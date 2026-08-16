@@ -27,6 +27,15 @@
 // and pairs them under one nm id, keeping whichever half succeeded even when
 // the other did not.
 //
+// Every fetching call reports where its data came from, in one shape: a Fetch
+// per request, naming the Source it went to, the worker Port that carried it
+// and the FetchCost it ran up, carried on a Fetches field of whatever the call
+// returns. Two calls fetch from two places at once — Card takes its two halves
+// from the CDN and the site, Seller its two documents from two hosts — and
+// each request is reported separately, the failed ones included, because a
+// single port and a single cost would describe only half of such a call.
+// TotalCost adds a provenance up for a caller that wants the whole of one.
+//
 // Envelope, Product, Size, Stock and Card are the decoded shapes; Money keeps
 // prices as an integer number of minor units with their currency rather than
 // a lossy float. Mode couples the search's appType parameter to the port

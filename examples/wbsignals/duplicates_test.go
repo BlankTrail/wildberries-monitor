@@ -138,8 +138,8 @@ func TestRunDuplicates_MatchIDZeroSkipsTheDuplicatesRequestEntirely(t *testing.T
 
 // TestRunDuplicates_ReportsThePortOfEveryFetchIncludingTheCard is the gap
 // this task closed. The duplicates fetch already named its port; the card
-// fetch did not, and landed in a separate "port not reported by this
-// endpoint" bucket despite having cost two real requests. Both are now filed
+// fetch did not, and landed in a bucket of calls no port could be named
+// for, despite having cost two real requests. Both are now filed
 // under the port that served them — which, on a single-port scripted lease,
 // means all three requests appear in one group.
 func TestRunDuplicates_ReportsThePortOfEveryFetchIncludingTheCard(t *testing.T) {

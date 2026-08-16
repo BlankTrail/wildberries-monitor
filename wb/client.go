@@ -77,7 +77,7 @@ type Result struct {
 	// FetchCost is what this response took to obtain — attempts, egress changes
 	// and connections lost on the way. Embedded, so res.Attempts still reads as
 	// a field of the result, while res.FetchCost hands the whole tally to
-	// whatever carries it further (see Envelope.Cost).
+	// whatever carries it further (see Fetch.Cost).
 	FetchCost
 }
 

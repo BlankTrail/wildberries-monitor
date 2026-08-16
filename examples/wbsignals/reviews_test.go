@@ -85,12 +85,12 @@ func TestRunReviews_SucceedsWhenEveryReviewCarriesSizeAndColor(t *testing.T) {
 	if !strings.Contains(summary.String(), "valuation:          4.8") {
 		t.Errorf("summary missing the valuation line; got:\n%s", summary.String())
 	}
-	// wb.Client.Reviews now carries Port and Cost out (it did not when this
+	// wb.Client.Reviews carries its own provenance out (it did not when this
 	// program first shipped — see the task report). A run must show a real,
-	// grouped port line, not fall back to "port not reported by this
-	// endpoint".
-	if strings.Contains(summary.String(), "port not reported by this endpoint") {
-		t.Errorf("summary fell back to the unattributed bucket for a reviews fetch, which now reports its own port; got:\n%s", summary.String())
+	// grouped port line rather than setting the call aside as one nothing can
+	// be said about.
+	if strings.Contains(summary.String(), "not grouped") {
+		t.Errorf("summary set the reviews fetch aside as ungrouped, though it reports its own port; got:\n%s", summary.String())
 	}
 	if !strings.Contains(summary.String(), "port 1 (1 call(s), 1 request(s))") {
 		t.Errorf("summary does not group the fetch under its own port; got:\n%s", summary.String())
@@ -100,7 +100,7 @@ func TestRunReviews_SucceedsWhenEveryReviewCarriesSizeAndColor(t *testing.T) {
 // TestRunReviews_GroupsRepeatedFetchesUnderTheirSharedPort is the warm-
 // session table this whole gap existed to close: two fetches through the
 // same scripted lease (one port) must appear together, first against later,
-// not scattered across "port not reported" lines.
+// not scattered across ungrouped lines.
 func TestRunReviews_GroupsRepeatedFetchesUnderTheirSharedPort(t *testing.T) {
 	lease := &scriptedLease{port: 4, replies: []*http.Response{
 		jsonReply(200, reviewsFixture(3, true)),
