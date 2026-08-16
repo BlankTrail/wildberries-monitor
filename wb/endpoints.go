@@ -46,6 +46,23 @@ type Endpoints struct {
 	// query parameters QuestionsURL/QuestionCountURL append, not path
 	// segments, so a bare base address is all this field needs to hold.
 	Questions string `yaml:"questions"`
+	// SellerCatalog is a seller's own storefront: every product they list,
+	// paged. It carries a version segment in its own path (v4), the same
+	// reason Reviews and Questions live here rather than as a hardcoded
+	// constant. Unlike Reviews it carries no placeholder either — supplier,
+	// page and dest are query parameters SellerCatalogURL appends — so a bare
+	// base address is all this field needs to hold, the same shape Questions
+	// already has.
+	//
+	// The other three sources Task 3 reads — the static supplier record, the
+	// seller profile and the static brand record — are not fields here. All
+	// three sit on fixed hosts observed at a single, unsharded address (no
+	// per-id volume the way the basket CDN's card address has), which is the
+	// same shape basket.go's own upstreamsURL has, and that one is a
+	// hardcoded constant rather than a field for the identical reason: there
+	// is no version segment in the path for the site to bump, and no second
+	// host to reroute to by editing a file.
+	SellerCatalog string `yaml:"seller_catalog"`
 }
 
 // searchTemplate is kept as one string, parameters and all, because the exact
@@ -63,12 +80,13 @@ const searchTemplate = "https://www.wildberries.ru/__internal/u-search/exactmatc
 // DefaultEndpoints returns the built-in addresses.
 func DefaultEndpoints() Endpoints {
 	return Endpoints{
-		Home:        "https://www.wildberries.ru/",
-		Search:      searchTemplate,
-		ProductPage: "https://www.wildberries.ru/catalog/{id}/detail.aspx",
-		CardDetail:  "https://www.wildberries.ru/__internal/u-card/cards/v4/detail",
-		Reviews:     "https://feedback-view-01.wb.ru/feedbacks/v2/{imtId}",
-		Questions:   "https://questions.wildberries.ru/api/v1/questions",
+		Home:          "https://www.wildberries.ru/",
+		Search:        searchTemplate,
+		ProductPage:   "https://www.wildberries.ru/catalog/{id}/detail.aspx",
+		CardDetail:    "https://www.wildberries.ru/__internal/u-card/cards/v4/detail",
+		Reviews:       "https://feedback-view-01.wb.ru/feedbacks/v2/{imtId}",
+		Questions:     "https://questions.wildberries.ru/api/v1/questions",
+		SellerCatalog: "https://www.wildberries.ru/__internal/u-catalog/sellers/v4/catalog",
 	}
 }
 
@@ -159,6 +177,9 @@ func (e Endpoints) Validate() error {
 	}
 	if strings.TrimSpace(e.Questions) == "" {
 		return errors.New("questions is empty")
+	}
+	if strings.TrimSpace(e.SellerCatalog) == "" {
+		return errors.New("seller_catalog is empty")
 	}
 	return nil
 }

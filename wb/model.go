@@ -106,6 +106,15 @@ type Product struct {
 	// Rank is the position in the result set, counted from one across pages, and
 	// Page is the page it was found on. For a seller, rank for a keyword is the
 	// product; the reference records neither.
+	//
+	// Client.SellerCatalogPage leaves Rank at its zero value. A position in a
+	// seller's own shop window is not a rank in the sense every other producer
+	// of this field means: search orders by relevance to a query, and a
+	// seller's own catalogue orders by whatever the storefront's own listing
+	// order happens to be — assigning a number here would let a zero-cost bug
+	// compare it against a real search rank as if the two meant the same
+	// thing. A zero from SellerCatalogPage means "no rank was computed," not
+	// "position one" — do not read it as the latter.
 	Rank int
 	Page int
 
