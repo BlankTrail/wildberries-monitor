@@ -36,6 +36,14 @@ const (
 // yesterday is the comparison this table exists for, and an overwrite would
 // answer only who is there now.
 //
+// The region joins them for the reason SaveDuplicates keys on (match_id, dest,
+// ts): what WB advertises into a phrase moves with the region, so one phrase
+// read for Moscow and for Penza in the same second is two readings, and a key
+// without the region collapses them into one row whose slots are whichever
+// reading was written last. wb.Shelves carries its own Dest — stamped by
+// Client.Shelves from the request it made, not read back out of a body that
+// states no region — which is what makes that key writable here at all.
+//
 // 0002_signals.sql declares no UNIQUE constraint over that key — unlike
 // review_summaries' idx_review_summaries_imt_ts, there is no ON CONFLICT
 // target to upsert against here, so saveShelf below finds the existing row
@@ -44,16 +52,17 @@ const (
 //
 // The products on a shelf are recorded as a place and an nmID, and
 // deliberately do not go through SaveProduct the way a duplicate listing does.
-// The reason is what the response states rather than tidiness: wb.Shelves
-// carries no region and no fetch time, and decodeShelves builds every product
-// on it through the same extractProduct every other source shares, which sets
-// neither field — Client.Shelves does not stamp them on afterwards either, the
-// way Client.SearchPage and Client.Card both do for their own products. A
-// snapshot written from one of these would therefore be filed under no region
-// at all, and a snapshot keyed (nmId, "", ts) compares as equal against
-// Moscow's and Penza's alike. A shelf answers "this listing was advertised
-// here, in this slot, at this moment", which is a different fact from what the
-// listing cost, and only the first one is actually in the document.
+// The reason is what the response states rather than tidiness: decodeShelves
+// builds every product on a shelf through the same extractProduct every other
+// source shares, which sets neither a region nor a fetch time, and
+// Client.Shelves does not stamp them onto the rows afterwards the way
+// Client.SearchPage and Client.Card both do for their own products — the
+// reading names its region, each row on it does not. A shelf answers "this
+// listing was advertised here, in this slot, at this moment", which is a
+// different fact from what the listing cost, and only the first one is
+// actually in the document. SaveDuplicates faces the same gap and answers it
+// differently, with inRegionOf, because a duplicate listing arrives with the
+// price that made the reading worth taking; a shelf slot arrives with a place.
 //
 // It returns how many slots were recorded across every shelf in the reading.
 func (s *Store) SaveShelves(ctx context.Context, sh wb.Shelves) (int, error) {
@@ -78,7 +87,7 @@ func (s *Store) SaveShelves(ctx context.Context, sh wb.Shelves) (int, error) {
 		{shelfKindShelf, sh.Shelves},
 	} {
 		for position, shelf := range group.shelfs {
-			slots, err := saveShelf(ctx, tx, source, key, group.kind, sh.PresetID, ts, position, shelf)
+			slots, err := saveShelf(ctx, tx, source, key, group.kind, sh.Dest, sh.PresetID, ts, position, shelf)
 			if err != nil {
 				return 0, err
 			}
@@ -120,14 +129,19 @@ func shelfSourceOf(sh wb.Shelves) (source, key string, err error) {
 // source_key: sh.PresetID is a fact the reading carries independent of which
 // of the two won shelfSourceOf's choice (see TestSaveShelves_PrefersThePhraseOverThePreset,
 // which saves a reading naming both), and there is a real column for it.
-// dest has no equivalent source — see this function's caller's doc comment
-// for why — and is left at its schema default rather than guessed at.
-func saveShelf(ctx context.Context, tx *sql.Tx, source, key, kind string, presetID int64, ts int64, position int, shelf wb.Shelf) (int, error) {
+//
+// dest is both stored and part of the row this looks up, never one without the
+// other: a key that separates two regions while writing an empty string into
+// the column would leave two rows differing by a value neither of them states.
+// An empty dest is stored as it arrives rather than refused — a reading whose
+// caller named no region is still a reading of a real shelf, and the one thing
+// this must not do is invent one.
+func saveShelf(ctx context.Context, tx *sql.Tx, source, key, kind, dest string, presetID int64, ts int64, position int, shelf wb.Shelf) (int, error) {
 	var shelfID int64
 	err := tx.QueryRowContext(ctx, `
 		SELECT id FROM shelves
-		WHERE source = ? AND source_key = ? AND kind = ? AND ts = ? AND position = ?`,
-		source, key, kind, ts, position).Scan(&shelfID)
+		WHERE source = ? AND source_key = ? AND kind = ? AND dest = ? AND ts = ? AND position = ?`,
+		source, key, kind, dest, ts, position).Scan(&shelfID)
 	switch {
 	case err == nil:
 		if _, err := tx.ExecContext(ctx,
@@ -139,7 +153,7 @@ func saveShelf(ctx context.Context, tx *sql.Tx, source, key, kind string, preset
 		res, err := tx.ExecContext(ctx, `
 			INSERT INTO shelves (source, source_key, kind, title, position, preset_id, dest, ts)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-			source, key, kind, shelf.Title, position, presetID, "", ts)
+			source, key, kind, shelf.Title, position, presetID, dest, ts)
 		if err != nil {
 			return 0, fmt.Errorf("store: save shelf %q %s %d: %w", key, kind, position, err)
 		}

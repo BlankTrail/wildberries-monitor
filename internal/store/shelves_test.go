@@ -33,6 +33,7 @@ func oneShelvesReading() wb.Shelves {
 	return wb.Shelves{
 		Query:    "кроссовки",
 		PresetID: 42,
+		Dest:     "-1257786",
 		Banners: []wb.Shelf{
 			{Title: "Баннер бренда", Products: []wb.Product{shelfProduct(11)}},
 		},
@@ -221,6 +222,111 @@ func TestSaveShelves_TwoMomentsAreTwoSlices(t *testing.T) {
 	}
 	if got := countRows(t, s, "shelf_items"); got != 10 {
 		t.Errorf("shelf_items holds %d rows, want 10", got)
+	}
+}
+
+func TestSaveShelves_TwoRegionsInOneSecondAreTwoSlices(t *testing.T) {
+	// The region is part of what a shelf is a reading of: what WB advertises
+	// into one phrase differs between Moscow and Penza, so two readings taken
+	// for two regions are two facts. Keyed without it, they collide on
+	// (source, source_key, kind, ts, position) and the second rewrites the
+	// first's slots — a Moscow shelf holding Penza's listings, with nothing on
+	// either row to tell them apart.
+	s := openTestStore(t)
+	ctx := context.Background()
+	s.SetClock(func() time.Time { return time.Date(2026, 8, 16, 9, 0, 0, 0, time.UTC) })
+
+	moscow := oneShelvesReading()
+	moscow.Dest = "-1257786"
+	moscow.Banners, moscow.Shelves = nil, []wb.Shelf{
+		{Title: "Похожие", Products: []wb.Product{shelfProduct(21), shelfProduct(22)}},
+	}
+	penza := oneShelvesReading()
+	penza.Dest = "-5892277"
+	penza.Banners, penza.Shelves = nil, []wb.Shelf{
+		{Title: "Похожие", Products: []wb.Product{shelfProduct(31)}},
+	}
+
+	if _, err := s.SaveShelves(ctx, moscow); err != nil {
+		t.Fatalf("Moscow SaveShelves: %v", err)
+	}
+	if _, err := s.SaveShelves(ctx, penza); err != nil {
+		t.Fatalf("Penza SaveShelves: %v", err)
+	}
+
+	if got := countRows(t, s, "shelves"); got != 2 {
+		t.Errorf("shelves holds %d rows after one phrase read for two regions in one second, want 2", got)
+	}
+	for _, tc := range []struct {
+		dest string
+		want []int64
+	}{
+		{"-1257786", []int64{21, 22}},
+		{"-5892277", []int64{31}},
+	} {
+		rows, err := s.db.QueryContext(ctx, `
+			SELECT i.nm_id FROM shelf_items i
+			JOIN shelves s ON s.id = i.shelf_id
+			WHERE s.dest = ?
+			ORDER BY i.position`, tc.dest)
+		if err != nil {
+			t.Fatalf("read %s items: %v", tc.dest, err)
+		}
+		var got []int64
+		for rows.Next() {
+			var nmID int64
+			if err := rows.Scan(&nmID); err != nil {
+				rows.Close()
+				t.Fatalf("scan %s item: %v", tc.dest, err)
+			}
+			got = append(got, nmID)
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			t.Fatalf("rows %s: %v", tc.dest, err)
+		}
+		if len(got) != len(tc.want) {
+			t.Fatalf("dest %s holds %v, want %v — the other region's reading overwrote it", tc.dest, got, tc.want)
+		}
+		for i := range tc.want {
+			if got[i] != tc.want[i] {
+				t.Errorf("dest %s slot %d = %d, want %d", tc.dest, i, got[i], tc.want[i])
+			}
+		}
+	}
+}
+
+func TestSaveShelves_RecordsTheRegionTheReadingWasTakenFor(t *testing.T) {
+	// The column has existed since 0002_signals.sql, which states that a shelf
+	// without a region is not comparable with anything; until wb.Shelves
+	// carried one there was nothing to put in it. Keying on the region while
+	// still storing an empty string would leave two rows that differ in a value
+	// neither of them states.
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	if _, err := s.SaveShelves(ctx, oneShelvesReading()); err != nil {
+		t.Fatalf("SaveShelves: %v", err)
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT dest FROM shelves`)
+	if err != nil {
+		t.Fatalf("read shelves: %v", err)
+	}
+	defer rows.Close()
+	var dests []string
+	for rows.Next() {
+		var dest string
+		if err := rows.Scan(&dest); err != nil {
+			t.Fatalf("scan dest: %v", err)
+		}
+		dests = append(dests, dest)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("rows: %v", err)
+	}
+	if len(dests) != 1 || dests[0] != "-1257786" {
+		t.Errorf("stored dest(s) = %q, want exactly the -1257786 the reading was taken for", dests)
 	}
 }
 
