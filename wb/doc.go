@@ -11,7 +11,8 @@
 // this package.
 //
 // Client is the one path every request takes. It builds the header profile a
-// request's Kind demands (KindDocument, KindAPI, KindSearch, KindPlain), mints
+// request's Kind demands (KindDocument, KindAPI, KindSearch, KindPlain,
+// KindSuppliers), mints
 // and carries per-visit identity through Sessions, judges every response with
 // Classify into a Class, and keeps retrying the two failures a different proxy
 // could fix — a challenge, and a connection the proxy killed before any

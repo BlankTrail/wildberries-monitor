@@ -476,7 +476,8 @@ func TestClient_KindSelectsTheHeaderProfile(t *testing.T) {
 		{KindDocument, []string{"Sec-Fetch-Dest", "Upgrade-Insecure-Requests"}, []string{"deviceid", "x-queryid", "x-userid", "x-spa-version"}},
 		{KindAPI, []string{"deviceid"}, []string{"x-queryid", "x-userid"}},
 		{KindSearch, []string{"deviceid", "x-queryid", "x-userid"}, nil},
-		{KindPlain, nil, []string{"deviceid", "x-queryid", "x-userid", "x-spa-version"}},
+		{KindPlain, nil, []string{"deviceid", "x-queryid", "x-userid", "x-spa-version", "X-Client-Name"}},
+		{KindSuppliers, []string{"X-Client-Name"}, []string{"deviceid", "x-queryid", "x-userid", "x-spa-version"}},
 	} {
 		l := &fakeLease{replies: []*http.Response{reply(200, "{}")}}
 		c := NewClient(&fakeLeaser{leases: []*fakeLease{l}}, NewSessions())

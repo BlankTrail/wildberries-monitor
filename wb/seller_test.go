@@ -468,6 +468,31 @@ func TestClient_SellerMergesStaticAndProfile(t *testing.T) {
 	}
 }
 
+// TestClient_SellerSendsTheProfileWithTheSuppliersProfileAndTheStaticWithout
+// pins the asymmetry the live 403 taught: the two halves of a Seller do not
+// share a header profile. The profile half goes to suppliers-shipment, which
+// refuses a request carrying no X-Client-Name; the static half goes to the
+// basket CDN, which never asked for one, and sending it there would be traffic
+// the site's own front end does not produce.
+func TestClient_SellerSendsTheProfileWithTheSuppliersProfileAndTheStaticWithout(t *testing.T) {
+	staticLease := &fakeLease{port: 1, replies: []*http.Response{reply(200, string(sellerStaticFixture(t)))}}
+	profileLease := &fakeLease{port: 2, replies: []*http.Response{reply(200, string(sellerProfileFixture(t)))}}
+	c := NewClient(&fakeLeaser{leases: []*fakeLease{staticLease, profileLease}}, NewSessions())
+
+	if _, err := c.Seller(context.Background(), DefaultEndpoints(), 350748670); err != nil {
+		t.Fatalf("Seller: %v", err)
+	}
+	if len(staticLease.sent) != 1 || len(profileLease.sent) != 1 {
+		t.Fatalf("sent %d static and %d profile requests, want 1 each", len(staticLease.sent), len(profileLease.sent))
+	}
+	if got := profileLease.sent[0].Header["X-Client-Name"]; len(got) != 1 || got[0] != "site" {
+		t.Errorf("profile request X-Client-Name=%v, want [site] — this endpoint answers 403 without it", got)
+	}
+	if got := staticLease.sent[0].Header["X-Client-Name"]; len(got) != 0 {
+		t.Errorf("static-record request carries X-Client-Name=%v; the basket CDN never asked for it", got)
+	}
+}
+
 // TestClient_SellerSurvivesAFailedStaticRecord is the brief's own mutation,
 // written as the resilience test it actually is: drop one of the two
 // sources (a 500 on the static record) and confirm the other one — the

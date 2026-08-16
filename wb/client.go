@@ -63,6 +63,12 @@ const (
 	// KindPlain is a request to another host — the basket CDN, questions,
 	// feedbacks — which the front end sends with no gate headers at all.
 	KindPlain
+	// KindSuppliers is the seller profile on the suppliers-shipment API: the
+	// plain profile plus X-Client-Name, the one header that host refuses the
+	// request without. It is its own Kind rather than a widening of KindPlain
+	// because the front end sends that name on this host and nowhere else —
+	// see suppliersHeaders.
+	KindSuppliers
 )
 
 // Result is one response, already read and judged.
@@ -430,13 +436,15 @@ func (c *Client) headers(kind Kind, port int, session, target, referer string) h
 		return searchHeaders(c.sessions.Identity(port, session), referer)
 	case KindPlain:
 		return plainHeaders(target, referer)
+	case KindSuppliers:
+		return suppliersHeaders(target, referer)
 	default:
 		// A Kind this switch does not name — a value added later without a
 		// case here, or a zero-initialised Kind that was never meant to reach
 		// this call. wb/status.go's Class.String uses the opposite convention
 		// deliberately, for the same underlying reason stated there: this
-		// package has no exhaustiveness linter, so nothing else would catch a
-		// fifth Kind added above without a case here. An unnamed Kind falls to
+		// package has no exhaustiveness linter, so nothing else would catch
+		// another Kind added above without a case here. An unnamed Kind falls to
 		// the least-fingerprinted profile, not the most — sending deviceid,
 		// x-queryid and x-userid to a host that never asked for them is the
 		// mistake this default exists to avoid, not to invite.

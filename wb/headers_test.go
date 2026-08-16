@@ -318,6 +318,45 @@ func TestPlainHeaders_OmitRefererWhenNotGiven(t *testing.T) {
 	}
 }
 
+// TestSuppliersHeaders_CarryTheNameTheEndpointDemands pins the whole reason
+// this profile exists. The suppliers-shipment host answers 403 to a request
+// with no X-Client-Name and 200 to the same request with one, so a value that
+// drifted or a header that went missing would put the seller profile straight
+// back where this profile found it.
+func TestSuppliersHeaders_CarryTheNameTheEndpointDemands(t *testing.T) {
+	h := suppliersHeaders("https://suppliers-shipment-2.wildberries.ru/api/v1/suppliers/1?curr=RUB", "")
+	// Literal, not the constant: comparing against the same symbol the
+	// production code uses is the tautology this file already warns about for
+	// Origin and the spa version.
+	if got := h["X-Client-Name"]; len(got) != 1 || got[0] != "site" {
+		t.Errorf("X-Client-Name=%v, want [site] — without it this endpoint answers 403", got)
+	}
+}
+
+// TestSuppliersHeaders_AddExactlyOneNameToThePlainSet is the other half: this
+// profile is the plain one plus a single name, so a gate header sneaking in
+// (or a plain header dropped on the way) fails here rather than live.
+func TestSuppliersHeaders_AddExactlyOneNameToThePlainSet(t *testing.T) {
+	const target = "https://suppliers-shipment-2.wildberries.ru/api/v1/suppliers/1"
+	const referer = "https://www.wildberries.ru/seller/1"
+	plain := plainHeaders(target, referer)
+	sup := suppliersHeaders(target, referer)
+
+	if len(sup) != len(plain)+1 {
+		t.Errorf("suppliers set has %d headers and the plain set %d; it adds exactly X-Client-Name", len(sup), len(plain))
+	}
+	for k, v := range plain {
+		if got := sup[k]; len(got) != len(v) || (len(v) > 0 && got[0] != v[0]) {
+			t.Errorf("suppliers set diverges from the plain set at %q: %v vs %v", k, got, v)
+		}
+	}
+	// Same-site is the answer for a wildberries.ru subdomain, and it has to
+	// come from fetchSite via plainHeaders rather than from a literal.
+	if got := sup.Get("Sec-Fetch-Site"); got != "same-site" {
+		t.Errorf("Sec-Fetch-Site=%q, want same-site for a wildberries.ru subdomain", got)
+	}
+}
+
 func TestFetchSite_LabelsTheRelationship(t *testing.T) {
 	for _, tc := range []struct{ target, want string }{
 		{"https://questions.wildberries.ru/api/v1/questions", "same-site"},

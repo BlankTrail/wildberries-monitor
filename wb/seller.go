@@ -403,8 +403,14 @@ func (c *Client) fillSellerStatic(ctx context.Context, s *Seller, id int64) erro
 
 // fillSellerProfile is fillSellerStatic's twin for the profile document, on
 // the identical contract.
+//
+// The one thing that differs is the header profile: KindSuppliers, not the
+// KindPlain its twin sends. The suppliers-shipment host refuses a request
+// carrying no X-Client-Name with a 403 — see suppliersHeaders for what was
+// measured and where the header came from — which is why this half, and only
+// this half, is not plain.
 func (c *Client) fillSellerProfile(ctx context.Context, s *Seller, id int64) error {
-	res, err := c.Get(ctx, sellerProfileURL(id), KindPlain, "")
+	res, err := c.Get(ctx, sellerProfileURL(id), KindSuppliers, "")
 	if err != nil {
 		s.Fetches = append(s.Fetches, lostFetch(SourceSellerProfile, err))
 		return err

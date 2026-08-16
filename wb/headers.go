@@ -132,6 +132,40 @@ func plainHeaders(target, referer string) http.Header {
 	return h
 }
 
+// clientNameValue is what the front end sends in X-Client-Name on the
+// suppliers-shipment calls. The edge checks that the header exists rather than
+// what it says — a nonsense value was answered exactly as this one was, live —
+// so this is not a token and needs no machinery to keep fresh. It is still the
+// site's own value rather than an invented one, for the same reason nothing
+// else in this file improvises: a header nobody else sends is a way to stand
+// out, and standing out is what these profiles exist to avoid.
+const clientNameValue = "site"
+
+// suppliersHeaders builds the set for the suppliers-shipment API, the host the
+// seller profile lives on: the plain set plus the one name that host refuses
+// the request without.
+//
+// Everything else about the request is a plain cross-host fetch — no gate
+// headers, an Origin, Sec-Fetch-Site from the target — which is why this
+// builds on plainHeaders rather than repeating it. The single addition is
+// X-Client-Name, and it is not a fingerprinting nicety: without it this
+// endpoint answers 403 with its own body, {"Err":"","RequestID":…,
+// "ErrorCode":403}, for every supplier id, under every other header profile in
+// this file, with or without a referer, and whether or not the seller's page
+// was visited first. With it, the same request on the same port answers 200
+// with the 687-byte profile. The site's own suppliersService bundle is where
+// this came from: it is the only place in the front end that sends the name,
+// and it sends it on this host alone.
+//
+// Written in canonical form, unlike the lowercase gate names apiHeaders keeps
+// out of Header.Set's reach, because X-Client-Name is how the front end's own
+// fetch spells it.
+func suppliersHeaders(target, referer string) http.Header {
+	h := plainHeaders(target, referer)
+	h.Set("X-Client-Name", clientNameValue)
+	return h
+}
+
 // fetchSite labels the relationship between the page and the target the way a
 // browser does.
 //
