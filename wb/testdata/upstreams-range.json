@@ -1,0 +1,1140 @@
+{
+ "recommend": {
+  "content_route_map": [
+   {
+    "method": "range",
+    "hosts": [
+     {
+      "vol_range_from": 0,
+      "vol_range_to": 7,
+      "host": "content-01.wbcontent.net"
+     },
+     {
+      "vol_range_from": 0,
+      "vol_range_to": 7,
+      "host": "content-02.wbcontent.net"
+     },
+     {
+      "vol_range_from": 0,
+      "vol_range_to": 7,
+      "host": "content-03.wbcontent.net"
+     },
+     {
+      "vol_range_from": 0,
+      "vol_range_to": 7,
+      "host": "content-04.wbcontent.net"
+     },
+     {
+      "vol_range_from": 0,
+      "vol_range_to": 7,
+      "host": "content-05.wbcontent.net"
+     }
+    ]
+   }
+  ],
+  "staticbasket_route_map": [
+   {
+    "method": "range",
+    "hosts": [
+     {
+      "vol_range_from": 0,
+      "vol_range_to": 4,
+      "host": "static-basket-01.wbcontent.net"
+     },
+     {
+      "vol_range_from": 20,
+      "vol_range_to": 35,
+      "host": "static-basket-02.wbcontent.net"
+     },
+     {
+      "vol_range_from": 40,
+      "vol_range_to": 54,
+      "host": "static-basket-03.wbcontent.net"
+     },
+     {
+      "vol_range_from": 114,
+      "vol_range_to": 125,
+      "host": "static-basket-05.wbcontent.net"
+     },
+     {
+      "vol_range_from": 138,
+      "vol_range_to": 149,
+      "host": "static-basket-07.wbcontent.net"
+     },
+     {
+      "vol_range_from": 174,
+      "vol_range_to": 185,
+      "host": "static-basket-09.wbcontent.net"
+     }
+    ]
+   }
+  ],
+  "videonme_route_map": [
+   {
+    "method": "range",
+    "hosts": [
+     {
+      "vol_range_from": 0,
+      "vol_range_to": 11,
+      "host": "videonme-basket-01.wbcontent.net"
+     },
+     {
+      "vol_range_from": 12,
+      "vol_range_to": 23,
+      "host": "videonme-basket-02.wbcontent.net"
+     },
+     {
+      "vol_range_from": 24,
+      "vol_range_to": 35,
+      "host": "videonme-basket-03.wbcontent.net"
+     },
+     {
+      "vol_range_from": 36,
+      "vol_range_to": 47,
+      "host": "videonme-basket-04.wbcontent.net"
+     },
+     {
+      "vol_range_from": 48,
+      "vol_range_to": 59,
+      "host": "videonme-basket-05.wbcontent.net"
+     },
+     {
+      "vol_range_from": 60,
+      "vol_range_to": 71,
+      "host": "videonme-basket-06.wbcontent.net"
+     },
+     {
+      "vol_range_from": 72,
+      "vol_range_to": 83,
+      "host": "videonme-basket-07.wbcontent.net"
+     },
+     {
+      "vol_range_from": 84,
+      "vol_range_to": 95,
+      "host": "videonme-basket-08.wbcontent.net"
+     },
+     {
+      "vol_range_from": 96,
+      "vol_range_to": 107,
+      "host": "videonme-basket-09.wbcontent.net"
+     },
+     {
+      "vol_range_from": 108,
+      "vol_range_to": 119,
+      "host": "videonme-basket-10.wbcontent.net"
+     },
+     {
+      "vol_range_from": 120,
+      "vol_range_to": 131,
+      "host": "videonme-basket-11.wbcontent.net"
+     },
+     {
+      "vol_range_from": 132,
+      "vol_range_to": 143,
+      "host": "videonme-basket-12.wbcontent.net"
+     }
+    ]
+   }
+  ],
+  "videofeedback_uuid_route_map": [
+   {
+    "method": "uuid",
+    "hosts": [
+     {
+      "shard_name": "videofeedback01",
+      "host": "videofeedback01.wbcontent.net"
+     },
+     {
+      "shard_name": "videofeedback02",
+      "host": "videofeedback02.wbcontent.net"
+     },
+     {
+      "shard_name": "videofeedback03",
+      "host": "videofeedback03.wbcontent.net"
+     },
+     {
+      "shard_name": "videofeedback04",
+      "host": "videofeedback04.wbcontent.net"
+     },
+     {
+      "shard_name": "videofeedback05",
+      "host": "videofeedback05.wbcontent.net"
+     },
+     {
+      "shard_name": "videofeedback06",
+      "host": "videofeedback06.wbcontent.net"
+     },
+     {
+      "shard_name": "videofeedback07",
+      "host": "videofeedback07.wbcontent.net"
+     },
+     {
+      "shard_name": "videofeedback08",
+      "host": "videofeedback08.wbcontent.net"
+     },
+     {
+      "shard_name": "videofeedback09",
+      "host": "videofeedback09.wbcontent.net"
+     },
+     {
+      "shard_name": "videofeedback10",
+      "host": "videofeedback10.wbcontent.net"
+     },
+     {
+      "shard_name": "videofeedback11",
+      "host": "videofeedback11.wbcontent.net"
+     },
+     {
+      "shard_name": "videofeedback12",
+      "host": "videofeedback12.wbcontent.net"
+     }
+    ]
+   }
+  ],
+  "mediabasket_route_map": [
+   {
+    "method": "range",
+    "hosts": [
+     {
+      "vol_range_from": 0,
+      "vol_range_to": 143,
+      "host": "basket-01.wbcontent.net"
+     },
+     {
+      "vol_range_from": 144,
+      "vol_range_to": 287,
+      "host": "basket-02.wbcontent.net"
+     },
+     {
+      "vol_range_from": 288,
+      "vol_range_to": 431,
+      "host": "basket-03.wbcontent.net"
+     },
+     {
+      "vol_range_from": 432,
+      "vol_range_to": 719,
+      "host": "basket-04.wbcontent.net"
+     },
+     {
+      "vol_range_from": 720,
+      "vol_range_to": 1007,
+      "host": "basket-05.wbcontent.net"
+     },
+     {
+      "vol_range_from": 1008,
+      "vol_range_to": 1061,
+      "host": "basket-06.wbcontent.net"
+     },
+     {
+      "vol_range_from": 1062,
+      "vol_range_to": 1115,
+      "host": "basket-07.wbcontent.net"
+     },
+     {
+      "vol_range_from": 1116,
+      "vol_range_to": 1169,
+      "host": "basket-08.wbcontent.net"
+     },
+     {
+      "vol_range_from": 1170,
+      "vol_range_to": 1313,
+      "host": "basket-09.wbcontent.net"
+     },
+     {
+      "vol_range_from": 1314,
+      "vol_range_to": 1601,
+      "host": "basket-10.wbcontent.net"
+     },
+     {
+      "vol_range_from": 1602,
+      "vol_range_to": 1655,
+      "host": "basket-11.wbcontent.net"
+     },
+     {
+      "vol_range_from": 1656,
+      "vol_range_to": 1919,
+      "host": "basket-12.wbcontent.net"
+     },
+     {
+      "vol_range_from": 1920,
+      "vol_range_to": 2045,
+      "host": "basket-13.wbcontent.net"
+     },
+     {
+      "vol_range_from": 2046,
+      "vol_range_to": 2189,
+      "host": "basket-14.wbcontent.net"
+     },
+     {
+      "vol_range_from": 2190,
+      "vol_range_to": 2405,
+      "host": "basket-15.wbcontent.net"
+     },
+     {
+      "vol_range_from": 2406,
+      "vol_range_to": 2621,
+      "host": "basket-16.wbcontent.net"
+     },
+     {
+      "vol_range_from": 2622,
+      "vol_range_to": 2837,
+      "host": "basket-17.wbcontent.net"
+     },
+     {
+      "vol_range_from": 2838,
+      "vol_range_to": 3053,
+      "host": "basket-18.wbcontent.net"
+     },
+     {
+      "vol_range_from": 3054,
+      "vol_range_to": 3269,
+      "host": "basket-19.wbcontent.net"
+     },
+     {
+      "vol_range_from": 3270,
+      "vol_range_to": 3485,
+      "host": "basket-20.wbcontent.net"
+     },
+     {
+      "vol_range_from": 3486,
+      "vol_range_to": 3701,
+      "host": "basket-21.wbcontent.net"
+     },
+     {
+      "vol_range_from": 3702,
+      "vol_range_to": 3917,
+      "host": "basket-22.wbcontent.net"
+     },
+     {
+      "vol_range_from": 3918,
+      "vol_range_to": 4133,
+      "host": "basket-23.wbcontent.net"
+     },
+     {
+      "vol_range_from": 4134,
+      "vol_range_to": 4349,
+      "host": "basket-24.wbcontent.net"
+     },
+     {
+      "vol_range_from": 4350,
+      "vol_range_to": 4565,
+      "host": "basket-25.wbcontent.net"
+     },
+     {
+      "vol_range_from": 4566,
+      "vol_range_to": 4877,
+      "host": "basket-26.wbcontent.net"
+     },
+     {
+      "vol_range_from": 4878,
+      "vol_range_to": 5189,
+      "host": "basket-27.wbcontent.net"
+     },
+     {
+      "vol_range_from": 5190,
+      "vol_range_to": 5501,
+      "host": "basket-28.wbcontent.net"
+     },
+     {
+      "vol_range_from": 5502,
+      "vol_range_to": 5813,
+      "host": "basket-29.wbcontent.net"
+     },
+     {
+      "vol_range_from": 5814,
+      "vol_range_to": 6125,
+      "host": "basket-30.wbcontent.net"
+     },
+     {
+      "vol_range_from": 6126,
+      "vol_range_to": 6437,
+      "host": "basket-31.wbcontent.net"
+     },
+     {
+      "vol_range_from": 6438,
+      "vol_range_to": 6749,
+      "host": "basket-32.wbcontent.net"
+     },
+     {
+      "vol_range_from": 6750,
+      "vol_range_to": 7061,
+      "host": "basket-33.wbcontent.net"
+     },
+     {
+      "vol_range_from": 7062,
+      "vol_range_to": 7373,
+      "host": "basket-34.wbcontent.net"
+     },
+     {
+      "vol_range_from": 7374,
+      "vol_range_to": 7685,
+      "host": "basket-35.wbcontent.net"
+     },
+     {
+      "vol_range_from": 7686,
+      "vol_range_to": 7997,
+      "host": "basket-36.wbcontent.net"
+     },
+     {
+      "vol_range_from": 7998,
+      "vol_range_to": 8309,
+      "host": "basket-37.wbcontent.net"
+     },
+     {
+      "vol_range_from": 8310,
+      "vol_range_to": 8741,
+      "host": "basket-38.wbcontent.net"
+     },
+     {
+      "vol_range_from": 8742,
+      "vol_range_to": 9173,
+      "host": "basket-39.wbcontent.net"
+     },
+     {
+      "vol_range_from": 9174,
+      "vol_range_to": 9605,
+      "host": "basket-40.wbcontent.net"
+     },
+     {
+      "vol_range_from": 9606,
+      "vol_range_to": 10373,
+      "host": "basket-41.wbcontent.net"
+     },
+     {
+      "vol_range_from": 10374,
+      "vol_range_to": 11141,
+      "host": "basket-42.wbcontent.net"
+     },
+     {
+      "vol_range_from": 11142,
+      "vol_range_to": 11909,
+      "host": "basket-43.wbcontent.net"
+     },
+     {
+      "vol_range_from": 11910,
+      "vol_range_to": 12677,
+      "host": "basket-44.wbcontent.net"
+     },
+     {
+      "vol_range_from": 12678,
+      "vol_range_to": 13445,
+      "host": "basket-45.wbcontent.net"
+     },
+     {
+      "vol_range_from": 13446,
+      "vol_range_to": 14213,
+      "host": "basket-46.wbcontent.net"
+     },
+     {
+      "vol_range_from": 14214,
+      "vol_range_to": 14981,
+      "host": "basket-47.wbcontent.net"
+     },
+     {
+      "vol_range_from": 14982,
+      "vol_range_to": 15749,
+      "host": "basket-48.wbcontent.net"
+     },
+     {
+      "vol_range_from": 15750,
+      "vol_range_to": 16517,
+      "host": "basket-49.wbcontent.net"
+     },
+     {
+      "vol_range_from": 16518,
+      "vol_range_to": 17285,
+      "host": "basket-50.wbcontent.net"
+     },
+     {
+      "vol_range_from": 17286,
+      "vol_range_to": 18053,
+      "host": "basket-51.wbcontent.net"
+     },
+     {
+      "vol_range_from": 18054,
+      "vol_range_to": 18821,
+      "host": "basket-52.wbcontent.net"
+     }
+    ]
+   }
+  ],
+  "content_uuid_route_map": [
+   {
+    "method": "uuid",
+    "hosts": [
+     {
+      "shard_name": "content-01",
+      "host": "content-01.wbcontent.net"
+     },
+     {
+      "shard_name": "content-02",
+      "host": "content-02.wbcontent.net"
+     },
+     {
+      "shard_name": "content-03",
+      "host": "content-03.wbcontent.net"
+     },
+     {
+      "shard_name": "content-04",
+      "host": "content-04.wbcontent.net"
+     },
+     {
+      "shard_name": "content-05",
+      "host": "content-05.wbcontent.net"
+     }
+    ]
+   }
+  ],
+  "feedback_uuid_route_map": [
+   {
+    "method": "uuid",
+    "hosts": [
+     {
+      "shard_name": "feedback-01",
+      "host": "feedback-01.wbcontent.net"
+     },
+     {
+      "shard_name": "feedback-02",
+      "host": "feedback-02.wbcontent.net"
+     },
+     {
+      "shard_name": "feedback-03",
+      "host": "feedback-03.wbcontent.net"
+     },
+     {
+      "shard_name": "feedback-04",
+      "host": "feedback-04.wbcontent.net"
+     },
+     {
+      "shard_name": "feedback-05",
+      "host": "feedback-05.wbcontent.net"
+     },
+     {
+      "shard_name": "feedback-06",
+      "host": "feedback-06.wbcontent.net"
+     }
+    ]
+   }
+  ]
+ },
+ "origin": {
+  "videofeedback_route_map": [
+   {
+    "method": "range",
+    "hosts": [
+     {
+      "vol_range_from": 0,
+      "vol_range_to": 6,
+      "host": "videofeedback01.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 0,
+      "vol_range_to": 6,
+      "host": "videofeedback02.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 0,
+      "vol_range_to": 6,
+      "host": "videofeedback03.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 0,
+      "vol_range_to": 6,
+      "host": "videofeedback04.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 0,
+      "vol_range_to": 6,
+      "host": "videofeedback05.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 0,
+      "vol_range_to": 6,
+      "host": "videofeedback06.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 0,
+      "vol_range_to": 6,
+      "host": "videofeedback07.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 0,
+      "vol_range_to": 6,
+      "host": "videofeedback08.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 0,
+      "vol_range_to": 6,
+      "host": "videofeedback09.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 0,
+      "vol_range_to": 6,
+      "host": "videofeedback10.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 0,
+      "vol_range_to": 6,
+      "host": "videofeedback11.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 0,
+      "vol_range_to": 6,
+      "host": "videofeedback12.wbbasket.ru"
+     }
+    ]
+   }
+  ],
+  "feedback_uuid_route_map": [
+   {
+    "method": "uuid",
+    "hosts": [
+     {
+      "shard_name": "feedback-01",
+      "host": "feedback-01.wbbasket.ru"
+     },
+     {
+      "shard_name": "feedback-02",
+      "host": "feedback-02.wbbasket.ru"
+     },
+     {
+      "shard_name": "feedback-03",
+      "host": "feedback-03.wbbasket.ru"
+     },
+     {
+      "shard_name": "feedback-04",
+      "host": "feedback-04.wbbasket.ru"
+     },
+     {
+      "shard_name": "feedback-05",
+      "host": "feedback-05.wbbasket.ru"
+     },
+     {
+      "shard_name": "feedback-06",
+      "host": "feedback-06.wbbasket.ru"
+     }
+    ]
+   }
+  ],
+  "mediabasket_route_map": [
+   {
+    "method": "range",
+    "hosts": [
+     {
+      "vol_range_from": 0,
+      "vol_range_to": 143,
+      "host": "basket-01.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 144,
+      "vol_range_to": 287,
+      "host": "basket-02.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 288,
+      "vol_range_to": 431,
+      "host": "basket-03.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 432,
+      "vol_range_to": 719,
+      "host": "basket-04.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 720,
+      "vol_range_to": 1007,
+      "host": "basket-05.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 1008,
+      "vol_range_to": 1061,
+      "host": "basket-06.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 1062,
+      "vol_range_to": 1115,
+      "host": "basket-07.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 1116,
+      "vol_range_to": 1169,
+      "host": "basket-08.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 1170,
+      "vol_range_to": 1313,
+      "host": "basket-09.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 1314,
+      "vol_range_to": 1601,
+      "host": "basket-10.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 1602,
+      "vol_range_to": 1655,
+      "host": "basket-11.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 1656,
+      "vol_range_to": 1919,
+      "host": "basket-12.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 1920,
+      "vol_range_to": 2045,
+      "host": "basket-13.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 2046,
+      "vol_range_to": 2189,
+      "host": "basket-14.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 2190,
+      "vol_range_to": 2405,
+      "host": "basket-15.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 2406,
+      "vol_range_to": 2621,
+      "host": "basket-16.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 2622,
+      "vol_range_to": 2837,
+      "host": "basket-17.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 2838,
+      "vol_range_to": 3053,
+      "host": "basket-18.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 3054,
+      "vol_range_to": 3269,
+      "host": "basket-19.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 3270,
+      "vol_range_to": 3485,
+      "host": "basket-20.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 3486,
+      "vol_range_to": 3701,
+      "host": "basket-21.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 3702,
+      "vol_range_to": 3917,
+      "host": "basket-22.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 3918,
+      "vol_range_to": 4133,
+      "host": "basket-23.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 4134,
+      "vol_range_to": 4349,
+      "host": "basket-24.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 4350,
+      "vol_range_to": 4565,
+      "host": "basket-25.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 4566,
+      "vol_range_to": 4877,
+      "host": "basket-26.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 4878,
+      "vol_range_to": 5189,
+      "host": "basket-27.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 5190,
+      "vol_range_to": 5501,
+      "host": "basket-28.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 5502,
+      "vol_range_to": 5813,
+      "host": "basket-29.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 5814,
+      "vol_range_to": 6125,
+      "host": "basket-30.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 6126,
+      "vol_range_to": 6437,
+      "host": "basket-31.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 6438,
+      "vol_range_to": 6749,
+      "host": "basket-32.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 6750,
+      "vol_range_to": 7061,
+      "host": "basket-33.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 7062,
+      "vol_range_to": 7373,
+      "host": "basket-34.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 7374,
+      "vol_range_to": 7685,
+      "host": "basket-35.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 7686,
+      "vol_range_to": 7997,
+      "host": "basket-36.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 7998,
+      "vol_range_to": 8309,
+      "host": "basket-37.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 8310,
+      "vol_range_to": 8741,
+      "host": "basket-38.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 8742,
+      "vol_range_to": 9173,
+      "host": "basket-39.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 9174,
+      "vol_range_to": 9605,
+      "host": "basket-40.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 9606,
+      "vol_range_to": 10373,
+      "host": "basket-41.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 10374,
+      "vol_range_to": 11141,
+      "host": "basket-42.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 11142,
+      "vol_range_to": 11909,
+      "host": "basket-43.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 11910,
+      "vol_range_to": 12677,
+      "host": "basket-44.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 12678,
+      "vol_range_to": 13445,
+      "host": "basket-45.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 13446,
+      "vol_range_to": 14213,
+      "host": "basket-46.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 14214,
+      "vol_range_to": 14981,
+      "host": "basket-47.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 14982,
+      "vol_range_to": 15749,
+      "host": "basket-48.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 15750,
+      "vol_range_to": 16517,
+      "host": "basket-49.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 16518,
+      "vol_range_to": 17285,
+      "host": "basket-50.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 17286,
+      "vol_range_to": 18053,
+      "host": "basket-51.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 18054,
+      "vol_range_to": 18821,
+      "host": "basket-52.wbbasket.ru"
+     }
+    ]
+   }
+  ],
+  "content_uuid_route_map": [
+   {
+    "method": "uuid",
+    "hosts": [
+     {
+      "shard_name": "content-01",
+      "host": "content-01.wbbasket.ru"
+     },
+     {
+      "shard_name": "content-02",
+      "host": "content-02.wbbasket.ru"
+     },
+     {
+      "shard_name": "content-03",
+      "host": "content-03.wbbasket.ru"
+     },
+     {
+      "shard_name": "content-04",
+      "host": "content-04.wbbasket.ru"
+     },
+     {
+      "shard_name": "content-05",
+      "host": "content-05.wbbasket.ru"
+     }
+    ]
+   }
+  ],
+  "videonme_route_map": [
+   {
+    "method": "range",
+    "hosts": [
+     {
+      "vol_range_from": 0,
+      "vol_range_to": 11,
+      "host": "videonme-basket-01.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 12,
+      "vol_range_to": 23,
+      "host": "videonme-basket-02.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 24,
+      "vol_range_to": 35,
+      "host": "videonme-basket-03.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 36,
+      "vol_range_to": 47,
+      "host": "videonme-basket-04.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 48,
+      "vol_range_to": 59,
+      "host": "videonme-basket-05.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 60,
+      "vol_range_to": 71,
+      "host": "videonme-basket-06.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 72,
+      "vol_range_to": 83,
+      "host": "videonme-basket-07.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 84,
+      "vol_range_to": 95,
+      "host": "videonme-basket-08.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 96,
+      "vol_range_to": 107,
+      "host": "videonme-basket-09.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 108,
+      "vol_range_to": 119,
+      "host": "videonme-basket-10.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 120,
+      "vol_range_to": 131,
+      "host": "videonme-basket-11.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 132,
+      "vol_range_to": 143,
+      "host": "videonme-basket-12.wbbasket.ru"
+     }
+    ]
+   }
+  ],
+  "wibesbasket_route_map": [
+   {
+    "method": "uuid",
+    "hosts": [
+     {
+      "shard_name": "wibes-01",
+      "host": "wibes-01.wbbasket.ru"
+     },
+     {
+      "shard_name": "wibes-02",
+      "host": "wibes-02.wbbasket.ru"
+     },
+     {
+      "shard_name": "wibes-03",
+      "host": "wibes-03.wbbasket.ru"
+     },
+     {
+      "shard_name": "wibes-04",
+      "host": "wibes-04.wbbasket.ru"
+     },
+     {
+      "shard_name": "wibes-05",
+      "host": "wibes-05.wbbasket.ru"
+     },
+     {
+      "shard_name": "wibes-06",
+      "host": "wibes-06.wbbasket.ru"
+     },
+     {
+      "shard_name": "wibes-07",
+      "host": "wibes-07.wbbasket.ru"
+     },
+     {
+      "shard_name": "wibes-08",
+      "host": "wibes-08.wbbasket.ru"
+     }
+    ]
+   }
+  ],
+  "staticbasket_route_map": [
+   {
+    "method": "range",
+    "hosts": [
+     {
+      "vol_range_from": 0,
+      "vol_range_to": 4,
+      "host": "static-basket-01.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 20,
+      "vol_range_to": 35,
+      "host": "static-basket-02.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 40,
+      "vol_range_to": 54,
+      "host": "static-basket-03.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 114,
+      "vol_range_to": 125,
+      "host": "static-basket-05.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 138,
+      "vol_range_to": 149,
+      "host": "static-basket-07.wbbasket.ru"
+     }
+    ]
+   }
+  ],
+  "content_route_map": [
+   {
+    "method": "range",
+    "hosts": [
+     {
+      "vol_range_from": 0,
+      "vol_range_to": 7,
+      "host": "content-01.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 0,
+      "vol_range_to": 7,
+      "host": "content-02.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 0,
+      "vol_range_to": 7,
+      "host": "content-03.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 0,
+      "vol_range_to": 7,
+      "host": "content-04.wbbasket.ru"
+     },
+     {
+      "vol_range_from": 0,
+      "vol_range_to": 7,
+      "host": "content-05.wbbasket.ru"
+     }
+    ]
+   }
+  ],
+  "videofeedback_uuid_route_map": [
+   {
+    "method": "uuid",
+    "hosts": [
+     {
+      "shard_name": "videofeedback01",
+      "host": "videofeedback01.wbbasket.ru"
+     },
+     {
+      "shard_name": "videofeedback02",
+      "host": "videofeedback02.wbbasket.ru"
+     },
+     {
+      "shard_name": "videofeedback03",
+      "host": "videofeedback03.wbbasket.ru"
+     },
+     {
+      "shard_name": "videofeedback04",
+      "host": "videofeedback04.wbbasket.ru"
+     },
+     {
+      "shard_name": "videofeedback05",
+      "host": "videofeedback05.wbbasket.ru"
+     },
+     {
+      "shard_name": "videofeedback06",
+      "host": "videofeedback06.wbbasket.ru"
+     },
+     {
+      "shard_name": "videofeedback07",
+      "host": "videofeedback07.wbbasket.ru"
+     },
+     {
+      "shard_name": "videofeedback08",
+      "host": "videofeedback08.wbbasket.ru"
+     },
+     {
+      "shard_name": "videofeedback09",
+      "host": "videofeedback09.wbbasket.ru"
+     },
+     {
+      "shard_name": "videofeedback10",
+      "host": "videofeedback10.wbbasket.ru"
+     },
+     {
+      "shard_name": "videofeedback11",
+      "host": "videofeedback11.wbbasket.ru"
+     },
+     {
+      "shard_name": "videofeedback12",
+      "host": "videofeedback12.wbbasket.ru"
+     }
+    ]
+   }
+  ]
+ },
+ "metrics_url": ""
+}
