@@ -96,28 +96,30 @@ func TestPreflight_ChallengeBreakerMissingIsFatal(t *testing.T) {
 	}
 }
 
-func TestPreflight_SolverCapacityWarnsWhenPortsExceedProcs(t *testing.T) {
+func TestPreflight_DoesNotWarnWhenPortsOutnumberSolverProcesses(t *testing.T) {
+	// This used to warn, on a model of one solve per solver process. A process
+	// takes more than one port at a time, and what
+	// overflows queues rather than fails, so ports outnumbering processes is an
+	// ordinary configuration and not a finding. A run that was fine collected a
+	// warning here, which teaches the reader to skip past this report.
+	//
+	// It is not replaced by a warning with a bigger multiplier, because the
+	// control API reports no per-process capacity to compute
+	// one from — see challengeBreakerFinding's own comment.
 	c, fake := newTestClient(t)
 	fake.SetCA(genTestCA(t))
 	fake.SetLicense(fakebt.License{
 		Activated: true, Plan: "Pro", Pool: true,
-		JsSolverMaxProcs: 4, JsSolverProcs: 4,
+		JsSolverMaxProcs: 10, JsSolverProcs: 10,
 	})
 
-	rep := Preflight(context.Background(), c, PreflightInput{Ports: 50})
+	rep := Preflight(context.Background(), c, PreflightInput{Ports: 160})
 
-	f, ok := rep.Find("solver_capacity")
-	if !ok {
-		t.Fatalf("no \"solver_capacity\" finding; got %+v", rep.Findings)
-	}
-	if f.Severity != SeverityWarn {
-		t.Errorf("severity=%v, want Warn: this slows the run, it does not break it", f.Severity)
+	if f, ok := rep.Find("solver_capacity"); ok {
+		t.Errorf("160 ports against 10 configured processes produced %q: %s", f.Title, f.Detail)
 	}
 	if !rep.OK() {
-		t.Error("a warning must not make the report fail")
-	}
-	if !strings.Contains(f.Detail, "50") || !strings.Contains(f.Detail, "4") {
-		t.Errorf("Detail=%q, want both numbers named so the user can act", f.Detail)
+		t.Errorf("Report.OK()=false for a run that is fine; findings: %+v", rep.Findings)
 	}
 }
 

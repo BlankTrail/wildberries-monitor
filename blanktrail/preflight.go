@@ -138,7 +138,7 @@ func Preflight(ctx context.Context, c *Client, in PreflightInput) Report {
 		})
 	}
 
-	rep.Findings = append(rep.Findings, challengeBreakerFinding(lic, in.Ports)...)
+	rep.Findings = append(rep.Findings, challengeBreakerFinding(lic)...)
 	rep.Findings = append(rep.Findings, poolFinding(lic, in.Ports)...)
 	rep.Findings = append(rep.Findings, domainFindings(lic, in)...)
 
@@ -180,7 +180,27 @@ func Preflight(ctx context.Context, c *Client, in PreflightInput) Report {
 	return rep
 }
 
-func challengeBreakerFinding(lic LicenseStatus, ports int) []Finding {
+// challengeBreakerFinding reports the two states of the solver that a run can
+// actually be stopped by: not entitled, and entitled but switched off. Both are
+// fatal — a challenge nobody solves is answered with a challenge page instead of
+// data, whichever of the two caused it.
+//
+// It deliberately does not compare the port count against the process count. It
+// used to, and warned when ports exceeded processes; that warning rested on a
+// model of one solve per process which is not how the solver works. A process
+// takes more than one port at a time, and
+// requests that arrive beyond that capacity queue rather than fail, so ports may
+// legitimately outnumber processes by a wide margin. The warning fired on runs
+// that were fine, which is worse than no warning at all: it teaches whoever sees
+// it that findings from this report can be ignored.
+//
+// Nothing honest replaces it. A real threshold would need the number of
+// ports a process can carry, and the control API reports no such
+// figure — LicenseStatus carries the licensed process ceiling, the configured
+// process count and a live-process gauge, and no per-process capacity or
+// queue depth anywhere. Picking a multiplier here would state as fact a number
+// this package has no way to know.
+func challengeBreakerFinding(lic LicenseStatus) []Finding {
 	if !lic.ChallengeBreakerEntitled() {
 		return []Finding{{
 			ID:       "challenge_breaker",
@@ -205,19 +225,6 @@ func challengeBreakerFinding(lic LicenseStatus, ports int) []Finding {
 			Action: fmt.Sprintf(
 				"Raise the Challenge Breaker process count in the BlankTrail dashboard (licence ceiling: %d).",
 				lic.JsSolverMaxProcs),
-		}}
-	}
-	if ports > lic.JsSolverProcs {
-		return []Finding{{
-			ID:       "solver_capacity",
-			Severity: SeverityWarn,
-			Title:    "More ports than Challenge Breaker processes",
-			Detail: fmt.Sprintf(
-				"This run opens %d ports but only %d solver processes are configured, so challenges will queue and the run will be slower than planned.",
-				ports, lic.JsSolverProcs),
-			Action: fmt.Sprintf(
-				"Either lower threads × ports per thread to %d or fewer, or raise the solver process count in the BlankTrail dashboard (licence ceiling: %d).",
-				lic.JsSolverProcs, lic.JsSolverMaxProcs),
 		}}
 	}
 	return nil
