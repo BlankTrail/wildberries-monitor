@@ -33,6 +33,12 @@ CREATE TABLE products (
     contents          TEXT,
     season            TEXT,
     colour_names      TEXT,
+
+    -- card_created and card_updated are an exception to "every timestamp is
+    -- Unix seconds": they are the site's own raw strings, kept as wb.Card
+    -- carries them, because the domain package does not parse them and
+    -- makes no promise about their format. Inventing a parse here would be
+    -- a format contract this schema has no basis for.
     card_created      TEXT,
     card_updated      TEXT,
 
@@ -144,15 +150,24 @@ CREATE TABLE snapshot_stocks (
 
 -- positions is organic placement only. Paid placement is ad_placements, a
 -- separate table with its own owner per row; see spec section 4.3.
+--
+-- app_type is part of the key for the same reason it travels on snapshots: a
+-- rank measured as Android and a rank measured as Web describe different
+-- audiences, and folding them into one row would compare two audiences as if
+-- they were the same one -- the same mistake package wb refuses to make
+-- across dest, made instead across app_type.
 CREATE TABLE positions (
-    nm_id INTEGER NOT NULL REFERENCES products(nm_id) ON DELETE CASCADE,
-    query TEXT    NOT NULL,
-    dest  TEXT    NOT NULL,
-    ts    INTEGER NOT NULL,
-    rank  INTEGER NOT NULL,
-    page  INTEGER NOT NULL,
-    PRIMARY KEY (nm_id, query, dest, ts)
+    nm_id    INTEGER NOT NULL REFERENCES products(nm_id) ON DELETE CASCADE,
+    query    TEXT    NOT NULL,
+    dest     TEXT    NOT NULL,
+    app_type INTEGER NOT NULL,
+    ts       INTEGER NOT NULL,
+    rank     INTEGER NOT NULL,
+    page     INTEGER NOT NULL,
+    PRIMARY KEY (nm_id, query, dest, app_type, ts)
 ) STRICT;
 
--- The second index spec section 5.2 names.
+-- The second index spec section 5.2 names. app_type is deliberately not
+-- part of it: this index answers "who stood on this phrase in this region",
+-- a question audience does not narrow.
 CREATE INDEX idx_positions_query_dest_ts ON positions(query, dest, ts);

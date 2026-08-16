@@ -24,15 +24,21 @@ type migration struct {
 	sql     string
 }
 
-// loadMigrations reads every embedded migration, in version order.
+// loadMigrations reads every migration in fsys's "migrations" directory, in
+// version order.
+//
+// fsys is a parameter rather than a direct reference to the package-level
+// migrationFS so the numbering rules below -- the gap check, the duplicate
+// check, the missing-prefix check -- can be driven from a fstest.MapFS in
+// tests instead of only from whatever happens to be embedded in this build.
 //
 // The version comes from the file name's leading digits, so the order on
 // disk and the order of application are the same thing a reader sees. A
 // file that does not start with digits fails the load rather than being
 // skipped: a skipped migration is a schema that silently differs between
 // two installations.
-func loadMigrations() ([]migration, error) {
-	entries, err := fs.ReadDir(migrationFS, "migrations")
+func loadMigrations(fsys fs.FS) ([]migration, error) {
+	entries, err := fs.ReadDir(fsys, "migrations")
 	if err != nil {
 		return nil, fmt.Errorf("store: read migrations: %w", err)
 	}
@@ -47,7 +53,7 @@ func loadMigrations() ([]migration, error) {
 		if err != nil {
 			return nil, fmt.Errorf("store: migration %q: %w", name, err)
 		}
-		body, err := fs.ReadFile(migrationFS, "migrations/"+name)
+		body, err := fs.ReadFile(fsys, "migrations/"+name)
 		if err != nil {
 			return nil, fmt.Errorf("store: read migration %q: %w", name, err)
 		}
@@ -91,9 +97,25 @@ func (s *Store) migrate(ctx context.Context) error {
 		return err
 	}
 
-	all, err := loadMigrations()
+	all, err := loadMigrations(migrationFS)
 	if err != nil {
 		return err
+	}
+
+	// The reverse of the checksum check: a version recorded that this build
+	// does not embed means the database was last opened by a newer build,
+	// and this one was reached by rolling the binary back. Starting anyway
+	// would run this build's earlier migrations against a database that
+	// already has a later one's shape, and write into tables whose current
+	// columns this build has never seen.
+	var newest int
+	if len(all) > 0 {
+		newest = all[len(all)-1].version
+	}
+	for v := range applied {
+		if v > newest {
+			return fmt.Errorf("store: database has migration %d applied, but this build only knows migrations up to %d; refusing to start with a schema newer than this build understands", v, newest)
+		}
 	}
 
 	for _, m := range all {

@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"path/filepath"
 	"testing"
+	"testing/fstest"
 )
 
 // tableNames lists the tables the schema currently has.
@@ -56,14 +57,25 @@ func TestMigrate_CreatesTheCoreTables(t *testing.T) {
 }
 
 func TestMigrate_RecordsEveryMigrationItApplied(t *testing.T) {
+	// "at least 1" would still pass a migrate() that only ran the first
+	// embedded file and silently dropped the rest -- indistinguishable from
+	// correct today, while there is exactly one migration to run, but not
+	// once tasks 3-4 add more. Comparing against what loadMigrations itself
+	// reports as newest is the version of this assertion that stays honest.
 	s := openTestStore(t)
+
+	all, err := loadMigrations(migrationFS)
+	if err != nil {
+		t.Fatalf("loadMigrations: %v", err)
+	}
+	want := all[len(all)-1].version
 
 	v, err := s.SchemaVersion(context.Background())
 	if err != nil {
 		t.Fatalf("SchemaVersion: %v", err)
 	}
-	if v < 1 {
-		t.Errorf("SchemaVersion = %d, want at least 1", v)
+	if v != want {
+		t.Errorf("SchemaVersion = %d, want %d (every embedded migration applied)", v, want)
 	}
 }
 
@@ -206,5 +218,115 @@ func TestMigrate_RollsBackTheWholeMigrationWhenRecordingItFails(t *testing.T) {
 	}
 	if err != sql.ErrNoRows {
 		t.Fatalf("query products: %v", err)
+	}
+}
+
+func TestMigrate_DoesNotAdvanceSchemaVersionWhenTheDDLItselfFails(t *testing.T) {
+	// The mirror of the rollback test above. That test proves a DDL that
+	// commits cannot outlive a recording insert that fails; this proves the
+	// other ordering bug is also closed: an implementation that recorded the
+	// version first and ran the DDL second, both without a shared
+	// transaction, would leave SchemaVersion reporting a migration whose
+	// tables were never created. Calling applyMigration directly, with SQL
+	// guaranteed to fail, is what makes this ordering observable regardless
+	// of which of the two statements a future edit puts first.
+	s := openTestStore(t)
+	before, err := s.SchemaVersion(context.Background())
+	if err != nil {
+		t.Fatalf("SchemaVersion before: %v", err)
+	}
+
+	bad := migration{version: before + 1, name: "bad.sql", sql: "NOT VALID SQL AT ALL"}
+	if err := s.applyMigration(context.Background(), bad, checksum(bad.sql)); err == nil {
+		t.Fatal("applyMigration succeeded on invalid SQL")
+	}
+
+	after, err := s.SchemaVersion(context.Background())
+	if err != nil {
+		t.Fatalf("SchemaVersion after: %v", err)
+	}
+	if after != before {
+		t.Errorf("SchemaVersion moved from %d to %d after a migration whose DDL failed", before, after)
+	}
+}
+
+func TestMigrate_RefusesADatabaseNewerThanThisBuild(t *testing.T) {
+	// The reverse of the changed-checksum test: a user who ran a newer build
+	// long enough for a later migration to apply, then rolled the binary
+	// back to this one, must not have this build start as if nothing
+	// happened. This build's migrations are written against the schema they
+	// left behind, not the one a later migration already moved to.
+	path := filepath.Join(t.TempDir(), "future.db")
+
+	s, err := Open(context.Background(), path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if _, err := s.db.ExecContext(context.Background(),
+		`INSERT INTO schema_migrations (version, name, checksum, applied_at) VALUES (?, ?, ?, ?)`,
+		999, "0999_from_the_future.sql", "whatever", 0); err != nil {
+		t.Fatalf("seed future migration: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	if _, err := Open(context.Background(), path); err == nil {
+		t.Error("Open succeeded on a database with migration 999 applied, which no embedded file carries; want a refusal naming it")
+	}
+}
+
+func TestLoadMigrations_RefusesAGapInTheNumbering(t *testing.T) {
+	// A gap means some installation may have skipped a migration that
+	// another one applied, and every migration after the gap is written
+	// against a shape only some databases have.
+	fsys := fstest.MapFS{
+		"migrations/0001_a.sql": &fstest.MapFile{Data: []byte("CREATE TABLE a (id INTEGER) STRICT;")},
+		"migrations/0003_b.sql": &fstest.MapFile{Data: []byte("CREATE TABLE b (id INTEGER) STRICT;")},
+	}
+	if _, err := loadMigrations(fsys); err == nil {
+		t.Error("loadMigrations succeeded over 0001, 0003; want a refusal naming the gap")
+	}
+}
+
+func TestLoadMigrations_RefusesADuplicateVersion(t *testing.T) {
+	// Two files claiming the same version is two different opinions about
+	// what that version means, and whichever the sort happens to place
+	// second silently loses -- not a state this loader should let through
+	// quietly.
+	fsys := fstest.MapFS{
+		"migrations/0001_a.sql": &fstest.MapFile{Data: []byte("CREATE TABLE a (id INTEGER) STRICT;")},
+		"migrations/0001_b.sql": &fstest.MapFile{Data: []byte("CREATE TABLE b (id INTEGER) STRICT;")},
+	}
+	if _, err := loadMigrations(fsys); err == nil {
+		t.Error("loadMigrations succeeded with two files both claiming version 1; want a refusal")
+	}
+}
+
+func TestLoadMigrations_RefusesAFileWithoutAVersionPrefix(t *testing.T) {
+	// A file the loader cannot number is a file it cannot order or check
+	// for gaps against, so it must fail the whole load rather than be
+	// silently skipped -- a skipped migration is a schema that differs
+	// between installations without anyone deciding that on purpose.
+	fsys := fstest.MapFS{
+		"migrations/core.sql": &fstest.MapFile{Data: []byte("CREATE TABLE a (id INTEGER) STRICT;")},
+	}
+	if _, err := loadMigrations(fsys); err == nil {
+		t.Error("loadMigrations succeeded on a file with no leading version number; want a refusal")
+	}
+}
+
+func TestLoadMigrations_AcceptsASingleFile(t *testing.T) {
+	// The smallest legal input. Every check above rejects something; this
+	// confirms none of them also rejects the ordinary case of one migration.
+	fsys := fstest.MapFS{
+		"migrations/0001_a.sql": &fstest.MapFile{Data: []byte("CREATE TABLE a (id INTEGER) STRICT;")},
+	}
+	got, err := loadMigrations(fsys)
+	if err != nil {
+		t.Fatalf("loadMigrations: %v", err)
+	}
+	if len(got) != 1 || got[0].version != 1 {
+		t.Errorf("loadMigrations = %+v, want one migration at version 1", got)
 	}
 }
