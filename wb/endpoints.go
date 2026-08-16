@@ -39,6 +39,13 @@ type Endpoints struct {
 	// basket CDN's upstream-map address does: a hardcoded string can only be
 	// fixed by a release, an Endpoints field by editing a file.
 	Reviews string `yaml:"reviews"`
+	// Questions is the questions endpoint, on its own host
+	// (questions.wildberries.ru) distinct from both the main site and the
+	// reviews host (feedback-view-01.wb.ru). Unlike Reviews, it carries no
+	// {imtId} placeholder of its own: imtId, take, skip and onlyCount are
+	// query parameters QuestionsURL/QuestionCountURL append, not path
+	// segments, so a bare base address is all this field needs to hold.
+	Questions string `yaml:"questions"`
 }
 
 // searchTemplate is kept as one string, parameters and all, because the exact
@@ -61,6 +68,7 @@ func DefaultEndpoints() Endpoints {
 		ProductPage: "https://www.wildberries.ru/catalog/{id}/detail.aspx",
 		CardDetail:  "https://www.wildberries.ru/__internal/u-card/cards/v4/detail",
 		Reviews:     "https://feedback-view-01.wb.ru/feedbacks/v2/{imtId}",
+		Questions:   "https://questions.wildberries.ru/api/v1/questions",
 	}
 }
 
@@ -148,6 +156,9 @@ func (e Endpoints) Validate() error {
 	}
 	if strings.TrimSpace(e.CardDetail) == "" {
 		return errors.New("card_detail is empty")
+	}
+	if strings.TrimSpace(e.Questions) == "" {
+		return errors.New("questions is empty")
 	}
 	return nil
 }
