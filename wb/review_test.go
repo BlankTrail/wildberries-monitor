@@ -585,11 +585,19 @@ func TestClient_ReviewsFetchesWithThePlainProfile(t *testing.T) {
 // No lease is scripted for the fakeLeaser below, so a request that reaches
 // Acquire at all fails this test on its own with "out of leases".
 func TestClient_ReviewsRejectsANonPositiveImtID(t *testing.T) {
-	c := NewClient(&fakeLeaser{}, NewSessions())
+	// countingLeaser, not an empty fakeLeaser. An empty one fails every Acquire,
+	// so Reviews returns an error whether the guard exists or not and the test
+	// cannot tell the two apart. Counting the acquires can: a rejected id must
+	// never reach the transport at all.
+	l := &countingLeaser{}
+	c := NewClient(l, NewSessions())
 	for _, imtID := range []int64{0, -1} {
 		if _, err := c.Reviews(context.Background(), DefaultEndpoints(), imtID); err == nil {
 			t.Errorf("imtID=%d was accepted without error", imtID)
 		}
+	}
+	if l.calls != 0 {
+		t.Errorf("a rejected imtID reached the transport %d time(s); the guard must refuse it first", l.calls)
 	}
 }
 
