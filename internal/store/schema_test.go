@@ -57,6 +57,31 @@ var wantPrimaryKeys = map[string][]string{
 	"observations":             {"id"},
 	"events":                   {"id"},
 	"event_changes":            {"event_id", "position"},
+
+	// Task 4: the rest of spec section 5.1, none of it with a producer yet.
+	"ad_placements": {"id"},
+	"promos":        {"id"},
+	// The reading is part of the key: membership is what promo_items exists
+	// to answer, and a table that only knew the current price could not.
+	"promo_items": {"promo_id", "nm_id", "ts"},
+	"profiles":    {"id"},
+	// One membership kind lives at the same key as the others: is this
+	// entity_id already a member of this profile under this kind.
+	"profile_items": {"profile_id", "kind", "entity_id"},
+	"phrases":       {"id"},
+	"competitors":   {"profile_id", "kind", "entity_id"},
+	// The full key spec section 4.7's comparison needs: one profile, one
+	// listing, one phrase, one region, one reading, one baseline.
+	"benchmarks":     {"profile_id", "nm_id", "query", "dest", "ts", "baseline", "baseline_id"},
+	"jobs":           {"id"},
+	"job_runs":       {"id"},
+	"job_items":      {"run_id", "position"},
+	"channels":       {"id"},
+	"proxies":        {"id"},
+	"rules":          {"id"},
+	"rule_events":    {"id"},
+	"notify_targets": {"id"},
+	"notify_outbox":  {"id"},
 }
 
 // wantIndexes names, for every index this schema declares, its columns in
@@ -91,6 +116,22 @@ var wantIndexes = map[string][]string{
 	// indexed for the same reason snapshots and positions are.
 	"idx_events_nm_observed_at":   {"nm_id", "observed_at"},
 	"idx_events_kind_observed_at": {"kind", "observed_at"},
+
+	// Task 4: the rest of spec section 5.1.
+	//
+	// The third index spec section 5.2 names, for the table it names as the
+	// fastest-growing one in the schema.
+	"idx_ad_placements_query_dest_ts": {"query", "dest", "ts"},
+	"idx_ad_placements_nm_ts":         {"nm_id", "ts"},
+	"idx_promo_items_nm_ts":           {"nm_id", "ts"},
+	"idx_phrases_profile_state":       {"profile_id", "state"},
+	"idx_benchmarks_nm_query_dest_ts": {"nm_id", "query", "dest", "ts"},
+	"idx_job_runs_job_started":        {"job_id", "started_at"},
+	"idx_job_items_run_state":         {"run_id", "state"},
+	"idx_rule_events_rule_fired":      {"rule_id", "fired_at"},
+	"idx_rule_events_dedup":           {"dedup_key", "fired_at"},
+	// The worker's only question: what is pending and ready to go.
+	"idx_notify_outbox_due": {"state", "due_at"},
 }
 
 // pkColumns reports table's primary key columns, in key order.
