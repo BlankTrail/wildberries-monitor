@@ -783,11 +783,16 @@ func printSummary(w io.Writer, pages, products, uniqueIDs, dropped int, classes 
 	// total. The card path reports no cost at all (wb.Client.Card hands back
 	// decoded halves, not the Results behind them), so it stays silent here
 	// rather than printing zeroes as though they had been measured.
-	if cost.Attempts > pages || cost.Rotations > 0 || cost.TransportErrors > 0 {
+	if cost.Attempts > pages || cost.Rotations > 0 || cost.TransportErrors > 0 || cost.PortChanges > 0 {
 		fmt.Fprintln(w, "fetch cost:")
 		fmt.Fprintf(w, "  requests sent:      %d (for %d page(s))\n", cost.Attempts, pages)
 		fmt.Fprintf(w, "  proxy changes:      %d\n", cost.Rotations)
 		fmt.Fprintf(w, "  lost before reply:  %d\n", cost.TransportErrors)
+		// Separate from proxy changes on purpose: this one counts ports given
+		// up on, not upstreams replaced. A run showing several says the trouble
+		// is local — worker ports that are not there — rather than in the proxy
+		// list, and the two call for different things to be looked at.
+		fmt.Fprintf(w, "  ports abandoned:    %d\n", cost.PortChanges)
 	}
 
 	fmt.Fprintln(w, "egress:")

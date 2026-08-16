@@ -4,6 +4,7 @@ package wb
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -187,6 +188,16 @@ func (c *Client) Retry() RetryPolicy { return c.retry }
 // because the goal past the threshold is to find a working proxy in the fewest
 // requests, not to give each new one the same three tries the first one had.
 //
+// A third failure is retried on a different lease rather than the same one: the
+// port itself being unreachable, which the transport reports structurally (see
+// blanktrail.PortUnreachable) and which also shows up as a refused rotation.
+// Nothing done to a port that will not answer can fix it — a new egress least of
+// all, since the request never reached the old one — so the remaining budget is
+// spent on another port instead of being thrown away with this one. That
+// property came free when every attempt took a fresh lease; holding one lease is
+// what made a challenge retry able to change its proxy, and this is the price of
+// it, paid explicitly.
+//
 // What does not retry: a usable response is the answer, and a response that
 // says our own request was wrong travels with us whichever proxy sends it.
 // Neither is improved by sending the same request again from somewhere else.
@@ -212,41 +223,97 @@ func (c *Client) Get(ctx context.Context, url string, kind Kind, referer string)
 	if err != nil {
 		return nil, fmt.Errorf("acquire a transport session: %w", err)
 	}
-	// The lease goes back on every path below, including the failures. A lease
-	// that is not released takes its port out of the pool permanently.
-	defer lease.Release()
+	// Whatever lease is current when this returns goes back. A lease that is not
+	// released takes its port out of the pool permanently, and one released
+	// twice hands the same port to two callers; held is what keeps swapPort and
+	// this deferred call from disagreeing about which of them owes the release.
+	held := true
+	defer func() {
+		if held {
+			lease.Release()
+		}
+	}()
 
 	var (
-		last      *Result // the last attempt that produced a response
-		lastErr   error   // the last attempt that did not; only one of the two is ever set
-		spent     int     // attempts actually made, which is not the loop counter after an early exit
-		rotations int
-		faults    int
+		last        *Result // the last attempt that produced a response
+		lastErr     error   // the last attempt that did not; only one of the two is ever set
+		spent       int     // attempts actually made, which is not the loop counter after an early exit
+		onPort      int     // attempts made on the port currently held
+		rotations   int
+		portChanges int
+		faults      int
 	)
+
+	// swapPort gives the current port back and takes another. It is the only
+	// place a lease is exchanged, deliberately: the release and the acquire have
+	// to stay paired, and two copies of that pairing are two chances for one of
+	// them to leak a port. onPort restarts because the new port arrives with its
+	// own egress, which has earned its own attempts before being replaced.
+	swapPort := func() error {
+		lease.Release()
+		held = false
+		next, err := c.leaser.Acquire(ctx)
+		if err != nil {
+			return err
+		}
+		lease, held = next, true
+		onPort, portChanges = 0, portChanges+1
+		return nil
+	}
+
+attempts:
 	for attempt := 1; attempt <= c.retry.Attempts; attempt++ {
 		if attempt > 1 && ctx.Err() != nil {
 			break
 		}
-		if attempt > c.retry.AttemptsPerEgress {
-			if err := lease.RotateEgress(ctx); err != nil {
-				// Either there is no other address to move to — direct egress,
-				// a fixed gateway — or the transport could not make the change.
-				// Either way the next attempt would leave through the address
-				// that has already failed AttemptsPerEgress times in a row, so
-				// stop and report what the last attempt found.
-				break
+		if onPort >= c.retry.AttemptsPerEgress {
+			port := lease.Port()
+			switch err := lease.RotateEgress(ctx); {
+			case err == nil:
+				rotations++
+			case errors.Is(err, blanktrail.ErrRenewUnsupported):
+				// One address behind this port and no second one to move to —
+				// direct egress, or a gateway fixed when the port was opened.
+				// Every further attempt would leave through the address that has
+				// already failed, so stop and report what the last one found.
+				break attempts
+			default:
+				// The port refused to take a new egress. That says nothing about
+				// the egress: it is the port failing at the one thing asked of
+				// it, the same signal as a port that will not answer a request
+				// at all. Take another and spend the rest of the budget there.
+				if swapErr := swapPort(); swapErr != nil {
+					last, lastErr = nil, fmt.Errorf("port %d would not change its egress (%w), and no other port could be taken: %w",
+						port, err, swapErr)
+					break attempts
+				}
 			}
-			rotations++
 		}
 
 		res, err := c.attempt(ctx, lease, base, kind, referer)
 		spent++
+		onPort++
 		if err != nil {
 			faults++
 			last, lastErr = nil, err
+			// The request never reached the proxy: this port's own listener
+			// refused it, or it is gone. Rotating its egress would be
+			// meaningless — nothing was sent through the old one — and
+			// repeating on it is worse, so the budget moves to another port.
+			// Not after the last attempt, though: taking a port only to hand it
+			// straight back can block on a busy pool for no gain.
+			if blanktrail.PortUnreachable(err) && attempt < c.retry.Attempts {
+				port := lease.Port()
+				if swapErr := swapPort(); swapErr != nil {
+					lastErr = fmt.Errorf("port %d could not be reached (%w), and no other port could be taken: %w",
+						port, err, swapErr)
+					break attempts
+				}
+			}
 			continue
 		}
 		res.Attempts, res.Rotations, res.TransportErrors = spent, rotations, faults
+		res.PortChanges = portChanges
 		last, lastErr = res, nil
 		if res.Class != ClassChallenge {
 			return res, nil
@@ -254,8 +321,8 @@ func (c *Client) Get(ctx context.Context, url string, kind Kind, referer string)
 	}
 
 	if lastErr != nil {
-		return nil, fmt.Errorf("%s: giving up after %d attempt(s), %d egress change(s), %d of them lost before a response: %w",
-			url, spent, rotations, faults, lastErr)
+		return nil, fmt.Errorf("%s: giving up after %d attempt(s) over %d port(s), %d egress change(s), %d of them lost before a response: %w",
+			url, spent, portChanges+1, rotations, faults, lastErr)
 	}
 	if last == nil {
 		// Unreachable: withDefaults guarantees at least one attempt, and both

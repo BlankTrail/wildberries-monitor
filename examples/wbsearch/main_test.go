@@ -507,11 +507,16 @@ func TestValidateEgressFlags_RejectsNegativeRetryNumbers(t *testing.T) {
 // a run where every page landed first try.
 func TestPrintSummary_ReportsWhatThePagesCostWhenTheyWereNotFree(t *testing.T) {
 	var buf bytes.Buffer
-	cost := wb.FetchCost{Attempts: 11, Rotations: 4, TransportErrors: 2}
+	cost := wb.FetchCost{Attempts: 11, Rotations: 4, TransportErrors: 2, PortChanges: 1}
 	printSummary(&buf, 3, 250, 250, 0, map[wb.Class]int{wb.ClassOK: 3}, cost, blanktrail.Stats{}, egressSetup{})
 
 	out := buf.String()
-	for _, want := range []string{"requests sent:      11 (for 3 page(s))", "proxy changes:      4", "lost before reply:  2"} {
+	for _, want := range []string{
+		"requests sent:      11 (for 3 page(s))",
+		"proxy changes:      4",
+		"lost before reply:  2",
+		"ports abandoned:    1",
+	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("summary output missing %q; got:\n%s", want, out)
 		}

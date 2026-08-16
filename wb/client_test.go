@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"reflect"
 	"strings"
@@ -989,4 +990,205 @@ func TestFetchCost_AddsUpAcrossPages(t *testing.T) {
 	if (FetchCost{Attempts: 1}).Retried() {
 		t.Error("a plain first-try fetch reports itself as retried")
 	}
+}
+
+// --- a port that is not there ---
+//
+// The failure the third battle test died on: 127.0.0.1:20006 refusing
+// connections. That address is not an upstream proxy, it is the worker port on
+// this machine, and no egress change can help a port that is gone. Holding one
+// lease across the whole fetch is what let a challenge retry change its proxy;
+// it is also what turned a dead port into a lost page, because the old
+// fresh-lease-per-attempt shape escaped one for free. These pin the escape
+// hatch that pays that back.
+
+// portRefused is what net/http returns when the worker port will not accept a
+// connection: a typed *net.OpError, whose Op is the part anything reads. The
+// message is the operating system's and is never matched on.
+func portRefused() error {
+	return &net.OpError{
+		Op: "proxyconnect", Net: "tcp",
+		Err: errors.New("dial tcp 127.0.0.1:20006: connectex: No connection could be made"),
+	}
+}
+
+func TestClient_AbandonsAPortThatWillNotAnswerForAnother(t *testing.T) {
+	dead := &fakeLease{port: 20006, err: portRefused()}
+	live := &fakeLease{port: 20007, replies: []*http.Response{reply(200, "{}")}}
+	leaser := &fakeLeaser{leases: []*fakeLease{dead, live}}
+	c := NewClientWithRetry(leaser, NewSessions(), DefaultRetryPolicy(true))
+
+	got, err := c.Get(context.Background(), "https://www.wildberries.ru/x", KindSearch, "")
+	if err != nil {
+		t.Fatalf("Get: %v — a dead port must be swapped, not fatal", err)
+	}
+	if got.Status != 200 || got.Port != 20007 {
+		t.Errorf("Status=%d Port=%d, want 200 from port 20007", got.Status, got.Port)
+	}
+	if len(dead.sent) != 1 {
+		t.Errorf("the dead port was asked %d times, want 1 — a port that refuses connections is not worth a second", len(dead.sent))
+	}
+	if dead.rotations != 0 {
+		t.Errorf("the dead port was asked for %d egress changes; nothing reached its upstream, so there is nothing to change", dead.rotations)
+	}
+	if got.PortChanges != 1 || got.TransportErrors != 1 || got.Attempts != 2 {
+		t.Errorf("PortChanges=%d TransportErrors=%d Attempts=%d, want 1/1/2", got.PortChanges, got.TransportErrors, got.Attempts)
+	}
+	if got.Rotations != 0 {
+		t.Errorf("Rotations=%d, want 0 — taking another port is not rotating this one's egress", got.Rotations)
+	}
+}
+
+func TestClient_CarriesTheAttemptBudgetOntoTheNewPort(t *testing.T) {
+	// The budget belongs to the fetch, not to the port. A port change must
+	// neither refill it nor consume what is left. The new port does get its own
+	// AttemptsPerEgress before its egress is replaced, because it arrived with
+	// a different one.
+	dead := &fakeLease{port: 20006, err: portRefused()}
+	live := &fakeLease{port: 20007, replies: append(challenges(3), reply(200, "{}"))}
+	c := NewClientWithRetry(&fakeLeaser{leases: []*fakeLease{dead, live}}, NewSessions(),
+		RetryPolicy{Attempts: 15, AttemptsPerEgress: 3})
+
+	got, err := c.Get(context.Background(), "https://www.wildberries.ru/x", KindSearch, "")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Attempts != 5 {
+		t.Errorf("Attempts=%d, want 5 — one on the dead port, four on the one that answered", got.Attempts)
+	}
+	want := []string{"do", "do", "do", "rotate", "do"}
+	if !reflect.DeepEqual(live.events, want) {
+		t.Errorf("the new port saw %v, want %v — it arrives with its own egress and has earned its own three tries", live.events, want)
+	}
+	if got.PortChanges != 1 || got.Rotations != 1 {
+		t.Errorf("PortChanges=%d Rotations=%d, want 1/1", got.PortChanges, got.Rotations)
+	}
+}
+
+func TestClient_APortChangeDoesNotRefillTheBudget(t *testing.T) {
+	// Every port dead, budget fifteen. If a change reset the count this would
+	// run until the leaser ran out — twenty here, so the difference shows up as
+	// a count rather than as a hang.
+	leases := make([]*fakeLease, 20)
+	for i := range leases {
+		leases[i] = &fakeLease{port: 20000 + i, err: portRefused()}
+	}
+	leaser := &fakeLeaser{leases: leases}
+	c := NewClientWithRetry(leaser, NewSessions(), DefaultRetryPolicy(true))
+
+	got, err := c.Get(context.Background(), "https://www.wildberries.ru/x", KindSearch, "")
+	if err == nil {
+		t.Fatal("fifteen dead ports returned no error")
+	}
+	if got != nil {
+		t.Errorf("got a Result (%+v) alongside the error", got)
+	}
+	sent := 0
+	for _, l := range leases {
+		sent += len(l.sent)
+	}
+	if sent != 15 {
+		t.Errorf("sent %d requests in total, want 15 — the budget belongs to the fetch, not to each port", sent)
+	}
+	// Fifteen attempts means fourteen changes: the last attempt does not take a
+	// port it will never use, which on a busy pool would block waiting for one.
+	if leaser.n != 15 {
+		t.Errorf("acquired %d leases, want 15", leaser.n)
+	}
+	if !strings.Contains(err.Error(), "15 attempt(s) over 15 port(s)") {
+		t.Errorf("error %q does not say what the fetch spent and where", err)
+	}
+}
+
+func TestClient_TakesAnotherPortWhenThisOneWillNotChangeItsEgress(t *testing.T) {
+	// The other face of the same fault, and the one the live run actually hit:
+	// the port was gone, so the control API could not set its upstream either,
+	// and RotateEgress failed. That is not "there is nothing to rotate to" —
+	// which is ErrRenewUnsupported, and does mean stop — it is the port
+	// failing, so the fetch moves to another one instead of giving up with
+	// twelve attempts unspent.
+	broken := &fakeLease{
+		port:      20006,
+		replies:   challenges(3),
+		rotateErr: errors.New("blanktrail: set upstream on port 20006: 404 port not found"),
+	}
+	live := &fakeLease{port: 20007, replies: []*http.Response{reply(200, "{}")}}
+	c := NewClientWithRetry(&fakeLeaser{leases: []*fakeLease{broken, live}}, NewSessions(),
+		RetryPolicy{Attempts: 15, AttemptsPerEgress: 3})
+
+	got, err := c.Get(context.Background(), "https://www.wildberries.ru/x", KindSearch, "")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Status != 200 || got.Port != 20007 {
+		t.Errorf("Status=%d Port=%d, want 200 from the port that was taken instead", got.Status, got.Port)
+	}
+	if got.Attempts != 4 || got.PortChanges != 1 {
+		t.Errorf("Attempts=%d PortChanges=%d, want 4/1", got.Attempts, got.PortChanges)
+	}
+	if len(broken.sent) != 3 {
+		t.Errorf("the broken port served %d requests, want 3", len(broken.sent))
+	}
+}
+
+func TestClient_StillStopsWhenThereIsNoOtherEgressToMoveTo(t *testing.T) {
+	// ErrRenewUnsupported keeps meaning what it meant: direct egress, or a
+	// gateway fixed at open time, has one address and no second one. That is
+	// not a broken port and must not cost a port change — otherwise a direct
+	// run would churn through the pool for nothing.
+	l := &fakeLease{port: 1, replies: challenges(20), rotateErr: blanktrail.ErrRenewUnsupported}
+	leaser := &fakeLeaser{leases: []*fakeLease{l, {port: 2, replies: challenges(20)}}}
+	c := NewClientWithRetry(leaser, NewSessions(), DefaultRetryPolicy(true))
+
+	got, err := c.Get(context.Background(), "https://www.wildberries.ru/x", KindSearch, "")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Attempts != 3 || got.PortChanges != 0 {
+		t.Errorf("Attempts=%d PortChanges=%d, want 3/0", got.Attempts, got.PortChanges)
+	}
+	if leaser.n != 1 {
+		t.Errorf("acquired %d leases, want 1", leaser.n)
+	}
+}
+
+func TestClient_ReleasesEveryPortItTakesExactlyOnce(t *testing.T) {
+	// Where a leak would show. A lease that is never released takes its port
+	// out of the pool for good; one released twice hands the same port to two
+	// callers at once. Both paths that exchange a lease are covered: a swap
+	// that found another port, and a swap that did not.
+	t.Run("swaps that succeed", func(t *testing.T) {
+		leases := []*fakeLease{
+			{port: 1, err: portRefused()},
+			{port: 2, err: portRefused()},
+			{port: 3, replies: []*http.Response{reply(200, "{}")}},
+		}
+		c := NewClientWithRetry(&fakeLeaser{leases: leases}, NewSessions(), DefaultRetryPolicy(true))
+		if _, err := c.Get(context.Background(), "https://www.wildberries.ru/x", KindSearch, ""); err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+		for _, l := range leases {
+			if l.released != 1 {
+				t.Errorf("port %d released %d times, want exactly 1", l.port, l.released)
+			}
+		}
+	})
+
+	t.Run("a swap with nothing left to take", func(t *testing.T) {
+		// The deferred release and the swap both have a claim on this lease.
+		// Exactly one of them may act on it.
+		only := &fakeLease{port: 1, err: portRefused()}
+		c := NewClientWithRetry(&fakeLeaser{leases: []*fakeLease{only}}, NewSessions(), DefaultRetryPolicy(true))
+
+		_, err := c.Get(context.Background(), "https://www.wildberries.ru/x", KindSearch, "")
+		if err == nil {
+			t.Fatal("Get returned no error when the only port was dead and no other could be taken")
+		}
+		if only.released != 1 {
+			t.Errorf("released %d times, want exactly 1", only.released)
+		}
+		if !strings.Contains(err.Error(), "no other port could be taken") {
+			t.Errorf("error %q does not say that the pool had nothing left", err)
+		}
+	})
 }

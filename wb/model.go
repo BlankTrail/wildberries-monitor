@@ -200,6 +200,13 @@ type FetchCost struct {
 	// Client.Get returns the last error instead, wrapped with how much of the
 	// budget went into it.
 	TransportErrors int
+	// PortChanges counts how many times the fetch gave up on its port and took
+	// another, because that port could not be reached or would not accept a new
+	// egress. It is not a rotation: a rotation keeps the port and changes where
+	// it exits, this abandons the port itself, and the two say different things
+	// about where a run's trouble is — proxies that will not carry traffic, or
+	// worker ports that are not there.
+	PortChanges int
 }
 
 // Add accumulates another fetch into a running total, so a caller walking pages
@@ -208,10 +215,11 @@ func (c *FetchCost) Add(other FetchCost) {
 	c.Attempts += other.Attempts
 	c.Rotations += other.Rotations
 	c.TransportErrors += other.TransportErrors
+	c.PortChanges += other.PortChanges
 }
 
 // Retried reports whether this cost describes anything worth mentioning: a
 // fetch that took more than one request, or lost one before a response.
 func (c FetchCost) Retried() bool {
-	return c.Attempts > 1 || c.Rotations > 0 || c.TransportErrors > 0
+	return c.Attempts > 1 || c.Rotations > 0 || c.TransportErrors > 0 || c.PortChanges > 0
 }

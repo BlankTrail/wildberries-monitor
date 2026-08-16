@@ -100,8 +100,10 @@ the new address instead of carrying the old one's history into it.
 BlankTrail port. Routing, fingerprints and challenge solving are `blanktrail`'s
 job, not this package's; what `wb` does decide is what a response means and what
 is worth doing about it — how many times a request the edge challenged, or the
-proxy killed before it ever answered, is worth repeating, and when the port's
-proxy has had enough tries and should be replaced
+proxy killed before it ever answered, is worth repeating; when the port's
+proxy has had enough tries and should be replaced; and when the port itself is
+unreachable, so the fetch should move to another one and take the rest of its
+budget with it
 (`wb.RetryPolicy`, and `wb.DefaultRetryPolicy` for the two sensible starting
 points). It takes a `Leaser` (`wb.FromPool` adapts a `*blanktrail.Pool`) and
 a `*wb.Sessions`, and hands back a `*wb.Client` that every request goes
