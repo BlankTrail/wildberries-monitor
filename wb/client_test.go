@@ -501,16 +501,24 @@ func TestClient_KindSelectsTheHeaderProfile(t *testing.T) {
 func TestClient_UnnamedKindFallsBackToThePlainProfile(t *testing.T) {
 	// A Kind this switch does not name — added later without a case here —
 	// must fall to the least-fingerprinted profile, not the most. Every case
-	// in TestClient_KindSelectsTheHeaderProfile is one of the four declared
+	// in TestClient_KindSelectsTheHeaderProfile is one of the five declared
 	// constants, so none of them alone would notice default drifting to the
 	// wrong fallback.
+	//
+	// X-Client-Name belongs in the list below and is the newest reason this
+	// test exists: KindSuppliers made "least-fingerprinted" and "plain" stop
+	// being the same statement. Checking only the four gate names would leave
+	// default free to drift to the suppliers profile with the suite green,
+	// and that drift sends a header the front end reserves for one host to
+	// the basket CDN, questions and feedbacks — the invented traffic the
+	// default's own comment exists to forbid.
 	l := &fakeLease{replies: []*http.Response{reply(200, "{}")}}
 	c := NewClient(&fakeLeaser{leases: []*fakeLease{l}}, NewSessions())
 	if _, err := c.Get(context.Background(), "https://example.test/x", Kind(99), ""); err != nil {
 		t.Fatalf("Get: %v", err)
 	}
 	h := l.sent[0].Header
-	for _, name := range []string{"deviceid", "x-queryid", "x-userid", "x-spa-version"} {
+	for _, name := range []string{"deviceid", "x-queryid", "x-userid", "x-spa-version", "X-Client-Name"} {
 		if len(h[name]) != 0 {
 			t.Errorf("unnamed Kind: header %q present, want the plain (no-gate-headers) profile", name)
 		}

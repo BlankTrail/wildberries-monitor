@@ -454,16 +454,24 @@ func TestClient_SellerMergesStaticAndProfile(t *testing.T) {
 		t.Errorf("profile half URL=%q, want %q", got, sellerProfileURL(350748670))
 	}
 
-	// Both fetches carry the plain (no-gate) profile: neither host is the
-	// same-domain www.wildberries.ru.
+	// Neither host is the same-domain www.wildberries.ru, so neither fetch
+	// carries a gate header and both carry an Origin — the two properties the
+	// plain profile is built around, and the two the profile half still shares
+	// with the static one even though it is sent as KindSuppliers rather than
+	// KindPlain. What the two halves do NOT share is X-Client-Name, and that
+	// is deliberately not asserted here: it is the whole subject of
+	// TestClient_SellerSendsTheProfileWithTheSuppliersProfileAndTheStaticWithout,
+	// and repeating it in this loop would mean asserting it of both requests
+	// at once, which is exactly the thing that is false.
 	for _, sent := range []*http.Request{staticLease.sent[0], profileLease.sent[0]} {
 		for _, name := range []string{"deviceid", "x-queryid", "x-userid", "x-spa-version"} {
 			if len(sent.Header[name]) != 0 {
-				t.Errorf("request to %s carries %q — both seller sources are plain, gate-free hosts", sent.URL, name)
+				t.Errorf("request to %s carries %q — neither seller host has a gate and neither asked for it", sent.URL, name)
 			}
 		}
 		if got := sent.Header.Get("Origin"); got != "https://www.wildberries.ru" {
-			t.Errorf("request to %s: Origin=%q, want %q — only the plain profile sets it", sent.URL, got, "https://www.wildberries.ru")
+			t.Errorf("request to %s: Origin=%q, want %q — the same-origin profiles send none, and a cross-host fetch must",
+				sent.URL, got, "https://www.wildberries.ru")
 		}
 	}
 }
