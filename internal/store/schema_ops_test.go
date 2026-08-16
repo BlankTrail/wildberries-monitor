@@ -44,12 +44,18 @@ func TestAdPlacements_HaveTheIndexSpecSection52Names(t *testing.T) {
 func TestAdPlacements_RefuseAFractionalBid(t *testing.T) {
 	// A bid is minor units. STRICT is what makes 12.5 an error instead of a
 	// number that rounds differently on every read.
+	//
+	// This is a dedicated test rather than reliance on the general
+	// TestSchema_MoneyIsMinorUnits sweep, even though bid_minor's name now
+	// puts it inside that sweep too: the sweep only proves the column's
+	// declared type is INTEGER, not that STRICT actually rejects 12.5 on a
+	// live INSERT, which is the failure mode this table cares about.
 	s := openTestStore(t)
 
 	execFails(t, s, "a bid with a fractional part",
-		`INSERT INTO ad_placements (query, dest, ts, position, nm_id, placement_type, bid, bid_currency, slice_fingerprint)
+		`INSERT INTO ad_placements (query, dest, ts, position, nm_id, placement_type, bid_minor, bid_currency, slice_fingerprint)
 		 VALUES ('socks', '-1257786', 1000, 1, 111, 'auction', 12.5, 'RUB', 'abc')`)
-	execOK(t, s, `INSERT INTO ad_placements (query, dest, ts, position, nm_id, placement_type, bid, bid_currency, slice_fingerprint)
+	execOK(t, s, `INSERT INTO ad_placements (query, dest, ts, position, nm_id, placement_type, bid_minor, bid_currency, slice_fingerprint)
 	              VALUES ('socks', '-1257786', 1000, 1, 111, 'auction', 12500, 'RUB', 'abc')`)
 }
 
@@ -64,7 +70,7 @@ func TestAdPlacements_AnUnpublishedBidIsNotAZeroBid(t *testing.T) {
 
 	var bid sql.NullInt64
 	if err := s.db.QueryRowContext(context.Background(),
-		`SELECT bid FROM ad_placements WHERE nm_id = 222`).Scan(&bid); err != nil {
+		`SELECT bid_minor FROM ad_placements WHERE nm_id = 222`).Scan(&bid); err != nil {
 		t.Fatalf("read placement: %v", err)
 	}
 	if bid.Valid {
@@ -159,6 +165,20 @@ func TestPhrases_RefuseTheSameCandidateTwice(t *testing.T) {
 		 VALUES (4, 'wool socks', 'working', 'uploaded', 111, '-1257786', 20)`)
 }
 
+func TestCompetitors_RefuseAKindOutsideTheTwo(t *testing.T) {
+	// Spec section 4.7 ranks a competitor either as a seller or as a listing.
+	// A third spelling is a row the comparison screen has no column for and
+	// the recompute silently skips, so it sits in the table looking tracked
+	// while nothing ever updates its position_delta again.
+	s := openTestStore(t)
+
+	execOK(t, s, `INSERT INTO profiles (id, name, source_input, seller_id, created_at, updated_at)
+	              VALUES (5, 'mine', '', 0, 10, 10)`)
+
+	execFails(t, s, "a competitor of an unknown kind",
+		`INSERT INTO competitors (profile_id, kind, entity_id, computed_at) VALUES (5, 'brand', 9, 10)`)
+}
+
 func TestBenchmarks_KeepMoneyBesideItsCurrency(t *testing.T) {
 	// The comparison table of spec section 4.7 puts price side by side with
 	// the rival's price. Both are minor units, and one currency column
@@ -198,6 +218,34 @@ func TestJobs_DeletingAJobTakesItsRunsAndItems(t *testing.T) {
 	}
 }
 
+func TestJobRuns_RefuseAStateOutsideTheFour(t *testing.T) {
+	// The resume logic of spec section 10 asks "is this run still going" by
+	// state alone. A fifth spelling is a run the resumer does not recognise
+	// as finished and does not recognise as in progress either, so it is
+	// never resumed and never reported as done.
+	s := openTestStore(t)
+
+	execOK(t, s, `INSERT INTO jobs (id, name, type, params, fields, regions, channels, schedule, threads, delay_ms, enabled, created_at, updated_at)
+	              VALUES (2, 'hourly', 'search', '{}', '[]', '[]', '[]', '', 4, 3000, 1, 10, 10)`)
+
+	execFails(t, s, "a job run in an unknown state",
+		`INSERT INTO job_runs (job_id, started_at, state) VALUES (2, 20, 'paused')`)
+}
+
+func TestJobItems_RefuseAStateOutsideTheFive(t *testing.T) {
+	// The same resume logic reads job_items per item. A sixth spelling is an
+	// item the resumer skips over without ever marking it done, failed or
+	// even attempted -- the exact silent gap spec section 10 exists to close.
+	s := openTestStore(t)
+
+	execOK(t, s, `INSERT INTO jobs (id, name, type, params, fields, regions, channels, schedule, threads, delay_ms, enabled, created_at, updated_at)
+	              VALUES (3, 'hourly', 'search', '{}', '[]', '[]', '[]', '', 4, 3000, 1, 10, 10)`)
+	execOK(t, s, `INSERT INTO job_runs (id, job_id, started_at, state) VALUES (2, 3, 20, 'running')`)
+
+	execFails(t, s, "a job item in an unknown state",
+		`INSERT INTO job_items (run_id, position, kind, item_key, state) VALUES (2, 1, 'product', '111', 'queued')`)
+}
+
 func TestChannels_RefuseAKindOutsideTheFour(t *testing.T) {
 	// Spec section 3.5 has exactly four channel implementations. A fifth
 	// spelling here is a channel the mixer will never pick, configured by a
@@ -224,6 +272,40 @@ func TestProxies_DeletingAChannelTakesItsProxies(t *testing.T) {
 	}
 }
 
+func TestProxies_RefuseASchemeOutsideTheFive(t *testing.T) {
+	// Spec section 3.5 names exactly five accepted schemes. A typo like
+	// 'sock5' that this table let through would sit unnoticed until the
+	// channel tried to dial it and failed, and the parser -- not this
+	// schema, which had the chance to refuse the row outright -- would take
+	// the blame.
+	s := openTestStore(t)
+
+	execOK(t, s, `INSERT INTO channels (id, name, kind, source, weight, enabled, created_at, updated_at)
+	              VALUES (2, 'list', 'proxy-list', 'proxies.txt', 100, 1, 10, 10)`)
+
+	execFails(t, s, "a proxy scheme that is not one of the five spec names",
+		`INSERT INTO proxies (channel_id, scheme, host, port) VALUES (2, 'sock5', '10.0.0.1', 1080)`)
+}
+
+func TestProxies_RefuseTheSameProxyTwice(t *testing.T) {
+	// A proxy list is reread on every run of the channel that owns it. Without
+	// the unique key, rereading the same list twice doubles every entry
+	// instead of leaving it in place, fail_streak splits across the
+	// duplicates instead of accumulating on one row, and a proxy that should
+	// have been quarantined after enough failures never crosses the
+	// threshold because no single row saw them all.
+	s := openTestStore(t)
+
+	execOK(t, s, `INSERT INTO channels (id, name, kind, source, weight, enabled, created_at, updated_at)
+	              VALUES (3, 'list', 'proxy-list', 'proxies.txt', 100, 1, 10, 10)`)
+	execOK(t, s, `INSERT INTO proxies (channel_id, scheme, host, port, username, password)
+	              VALUES (3, 'socks5', '10.0.0.1', 1080, 'u', 'p')`)
+
+	execFails(t, s, "the same channel/scheme/host/port/username reread a second time",
+		`INSERT INTO proxies (channel_id, scheme, host, port, username, password)
+		 VALUES (3, 'socks5', '10.0.0.1', 1080, 'u', 'different-password-does-not-matter')`)
+}
+
 func TestRules_DeletingARuleTakesItsFirings(t *testing.T) {
 	s := openTestStore(t)
 
@@ -241,6 +323,20 @@ func TestRules_DeletingARuleTakesItsFirings(t *testing.T) {
 	if n := countQuery(t, s, `SELECT count(*) FROM rule_events`); n != 0 {
 		t.Errorf("rule_events left %d rows after its rule was deleted, want 0", n)
 	}
+}
+
+func TestRules_RefuseAScopeKindOutsideTheFour(t *testing.T) {
+	// Spec section 6.2 scopes a rule to a product, a seller, a job or a
+	// filter -- nothing else. A fifth spelling is a rule the matching engine's
+	// switch does not handle, so it silently never fires and the user finds
+	// out only by the absence of a notification they expected.
+	s := openTestStore(t)
+
+	execFails(t, s, "a rule scoped to something outside the four kinds",
+		`INSERT INTO rules (id, name, event_kind, condition, scope_kind, scope_id, scope_filter, urgent,
+		                    threshold_pct, threshold_minor, threshold_currency, min_interval_sec, aggregate,
+		                    targets, enabled, created_at, updated_at)
+		 VALUES (3, 'price drop', 'price-changed', '{}', 'category', 111, '{}', 0, 5, 0, 'RUB', 600, 0, '[]', 1, 10, 10)`)
 }
 
 func TestNotifyOutbox_KeepsAQueuedMessageWhenItsRuleEventGoes(t *testing.T) {

@@ -24,6 +24,11 @@
 -- threads and delay_ms are the knobs the job screen exposes (section 7);
 -- zero means "use the application default" rather than "no threads" and "no
 -- delay", both of which would be nonsense settings.
+--
+-- schedule has no declared format. The spec does not say whether a saved job
+-- runs on a cron string, a fixed interval or a calendar picker in the UI, so
+-- this is TEXT and opaque to the schema; whatever scheduler M3-M5 build
+-- parses it, and an empty string means "not scheduled, run on demand only".
 CREATE TABLE jobs (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     name       TEXT    NOT NULL DEFAULT '',
@@ -111,12 +116,27 @@ CREATE TABLE channels (
 -- spec section 3.5 produces. The five accepted input spellings all reduce to
 -- these fields, which is why the parsed form is stored rather than the line.
 --
+-- scheme is checked against the same five spellings section 3.5 names --
+-- http, https, socks5, socks5h, socks4 -- for the same reason channels.kind
+-- is checked above: a typo like 'sock5' would otherwise sit in the table
+-- until the channel silently failed to dial, and the parser, not this
+-- schema, would take the blame for a row the schema could have refused.
+--
 -- fail_streak is per proxy and not per channel: a single dead entry in a
 -- healthy list should cost that entry its place, not the list its weight.
+--
+-- password is stored as the parser hands it over, in cleartext. This is an
+-- open question, not a decision: spec section 3.5 says proxy lists are
+-- parsed with credentials in them but does not say whether those credentials
+-- belong on disk, and this database's file is the one thing a user is
+-- expected to copy or back up when moving to another machine. The column
+-- exists because a proxy channel cannot be dialled without a password to
+-- send; it is not evidence that storing it in the clear was reviewed and
+-- accepted.
 CREATE TABLE proxies (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     channel_id   INTEGER NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
-    scheme       TEXT    NOT NULL,
+    scheme       TEXT    NOT NULL CHECK (scheme IN ('http', 'https', 'socks5', 'socks5h', 'socks4')),
     host         TEXT    NOT NULL,
     port         INTEGER NOT NULL,
     username     TEXT    NOT NULL DEFAULT '',
@@ -142,9 +162,11 @@ CREATE TABLE proxies (
 --
 -- The suppression columns are section 6.3 in full, and they are not
 -- decoration: a monitor that sends forty messages in one pass is switched off
--- on the second day. urgent is the one exemption from quiet hours -- the quiet
--- hours themselves are an application setting, and section 5.1 lists no table
--- for settings, so nothing here stores them.
+-- on the second day. aggregate is per rule -- whether this rule's own firings
+-- batch -- and is not the same thing as the global aggregation threshold
+-- section 6.3 also describes; that threshold, like quiet hours, is an
+-- application setting, and section 5.1 lists no table for settings, so
+-- neither one is stored here. urgent is the one exemption from quiet hours.
 --
 -- targets is a JSON array of notify_targets ids, for the same reason
 -- jobs.channels is one: many-to-many with no join table in the stated list.

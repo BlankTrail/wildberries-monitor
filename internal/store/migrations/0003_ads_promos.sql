@@ -22,9 +22,13 @@
 -- is written -- and this is what lets that comparison be one indexed lookup
 -- instead of reassembling and comparing the previous list.
 --
--- bid is minor units and nullable, and nullable is the load-bearing part:
--- spec section 4.2 warns that WB may not publish bids at all, and a missing
--- bid stored as zero reads as "this seat was free".
+-- bid_minor is minor units and nullable, and nullable is the load-bearing
+-- part: spec section 4.2 warns that WB may not publish bids at all, and a
+-- missing bid stored as zero reads as "this seat was free". The _minor
+-- suffix matches rules.threshold_minor below and is what lets
+-- TestSchema_MoneyIsMinorUnits (schema_signals_test.go, task 3) find this
+-- column by its general "every %_minor column is INTEGER" sweep instead of
+-- depending only on this table's own dedicated test to keep watching it.
 --
 -- placement_type has no CHECK. The vocabulary of placement types is what the
 -- risky-source reconnaissance of milestone M1 is meant to discover; freezing
@@ -32,17 +36,22 @@
 --
 -- There is no app_type column: spec section 4.3 keys an ad slice on
 -- (query, dest, ts) and nothing in the spec fills a fourth dimension.
+--
+-- There is no page column either. positions.page (migration 0001) exists
+-- because wb.Product.Page is a field the search response actually carries;
+-- there is no wb.AdPlacement type at all yet, spec section 4.3's field list
+-- for a paid seat is nmID, position, placement type, bid, seller, and
+-- nothing here would have a real value to hold before a producer exists.
 CREATE TABLE ad_placements (
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
     query             TEXT    NOT NULL,
     dest              TEXT    NOT NULL,
     ts                INTEGER NOT NULL,
     position          INTEGER NOT NULL,
-    page              INTEGER NOT NULL DEFAULT 0,
     nm_id             INTEGER NOT NULL,
     supplier_id       INTEGER,
     placement_type    TEXT    NOT NULL DEFAULT '',
-    bid               INTEGER,
+    bid_minor         INTEGER,
     bid_currency      TEXT    NOT NULL DEFAULT '',
     slice_fingerprint TEXT    NOT NULL
 ) STRICT;
