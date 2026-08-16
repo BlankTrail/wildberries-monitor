@@ -31,6 +31,12 @@ type fakeLease struct {
 	// rotateErr is what RotateEgress reports instead of making one.
 	rotations int
 	rotateErr error
+	// dropAt fails the requests with these 1-based indexes at the transport
+	// level — the proxy refusing, dropping or forcibly closing the connection —
+	// without consuming a scripted reply, so a dead connection can be scripted
+	// in among ordinary responses. The err field above is the blunter version:
+	// every request fails, forever.
+	dropAt map[int]error
 	// events is the ordered log of what the lease was asked to do: "do" for a
 	// request, "rotate" for an egress change. The retry policy is a statement
 	// about the order of those two — three requests, then a rotation, then a
@@ -54,6 +60,9 @@ func (f *fakeLease) Do(req *http.Request) (*http.Response, error) {
 	f.events = append(f.events, "do")
 	if f.err != nil {
 		return nil, f.err
+	}
+	if err, ok := f.dropAt[len(f.sent)]; ok {
+		return nil, err
 	}
 	if len(f.replies) == 0 {
 		return nil, errors.New("fakeLease: no reply scripted")
@@ -750,5 +759,160 @@ func TestSearchReferer_FallsBackToTheBuiltInOriginForAnOddHome(t *testing.T) {
 		if !strings.HasPrefix(got, "https://www.wildberries.ru/") {
 			t.Errorf("searchReferer with Home=%q is %q, want it to fall back to the built-in origin", home, got)
 		}
+	}
+}
+
+// --- transport errors ---
+//
+// The live run that produced the retry policy also produced the gap these
+// cover. Page five died on "An existing connection was forcibly closed by the
+// remote host": not a challenge, so the loop above never saw it, and the whole
+// page was abandoned on the first attempt with none of the budget spent and no
+// proxy replaced. It is the same loss the policy exists to prevent, arriving
+// through a different door — and a proxy that kills the connection is the
+// strongest evidence available that the proxy, not the target, is the problem.
+
+// errConnKilled is the shape the live failure took: no response, no status, just a
+// dead socket.
+var errConnKilled = errors.New("read tcp 127.0.0.1:58713->127.0.0.1:20013: wsarecv: " +
+	"An existing connection was forcibly closed by the remote host")
+
+// killedAt scripts a dead connection for each of the 1-based request indexes.
+func killedAt(indexes ...int) map[int]error {
+	m := make(map[int]error, len(indexes))
+	for _, i := range indexes {
+		m[i] = errConnKilled
+	}
+	return m
+}
+
+func TestClient_RetriesADeadConnectionAndThenChangesTheProxy(t *testing.T) {
+	// The same shape the challenge case has, and deliberately so: three
+	// attempts through the proxy the port already had, then a different proxy,
+	// and the fetch comes back with its data rather than as a lost page.
+	l := &fakeLease{port: 20013, dropAt: killedAt(1, 2, 3), replies: []*http.Response{reply(200, `{"products":[]}`)}}
+	c := NewClientWithRetry(&fakeLeaser{leases: []*fakeLease{l}}, NewSessions(),
+		RetryPolicy{Attempts: 15, AttemptsPerEgress: 3})
+
+	got, err := c.Get(context.Background(), "https://www.wildberries.ru/x", KindSearch, "")
+	if err != nil {
+		t.Fatalf("Get: %v — a dead connection must be retried, not returned", err)
+	}
+	want := []string{"do", "do", "do", "rotate", "do"}
+	if !reflect.DeepEqual(l.events, want) {
+		t.Errorf("lease saw %v, want %v — three attempts on the first proxy, then a new one", l.events, want)
+	}
+	if got.Status != 200 || got.Attempts != 4 || got.Rotations != 1 {
+		t.Errorf("Status=%d Attempts=%d Rotations=%d, want 200/4/1", got.Status, got.Attempts, got.Rotations)
+	}
+	if got.TransportErrors != 3 {
+		t.Errorf("TransportErrors=%d, want 3 — the attempts that never got a response", got.TransportErrors)
+	}
+}
+
+func TestClient_CountsChallengesAndDeadConnectionsApart(t *testing.T) {
+	// Both failures feed one budget, but they mean different things: the edge
+	// refusing us is the target's defence, a dead socket is the proxies. A
+	// caller reading the result — or a summary line — has to be able to tell
+	// which it was, and a dead connection leaves no status and no body to say so.
+	l := &fakeLease{port: 20013, dropAt: killedAt(1, 2), replies: []*http.Response{
+		reply(498, "<html>challenge</html>"),
+		reply(200, "{}"),
+	}}
+	c := NewClientWithRetry(&fakeLeaser{leases: []*fakeLease{l}}, NewSessions(),
+		RetryPolicy{Attempts: 15, AttemptsPerEgress: 3})
+
+	got, err := c.Get(context.Background(), "https://www.wildberries.ru/x", KindSearch, "")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Attempts != 4 || got.Rotations != 1 {
+		t.Errorf("Attempts=%d Rotations=%d, want 4/1 — two dead connections and a challenge share one budget", got.Attempts, got.Rotations)
+	}
+	if got.TransportErrors != 2 {
+		t.Errorf("TransportErrors=%d, want 2 — three failed attempts, of which one was the edge answering", got.TransportErrors)
+	}
+}
+
+func TestClient_ADeadContextStopsTheLoopInsteadOfBurningTheBudget(t *testing.T) {
+	// Nothing can succeed once the caller's context is done, so the rest of the
+	// budget would go on requests that fail before they are sent — and, worse,
+	// on an egress rotation per attempt, each one a control-API call spending a
+	// proxy for a run that is already over.
+	//
+	// The live-context half is what makes the cancelled half mean anything: the
+	// same lease and the same script, differing only in the context, must spend
+	// the whole budget.
+	newLease := func() *fakeLease { return &fakeLease{port: 20013, err: errConnKilled} }
+
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	stopped := newLease()
+	c := NewClientWithRetry(&fakeLeaser{leases: []*fakeLease{stopped}}, NewSessions(), DefaultRetryPolicy(true))
+	if _, err := c.Get(cancelled, "https://www.wildberries.ru/x", KindSearch, ""); err == nil {
+		t.Fatal("Get on a cancelled context returned no error")
+	}
+	if len(stopped.sent) != 1 {
+		t.Errorf("sent %d requests on a cancelled context, want 1 — the loop must stop, not spend fifteen", len(stopped.sent))
+	}
+	if stopped.rotations != 0 {
+		t.Errorf("asked for %d egress changes on a cancelled context", stopped.rotations)
+	}
+
+	spent := newLease()
+	c = NewClientWithRetry(&fakeLeaser{leases: []*fakeLease{spent}}, NewSessions(), DefaultRetryPolicy(true))
+	if _, err := c.Get(context.Background(), "https://www.wildberries.ru/x", KindSearch, ""); err == nil {
+		t.Fatal("Get with every attempt failing returned no error")
+	}
+	if len(spent.sent) != 15 {
+		t.Errorf("sent %d requests on a live context, want 15 — otherwise the cancelled half proves nothing", len(spent.sent))
+	}
+}
+
+func TestClient_DeadConnectionsRespectTheSameCeiling(t *testing.T) {
+	// The budget is a total across both failures, not one budget each. The
+	// error that comes back carries what it cost, because there is no Result to
+	// carry it: fifteen dead connections leave no status and no body behind.
+	l := &fakeLease{port: 20013, err: errConnKilled}
+	c := NewClientWithRetry(&fakeLeaser{leases: []*fakeLease{l}}, NewSessions(), DefaultRetryPolicy(true))
+
+	got, err := c.Get(context.Background(), "https://www.wildberries.ru/x", KindSearch, "")
+	if err == nil {
+		t.Fatal("fifteen dead connections returned no error")
+	}
+	if got != nil {
+		t.Errorf("got a Result (%+v) alongside the error; a connection that died produced no response to report", got)
+	}
+	if len(l.sent) != 15 {
+		t.Errorf("sent %d requests, want 15", len(l.sent))
+	}
+	if l.rotations != 12 {
+		t.Errorf("asked for %d egress changes, want 12 — one per attempt past the threshold", l.rotations)
+	}
+	if !errors.Is(err, errConnKilled) {
+		t.Errorf("error %v does not wrap the transport's own; the cause must survive to the caller", err)
+	}
+	for _, want := range []string{"15", "12"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not say %q — what the fetch cost is the whole diagnosis when there is no Result", err, want)
+		}
+	}
+	if l.released != 1 {
+		t.Errorf("released %d times, want exactly 1", l.released)
+	}
+}
+
+func TestClient_DoesNotRetryARequestItCouldNotBuild(t *testing.T) {
+	// A URL that will not parse fails identically every time. Spending fifteen
+	// attempts on it would also spend twelve proxies — each rotation a
+	// control-API call — on a typo in this program.
+	l := &fakeLease{port: 1, replies: []*http.Response{reply(200, "{}")}}
+	c := NewClientWithRetry(&fakeLeaser{leases: []*fakeLease{l}}, NewSessions(), DefaultRetryPolicy(true))
+
+	if _, err := c.Get(context.Background(), "://nonsense", KindSearch, ""); err == nil {
+		t.Fatal("a URL that cannot be parsed into a request returned no error")
+	}
+	if len(l.sent) != 0 || l.rotations != 0 {
+		t.Errorf("sent %d requests and asked for %d egress changes for a request that was never built", len(l.sent), l.rotations)
 	}
 }

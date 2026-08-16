@@ -82,6 +82,18 @@ type Result struct {
 	// egress pool the second is the whole point, and without one it is
 	// impossible, so a run that expected to search and did not shows up here.
 	Rotations int
+	// TransportErrors counts the attempts that never got a response at all —
+	// the proxy refusing, dropping or forcibly closing the connection. Both that
+	// and a challenge are retried the same way and cost the same budget, but
+	// they mean different things and call for different action: "the edge
+	// challenged us four times" is the target's defence, "the connection died
+	// four times" is the proxies. Without this the two are indistinguishable in
+	// a Result, because a dead connection leaves no status and no body behind.
+	//
+	// When every attempt dies this way there is no Result to carry it: Get
+	// returns the last error instead, wrapped with how much of the budget went
+	// into it.
+	TransportErrors int
 }
 
 // Retry policy defaults for a challenged request. They are exported because the
@@ -169,29 +181,49 @@ func (c *Client) Retry() RetryPolicy { return c.retry }
 
 // Get fetches url with the header profile kind demands.
 //
-// One lease serves the whole call, challenge retries included. A challenge is
-// repeated on the port that met it, and once RetryPolicy.AttemptsPerEgress
-// attempts have gone out through one exit address, every further attempt
-// replaces that address first.
+// One lease serves the whole call, retries included. A fetch that fails in a
+// way a different proxy could fix is repeated on the port that met it, and once
+// RetryPolicy.AttemptsPerEgress attempts have gone out through one exit
+// address, every further attempt replaces that address first.
 //
-// The reasoning, corrected by a live run: the transport's solver works on many
-// challenges at once, so one reaching us does not mean the solver is
-// oversubscribed — it means this particular attempt went unsolved, and the
-// likeliest cause is the proxy behind this port being slow or otherwise poor.
-// Retrying is therefore worth far more than reporting the challenge, and after
-// a few tries on one address the address is the thing to change. Releasing the
-// lease and taking a fresh one does not change it: that is a different port,
-// possibly the same one back again, and never a different upstream proxy.
+// Two failures qualify, for the same underlying reason.
+//
+// A challenge: the transport's solver works on many at once, so one reaching us
+// does not mean the solver is oversubscribed — it means this particular attempt
+// went unsolved, and the likeliest cause is the proxy behind this port being
+// slow or otherwise poor. A transport error: the request never got a response
+// at all, because the proxy refused, dropped or forcibly closed the connection,
+// which is the strongest evidence available that the proxy is bad. Both are
+// worth far more repeated than reported, and after a few tries through one
+// address the address is the thing to change. Releasing the lease and taking a
+// fresh one does not change it: that is a different port, possibly the same one
+// back again, and never a different upstream proxy.
 //
 // The search is one proxy per attempt rather than one per group of attempts,
 // because the goal past the threshold is to find a working proxy in the fewest
 // requests, not to give each new one the same three tries the first one had.
 //
-// Only a challenge retries. A usable response is the answer; a request-level
-// fault is our own headers and travels with us; a transport error already had
-// the transport's own ladder applied to it. None of the three is improved by
-// sending the same request again from somewhere else.
+// What does not retry: a usable response is the answer, and a response that
+// says our own request was wrong travels with us whichever proxy sends it.
+// Neither is improved by sending the same request again from somewhere else.
+// Nor is anything, once the caller's context is done — the remaining budget
+// would be spent on requests that fail before they are sent, so the loop stops
+// there.
+//
+// A fetch that ends on a challenge comes back as that Result, with Attempts,
+// Rotations and TransportErrors describing what it cost. A fetch that ends on a
+// dead connection has no Result to come back as, so it returns the last error,
+// wrapped with the same counts in words.
 func (c *Client) Get(ctx context.Context, url string, kind Kind, referer string) (*Result, error) {
+	// Built once, before the lease and before the loop. A URL that will not
+	// parse is a fault in this program rather than in the transport: it would
+	// fail identically on every attempt, and letting it into the loop would
+	// spend a fresh proxy per attempt on a typo.
+	base, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("build the request: %w", err)
+	}
+
 	lease, err := c.leaser.Acquire(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("acquire a transport session: %w", err)
@@ -200,31 +232,53 @@ func (c *Client) Get(ctx context.Context, url string, kind Kind, referer string)
 	// that is not released takes its port out of the pool permanently.
 	defer lease.Release()
 
-	var last *Result
-	rotations := 0
+	var (
+		last      *Result // the last attempt that produced a response
+		lastErr   error   // the last attempt that did not; only one of the two is ever set
+		spent     int     // attempts actually made, which is not the loop counter after an early exit
+		rotations int
+		faults    int
+	)
 	for attempt := 1; attempt <= c.retry.Attempts; attempt++ {
+		if attempt > 1 && ctx.Err() != nil {
+			break
+		}
 		if attempt > c.retry.AttemptsPerEgress {
 			if err := lease.RotateEgress(ctx); err != nil {
 				// Either there is no other address to move to — direct egress,
 				// a fixed gateway — or the transport could not make the change.
 				// Either way the next attempt would leave through the address
 				// that has already failed AttemptsPerEgress times in a row, so
-				// stop here and report the challenge. last is never nil in this
-				// branch: it is only reachable after an attempt returned one.
+				// stop and report what the last attempt found.
 				break
 			}
 			rotations++
 		}
 
-		res, err := c.attempt(ctx, lease, url, kind, referer)
+		res, err := c.attempt(ctx, lease, base, kind, referer)
+		spent++
 		if err != nil {
-			return nil, err
+			faults++
+			last, lastErr = nil, err
+			continue
 		}
-		res.Attempts, res.Rotations = attempt, rotations
+		res.Attempts, res.Rotations, res.TransportErrors = spent, rotations, faults
+		last, lastErr = res, nil
 		if res.Class != ClassChallenge {
 			return res, nil
 		}
-		last = res
+	}
+
+	if lastErr != nil {
+		return nil, fmt.Errorf("%s: giving up after %d attempt(s), %d egress change(s), %d of them lost before a response: %w",
+			url, spent, rotations, faults, lastErr)
+	}
+	if last == nil {
+		// Unreachable: withDefaults guarantees at least one attempt, and both
+		// early exits above run only after one has been made. Kept because
+		// returning a nil result with a nil error faults in the caller, far
+		// from whatever made it happen here.
+		return nil, fmt.Errorf("%s: no attempt was made", url)
 	}
 	return last, nil
 }
@@ -232,13 +286,16 @@ func (c *Client) Get(ctx context.Context, url string, kind Kind, referer string)
 // attempt makes exactly one request on lease and returns it read and judged.
 //
 // The lease belongs to the caller: attempt neither acquires nor releases it,
-// because a challenge retry has to stay on the same port for changing that
-// port's upstream proxy to mean anything.
-func (c *Client) attempt(ctx context.Context, lease Lease, url string, kind Kind, referer string) (*Result, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, fmt.Errorf("build the request: %w", err)
-	}
+// because a retry has to stay on the same port for changing that port's
+// upstream proxy to mean anything.
+//
+// base is cloned rather than sent, because a request that has been through
+// http.Client once must not be handed to it again — and because the headers are
+// rebuilt per attempt from the lease's current session, which changes under us
+// whenever the exit address does.
+func (c *Client) attempt(ctx context.Context, lease Lease, base *http.Request, kind Kind, referer string) (*Result, error) {
+	url := base.URL.String()
+	req := base.Clone(ctx)
 	req.Header = c.headers(kind, lease.Port(), lease.Session(), url, referer)
 
 	resp, err := lease.Do(req)
@@ -327,7 +384,12 @@ func (c *Client) SearchPage(ctx context.Context, eps Endpoints, q SearchQuery) (
 		return Envelope{}, err
 	}
 	if res.Class != ClassOK {
-		return Envelope{}, fmt.Errorf("wb: search page %d: status %d (%s)", q.Page, res.Status, res.Class)
+		// What the fetch cost belongs in this message: a page that came back
+		// challenged after fifteen attempts through twelve proxies is a
+		// different problem from one challenged on the first, and the status
+		// alone reads identically for both.
+		return Envelope{}, fmt.Errorf("wb: search page %d: status %d (%s) after %d attempt(s), %d egress change(s), %d of them lost before a response",
+			q.Page, res.Status, res.Class, res.Attempts, res.Rotations, res.TransportErrors)
 	}
 
 	env, err := decodeEnvelope(res.Body)

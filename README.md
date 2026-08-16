@@ -89,8 +89,9 @@ the new address instead of carrying the old one's history into it.
 `wb` reads Wildberries search results and product cards through a leased
 BlankTrail port. Routing, fingerprints and challenge solving are `blanktrail`'s
 job, not this package's; what `wb` does decide is what a response means and what
-is worth doing about it — how many times a challenged request is worth
-repeating, and when the port's proxy has had enough tries and should be replaced
+is worth doing about it — how many times a request the edge challenged, or the
+proxy killed before it ever answered, is worth repeating, and when the port's
+proxy has had enough tries and should be replaced
 (`wb.RetryPolicy`, and `wb.DefaultRetryPolicy` for the two sensible starting
 points). It takes a `Leaser` (`wb.FromPool` adapts a `*blanktrail.Pool`) and
 a `*wb.Sessions`, and hands back a `*wb.Client` that every request goes

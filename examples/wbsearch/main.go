@@ -28,13 +28,15 @@
 //
 //	go run ./examples/wbsearch -query "кроссовки женские" -dest 1259570991 -proxies proxies.txt -proxy-scheme socks5 -threads 8 -ports-per-thread 20
 //
-// A request the edge answers with a challenge is retried, and once a few
-// attempts have gone out through one proxy the port's upstream is replaced
-// before every further one — a challenge that reaches this program means the
-// proxy behind that port did not get a solve finished, and the proxy is the
-// part worth changing. -challenge-attempts and -attempts-per-egress set the two
-// numbers; left alone they pick themselves from whether there is a pool of
-// proxies to search at all (15 attempts) or a single direct address (2).
+// A request the edge answers with a challenge, or that the proxy kills before
+// it answers at all, is retried; and once a few attempts have gone out through
+// one proxy the port's upstream is replaced before every further one. Both
+// failures point the same way — a challenge reaching this program means the
+// proxy behind that port did not get a solve finished, and a dead connection
+// means it did far less than that — so the proxy is the part worth changing.
+// -challenge-attempts and -attempts-per-egress set the two numbers; left alone
+// they pick themselves from whether there is a pool of proxies to search at all
+// (15 attempts) or a single direct address (2).
 //
 // JSONL rows go to -out (or stdout when it is empty); preflight findings and
 // the closing summary always go to stderr, so a run can be piped straight
@@ -110,7 +112,7 @@ func run() error {
 		requestTimeout = flag.Duration("request-timeout", 300*time.Second, "the caller's own budget per request, retries included (blanktrail.PoolConfig.RequestTimeout)")
 		portTimeout    = flag.Int("port-timeout", 30, "seconds the port itself waits for one request before giving up (blanktrail.PortSpec.TimeoutSeconds)")
 
-		challengeAttempts = flag.Int("challenge-attempts", 0, "total attempts for a request the edge answers with a challenge (0 = automatic: 15 when any egress channel is configured, 2 on direct egress)")
+		challengeAttempts = flag.Int("challenge-attempts", 0, "total attempts for a request the edge answers with a challenge or the proxy kills before it answers at all (0 = automatic: 15 when any egress channel is configured, 2 on direct egress)")
 		attemptsPerEgress = flag.Int("attempts-per-egress", wb.DefaultAttemptsPerEgress, "attempts through one proxy before the port's upstream is replaced; past this, every attempt takes a fresh proxy")
 	)
 	flag.Usage = usage
