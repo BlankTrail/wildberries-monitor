@@ -706,6 +706,12 @@ func PriceFloorEvents(before, after Observation, floor Money) ([]Event, error) {
 // zero, and a change of holder while the price stays under the floor is not
 // re-fired — the operator already knows the floor is broken, and who broke it
 // is in the reading they will fetch anyway.
+//
+// Where both readings are real they must also be of the same physical product
+// and the same region, or they are refused with ErrIdentityMismatch or
+// ErrContextMismatch — see comparableDuplicates. There is no Diff function for
+// this reading to have carried those guards, which is exactly why the pair
+// went unchecked until Duplicates could state what it was a reading of.
 func MinPriceFloorEvents(before, after Observation, floor Money) ([]Event, error) {
 	later, err := readingOf[Duplicates](after, ObservationDuplicates)
 	if err != nil {
@@ -724,6 +730,9 @@ func MinPriceFloorEvents(before, after Observation, floor Money) ([]Event, error
 		earlier, kindErr := readingOf[Duplicates](before, ObservationDuplicates)
 		if kindErr != nil {
 			return nil, kindErr
+		}
+		if guardErr := comparableDuplicates(before, earlier, after, later); guardErr != nil {
+			return nil, guardErr
 		}
 		was, wasHolder = earlier.MinimalPrice, earlier.MinPriceItem
 	}
@@ -749,9 +758,49 @@ func MinPriceFloorEvents(before, after Observation, floor Money) ([]Event, error
 		})
 	}
 	return []Event{{
-		Kind: MinPriceViolated, At: after.At, NmID: holderID(later.MinPriceItem), Dest: after.Dest,
+		Kind: MinPriceViolated, At: after.At, NmID: holderID(later.MinPriceItem), Dest: readingDest(after, later),
 		Changes: changes, Confidence: ConfidenceObserved,
 	}}, nil
+}
+
+// comparableDuplicates refuses two duplicate readings that have nothing to say
+// about each other, which is the whole of what a minimum price needs to be
+// compared honestly: the same physical product, in the same region.
+//
+// There is no Diff function for this reading — MinPriceFloorEvents is its only
+// consumer and compares one number — so the guard every other pair in this
+// package gets from task 6's Diff functions lives here instead.
+//
+// Both halves exempt an unstated side, for the reason DiffSellerCatalog
+// exempts a page with no rows: a reading that names no group, or no region,
+// cannot disagree with one that does, and refusing it would make every
+// hand-built and every straight-from-decodeDuplicates value uncomparable.
+// Client.Duplicates states both, so the guard engages wherever it matters.
+func comparableDuplicates(beforeSeen Observation, before Duplicates, afterSeen Observation, after Duplicates) error {
+	if before.MatchID != 0 && after.MatchID != 0 && before.MatchID != after.MatchID {
+		return fmt.Errorf("%w: the duplicates of match group %d and the duplicates of match group %d",
+			ErrIdentityMismatch, before.MatchID, after.MatchID)
+	}
+	wasIn, nowIn := readingDest(beforeSeen, before), readingDest(afterSeen, after)
+	if wasIn != "" && nowIn != "" && wasIn != nowIn {
+		return fmt.Errorf("%w: the minimum was read for dest %q and then for dest %q",
+			ErrContextMismatch, wasIn, nowIn)
+	}
+	return nil
+}
+
+// readingDest is the region a duplicates reading was taken for: the
+// observation's own where the caller stamped one, the reading's otherwise.
+//
+// It is the same fallback eventContext applies elsewhere, spelled out here
+// because a Duplicates value carries no fetch time to pass alongside it. The
+// fallback is what makes the region usable at all for a caller that wrapped
+// the reading without repeating what Client.Duplicates was already told.
+func readingDest(seen Observation, d Duplicates) string {
+	if seen.Dest != "" {
+		return seen.Dest
+	}
+	return d.Dest
 }
 
 // NegativeReviewEvents reports reviews that arrived rating the product at or

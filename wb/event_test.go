@@ -1048,6 +1048,135 @@ func TestMinPriceFloorEvents_AReadingWithNoStatedMinimumSaysNothing(t *testing.T
 	requireNoEvents(t, "a duplicates reading with no stated minimum", events, err)
 }
 
+// inGroup and inRegion give a reading the match group and the region it was
+// fetched for, which decodeDuplicates cannot do — the document names neither,
+// and Client.Duplicates stamps both from the request it made.
+func inGroup(d Duplicates, matchID int64) Duplicates {
+	d.MatchID = matchID
+	return d
+}
+
+func inRegion(d Duplicates, dest string) Duplicates {
+	d.Dest = dest
+	return d
+}
+
+// TestMinPriceFloorEvents_TwoDifferentProductsAreNotComparable is the guard
+// the reviews rule just gained, reaching the other reading that could not say
+// what it was about. Both sides here state a real minimum, and the pair is
+// rigged to fire — 2800 roubles falling to 2681 under a floor of 2700 — so a
+// build without the guard hands an operator a floor violation assembled from
+// two unrelated products.
+func TestMinPriceFloorEvents_TwoDifferentProductsAreNotComparable(t *testing.T) {
+	d := loadDuplicates(t)
+	before := seenDuplicates(inGroup(atMinimalPrice(d, 280000), 10176246), destMoscow, seenMonday)
+	after := seenDuplicates(inGroup(d, 90000001), destMoscow, seenTuesday)
+
+	events, err := MinPriceFloorEvents(before, after, Money{Minor: 270000, Currency: "RUB"})
+	if err == nil || !errors.Is(err, ErrIdentityMismatch) {
+		t.Fatalf("err = %v, want it to wrap ErrIdentityMismatch; events = %v", err, kindsOf(events))
+	}
+	if events != nil {
+		t.Fatalf("still produced %v", kindsOf(events))
+	}
+	for _, id := range []string{"10176246", "90000001"} {
+		if !strings.Contains(err.Error(), id) {
+			t.Errorf("error %q does not name %s", err, id)
+		}
+	}
+}
+
+// TestMinPriceFloorEvents_TwoRegionsAreNotComparable is the context half. A
+// minimum price is regional — Client.Duplicates refuses to fetch one without a
+// dest for exactly this reason — so Moscow's cheapest listing crossing a floor
+// says nothing about Penza's, and the two readings are refused whether the
+// caller stated the region on the observation it wrapped them in or left it to
+// the reading itself.
+func TestMinPriceFloorEvents_TwoRegionsAreNotComparable(t *testing.T) {
+	d := loadDuplicates(t)
+	earlier, later := atMinimalPrice(d, 280000), d
+
+	for _, tc := range []struct {
+		what          string
+		before, after Observation
+	}{
+		{
+			"stated on the observation",
+			seenDuplicates(earlier, destMoscow, seenMonday),
+			seenDuplicates(later, destPenza, seenTuesday),
+		},
+		{
+			"stated by the readings themselves",
+			Observation{At: seenMonday, Kind: ObservationDuplicates, Payload: inRegion(earlier, destMoscow)},
+			Observation{At: seenTuesday, Kind: ObservationDuplicates, Payload: inRegion(later, destPenza)},
+		},
+	} {
+		events, err := MinPriceFloorEvents(tc.before, tc.after, Money{Minor: 270000, Currency: "RUB"})
+		if err == nil || !errors.Is(err, ErrContextMismatch) {
+			t.Errorf("%s: err = %v, want it to wrap ErrContextMismatch; events = %v", tc.what, err, kindsOf(events))
+		}
+		if events != nil {
+			t.Errorf("%s: still produced %v", tc.what, kindsOf(events))
+		}
+	}
+}
+
+// TestMinPriceFloorEvents_AReadingThatStatesNeitherIsComparableWithAnything is
+// the other side of both guards above. A reading that names no match group and
+// no region — every value decodeDuplicates produces on its own, and every one
+// built by hand — cannot disagree with one that does, and a build that refused
+// it would have made the rule unusable for anything but a reading straight out
+// of Client.Duplicates. The pair below fires in both directions, so a refusal
+// shows up as a missing event rather than as silence that proves nothing.
+func TestMinPriceFloorEvents_AReadingThatStatesNeitherIsComparableWithAnything(t *testing.T) {
+	d := loadDuplicates(t)
+	stated := inRegion(inGroup(atMinimalPrice(d, 280000), 10176246), destMoscow)
+	silent := d
+
+	for _, tc := range []struct {
+		what          string
+		before, after Observation
+	}{
+		{
+			"a later reading that states neither",
+			Observation{At: seenMonday, Kind: ObservationDuplicates, Payload: stated},
+			Observation{At: seenTuesday, Kind: ObservationDuplicates, Payload: silent},
+		},
+		{
+			"an earlier reading that states neither",
+			Observation{At: seenMonday, Kind: ObservationDuplicates, Payload: atMinimalPrice(silent, 280000)},
+			Observation{At: seenTuesday, Kind: ObservationDuplicates, Payload: inRegion(inGroup(d, 10176246), destMoscow)},
+		},
+	} {
+		events, err := MinPriceFloorEvents(tc.before, tc.after, Money{Minor: 270000, Currency: "RUB"})
+		if err != nil {
+			t.Errorf("%s: unexpected error: %v", tc.what, err)
+			continue
+		}
+		if len(events) != 1 || events[0].Kind != MinPriceViolated {
+			t.Errorf("%s: events = %v, want one min-price-violated", tc.what, kindsOf(events))
+		}
+	}
+}
+
+// TestMinPriceFloorEvents_TheEventTakesTheRegionFromTheReadingWhenTheObservationIsSilent
+// mirrors what catalogEvents already does with an Envelope's rows: a caller
+// that wrapped a reading without repeating the region should still get an
+// actionable event, because the reading now knows the region itself.
+func TestMinPriceFloorEvents_TheEventTakesTheRegionFromTheReadingWhenTheObservationIsSilent(t *testing.T) {
+	d := inRegion(loadDuplicates(t), destPenza)
+	after := Observation{At: seenTuesday, Kind: ObservationDuplicates, Payload: d}
+
+	events, err := MinPriceFloorEvents(Observation{}, after, Money{Minor: 270000, Currency: "RUB"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	e := eventOfKind(t, events, MinPriceViolated)
+	if e.Dest != destPenza {
+		t.Errorf("dest = %q, want the reading's own %q: an event with no region cannot be acted on", e.Dest, destPenza)
+	}
+}
+
 func TestMinPriceFloorEvents_NeedsADuplicatesReading(t *testing.T) {
 	product := seenProduct(t, observedFixture(t, "product_captured.json"), destMoscow, seenTuesday)
 

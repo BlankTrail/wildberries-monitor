@@ -4,6 +4,7 @@ package wb
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/url"
 	"os"
@@ -238,6 +239,12 @@ func TestClient_DuplicatesSkipsTheRequestWhenMatchIDIsZero(t *testing.T) {
 	if got.Total != 0 || got.Items != nil || got.MinimalPrice != nil || got.MinPriceItem != nil || got.Port != 0 {
 		t.Errorf("Duplicates=%+v, want the zero value — no duplicate group means nothing to report, and no request means no port to name", got)
 	}
+	// The identity fields are part of that zero value, not an exception to it:
+	// a product in no duplicate group has no group to name, and no request was
+	// made for any region.
+	if got.MatchID != 0 || got.Dest != "" {
+		t.Errorf("Duplicates=%+v, want no match group and no region — nothing was fetched", got)
+	}
 }
 
 func TestClient_DuplicatesFetchesAndDecodesTheRealFixture(t *testing.T) {
@@ -340,6 +347,66 @@ func TestClient_DuplicatesTreatsANilSupplierIDAsZero(t *testing.T) {
 	got := l.sent[0].URL.Query().Get("anchor_supplier_id")
 	if got != "0" {
 		t.Errorf("anchor_supplier_id=%q, want 0 for a nil SupplierID", got)
+	}
+}
+
+// TestClient_DuplicatesCarriesTheMatchGroupAndRegionItAskedFor pins the two
+// facts a Duplicates value could not previously state about itself: which
+// physical product's group this is, and which region the minimum price was
+// quoted for. Both come from the arguments — the payload states neither — and
+// without them two readings of two different products, or of two different
+// regions, are indistinguishable to anything comparing them.
+func TestClient_DuplicatesCarriesTheMatchGroupAndRegionItAskedFor(t *testing.T) {
+	l := &fakeLease{port: 1, replies: []*http.Response{reply(200, string(duplicatesFixture(t)))}}
+	c := NewClient(&fakeLeaser{leases: []*fakeLease{l}}, NewSessions())
+
+	got, err := c.Duplicates(context.Background(), DefaultEndpoints(), Product{ID: 111222333, MatchID: 444555666}, "-5892277")
+	if err != nil {
+		t.Fatalf("Duplicates: %v", err)
+	}
+	if got.MatchID != 444555666 {
+		t.Errorf("MatchID=%d, want the group 444555666 the fetch was keyed on, not the anchor 111222333", got.MatchID)
+	}
+	if got.Dest != "-5892277" {
+		t.Errorf("Dest=%q, want the -5892277 the fetch was made for", got.Dest)
+	}
+}
+
+// TestClient_DuplicatesCarriesThemThroughEveryFailure is the half that makes
+// the two fields trustworthy: they name the request, so they have to survive a
+// request that produced nothing to read them back from. Each shape below fails
+// at a different return statement.
+func TestClient_DuplicatesCarriesThemThroughEveryFailure(t *testing.T) {
+	for _, tc := range []struct {
+		what  string
+		lease *fakeLease
+	}{
+		{"a transport that never answered", &fakeLease{port: 3, err: errors.New("boom")}},
+		{"a non-OK status", &fakeLease{port: 3, replies: []*http.Response{reply(500, "")}}},
+		{"a body that did not decode", &fakeLease{port: 3, replies: []*http.Response{reply(200, "{not valid json")}}},
+	} {
+		c := NewClient(&fakeLeaser{leases: []*fakeLease{tc.lease}}, NewSessions())
+		got, err := c.Duplicates(context.Background(), DefaultEndpoints(), Product{ID: 1, MatchID: 444555666}, "-5892277")
+		if err == nil {
+			t.Fatalf("%s: was accepted without error", tc.what)
+		}
+		if got.MatchID != 444555666 || got.Dest != "-5892277" {
+			t.Errorf("%s: MatchID=%d Dest=%q, want 444555666 / -5892277", tc.what, got.MatchID, got.Dest)
+		}
+	}
+}
+
+// TestDecodeDuplicates_NamesNoMatchGroupOrRegionOfItsOwn pins where those two
+// do not come from. Neither is in the document — the region is a query
+// parameter and the group is the key the request was made with — so a decode
+// that produced either would have invented it.
+func TestDecodeDuplicates_NamesNoMatchGroupOrRegionOfItsOwn(t *testing.T) {
+	got, err := decodeDuplicates(duplicatesFixture(t))
+	if err != nil {
+		t.Fatalf("decodeDuplicates: %v", err)
+	}
+	if got.MatchID != 0 || got.Dest != "" {
+		t.Errorf("MatchID=%d Dest=%q, want both empty: only the caller's own arguments can say these", got.MatchID, got.Dest)
 	}
 }
 

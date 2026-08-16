@@ -41,6 +41,27 @@ type Duplicates struct {
 	// already draws for ReviewSummary.Count and decodeQuestions's count.
 	Total int64
 
+	// MatchID is the physical product's group this reading is of, and Dest is
+	// the region it was quoted for — the two things that make one Duplicates
+	// value comparable with another and nothing else.
+	//
+	// A minimum price says "the cheapest listing of this item, here, costs
+	// this much". Both halves of that sentence used to be missing from the
+	// value carrying the number, so two readings taken for two different
+	// products, or for Moscow and then for Penza, looked identical to
+	// MinPriceFloorEvents — which would then report a floor violation
+	// assembled from two unrelated facts. That rule now refuses such a pair.
+	//
+	// Client.Duplicates sets both from its own arguments, not from the
+	// document, which states neither: the region is a query parameter and the
+	// group is the key the request was made with. As with Reviews.ImtID and
+	// Seller.ID, arguments rather than body means the identity survives a
+	// fetch that produced nothing to read it back from. Both are empty on a
+	// reading no request was made for — a product whose MatchID is 0 belongs
+	// to no group and was never asked about anywhere.
+	MatchID int64
+	Dest    string
+
 	// Port is the worker port this fetch was served through, mirroring
 	// Envelope.Port — see that field's own doc comment for why a caller
 	// needs it. Zero both when the fetch never produced a response at all,
@@ -185,19 +206,29 @@ func (c *Client) Duplicates(ctx context.Context, eps Endpoints, p Product, dest 
 		supplierID = *p.SupplierID
 	}
 
+	// asked names what this request is about, on every path below including
+	// the failing ones: a caller holding a reading that did not arrive still
+	// needs to know which group and which region it was for. See Duplicates's
+	// own doc comment.
+	asked := Duplicates{MatchID: p.MatchID, Dest: dest}
+
 	referer := eps.CardPageURL(p.ID)
 	res, err := c.Get(ctx, eps.DuplicatesURL(p.MatchID, p.ID, supplierID, dest), KindAPI, referer)
 	if err != nil {
-		return Duplicates{Cost: CostOf(err)}, err
+		asked.Cost = CostOf(err)
+		return asked, err
 	}
 	if res.Class != ClassOK {
-		return Duplicates{Port: res.Port, Cost: res.FetchCost}, fmt.Errorf("wb: duplicates %d: status %d (%s)", p.ID, res.Status, res.Class)
+		asked.Port, asked.Cost = res.Port, res.FetchCost
+		return asked, fmt.Errorf("wb: duplicates %d: status %d (%s)", p.ID, res.Status, res.Class)
 	}
 
 	d, err := decodeDuplicates(res.Body)
 	if err != nil {
-		return Duplicates{Port: res.Port, Cost: res.FetchCost}, fmt.Errorf("wb: duplicates %d: %w", p.ID, err)
+		asked.Port, asked.Cost = res.Port, res.FetchCost
+		return asked, fmt.Errorf("wb: duplicates %d: %w", p.ID, err)
 	}
+	d.MatchID, d.Dest = asked.MatchID, asked.Dest
 	d.Port, d.Cost = res.Port, res.FetchCost
 	return d, nil
 }
