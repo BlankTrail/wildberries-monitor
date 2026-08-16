@@ -477,6 +477,144 @@ func TestClient_QuestionCountReportsNoItems(t *testing.T) {
 	}
 }
 
+// TestClient_QuestionCountCarriesTheImtIDItWasAskedFor is the reason this
+// field exists at all. Client.Questions can usually be traced back to a card
+// through its first item's own ImtID, but QuestionCount returns no items ever
+// (see TestClient_QuestionCountReportsNoItems) — a bare number with nothing
+// attached. A consumer storing that count could not say what it counted, and
+// the column it filled would read "no questions" for every cheaply polled
+// card while only the expensive path ever named one.
+func TestClient_QuestionCountCarriesTheImtIDItWasAskedFor(t *testing.T) {
+	l := &fakeLease{port: 1, replies: []*http.Response{reply(200, `{"count":6,"err":null}`)}}
+	c := NewClient(&fakeLeaser{leases: []*fakeLease{l}}, NewSessions())
+
+	got, err := c.QuestionCount(context.Background(), DefaultEndpoints(), 996564353)
+	if err != nil {
+		t.Fatalf("QuestionCount: %v", err)
+	}
+	if got.ImtID != 996564353 {
+		t.Errorf("ImtID=%d, want the 996564353 the fetch was keyed on — with Items always empty, this is the only place the cheap count can name its card", got.ImtID)
+	}
+}
+
+// TestClient_QuestionsCarriesTheImtIDItWasAskedFor is the paged path's half of
+// the same claim, mirroring TestClient_ReviewsCarriesTheImtIDItWasAskedFor: the
+// envelope names the card the fetch was keyed on rather than leaving a caller
+// to dig it out of an item that may not be there.
+func TestClient_QuestionsCarriesTheImtIDItWasAskedFor(t *testing.T) {
+	l := &fakeLease{port: 1, replies: []*http.Response{reply(200, string(questionsFixture(t)))}}
+	c := NewClient(&fakeLeaser{leases: []*fakeLease{l}}, NewSessions())
+
+	got, err := c.Questions(context.Background(), DefaultEndpoints(), 996564353, 20, 0)
+	if err != nil {
+		t.Fatalf("Questions: %v", err)
+	}
+	if got.ImtID != 996564353 {
+		t.Errorf("ImtID=%d, want the 996564353 the fetch was keyed on", got.ImtID)
+	}
+}
+
+// TestClient_QuestionsAndQuestionCountCarryTheImtIDThroughEveryFailure is the
+// half that matters, for the reason
+// TestClient_ReviewsCarriesTheImtIDThroughEveryFailure spells out: the id comes
+// from the argument, so it must survive a fetch that produced nothing to read
+// it back from — a caller holding a failed reading still needs to know which
+// card failed. Each shape fails at a different return statement in each method,
+// so a build that stamps only the happy paths fails here rather than in the two
+// tests above.
+//
+// An empty page is deliberately among the shapes for Client.Questions, and it
+// is the one that does not fail: a card whose questions have all been answered
+// and paged past returns zero items with no error at all, so the item-derived
+// identity a reader might otherwise reach for is missing on a perfectly
+// successful fetch too.
+func TestClient_QuestionsAndQuestionCountCarryTheImtIDThroughEveryFailure(t *testing.T) {
+	shapes := []struct {
+		what    string
+		lease   func() *fakeLease
+		wantErr bool
+	}{
+		{"a transport that never answered", func() *fakeLease { return &fakeLease{port: 7, err: errors.New("boom")} }, true},
+		{"a non-OK status", func() *fakeLease {
+			return &fakeLease{port: 7, replies: []*http.Response{reply(500, "")}}
+		}, true},
+		{"a body that did not decode", func() *fakeLease {
+			return &fakeLease{port: 7, replies: []*http.Response{reply(200, "{not valid json")}}
+		}, true},
+		{"a page with no questions on it", func() *fakeLease {
+			return &fakeLease{port: 7, replies: []*http.Response{reply(200, `{"questions":[],"count":0,"err":null}`)}}
+		}, false},
+	}
+	calls := []struct {
+		name string
+		call func(*Client) (Questions, error)
+	}{
+		{"Questions", func(c *Client) (Questions, error) {
+			return c.Questions(context.Background(), DefaultEndpoints(), 996564353, 20, 0)
+		}},
+		{"QuestionCount", func(c *Client) (Questions, error) {
+			return c.QuestionCount(context.Background(), DefaultEndpoints(), 996564353)
+		}},
+	}
+	for _, call := range calls {
+		for _, s := range shapes {
+			c := NewClient(&fakeLeaser{leases: []*fakeLease{s.lease()}}, NewSessions())
+			got, err := call.call(c)
+			switch {
+			case s.wantErr && err == nil:
+				t.Fatalf("%s: %s was accepted without error", call.name, s.what)
+			case !s.wantErr && err != nil:
+				t.Fatalf("%s: %s: %v", call.name, s.what, err)
+			}
+			if got.ImtID != 996564353 {
+				t.Errorf("%s: %s: ImtID=%d, want the 996564353 the fetch was keyed on", call.name, s.what, got.ImtID)
+			}
+		}
+	}
+}
+
+// TestClient_QuestionsKeepsAQuestionsOwnImtIDEvenWhenItDisagrees pins the one
+// place the two ImtID fields are allowed to differ, and pins that this package
+// does not paper over it. Question.ImtID is what the site said about that
+// question; Questions.ImtID is what this process asked for. If the site ever
+// files a question under one card into another card's page, that is a fact
+// worth seeing, and overwriting the item from the envelope (or the envelope
+// from the item) would destroy the only evidence of it.
+func TestClient_QuestionsKeepsAQuestionsOwnImtIDEvenWhenItDisagrees(t *testing.T) {
+	// Schema-accurate, field names taken from wb/testdata/questions.json: one
+	// question whose own imtId is not the card the fetch was keyed on.
+	const doc = `{
+		"questions": [{
+			"id": "filed-under-another-card",
+			"imtId": 111,
+			"nmId": 222,
+			"text": "a question the site attached to a different parent",
+			"createdDate": "2026-01-01T00:00:00Z",
+			"productDetails": {"supplierArticle": "a"},
+			"answer": null,
+			"tags": null
+		}],
+		"count": 1,
+		"err": null
+	}`
+	l := &fakeLease{port: 1, replies: []*http.Response{reply(200, doc)}}
+	c := NewClient(&fakeLeaser{leases: []*fakeLease{l}}, NewSessions())
+
+	got, err := c.Questions(context.Background(), DefaultEndpoints(), 996564353, 20, 0)
+	if err != nil {
+		t.Fatalf("Questions: %v", err)
+	}
+	if got.ImtID != 996564353 {
+		t.Errorf("Questions.ImtID=%d, want the 996564353 the fetch was keyed on — the envelope reports the request, not the payload", got.ImtID)
+	}
+	if len(got.Items) != 1 {
+		t.Fatalf("len(Items)=%d, want 1", len(got.Items))
+	}
+	if got.Items[0].ImtID != 111 {
+		t.Errorf("Items[0].ImtID=%d, want the 111 the site itself sent — a disagreement with the envelope is a fact to notice, not one to smooth over", got.Items[0].ImtID)
+	}
+}
+
 // TestClient_QuestionsSendsTakeAndSkipInTheGivenOrder is the brief's own
 // mutation target at the client level, not just the URL-builder level:
 // distinct values on each side (7 and 13) so a swap anywhere in the call
