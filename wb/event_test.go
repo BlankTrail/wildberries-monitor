@@ -101,6 +101,13 @@ func checkEvent(t *testing.T, e Event) {
 	if e.At.IsZero() {
 		t.Errorf("%s carries no time; an event nobody can place is not actionable", e.Kind)
 	}
+	// An event that names nothing tells its receiver that something happened
+	// somewhere. Which of the two ids is set depends on what the rule read (see
+	// Event.NmID), but a rule that sets neither has produced a notification
+	// nobody can act on — which is what rating-dropped used to be.
+	if e.NmID == 0 && e.ImtID == 0 {
+		t.Errorf("%s names neither a nomenclature nor a card; nobody receiving it knows what to look at", e.Kind)
+	}
 	for _, c := range e.Changes {
 		if c.Was == c.Now {
 			t.Errorf("%s carries %v as evidence, whose two sides agree: a change that changed nothing is not evidence of anything", e.Kind, c)
@@ -188,6 +195,24 @@ func TestEvent_StringNamesTheKindTheProductAndTheConfidence(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("Event.String() = %q, want it to carry %q", got, want)
 		}
+	}
+	if strings.Contains(got, "imt") {
+		t.Errorf("Event.String() = %q, want no imt on an event that names none", got)
+	}
+}
+
+// TestEvent_StringSpellsAnImtIDAsAnImtID is the whole point of keeping the two
+// ids in separate fields: a reader has to be able to tell which numbering an
+// event's id belongs to, and "nm 3337911982" for a card-wide fact is precisely
+// the silent confusion this package refuses to create.
+func TestEvent_StringSpellsAnImtIDAsAnImtID(t *testing.T) {
+	e := Event{Kind: RatingDropped, ImtID: 3337911982, Confidence: ConfidenceObserved}
+	got := e.String()
+	if !strings.Contains(got, "imt 3337911982") {
+		t.Errorf("Event.String() = %q, want it to carry %q", got, "imt 3337911982")
+	}
+	if strings.Contains(got, "nm ") {
+		t.Errorf("Event.String() = %q, want no nm: the event names a card, not a nomenclature", got)
 	}
 }
 
@@ -699,6 +724,16 @@ func TestEventsFromChanges_ARatingThatFellIsAnEventAndOneThatRoseIsNot(t *testin
 	c := changeFor(t, e.Changes, "valuation")
 	if c.Was != "4.8" || c.Now != "4.6" {
 		t.Fatalf("evidence = %+v, want was 4.8 now 4.6", c)
+	}
+	// The receiver of a notification has to know which product's rating fell,
+	// and the aggregate belongs to the imtId that groups every variant — so it
+	// is named in the field that says imtId, and the nomenclature field stays
+	// empty rather than carrying an id from the wrong numbering.
+	if e.ImtID != reviewsFixtureImtID {
+		t.Errorf("the event names imtID %d, want the reading's own %d", e.ImtID, reviewsFixtureImtID)
+	}
+	if e.NmID != 0 {
+		t.Errorf("the event carries nmID %d; a card-wide aggregate belongs to no single variant", e.NmID)
 	}
 
 	events, err = EventsFromChanges(seenReviews(before, seenMonday), seenReviews(rose, seenTuesday))

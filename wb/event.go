@@ -108,12 +108,25 @@ const (
 // happened: the change happened somewhere between the two readings and no
 // amount of care can be more precise than that.
 //
-// NmID names the listing the event is about, and is zero only where the
-// reading genuinely does not name one — a card-wide rating belongs to an imtId
-// rather than to a nomenclature, and this package will not put an imtId into a
-// field called NmID (the two are easy to confuse and the mistake is silent;
-// see Client.Reviews). The caller that fetched such a reading knows which card
-// it asked about.
+// NmID and ImtID both name what the event is about, in the site's two
+// different numberings, and every event this package produces sets at least
+// one of them: an event naming neither tells its receiver that something
+// happened without telling them what to go and look at, which is most of the
+// way to not being worth sending.
+//
+// NmID is a nomenclature: one listing, one colour and size grouping, the id a
+// search row and a card are keyed on. ImtID is its parent — the id that groups
+// every variant of the same listing, which is what the reviews and questions
+// endpoints are keyed on. They are both bare int64s of similar magnitude, so
+// putting one in the other's field is a mistake nothing downstream can detect,
+// which is why there are two fields rather than one id and a convention.
+//
+// A fact that belongs to the whole card rather than to a variant — the
+// aggregate star rating is the case this exists for — is therefore named in
+// ImtID with NmID left at zero, not by borrowing the nomenclature field. Every
+// other rule here reads a per-listing payload and names the listing, so ImtID
+// stays zero on those: a field filled in because it happened to be in scope,
+// which no rule and no test reads, is worse than an empty one.
 //
 // Dest is the region the reading was taken for. It is not decoration: price,
 // stock, the delivery window and even whether a listing appears in a shop
@@ -131,6 +144,7 @@ type Event struct {
 	Kind       EventKind
 	At         time.Time
 	NmID       int64
+	ImtID      int64
 	Dest       string
 	Changes    []Change
 	Confidence float64
@@ -142,6 +156,12 @@ func (e Event) String() string {
 	b.WriteString(string(e.Kind))
 	if e.NmID != 0 {
 		b.WriteString(" nm " + strconv.FormatInt(e.NmID, 10))
+	}
+	// Spelled out rather than folded in beside nm: a reader of a log line has
+	// to be able to tell which numbering the id belongs to, and that is the
+	// entire reason Event carries two fields (see Event.ImtID).
+	if e.ImtID != 0 {
+		b.WriteString(" imt " + strconv.FormatInt(e.ImtID, 10))
 	}
 	if e.Dest != "" {
 		b.WriteString(" dest " + e.Dest)
@@ -514,10 +534,15 @@ func pageContext(pages ...Envelope) (time.Time, string) {
 // somebody about is how bad it is, which is a number the user sets (see
 // NegativeReviewEvents).
 //
-// The event names no product. A card-wide aggregate belongs to the imtId that
-// groups every variant, and putting an imtId into a field called NmID is the
-// exact confusion this milestone's brief singles out as easy to make and
-// silent when made; see Event.NmID.
+// The event names the card in ImtID and leaves NmID at zero. A card-wide
+// aggregate belongs to the imtId that groups every variant, and putting an
+// imtId into a field called NmID is the exact confusion this milestone's brief
+// singles out as easy to make and silent when made — so the id is carried
+// under its own name instead, which is what lets the receiver of a
+// rating-dropped notification know which product to go and look at. It is the
+// reading's own ImtID, which Client.Reviews stamped from the fetch it made;
+// zero only where the caller built a Reviews value that never said what it was
+// about.
 func reviewEvents(before, after Observation) ([]Event, error) {
 	earlier, err := payloadOf[Reviews](before)
 	if err != nil {
@@ -535,7 +560,7 @@ func reviewEvents(before, after Observation) ([]Event, error) {
 		return nil, nil
 	}
 	return []Event{{
-		Kind: RatingDropped, At: after.At, Dest: after.Dest,
+		Kind: RatingDropped, At: after.At, ImtID: later.ImtID, Dest: after.Dest,
 		Changes: []Change{*ratingChange}, Confidence: ConfidenceObserved,
 	}}, nil
 }
