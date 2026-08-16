@@ -139,15 +139,28 @@ func (s *Store) saveProductTx(ctx context.Context, tx *sql.Tx, p wb.Product, que
 	}
 	stats.Products++
 
-	// Every reading is written. Suppressing the ones that changed nothing is a
-	// rule of its own and it is applied at this point.
-	snapshotID, err := insertSnapshot(ctx, tx, p, fingerprintOf(p), ts, false)
+	fp := fingerprintOf(p)
+	write, anchor, err := s.shouldWriteSnapshot(ctx, tx, p.ID, p.Dest, fp, ts)
 	if err != nil {
 		return SaveStats{}, err
 	}
-	stats.Snapshots++
-	if err := insertSizes(ctx, tx, snapshotID, p); err != nil {
-		return SaveStats{}, err
+	// Counted whether or not the day's anchor was also written for it: see
+	// SaveStats on why these two overlap.
+	if !write || anchor {
+		stats.Unchanged++
+	}
+	if write {
+		snapshotID, err := insertSnapshot(ctx, tx, p, fp, ts, anchor)
+		if err != nil {
+			return SaveStats{}, err
+		}
+		stats.Snapshots++
+		if anchor {
+			stats.Anchors++
+		}
+		if err := insertSizes(ctx, tx, snapshotID, p); err != nil {
+			return SaveStats{}, err
+		}
 	}
 
 	// An organic position needs two things this reading may not have: a phrase
@@ -236,9 +249,10 @@ func upsertProductRow(ctx context.Context, tx *sql.Tx, p wb.Product, now int64) 
 // insertSnapshot writes the volatile half and returns the row's id, which the
 // sizes hang from.
 //
-// anchor says the row was written because a day passed with nothing changing,
-// not because something moved. Nothing sets it in this build — every reading
-// is written, so no row is owed to the passage of time alone.
+// anchor says the row was written because a whole AnchorEvery passed with
+// nothing changing, not because something moved. Retention keeps anchors and
+// any "what changed" query has to skip them, so the two must stay
+// distinguishable; see shouldWriteSnapshot.
 func insertSnapshot(ctx context.Context, tx *sql.Tx, p wb.Product, fingerprint string, ts int64, anchor bool) (int64, error) {
 	base, sale, discount, currency := snapshotPrices(p)
 

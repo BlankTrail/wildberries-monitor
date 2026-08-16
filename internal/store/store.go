@@ -29,6 +29,12 @@ type Store struct {
 	// and neither can be tested against a clock that only moves forwards at
 	// one second per second.
 	now func() time.Time
+
+	// retention is how long history stays dense. The zero value means the
+	// defaults — see retentionOrDefault — so Open does not have to fill it and
+	// a Store built without SetRetention behaves like one built with
+	// DefaultRetention.
+	retention Retention
 }
 
 // Open opens the database at path, creating it if it does not exist.
