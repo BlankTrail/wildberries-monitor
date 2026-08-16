@@ -86,19 +86,34 @@ WHERE id IN (
 
 // thinPositionsSQL is the same rule over the position series.
 //
-// The partition is (product, phrase, region): positions carry no app type and
-// each phrase is its own series. There is no anchor column either — a
-// position is only written when the search results were actually fetched, so
-// every row is a real measurement.
+// The partition is (product, phrase, region, audience): app_type is part of
+// positions' primary key exactly as it is on snapshots (0001_core.sql), and
+// for the same reason — mobile and web are read on independent schedules and
+// can rank differently on the same phrase at the same moment. Folding the two
+// into one partition would let one audience's row delete the other's, which
+// is the bug products.go's own comment warns against for the write path and
+// which the first cut of this query committed on the read path: without
+// app_type here, a web reading and a mobile reading that happened to land in
+// the same second raced for the single surviving slot and one audience's
+// history was thinned out of existence starting at day 31. There is no
+// anchor column either — a position is only written when the search results
+// were actually fetched, so every row is a real measurement.
 //
 // Keeping the last measurement rather than the best one is deliberate. A rule
 // that kept the best rank of a period would build an optimistic bias into the
 // history that grows as it ages: every chart older than a month would flatter
 // the seller. History may lose resolution; it may not change its meaning.
 //
-// rowid works because positions is an ordinary rowid table. If it is ever
-// declared WITHOUT ROWID this fails loudly at the first run rather than
-// silently keeping the wrong row.
+// The ORDER BY has no rowid (or id) tiebreak, unlike thinSnapshotsSQL, and
+// that is not an oversight: positions' primary key is
+// (nm_id, query, dest, app_type, ts), which is exactly this query's partition
+// key plus ts, so two rows of one partition can never share a ts — the
+// primary key already forbids it. snapshots carries no such constraint (its
+// primary key is a bare autoincrementing id), so two passes can legitimately
+// land on the same second and thinSnapshotsSQL needs an explicit tiebreak;
+// positions cannot reach that state and adding one here would only paper
+// over a partition that had silently dropped one of its key columns, the way
+// the missing app_type once did.
 const thinPositionsSQL = `
 DELETE FROM positions
 WHERE rowid IN (
@@ -106,13 +121,13 @@ WHERE rowid IN (
         SELECT rowid,
                ROW_NUMBER() OVER (
                    PARTITION BY
-                       nm_id, query, dest,
+                       nm_id, query, dest, app_type,
                        CASE WHEN ts < ? THEN 1 ELSE 0 END,
                        CASE WHEN ts < ?
                             THEN (ts - 345600) / 604800
                             ELSE ts / 86400
                        END
-                   ORDER BY ts DESC, rowid DESC
+                   ORDER BY ts DESC
                ) AS rn
         FROM positions
         WHERE ts < ?

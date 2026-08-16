@@ -89,16 +89,13 @@ func putSize(t *testing.T, s *Store, snapshotID int64, warehouseID int64) int64 
 	return sizeID
 }
 
-// putPosition inserts one position row.
-func putPosition(t *testing.T, s *Store, nmID int64, query, dest string, ts int64, rank, page int) {
+// putPosition inserts one position row for the given audience.
+func putPosition(t *testing.T, s *Store, nmID int64, query, dest string, appType int, ts int64, rank, page int) {
 	t.Helper()
-	// appType is fixed at wb.AppWeb here: retention does not distinguish
-	// audiences on positions (there is no app_type column to key it on), and
-	// varying it would only add a dimension the tests below never vary.
 	if _, err := s.db.ExecContext(context.Background(),
 		`INSERT INTO positions (nm_id, query, dest, app_type, ts, rank, page) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		nmID, query, dest, wb.AppWeb, ts, rank, page); err != nil {
-		t.Fatalf("insert position %q at %d: %v", query, ts, err)
+		nmID, query, dest, appType, ts, rank, page); err != nil {
+		t.Fatalf("insert position %q app %d at %d: %v", query, appType, ts, err)
 	}
 }
 
@@ -126,12 +123,13 @@ func liveSnapshots(t *testing.T, s *Store) []string {
 }
 
 // livePositions names the positions still in the database, carrying the rank
-// in the name: a rule that kept the best rank of a period instead of the last
-// one has to be visible in the failure message.
+// and the audience in the name: a rule that kept the best rank of a period
+// instead of the last one has to be visible in the failure message, and so
+// does a rule that let one audience's row delete another's.
 func livePositions(t *testing.T, s *Store) []string {
 	t.Helper()
 	rows, err := s.db.QueryContext(context.Background(),
-		`SELECT query, ts, rank FROM positions ORDER BY query, ts`)
+		`SELECT query, app_type, ts, rank FROM positions ORDER BY query, app_type, ts`)
 	if err != nil {
 		t.Fatalf("list positions: %v", err)
 	}
@@ -139,12 +137,13 @@ func livePositions(t *testing.T, s *Store) []string {
 	var out []string
 	for rows.Next() {
 		var q string
+		var appType int
 		var ts int64
 		var rank int
-		if err := rows.Scan(&q, &ts, &rank); err != nil {
+		if err := rows.Scan(&q, &appType, &ts, &rank); err != nil {
 			t.Fatalf("scan position: %v", err)
 		}
-		out = append(out, fmt.Sprintf("%s@%s#%d", q,
+		out = append(out, fmt.Sprintf("%s/app%d@%s#%d", q, appType,
 			time.Unix(ts, 0).UTC().Format("2006-01-02T15:04"), rank))
 	}
 	if err := rows.Err(); err != nil {
@@ -282,6 +281,69 @@ func TestThin_CollapsesToOneRowPerCalendarWeekBeyondTheYear(t *testing.T) {
 	wantNames(t, liveSnapshots(t, s), "wA-sun", "wB-thu")
 }
 
+func TestThin_TreatsTheDailyBoundaryAsStillFresh(t *testing.T) {
+	// The threshold is "now - DailyAfter", and a row exactly that old is the
+	// newest row the daily zone is allowed to touch — the last instant that
+	// still counts as fresh, not the first instant that counts as old. A
+	// mutation that let the candidate filter admit ts == daily (< turned <=)
+	// would not simply keep one extra row: it would pull this exact-boundary
+	// row into the same day's partition as a genuinely old row, and because
+	// it carries the later timestamp it would win that partition and evict
+	// the row that was already there — an old row disappearing a day earlier
+	// than the threshold says it should.
+	s := openTestStore(t)
+	freezeClock(s, thinNow)
+	seedProduct(t, s, 1)
+
+	// Same calendar day (2027-02-13, UTC) as the exact boundary instant.
+	putSnapshot(t, s, 1, "-1257786", 1, dayAt(30, 8, 0), 0, "already-old")
+	// dayAt(30, 12, 0) lands on thinNow's own hour and minute, so it equals
+	// thinNow minus exactly 30*86400 seconds: the daily threshold itself.
+	putSnapshot(t, s, 1, "-1257786", 1, dayAt(30, 12, 0), 0, "exactly-the-threshold")
+
+	mustThin(t, s)
+
+	// Both survive: "already-old" because it is alone in its day's
+	// partition, "exactly-the-threshold" because the candidate filter must
+	// never reach it at all.
+	wantNames(t, liveSnapshots(t, s), "already-old", "exactly-the-threshold")
+}
+
+func TestThin_TreatsTheWeeklyBoundaryAsStillDaily(t *testing.T) {
+	// A row exactly WeeklyAfter old belongs to the daily zone, not the
+	// weekly one — the weekly zone is everything older than that instant,
+	// not everything at or past it. Custom, close-together thresholds make
+	// the boundary reachable with ordinary calendar dates instead of a
+	// 365-day default.
+	s := openTestStore(t)
+	freezeClock(s, thinNow)
+	s.SetRetention(Retention{
+		AnchorEvery: 24 * time.Hour,
+		DailyAfter:  5 * 24 * time.Hour,
+		WeeklyAfter: 16 * 24 * time.Hour,
+	})
+	seedProduct(t, s, 1)
+
+	// dayAt(16, 12, 0) is thinNow minus exactly 16 days: the weekly
+	// threshold itself, landing on Saturday 2027-02-27.
+	putSnapshot(t, s, 1, "-1257786", 1, dayAt(16, 12, 0), 0, "exactly-the-threshold")
+	// Thursday 2027-02-25: strictly older than the threshold, so always in
+	// the weekly zone regardless of the mutation below, and deliberately
+	// placed in the same Monday-Sunday week as the boundary row above.
+	putSnapshot(t, s, 1, "-1257786", 1, dayAt(18, 10, 0), 0, "same-week-but-clearly-old")
+
+	mustThin(t, s)
+
+	// Correct behaviour: the boundary row is bucketed by day (it is not yet
+	// in the weekly zone) and the older row by week, so they never share a
+	// partition and both survive alone. A mutation that admits ts == weekly
+	// into the weekly zone would drop the boundary row into the older row's
+	// week-bucket; sharing a partition, the later timestamp would win and
+	// "same-week-but-clearly-old" would be deleted a week before its own
+	// threshold says it should be.
+	wantNames(t, liveSnapshots(t, s), "exactly-the-threshold", "same-week-but-clearly-old")
+}
+
 func TestThin_KeepsEachRegionAndAppTypeSeparately(t *testing.T) {
 	// A row of one region must never delete a row of another: the price and
 	// the delivery time these rows carry are different facts, not repeats.
@@ -308,17 +370,42 @@ func TestThin_KeepsTheLastPositionOfEachOldDayPerQuery(t *testing.T) {
 	freezeClock(s, thinNow)
 	seedProduct(t, s, 1)
 
-	putPosition(t, s, 1, "рюкзак", "-1257786", dayAt(40, 3, 0), 5, 1)
-	putPosition(t, s, 1, "рюкзак", "-1257786", dayAt(40, 20, 0), 9, 1)
-	putPosition(t, s, 1, "сумка", "-1257786", dayAt(40, 4, 0), 1, 1)
-	putPosition(t, s, 1, "рюкзак", "-1257786", dayAt(1, 4, 0), 3, 1)
+	putPosition(t, s, 1, "рюкзак", "-1257786", wb.AppWeb, dayAt(40, 3, 0), 5, 1)
+	putPosition(t, s, 1, "рюкзак", "-1257786", wb.AppWeb, dayAt(40, 20, 0), 9, 1)
+	putPosition(t, s, 1, "сумка", "-1257786", wb.AppWeb, dayAt(40, 4, 0), 1, 1)
+	putPosition(t, s, 1, "рюкзак", "-1257786", wb.AppWeb, dayAt(1, 4, 0), 3, 1)
 
 	mustThin(t, s)
 
 	wantNames(t, livePositions(t, s),
-		"рюкзак@"+time.Unix(dayAt(40, 20, 0), 0).UTC().Format("2006-01-02T15:04")+"#9",
-		"сумка@"+time.Unix(dayAt(40, 4, 0), 0).UTC().Format("2006-01-02T15:04")+"#1",
-		"рюкзак@"+time.Unix(dayAt(1, 4, 0), 0).UTC().Format("2006-01-02T15:04")+"#3",
+		fmt.Sprintf("рюкзак/app%d@%s#9", wb.AppWeb, time.Unix(dayAt(40, 20, 0), 0).UTC().Format("2006-01-02T15:04")),
+		fmt.Sprintf("сумка/app%d@%s#1", wb.AppWeb, time.Unix(dayAt(40, 4, 0), 0).UTC().Format("2006-01-02T15:04")),
+		fmt.Sprintf("рюкзак/app%d@%s#3", wb.AppWeb, time.Unix(dayAt(1, 4, 0), 0).UTC().Format("2006-01-02T15:04")),
+	)
+}
+
+func TestThin_KeepsEachAudiencesPositionsSeparately(t *testing.T) {
+	// positions.app_type is part of the primary key exactly like it is on
+	// snapshots (0001_core.sql), and for the same reason: a mobile reading
+	// and a web reading of the same phrase can rank differently in the same
+	// second, and folding them into one partition would let one audience's
+	// row overwrite the other's — the exact mistake products.go warns
+	// against for the write path, made instead on the read path.
+	s := openTestStore(t)
+	freezeClock(s, thinNow)
+	seedProduct(t, s, 1)
+
+	// Same product, same phrase, same region, same day, deliberately close
+	// timestamps: if app_type ever drops out of the partition these two look
+	// like duplicates of one series and one of them gets thinned away.
+	putPosition(t, s, 1, "рюкзак", "-1257786", wb.AppWeb, dayAt(40, 5, 0), 7, 1)
+	putPosition(t, s, 1, "рюкзак", "-1257786", wb.AppMobile, dayAt(40, 6, 0), 3, 1)
+
+	mustThin(t, s)
+
+	wantNames(t, livePositions(t, s),
+		fmt.Sprintf("рюкзак/app%d@%s#7", wb.AppWeb, time.Unix(dayAt(40, 5, 0), 0).UTC().Format("2006-01-02T15:04")),
+		fmt.Sprintf("рюкзак/app%d@%s#3", wb.AppMobile, time.Unix(dayAt(40, 6, 0), 0).UTC().Format("2006-01-02T15:04")),
 	)
 }
 
@@ -374,13 +461,18 @@ func TestThin_ReportsWhatItExaminedAndDeleted(t *testing.T) {
 	freezeClock(s, thinNow)
 	seedProduct(t, s, 1)
 
-	putSnapshot(t, s, 1, "-1257786", 1, dayAt(40, 1, 0), 0, "a")
+	a := putSnapshot(t, s, 1, "-1257786", 1, dayAt(40, 1, 0), 0, "a")
 	putSnapshot(t, s, 1, "-1257786", 1, dayAt(40, 9, 0), 0, "b")
 	putSnapshot(t, s, 1, "-1257786", 1, dayAt(40, 17, 0), 0, "c")
 	putSnapshot(t, s, 1, "-1257786", 1, dayAt(1, 17, 0), 0, "fresh")
-	putSize(t, s, 1, 507)
-	putPosition(t, s, 1, "рюкзак", "-1257786", dayAt(40, 3, 0), 5, 1)
-	putPosition(t, s, 1, "рюкзак", "-1257786", dayAt(40, 20, 0), 9, 1)
+	// Attached to the id putSnapshot actually returned, not the literal 1: on
+	// any database that is not freshly opened — seed order changed, a row
+	// inserted earlier by another test helper — id 1 would belong to some
+	// other snapshot, and this size would silently cascade with the wrong
+	// parent.
+	putSize(t, s, a, 507)
+	putPosition(t, s, 1, "рюкзак", "-1257786", wb.AppWeb, dayAt(40, 3, 0), 5, 1)
+	putPosition(t, s, 1, "рюкзак", "-1257786", wb.AppWeb, dayAt(40, 20, 0), 9, 1)
 
 	st := mustThin(t, s)
 
@@ -478,8 +570,19 @@ func TestThin_RefusesThresholdsThatOverlap(t *testing.T) {
 		DailyAfter:  30 * 24 * time.Hour,
 		WeeklyAfter: 7 * 24 * time.Hour,
 	})
+	seedProduct(t, s, 1)
+	// A row old enough that any implementation which deletes first and
+	// validates second — or validates but deletes anyway — would still show
+	// it gone. An empty database would let such a bug pass this test: there
+	// would be nothing left for a wrongly-executed delete to remove, and
+	// "Thin returned an error" would look the same whether or not it also
+	// destroyed data on the way there. Refusing has to mean refusing, not
+	// merely reporting after the fact.
+	putSnapshot(t, s, 1, "-1257786", 1, dayAt(400, 12, 0), 0, "untouched")
 
 	if _, err := s.Thin(context.Background()); err == nil {
 		t.Error("Thin succeeded with WeeklyAfter shorter than DailyAfter; want an error naming both")
 	}
+
+	wantNames(t, liveSnapshots(t, s), "untouched")
 }
