@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -143,6 +144,52 @@ func TestRunDiff_FailsCheck5WhenThePriceMovedBetweenTheTwoFetches(t *testing.T) 
 	}
 	if !strings.Contains(err.Error(), "changed on") {
 		t.Errorf("error %v does not describe the change", err)
+	}
+}
+
+// TestRunDiff_GroupsBothCardFetchesUnderThePortThatServedThem guards the one
+// path this whole task was demonstrated on. -what diff is what shows a port's
+// second fetch of the same product costing a fraction of its first, and that
+// evidence is worth nothing if the two rows stop naming a port: without this,
+// dropping fetched.Fetches in fetchCardForDiff would send both cards back to
+// the ungrouped bucket with the package's own tests all green. The three
+// runDiff tests above check the verdicts and the rows; none of them looks at
+// the timing table.
+//
+// Four requests, not six: the CDN shard map is fetched once through the same
+// lease and is deliberately not part of a card's provenance (see
+// wb.CardFetch.Fetches), so the count here also pins that boundary.
+func TestRunDiff_GroupsBothCardFetchesUnderThePortThatServedThem(t *testing.T) {
+	lease := &scriptedLease{port: 5, replies: append(
+		cardTriple(141504066, 100000),
+		cardPair(141504066, 100000)...)}
+	c := newTestClient(lease)
+
+	var rows, summary bytes.Buffer
+	err := runDiff(context.Background(), c, wb.DefaultEndpoints(), wb.NewBasket(c), 141504066, "1259570991", "", wb.ModeDesktop, 0,
+		&rows, &summary, func() blanktrail.Stats { return blanktrail.Stats{} }, egressSetup{})
+	if err != nil {
+		t.Fatalf("runDiff: %v", err)
+	}
+
+	out := summary.String()
+	if !strings.Contains(out, "port 5 (2 call(s), 4 request(s))") {
+		t.Errorf("summary does not file both card fetches, four requests, under port 5; got:\n%s", out)
+	}
+	for _, label := range []string{"card (1st, 1259570991)", "card (2nd, 1259570991)"} {
+		pattern := regexp.QuoteMeta(label) + `\s+\S+\s+\(2 request\(s\): card static, card live; 2 attempt\(s\)\)`
+		if !regexp.MustCompile(pattern).MatchString(out) {
+			t.Errorf("summary does not show %q as the two named requests it is; got:\n%s", label, out)
+		}
+	}
+	// The comparison this check exists to make is per port. A card fetch that
+	// stopped reporting where it came from would land here instead, and the
+	// first-against-later line would never be printed at all.
+	if strings.Contains(out, "not grouped") {
+		t.Errorf("a card fetch was set aside as ungrouped though every request went through the one scripted port; got:\n%s", out)
+	}
+	if !strings.Contains(out, "later median") {
+		t.Errorf("summary does not compare the second fetch against the first, which is what -what diff exists to show; got:\n%s", out)
 	}
 }
 
