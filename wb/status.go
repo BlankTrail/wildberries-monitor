@@ -16,12 +16,12 @@ const (
 	// ClassChallenge means the edge served a challenge instead of the answer.
 	// This is not a verdict: the capture shows a real browser collecting one on
 	// its first contact, with the response telling it to go mint a token. The
-	// transport's solver is what clears it, so a different exit address does not
-	// help by itself — but a challenge that reached us means this port's solver
-	// did not clear it, and repeating on the same port meets the same unsolved
-	// session. The retry therefore takes a fresh lease. A challenge that survives
-	// a second, different session means the solver is not working, not that the
-	// address is bad.
+	// transport's solver is what clears it, and it works on many at once, so one
+	// reaching us is not the solver being oversubscribed — it is this attempt
+	// going unsolved, most often behind a proxy too slow or too poor to finish.
+	// So it is worth repeating on the same port, and worth replacing that port's
+	// upstream proxy once a few tries through one address have all come back
+	// with a challenge. See Client.Get for the policy this reasoning produced.
 	ClassChallenge
 	// ClassEgress means the exit address is the problem — reputation or rate.
 	ClassEgress
@@ -166,6 +166,15 @@ func Classify(status int, body []byte) Class {
 // 498 and 403 answer false for the reasons Class's doc comments give: a
 // challenge is cleared by the transport's solver, not by a new address, and a
 // malformed request travels with us regardless of which address sends it.
+//
+// A challenge answering false here is what leaves Client.Get in sole charge of
+// rotating on one, and the two are not in conflict. Counted here, a challenge
+// would push the port towards the pool's own consecutive-failure threshold, and
+// that threshold is reached inside a single RoundTrip — between the ladder's own
+// retries, where this package cannot see it, mid-fetch, discarding a solve that
+// may have been seconds from finishing. Get applies the same signal one level
+// up, where an attempt is a whole request and the count is a decision rather
+// than a side effect.
 //
 // Everything else — including a status we do not recognise — counts, so an
 // unknown failure still gets the generic treatment rather than being silently

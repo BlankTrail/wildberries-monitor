@@ -13,8 +13,10 @@
 // Client is the one path every request takes. It builds the header profile a
 // request's Kind demands (KindDocument, KindAPI, KindSearch, KindPlain), mints
 // and carries per-visit identity through Sessions, judges every response with
-// Classify into a Class, and retries a challenge once on a fresh lease before
-// reporting it. Two calls build on that path: SearchPage fetches one page of
+// Classify into a Class, and keeps retrying a challenge on the port that met
+// it — replacing that port's upstream proxy once RetryPolicy.AttemptsPerEgress
+// tries have gone out through one address — before reporting it. Two calls
+// build on that path: SearchPage fetches one page of
 // a search and stamps every row with its rank, page and the region/audience
 // it was fetched for; Card fetches both halves of one product — the seller's
 // own description from the CDN, reached through Basket's fetched shard map,

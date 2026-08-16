@@ -5,12 +5,16 @@ package wb
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/BlankTrail/wildberries-monitor/blanktrail"
 )
 
 // fakeLease records what it was asked to send and replies from a script.
@@ -22,6 +26,16 @@ type fakeLease struct {
 	sent     []*http.Request
 	released int
 	err      error
+
+	// rotations counts the egress changes this lease was asked for, and
+	// rotateErr is what RotateEgress reports instead of making one.
+	rotations int
+	rotateErr error
+	// events is the ordered log of what the lease was asked to do: "do" for a
+	// request, "rotate" for an egress change. The retry policy is a statement
+	// about the order of those two — three requests, then a rotation, then a
+	// request — which no pair of counts can pin on its own.
+	events []string
 
 	// bodyClosed and releasedWithBodyClosed pin the "read and close before
 	// Release" requirement. Do wraps whatever body a scripted response carries
@@ -37,6 +51,7 @@ func (f *fakeLease) Do(req *http.Request) (*http.Response, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.sent = append(f.sent, req)
+	f.events = append(f.events, "do")
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -51,8 +66,29 @@ func (f *fakeLease) Do(req *http.Request) (*http.Response, error) {
 	return r, nil
 }
 
-func (f *fakeLease) Session() string { return f.session }
-func (f *fakeLease) Port() int       { return f.port }
+func (f *fakeLease) Session() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.session
+}
+
+func (f *fakeLease) Port() int { return f.port }
+
+// RotateEgress models what the real one does to the things wb can observe: the
+// port stays, and the session string changes, because the proxy discards a
+// solved challenge along with the exit address it was bound to.
+func (f *fakeLease) RotateEgress(context.Context) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.rotateErr != nil {
+		return f.rotateErr
+	}
+	f.rotations++
+	f.events = append(f.events, "rotate")
+	f.session = fmt.Sprintf("%d#r%d", f.port, f.rotations)
+	return nil
+}
+
 func (f *fakeLease) Release() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -155,40 +191,250 @@ func TestClient_ReleasesTheLeaseOnlyAfterTheBodyIsClosed(t *testing.T) {
 	}
 }
 
-func TestClient_RetriesAChallengeOnADifferentLease(t *testing.T) {
-	first := &fakeLease{session: "20000#1", port: 20000, replies: []*http.Response{reply(498, "<html>challenge</html>")}}
-	second := &fakeLease{session: "20001#1", port: 20001, replies: []*http.Response{reply(200, "{}")}}
-	c := NewClient(&fakeLeaser{leases: []*fakeLease{first, second}}, NewSessions())
+// challenges scripts n challenge replies, for the loops below that have to run
+// past the point where a caller would have given up.
+func challenges(n int) []*http.Response {
+	out := make([]*http.Response, n)
+	for i := range out {
+		out[i] = reply(498, "<html>challenge</html>")
+	}
+	return out
+}
+
+func TestClient_RetriesAChallengeOnTheSameEgressBeforeChangingIt(t *testing.T) {
+	// The shape of the policy, in the case the live run actually hit: the
+	// challenge clears on the fourth attempt. Three of them go out through the
+	// address the port already had — a slow proxy deserves the chance to finish
+	// a solve — and only then is the proxy replaced. A rotation any earlier
+	// throws away a working session and a solve already in progress; any later
+	// keeps re-sending through the address that is the likeliest cause.
+	l := &fakeLease{session: "20000#1", port: 20000, replies: append(challenges(3), reply(200, "{}"))}
+	c := NewClientWithRetry(&fakeLeaser{leases: []*fakeLease{l}}, NewSessions(),
+		RetryPolicy{Attempts: 15, AttemptsPerEgress: 3})
 
 	got, err := c.Get(context.Background(), "https://www.wildberries.ru/x", KindSearch, "")
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
 	if got.Status != 200 {
-		t.Errorf("Status=%d, want the retry's 200", got.Status)
+		t.Errorf("Status=%d, want the fourth attempt's 200", got.Status)
 	}
-	if got.Attempts != 2 {
-		t.Errorf("Attempts=%d, want 2", got.Attempts)
+	if got.Attempts != 4 || got.Rotations != 1 {
+		t.Errorf("Attempts=%d Rotations=%d, want 4/1", got.Attempts, got.Rotations)
 	}
-	if got.Port != 20001 {
-		t.Errorf("Port=%d, want the second lease's port — retrying a challenge on the same port meets the same unsolved session", got.Port)
+	want := []string{"do", "do", "do", "rotate", "do"}
+	if !reflect.DeepEqual(l.events, want) {
+		t.Errorf("lease saw %v, want %v — three attempts on the first egress, then a new proxy", l.events, want)
 	}
-	if first.released != 1 || second.released != 1 {
-		t.Errorf("released %d and %d, want 1 each", first.released, second.released)
+	if got.Port != 20000 {
+		t.Errorf("Port=%d, want the one port this whole fetch was made on", got.Port)
 	}
 }
 
-func TestClient_GivesUpAfterOneChallengeRetry(t *testing.T) {
-	a := &fakeLease{port: 1, replies: []*http.Response{reply(498, "")}}
-	b := &fakeLease{port: 2, replies: []*http.Response{reply(498, "")}}
-	c := NewClient(&fakeLeaser{leases: []*fakeLease{a, b}}, NewSessions())
+func TestClient_KeepsOneLeaseAcrossTheWholeChallengeLoop(t *testing.T) {
+	// Retrying on a fresh lease was the old behaviour and is not the same
+	// thing: a new lease is a new port — quite possibly the same one back
+	// again — and never a new upstream proxy. Only a lease held across the
+	// attempts can ask for the address to change.
+	l := &fakeLease{port: 20000, replies: append(challenges(5), reply(200, "{}"))}
+	leaser := &fakeLeaser{leases: []*fakeLease{l}}
+	c := NewClientWithRetry(leaser, NewSessions(), RetryPolicy{Attempts: 15, AttemptsPerEgress: 3})
+
+	if _, err := c.Get(context.Background(), "https://www.wildberries.ru/x", KindSearch, ""); err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if leaser.n != 1 {
+		t.Errorf("acquired %d leases, want 1 for the whole fetch", leaser.n)
+	}
+	if l.released != 1 {
+		t.Errorf("released %d times, want exactly 1", l.released)
+	}
+}
+
+func TestClient_ChangesTheProxyOnEveryAttemptPastTheThreshold(t *testing.T) {
+	// Past the threshold the point is to find a proxy that works, so each
+	// further attempt takes a fresh one. Giving every new proxy the same three
+	// tries the first one had would spend the whole budget on four addresses
+	// instead of twelve.
+	l := &fakeLease{port: 20000, replies: challenges(6)}
+	c := NewClientWithRetry(&fakeLeaser{leases: []*fakeLease{l}}, NewSessions(),
+		RetryPolicy{Attempts: 6, AttemptsPerEgress: 3})
 
 	got, err := c.Get(context.Background(), "https://www.wildberries.ru/x", KindSearch, "")
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if got.Class != ClassChallenge || got.Attempts != 2 {
-		t.Errorf("Class=%v Attempts=%d, want %v/2 — a challenge that survives a fresh session is reported, not looped on", got.Class, got.Attempts, ClassChallenge)
+	want := []string{"do", "do", "do", "rotate", "do", "rotate", "do", "rotate", "do"}
+	if !reflect.DeepEqual(l.events, want) {
+		t.Errorf("lease saw %v, want %v", l.events, want)
+	}
+	if got.Attempts != 6 || got.Rotations != 3 {
+		t.Errorf("Attempts=%d Rotations=%d, want 6/3", got.Attempts, got.Rotations)
+	}
+}
+
+func TestClient_SpendsTheWholeBudgetAndNoMore(t *testing.T) {
+	// The budget is a total, not a target: fifteen attempts means the fifteenth
+	// challenge is reported, not that a sixteenth request is sent. The lease is
+	// scripted with more replies than the policy allows, so an off-by-one in
+	// either direction shows up as a count rather than as an error.
+	l := &fakeLease{port: 20000, replies: challenges(30)}
+	c := NewClientWithRetry(&fakeLeaser{leases: []*fakeLease{l}}, NewSessions(),
+		DefaultRetryPolicy(true))
+
+	got, err := c.Get(context.Background(), "https://www.wildberries.ru/x", KindSearch, "")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Class != ClassChallenge {
+		t.Fatalf("Class=%v, want %v", got.Class, ClassChallenge)
+	}
+	// The numbers are spelled out rather than taken from the constants the
+	// production code uses: an assertion written against those moves with them
+	// and would let the budget be changed to anything at all with this suite
+	// still green. client_test.go's own referer fallback test states the same
+	// reasoning about the origin constant.
+	if len(l.sent) != 15 || got.Attempts != 15 {
+		t.Errorf("sent %d requests and reported %d attempts, want 15 of each", len(l.sent), got.Attempts)
+	}
+	if got.Rotations != 12 {
+		t.Errorf("Rotations=%d, want 12 — three attempts on the port's own proxy, then a fresh one per attempt", got.Rotations)
+	}
+}
+
+func TestClient_DirectEgressStopsAtTwoAttempts(t *testing.T) {
+	// With one exit address there is nothing to search. The second attempt is
+	// still worth making — a solve can simply have been unlucky — but the third
+	// would be the same request from the same address for the third time.
+	l := &fakeLease{port: 1, replies: challenges(10)}
+	c := NewClient(&fakeLeaser{leases: []*fakeLease{l}}, NewSessions())
+
+	got, err := c.Get(context.Background(), "https://www.wildberries.ru/x", KindSearch, "")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Class != ClassChallenge {
+		t.Fatalf("Class=%v, want %v", got.Class, ClassChallenge)
+	}
+	if len(l.sent) != 2 || got.Attempts != 2 {
+		t.Errorf("sent %d requests and reported %d attempts, want 2 of each", len(l.sent), got.Attempts)
+	}
+	if l.rotations != 0 {
+		t.Errorf("asked for %d egress changes on a client built for direct egress", l.rotations)
+	}
+}
+
+func TestClient_StopsWhenTheEgressCannotBeChanged(t *testing.T) {
+	// A pooled budget pointed at a port that cannot change its address — direct
+	// egress, or a gateway fixed at open time. Every attempt past the threshold
+	// would leave through the address that has already failed three times, so
+	// the loop stops there instead of spending twelve more requests proving it.
+	l := &fakeLease{port: 1, replies: challenges(20), rotateErr: blanktrail.ErrRenewUnsupported}
+	c := NewClientWithRetry(&fakeLeaser{leases: []*fakeLease{l}}, NewSessions(), DefaultRetryPolicy(true))
+
+	got, err := c.Get(context.Background(), "https://www.wildberries.ru/x", KindSearch, "")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Class != ClassChallenge {
+		t.Fatalf("Class=%v, want %v", got.Class, ClassChallenge)
+	}
+	if len(l.sent) != 3 || got.Attempts != 3 {
+		t.Errorf("sent %d requests and reported %d attempts, want 3 of each — the budget cannot be spent on an address that will not change",
+			len(l.sent), got.Attempts)
+	}
+	if got.Rotations != 0 {
+		t.Errorf("Rotations=%d, want 0 — a refused change is not a change", got.Rotations)
+	}
+}
+
+func TestClient_MintsANewVisitorAfterTheProxyChanges(t *testing.T) {
+	// Clearance binds to the exit IP, so the transport reports a new session
+	// once the address moves — and the identity sent to the site has to move
+	// with it. Building the headers once and reusing them across the loop would
+	// send one visitor whose device outlived its own address.
+	l := &fakeLease{session: "20000#1", port: 20000, replies: append(challenges(3), reply(200, "{}"))}
+	c := NewClientWithRetry(&fakeLeaser{leases: []*fakeLease{l}}, NewSessions(),
+		RetryPolicy{Attempts: 15, AttemptsPerEgress: 3})
+
+	if _, err := c.Get(context.Background(), "https://www.wildberries.ru/x", KindSearch, ""); err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if len(l.sent) != 4 {
+		t.Fatalf("sent %d requests, want 4", len(l.sent))
+	}
+	// The header map is keyed by the literal lowercase name the site's own
+	// front end sends, which is not the canonical form Header.Get would look
+	// up — headers_test.go makes the same direct lookup for the same reason.
+	deviceID := func(i int) string {
+		v := l.sent[i].Header["deviceid"]
+		if len(v) != 1 {
+			t.Fatalf("request %d carries %d deviceid values, want 1", i, len(v))
+		}
+		return v[0]
+	}
+	before, after := deviceID(2), deviceID(3)
+	if before == after {
+		t.Errorf("deviceid still %q after the proxy changed; one visitor cannot keep its device across an address change", after)
+	}
+	// The three attempts before the rotation are one visit and must look like
+	// one: a fresh device id per attempt is the same anomaly in the other
+	// direction.
+	if first := deviceID(0); first != before {
+		t.Errorf("deviceid changed from %q to %q between two attempts on the same address", first, before)
+	}
+}
+
+func TestClient_OnlyAChallengeRetries(t *testing.T) {
+	// A usable response, our own malformed request and the origin's own error
+	// are all answers this loop cannot improve on. Retrying them would multiply
+	// every failed page by the whole budget.
+	for _, tc := range []struct {
+		name   string
+		status int
+		body   string
+	}{
+		{"ok", 200, "{}"},
+		{"request fault", 403, ""},
+		{"server error", 500, ""},
+		{"soft wall", 200, "почти готово"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			l := &fakeLease{port: 1, replies: []*http.Response{reply(tc.status, tc.body), reply(200, "{}")}}
+			c := NewClientWithRetry(&fakeLeaser{leases: []*fakeLease{l}}, NewSessions(), DefaultRetryPolicy(true))
+
+			got, err := c.Get(context.Background(), "https://www.wildberries.ru/x", KindSearch, "")
+			if err != nil {
+				t.Fatalf("Get: %v", err)
+			}
+			if got.Status != tc.status || got.Attempts != 1 {
+				t.Errorf("Status=%d Attempts=%d, want %d/1", got.Status, got.Attempts, tc.status)
+			}
+			if l.rotations != 0 {
+				t.Errorf("asked for %d egress changes for a %d", l.rotations, tc.status)
+			}
+		})
+	}
+}
+
+func TestRetryPolicy_DefaultsAndFallbacks(t *testing.T) {
+	// Spelled out on purpose — see TestClient_SpendsTheWholeBudgetAndNoMore.
+	if got := DefaultRetryPolicy(true); got.Attempts != 15 || got.AttemptsPerEgress != 3 {
+		t.Errorf("DefaultRetryPolicy(true)=%+v, want 15 attempts, 3 per egress", got)
+	}
+	if got := DefaultRetryPolicy(false); got.Attempts != 2 || got.AttemptsPerEgress != 3 {
+		t.Errorf("DefaultRetryPolicy(false)=%+v, want 2 attempts, 3 per egress", got)
+	}
+	// A zero or negative policy must not reduce Get to no attempts at all,
+	// which would turn a misconfiguration into a run that fetches nothing and
+	// reports no error.
+	c := NewClientWithRetry(&fakeLeaser{}, NewSessions(), RetryPolicy{})
+	if got := c.Retry(); got.Attempts < 1 || got.AttemptsPerEgress < 1 {
+		t.Errorf("the zero policy normalised to %+v, want at least one attempt", got)
+	}
+	c = NewClientWithRetry(&fakeLeaser{}, NewSessions(), RetryPolicy{Attempts: -3, AttemptsPerEgress: -1})
+	if got := c.Retry(); got.Attempts < 1 || got.AttemptsPerEgress < 1 {
+		t.Errorf("a negative policy normalised to %+v, want at least one attempt", got)
 	}
 }
 
@@ -348,8 +594,8 @@ func TestClient_SearchPageRefusesANonOKPage(t *testing.T) {
 		// actually pins the res.Class != ClassOK guard. An empty string body
 		// would fail decodeEnvelope on its own regardless of the guard, and a
 		// test built on that fixture passes whether or not the guard exists.
-		// A 498 is retried once (Get's own behaviour), so both leases must
-		// reply the same way.
+		// A 498 is retried (Get's own behaviour: this client is built for
+		// direct egress, so twice), and both attempts land on the one lease.
 		{"challenge with a body that would otherwise decode as empty results", []*http.Response{
 			reply(498, `{"products":[]}`),
 			reply(498, `{"products":[]}`),
@@ -362,11 +608,9 @@ func TestClient_SearchPageRefusesANonOKPage(t *testing.T) {
 		{"malformed 200 body", []*http.Response{reply(200, "{")}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			leases := make([]*fakeLease, len(tc.replies))
-			for i, r := range tc.replies {
-				leases[i] = &fakeLease{port: i + 1, replies: []*http.Response{r}}
-			}
-			c := NewClient(&fakeLeaser{leases: leases}, NewSessions())
+			// One lease carries the whole script: a challenge retry stays on
+			// the port it met the challenge on.
+			c := NewClient(&fakeLeaser{leases: []*fakeLease{{port: 1, replies: tc.replies}}}, NewSessions())
 
 			_, err := c.SearchPage(context.Background(), DefaultEndpoints(), SearchQuery{Query: "x", Dest: "1", Page: 1})
 			if err == nil {
