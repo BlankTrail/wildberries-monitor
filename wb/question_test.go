@@ -334,7 +334,8 @@ func TestClient_QuestionsFetchesWithThePlainProfile(t *testing.T) {
 	l := &fakeLease{port: 1, replies: []*http.Response{reply(200, string(fixture))}}
 	c := NewClient(&fakeLeaser{leases: []*fakeLease{l}}, NewSessions())
 
-	items, count, _, _, err := c.Questions(context.Background(), DefaultEndpoints(), 996564353, 20, 0)
+	got, err := c.Questions(context.Background(), DefaultEndpoints(), 996564353, 20, 0)
+	items, count := got.Items, got.Count
 	if err != nil {
 		t.Fatalf("Questions: %v", err)
 	}
@@ -377,34 +378,102 @@ func TestClient_QuestionsFetchesWithThePlainProfile(t *testing.T) {
 // same gap and the same fix as Client.Reviews and Client.Duplicates: neither
 // method returned which port answered or what it cost, so a caller paging
 // through several requests had no way to tell a warm port from a cold one.
+// Both now report it the way every other call in this package does, and the
+// two name themselves apart: the whole point of the cheap mode is that it
+// costs a fraction of the paged fetch, which nothing can see in a timing
+// table if both rows are labelled the same.
 func TestClient_QuestionsAndQuestionCountReportThePortAndCostOfTheFetch(t *testing.T) {
 	fixture := questionsFixture(t)
 	ql := &fakeLease{port: 11, replies: []*http.Response{reply(200, string(fixture))}}
 	qc := NewClient(&fakeLeaser{leases: []*fakeLease{ql}}, NewSessions())
 
-	_, _, port, cost, err := qc.Questions(context.Background(), DefaultEndpoints(), 996564353, 20, 0)
+	page, err := qc.Questions(context.Background(), DefaultEndpoints(), 996564353, 20, 0)
 	if err != nil {
 		t.Fatalf("Questions: %v", err)
 	}
-	if port != 11 {
-		t.Errorf("Questions port=%d, want 11", port)
+	f := onlyFetch(t, page.Fetches)
+	if f.Source != SourceQuestions {
+		t.Errorf("Questions source=%q, want %q", f.Source, SourceQuestions)
 	}
-	if cost.Attempts != 1 {
-		t.Errorf("Questions cost.Attempts=%d, want 1", cost.Attempts)
+	if f.Port != 11 {
+		t.Errorf("Questions port=%d, want 11", f.Port)
+	}
+	if f.Cost.Attempts != 1 {
+		t.Errorf("Questions cost.Attempts=%d, want 1", f.Cost.Attempts)
 	}
 
 	cl := &fakeLease{port: 12, replies: []*http.Response{reply(200, `{"count":6,"err":null}`)}}
 	cc := NewClient(&fakeLeaser{leases: []*fakeLease{cl}}, NewSessions())
 
-	_, ccPort, ccCost, err := cc.QuestionCount(context.Background(), DefaultEndpoints(), 996564353)
+	cheap, err := cc.QuestionCount(context.Background(), DefaultEndpoints(), 996564353)
 	if err != nil {
 		t.Fatalf("QuestionCount: %v", err)
 	}
-	if ccPort != 12 {
-		t.Errorf("QuestionCount port=%d, want 12", ccPort)
+	cf := onlyFetch(t, cheap.Fetches)
+	if cf.Source != SourceQuestionCount {
+		t.Errorf("QuestionCount source=%q, want %q — the cheap mode is a different address from the paged fetch and must not report itself as one", cf.Source, SourceQuestionCount)
 	}
-	if ccCost.Attempts != 1 {
-		t.Errorf("QuestionCount cost.Attempts=%d, want 1", ccCost.Attempts)
+	if cf.Port != 12 {
+		t.Errorf("QuestionCount port=%d, want 12", cf.Port)
+	}
+	if cf.Cost.Attempts != 1 {
+		t.Errorf("QuestionCount cost.Attempts=%d, want 1", cf.Cost.Attempts)
+	}
+}
+
+// TestClient_QuestionsReportsAFetchThatNeverLanded is the failing half of
+// the same claim: a request that never produced a response has no port to
+// name, but it burned a real budget doing so, and that is the figure a run's
+// summary would otherwise be missing for its most expensive fetch. Both
+// methods are checked, because both build that entry themselves.
+func TestClient_QuestionsReportsAFetchThatNeverLanded(t *testing.T) {
+	want := FetchCost{Attempts: 2, TransportErrors: 2}
+
+	pl := &fakeLease{port: 11, err: errors.New("boom")}
+	page, err := NewClient(&fakeLeaser{leases: []*fakeLease{pl}}, NewSessions()).
+		Questions(context.Background(), DefaultEndpoints(), 996564353, 20, 0)
+	if err == nil {
+		t.Fatal("a transport failure was accepted without error")
+	}
+	f := onlyFetch(t, page.Fetches)
+	if f.Source != SourceQuestions || f.Port != 0 || f.Cost != want {
+		t.Errorf("Questions provenance = %+v, want the paged source, no port and %+v", f, want)
+	}
+
+	cl := &fakeLease{port: 12, err: errors.New("boom")}
+	cheap, err := NewClient(&fakeLeaser{leases: []*fakeLease{cl}}, NewSessions()).
+		QuestionCount(context.Background(), DefaultEndpoints(), 996564353)
+	if err == nil {
+		t.Fatal("a transport failure on the cheap count was accepted without error")
+	}
+	cf := onlyFetch(t, cheap.Fetches)
+	if cf.Source != SourceQuestionCount || cf.Port != 0 || cf.Cost != want {
+		t.Errorf("QuestionCount provenance = %+v, want the cheap source, no port and %+v", cf, want)
+	}
+}
+
+// TestClient_QuestionCountReportsNoItems pins the one trap in giving both
+// methods the same return type: the cheap mode fetches no question bodies at
+// all, so its Items must stay empty rather than carrying anything a previous
+// decode left behind. A caller reading Items off a QuestionCount result is
+// reading what the endpoint deliberately did not ask for, and it must read as
+// empty rather than as a card with no questions.
+func TestClient_QuestionCountReportsNoItems(t *testing.T) {
+	// The reply is a full questions document, bodies and all — the shape the
+	// site would send if onlyCount were dropped from the URL. Even given that,
+	// QuestionCount must hand back no items.
+	l := &fakeLease{port: 1, replies: []*http.Response{reply(200, string(questionsFixture(t)))}}
+	c := NewClient(&fakeLeaser{leases: []*fakeLease{l}}, NewSessions())
+
+	got, err := c.QuestionCount(context.Background(), DefaultEndpoints(), 996564353)
+	if err != nil {
+		t.Fatalf("QuestionCount: %v", err)
+	}
+	if len(got.Items) != 0 {
+		t.Errorf("Items=%d, want none — QuestionCount asks for the aggregate, not the bodies", len(got.Items))
+	}
+	if got.Count != 6 {
+		t.Errorf("Count=%d, want the fixture's own 6", got.Count)
 	}
 }
 
@@ -416,7 +485,7 @@ func TestClient_QuestionsSendsTakeAndSkipInTheGivenOrder(t *testing.T) {
 	l := &fakeLease{port: 1, replies: []*http.Response{reply(200, `{"questions":[],"count":0,"err":null}`)}}
 	c := NewClient(&fakeLeaser{leases: []*fakeLease{l}}, NewSessions())
 
-	if _, _, _, _, err := c.Questions(context.Background(), DefaultEndpoints(), 1, 7, 13); err != nil {
+	if _, err := c.Questions(context.Background(), DefaultEndpoints(), 1, 7, 13); err != nil {
 		t.Fatalf("Questions: %v", err)
 	}
 	if len(l.sent) != 1 {
@@ -441,11 +510,11 @@ func TestClient_QuestionCountSendsOnlyCountTrueAndPullsNoBody(t *testing.T) {
 	l := &fakeLease{port: 1, replies: []*http.Response{reply(200, `{"count":6,"err":null}`)}}
 	c := NewClient(&fakeLeaser{leases: []*fakeLease{l}}, NewSessions())
 
-	count, _, _, err := c.QuestionCount(context.Background(), DefaultEndpoints(), 996564353)
+	got, err := c.QuestionCount(context.Background(), DefaultEndpoints(), 996564353)
 	if err != nil {
 		t.Fatalf("QuestionCount: %v", err)
 	}
-	if count != 6 {
+	if count := got.Count; count != 6 {
 		t.Errorf("count=%d, want 6", count)
 	}
 
@@ -482,7 +551,7 @@ func TestClient_QuestionsRejectsANonPositiveImtID(t *testing.T) {
 	l := &countingLeaser{}
 	c := NewClient(l, NewSessions())
 	for _, imtID := range []int64{0, -1} {
-		if _, _, _, _, err := c.Questions(context.Background(), DefaultEndpoints(), imtID, 20, 0); err == nil {
+		if _, err := c.Questions(context.Background(), DefaultEndpoints(), imtID, 20, 0); err == nil {
 			t.Errorf("imtID=%d was accepted without error", imtID)
 		}
 	}
@@ -499,7 +568,7 @@ func TestClient_QuestionCountRejectsANonPositiveImtID(t *testing.T) {
 	l := &countingLeaser{}
 	c := NewClient(l, NewSessions())
 	for _, imtID := range []int64{0, -1} {
-		if _, _, _, err := c.QuestionCount(context.Background(), DefaultEndpoints(), imtID); err == nil {
+		if _, err := c.QuestionCount(context.Background(), DefaultEndpoints(), imtID); err == nil {
 			t.Errorf("imtID=%d was accepted without error", imtID)
 		}
 	}
@@ -512,7 +581,7 @@ func TestClient_QuestionsRefusesANonOKStatus(t *testing.T) {
 	l := &fakeLease{port: 1, replies: []*http.Response{reply(500, "")}}
 	c := NewClient(&fakeLeaser{leases: []*fakeLease{l}}, NewSessions())
 
-	if _, _, _, _, err := c.Questions(context.Background(), DefaultEndpoints(), 1, 20, 0); err == nil {
+	if _, err := c.Questions(context.Background(), DefaultEndpoints(), 1, 20, 0); err == nil {
 		t.Fatal("a 500 was accepted without error")
 	}
 }
@@ -521,7 +590,7 @@ func TestClient_QuestionCountRefusesANonOKStatus(t *testing.T) {
 	l := &fakeLease{port: 1, replies: []*http.Response{reply(500, "")}}
 	c := NewClient(&fakeLeaser{leases: []*fakeLease{l}}, NewSessions())
 
-	if _, _, _, err := c.QuestionCount(context.Background(), DefaultEndpoints(), 1); err == nil {
+	if _, err := c.QuestionCount(context.Background(), DefaultEndpoints(), 1); err == nil {
 		t.Fatal("a 500 was accepted without error")
 	}
 }
@@ -530,7 +599,7 @@ func TestClient_QuestionsPropagatesADecodeFailure(t *testing.T) {
 	l := &fakeLease{port: 1, replies: []*http.Response{reply(200, "{not valid json")}}
 	c := NewClient(&fakeLeaser{leases: []*fakeLease{l}}, NewSessions())
 
-	if _, _, _, _, err := c.Questions(context.Background(), DefaultEndpoints(), 1, 20, 0); err == nil {
+	if _, err := c.Questions(context.Background(), DefaultEndpoints(), 1, 20, 0); err == nil {
 		t.Fatal("a malformed body was accepted without error")
 	}
 }
@@ -539,7 +608,7 @@ func TestClient_QuestionCountPropagatesADecodeFailure(t *testing.T) {
 	l := &fakeLease{port: 1, replies: []*http.Response{reply(200, "{not valid json")}}
 	c := NewClient(&fakeLeaser{leases: []*fakeLease{l}}, NewSessions())
 
-	if _, _, _, err := c.QuestionCount(context.Background(), DefaultEndpoints(), 1); err == nil {
+	if _, err := c.QuestionCount(context.Background(), DefaultEndpoints(), 1); err == nil {
 		t.Fatal("a malformed body was accepted without error")
 	}
 }

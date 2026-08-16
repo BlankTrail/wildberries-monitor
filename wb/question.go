@@ -117,6 +117,32 @@ func (r rawQuestion) toQuestion() Question {
 	return q
 }
 
+// Questions is one fetch of a card's buyer questions: the window of them the
+// request asked for, the card's own aggregate count, and where the request
+// came from. It is what both Client.Questions and Client.QuestionCount
+// answer with — see QuestionCount for why the cheap mode shares the type and
+// leaves Items empty.
+//
+// It mirrors Reviews, which pairs the same two kinds of fact for the same
+// reason: a window and an aggregate are different claims, and the count is
+// the site's own total rather than len(Items) — see decodeQuestions.
+type Questions struct {
+	// Items is the page of questions this request asked for, ordered as the
+	// site sent them. Empty from Client.QuestionCount, which asks for no
+	// bodies at all.
+	Items []Question
+
+	// Count is WB's own aggregate for the card: every question it has ever
+	// received, not the size of the window in Items. Both methods read it
+	// from the same field of the same document, through two addresses.
+	Count int64
+
+	// Fetches is where the one request behind this value went and what it
+	// cost. See Fetch, and Envelope.Fetches for the identical field on the
+	// identical reasoning.
+	Fetches []Fetch
+}
+
 // rawQuestionsDocument mirrors the top level of a questions.json-shaped
 // payload. It also covers the onlyCount=true shape: that response is the
 // same document with questions absent (or empty) and only count meaningful,
@@ -194,27 +220,31 @@ func (e Endpoints) QuestionCountURL(imtID int64) string {
 // carry a variant's nmId. See Client.Reviews's doc comment for why this is
 // documented as an approximation rather than a pinned-down fact.
 //
-// port and cost mirror Envelope.Port and Envelope.Cost — see Envelope.Port's
-// own doc comment for why a caller needs a port to group by: to tell whether
-// a port's session survives across separate requests. port is zero when the
-// fetch never produced a response at all.
-func (c *Client) Questions(ctx context.Context, eps Endpoints, imtID int64, take, skip int) (items []Question, count int64, port int, cost FetchCost, err error) {
+// The returned Questions carries the provenance of the one request this makes
+// — see Questions.Fetches and Fetch — the same way every other call in this
+// package does. It replaces the loose port and cost this method used to
+// return as its third and fourth values: five return values is not a shape
+// worth spreading to the calls that fetch from two places at once, and the
+// two halves of one answer plus its provenance is a result, not an argument
+// list.
+func (c *Client) Questions(ctx context.Context, eps Endpoints, imtID int64, take, skip int) (Questions, error) {
 	if imtID <= 0 {
-		return nil, 0, 0, FetchCost{}, fmt.Errorf("wb: questions: invalid imtId %d", imtID)
+		return Questions{}, fmt.Errorf("wb: questions: invalid imtId %d", imtID)
 	}
 	referer := eps.CardPageURL(imtID)
 	res, err := c.Get(ctx, eps.QuestionsURL(imtID, take, skip), KindPlain, referer)
 	if err != nil {
-		return nil, 0, 0, CostOf(err), err
+		return Questions{Fetches: []Fetch{lostFetch(SourceQuestions, err)}}, err
 	}
+	from := []Fetch{fetchOf(SourceQuestions, res)}
 	if res.Class != ClassOK {
-		return nil, 0, res.Port, res.FetchCost, fmt.Errorf("wb: questions %d: status %d (%s)", imtID, res.Status, res.Class)
+		return Questions{Fetches: from}, fmt.Errorf("wb: questions %d: status %d (%s)", imtID, res.Status, res.Class)
 	}
-	items, count, err = decodeQuestions(res.Body)
+	items, count, err := decodeQuestions(res.Body)
 	if err != nil {
-		return nil, 0, res.Port, res.FetchCost, fmt.Errorf("wb: questions %d: %w", imtID, err)
+		return Questions{Fetches: from}, fmt.Errorf("wb: questions %d: %w", imtID, err)
 	}
-	return items, count, res.Port, res.FetchCost, nil
+	return Questions{Items: items, Count: count, Fetches: from}, nil
 }
 
 // QuestionCount fetches only the cheap aggregate: onlyCount=true, no question
@@ -224,23 +254,36 @@ func (c *Client) Questions(ctx context.Context, eps Endpoints, imtID int64, take
 // separate thing to call, not an argument to thread through the expensive
 // one.
 //
-// port and cost mirror the identical pair on Questions, for the identical
-// reason.
-func (c *Client) QuestionCount(ctx context.Context, eps Endpoints, imtID int64) (count int64, port int, cost FetchCost, err error) {
+// It answers the same Questions type Client.Questions does, with Items empty:
+// the cheap response is that same document with the questions array absent
+// (see rawQuestionsDocument), and a second type differing only in which field
+// is populated would have to be converted at every call site that holds
+// both. Items is left empty deliberately even when a response arrives with
+// bodies in it — reading Items off a QuestionCount result is reading what
+// this mode exists not to fetch, and it must read as "not asked for" rather
+// than as a card with no questions.
+//
+// The provenance names itself SourceQuestionCount rather than
+// SourceQuestions. The two are different addresses with very different
+// costs — about forty bytes against a full page — and a timing table that
+// labelled both the same could not show the difference this method exists
+// for.
+func (c *Client) QuestionCount(ctx context.Context, eps Endpoints, imtID int64) (Questions, error) {
 	if imtID <= 0 {
-		return 0, 0, FetchCost{}, fmt.Errorf("wb: question count: invalid imtId %d", imtID)
+		return Questions{}, fmt.Errorf("wb: question count: invalid imtId %d", imtID)
 	}
 	referer := eps.CardPageURL(imtID)
 	res, err := c.Get(ctx, eps.QuestionCountURL(imtID), KindPlain, referer)
 	if err != nil {
-		return 0, 0, CostOf(err), err
+		return Questions{Fetches: []Fetch{lostFetch(SourceQuestionCount, err)}}, err
 	}
+	from := []Fetch{fetchOf(SourceQuestionCount, res)}
 	if res.Class != ClassOK {
-		return 0, res.Port, res.FetchCost, fmt.Errorf("wb: question count %d: status %d (%s)", imtID, res.Status, res.Class)
+		return Questions{Fetches: from}, fmt.Errorf("wb: question count %d: status %d (%s)", imtID, res.Status, res.Class)
 	}
-	_, count, err = decodeQuestions(res.Body)
+	_, count, err := decodeQuestions(res.Body)
 	if err != nil {
-		return 0, res.Port, res.FetchCost, fmt.Errorf("wb: question count %d: %w", imtID, err)
+		return Questions{Fetches: from}, fmt.Errorf("wb: question count %d: %w", imtID, err)
 	}
-	return count, res.Port, res.FetchCost, nil
+	return Questions{Count: count, Fetches: from}, nil
 }

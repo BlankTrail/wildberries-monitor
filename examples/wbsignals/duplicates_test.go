@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"net/http"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -162,7 +163,9 @@ func TestRunDuplicates_ReportsThePortOfEveryFetchIncludingTheCard(t *testing.T) 
 	}
 	// The card's own row must carry the attempts of both its halves — the
 	// static one and the live one — not of one of them.
-	if !strings.Contains(summary.String(), "card #1                      0s         (2 request(s), 2 attempt(s))") {
+	// Matched around the elapsed column, not through it: see the identical
+	// note in seller_test.go.
+	if !regexp.MustCompile(`card #1\s+\S+\s+\(2 request\(s\), 2 attempt\(s\)\)`).MatchString(summary.String()) {
 		t.Errorf("summary does not show the card as two requests through that port; got:\n%s", summary.String())
 	}
 	if strings.Contains(summary.String(), "did not share a port") {

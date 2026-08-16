@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"net/http"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -129,7 +130,11 @@ func TestRunSeller_ReportsTheSellerCallAsTwoRequestsThroughItsPort(t *testing.T)
 	if !strings.Contains(out, "port 4 (2 call(s), 3 request(s))") {
 		t.Errorf("summary does not file both calls — three requests — under port 4; got:\n%s", out)
 	}
-	if !strings.Contains(out, "seller profile #1            0s         (2 request(s), 2 attempt(s))") {
+	// Matched around the elapsed column rather than through it: how long a
+	// scripted lease takes is not this test's claim, and pinning it would
+	// make the test fail on a slow machine for a reason unrelated to what it
+	// asserts.
+	if !regexp.MustCompile(`seller profile #1\s+\S+\s+\(2 request\(s\), 2 attempt\(s\)\)`).MatchString(out) {
 		t.Errorf("summary does not show the seller call as the two requests it is; got:\n%s", out)
 	}
 	if strings.Contains(out, "no port reported") {

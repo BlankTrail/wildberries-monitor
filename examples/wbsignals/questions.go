@@ -123,11 +123,8 @@ func runQuestions(ctx context.Context, c *wb.Client, eps wb.Endpoints, imt int64
 		var t []requestTiming
 
 		start := time.Now()
-		cheap, cheapPort, cheapCost, ferr := c.QuestionCount(ctx, eps, imt)
-		t = append(t, requestTiming{
-			label: fmt.Sprintf("question count #%d", i), elapsed: time.Since(start),
-			ports: []int{cheapPort}, attempts: cheapCost.Attempts,
-		})
+		cheap, ferr := c.QuestionCount(ctx, eps, imt)
+		t = append(t, timingOf(fmt.Sprintf("question count #%d", i), cheap.Fetches, time.Since(start)))
 		if ferr != nil {
 			return t, fmt.Errorf("question count %d (attempt %d/%d): %w", imt, i, repeat, ferr)
 		}
@@ -137,15 +134,13 @@ func runQuestions(ctx context.Context, c *wb.Client, eps wb.Endpoints, imt int64
 		skip := 0
 		for page := 1; page <= maxQuestionPages; page++ {
 			pstart := time.Now()
-			items, count, port, cost, perr := c.Questions(ctx, eps, imt, take, skip)
-			t = append(t, requestTiming{
-				label: fmt.Sprintf("questions #%d page %d", i, page), elapsed: time.Since(pstart),
-				ports: []int{port}, attempts: cost.Attempts,
-			})
+			got, perr := c.Questions(ctx, eps, imt, take, skip)
+			items := got.Items
+			t = append(t, timingOf(fmt.Sprintf("questions #%d page %d", i, page), got.Fetches, time.Since(pstart)))
 			if perr != nil {
 				return t, fmt.Errorf("questions %d page %d (attempt %d/%d): %w", imt, page, i, repeat, perr)
 			}
-			declared = count
+			declared = got.Count
 			all = append(all, items...)
 			if len(items) < take {
 				break
@@ -157,13 +152,13 @@ func runQuestions(ctx context.Context, c *wb.Client, eps wb.Endpoints, imt int64
 			}
 		}
 
-		row := toQuestionsRow(imt, cheap, declared, (len(all)+take-1)/max1(take), all, time.Now())
+		row := toQuestionsRow(imt, cheap.Count, declared, (len(all)+take-1)/max1(take), all, time.Now())
 		if werr := jsonEncode(enc, "questions", row); werr != nil {
 			return t, werr
 		}
 		last = row
 
-		if cerr := checkCountsAgree(cheap, declared); cerr != nil {
+		if cerr := checkCountsAgree(cheap.Count, declared); cerr != nil {
 			return t, fmt.Errorf("questions %d (attempt %d/%d): %w", imt, i, repeat, cerr)
 		}
 		if id, dup := duplicateQuestionIDs(all); dup {
