@@ -268,3 +268,22 @@ func TestVacuum_LeavesTheStoreUsable(t *testing.T) {
 		t.Errorf("Rows[products] = %d, want 1", v.Rows["products"])
 	}
 }
+
+func TestVolume_MeasuresAnInMemoryDatabaseByItsPageCount(t *testing.T) {
+	// ":memory:" gives pragma_database_list an empty file column, so
+	// fileBytes has nothing to os.Stat and falls back to pageBytes — the only
+	// path that exercises that fallback, since every other test in this file
+	// opens a real file. Reached through the public API precisely the way a
+	// caller who opened Open(ctx, ":memory:") would reach it.
+	s, err := Open(context.Background(), ":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer s.Close()
+
+	v := mustVolume(t, s)
+
+	if v.FileBytes <= 0 {
+		t.Errorf("FileBytes = %d, want a positive size from the page count — the schema alone occupies pages", v.FileBytes)
+	}
+}

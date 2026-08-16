@@ -85,11 +85,9 @@ func (s *Store) Volume(ctx context.Context) (Volume, error) {
 // checkpoint from completing. Reporting the main file alone would say the
 // database is small on precisely the day it is not.
 func (s *Store) fileBytes(ctx context.Context) (int64, error) {
-	var seq int
-	var name string
 	var file sql.NullString
 	err := s.db.QueryRowContext(ctx,
-		`SELECT seq, name, file FROM pragma_database_list WHERE name = 'main'`).Scan(&seq, &name, &file)
+		`SELECT file FROM pragma_database_list WHERE name = 'main'`).Scan(&file)
 	if err != nil {
 		return 0, fmt.Errorf("store: volume: locate the database file: %w", err)
 	}
@@ -167,8 +165,5 @@ func (s *Store) Vacuum(ctx context.Context) error {
 	// and reporting it as one would train the scheduler's owner to ignore
 	// this method's errors — and then miss a real one. Volume tells the truth
 	// about the size either way.
-	_ = busy
-	_ = logFrames
-	_ = checkpointed
 	return nil
 }
