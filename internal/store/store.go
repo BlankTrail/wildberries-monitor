@@ -1,18 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-// Package store keeps everything the monitor has ever read.
-//
-// One SQLite file holds it all — jobs, rules, channels, schedules, history,
-// the delivery queue — because a monitor that a user runs on their own
-// machine should be one file they can copy, not a service they have to
-// administer. The YAML configuration holds only what has to be read before
-// this file can be opened.
-//
-// The domain package decodes what the site sent; this package decides what
-// is worth keeping. Those are different questions, and the second one is
-// where a monitor lives or dies: writing every reading of every product on
-// every pass produces tens of gigabytes a month and no more information
-// than writing the readings that differ.
 package store
 
 import (
@@ -20,7 +7,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"sync"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -33,11 +19,10 @@ import (
 type Store struct {
 	db *sql.DB
 
-	// closeOnce makes Close idempotent. The tray application and the HTTP
-	// server both own a shutdown path, and whichever runs second must not
-	// panic on an already-closed pool.
-	closeOnce sync.Once
-	closeErr  error
+	// path is what Open was called with. Kept for reopening the same file —
+	// a migration test proving idempotency across a restart, or vacuum.go's
+	// volume telemetry — rather than for anything Open itself needs again.
+	path string
 
 	// now reads the clock. Replaced in tests through SetClock; nothing else
 	// writes it. Retention and the daily anchor both do arithmetic on time,
@@ -86,6 +71,18 @@ func Open(ctx context.Context, path string) (*Store, error) {
 		return nil, fmt.Errorf("store: open %s: %w", path, err)
 	}
 
+	// sql.Open never dials — it only validates the DSN — so a bad directory
+	// or an unwritable path surfaces on the first real use instead. Forcing
+	// that use here, with PingContext, means it is reported as a failure to
+	// open path, which is what a caller who mistyped it needs to read; left
+	// to happen on the WAL pragma below, the same failure would print as a
+	// failure to "enable WAL", which sends a mistyped-path user chasing a
+	// journal-mode problem that does not exist.
+	if err := db.PingContext(ctx); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("store: open %s: %w", path, err)
+	}
+
 	// WAL lets a reader run while a writer holds the database, which is what
 	// makes the web UI usable during a job rather than an optimisation. See
 	// spec §5.2. It is persistent in the file, so one execution configures
@@ -95,15 +92,22 @@ func Open(ctx context.Context, path string) (*Store, error) {
 		return nil, fmt.Errorf("store: enable WAL: %w", err)
 	}
 
-	return &Store{db: db, now: time.Now}, nil
+	return &Store{db: db, path: path, now: time.Now}, nil
 }
+
+// Path is the filesystem path Open was called with.
+func (s *Store) Path() string { return s.path }
 
 // SetClock replaces the clock this store reads. Tests use it to make
 // retention and the daily anchor reachable; nothing in production calls it.
 func (s *Store) SetClock(now func() time.Time) { s.now = now }
 
-// Close releases the database. Calling it twice is not an error.
+// Close releases the database.
+//
+// Calling it twice is not an error: (*sql.DB).Close is itself idempotent —
+// a second call is a no-op that returns nil, even if the first call
+// returned an error. That is the stdlib's guarantee, not one this package
+// adds, so nothing here needs to reproduce it.
 func (s *Store) Close() error {
-	s.closeOnce.Do(func() { s.closeErr = s.db.Close() })
-	return s.closeErr
+	return s.db.Close()
 }

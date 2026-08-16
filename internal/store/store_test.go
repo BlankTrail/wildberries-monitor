@@ -66,16 +66,32 @@ func TestOpen_EnablesWriteAheadLogging(t *testing.T) {
 	}
 }
 
-func TestOpen_EnforcesForeignKeysOnEveryPooledConnection(t *testing.T) {
-	// SQLite defaults foreign keys OFF, and the setting is per connection
-	// while database/sql hands out a pool. This test deliberately holds
-	// several connections open at once and asks each of them, because the
-	// obvious version — one query through the pool — passes against a
-	// implementation that configured exactly one connection and left every
-	// later one with cascades switched off. That is the failure being
-	// guarded: a deleted product keeps its snapshots forever, on some writes
+func TestOpen_EnforcesPerConnectionPragmasOnEveryPooledConnection(t *testing.T) {
+	// foreign_keys, busy_timeout and synchronous are all per-connection
+	// settings, and the setting is per connection while database/sql hands
+	// out a pool. This test deliberately holds several connections open at
+	// once and asks each of them, because the obvious version — one query
+	// through the pool — passes against an implementation that configured
+	// exactly one connection and left every later one unconfigured. Held
+	// together because all three travel the same way, in the DSN, for the
+	// same reason (see the comment in Open): a mutation that drops any one
+	// of them from the DSN string is a mutation to this same loop.
+	//
+	// foreign_keys off is the failure named in the original version of this
+	// test: a deleted product keeps its snapshots forever, on some writes
 	// and not others, and history accumulates that belongs to nothing and
 	// that retention will never find.
+	//
+	// busy_timeout off (0) is a different failure with the same shape: the
+	// first read from the web UI that overlaps a job's write gets an
+	// immediate SQLITE_BUSY instead of the five-second wait this pragma
+	// exists to buy it — on whichever pooled connection the driver forgot
+	// to configure.
+	//
+	// synchronous off (0, "OFF") trades the fsync that survives a crash for
+	// speed; on a connection where it silently stayed off, a power loss
+	// mid-write can corrupt the WAL rather than just lose the last
+	// transaction.
 	s := openTestStore(t)
 	ctx := context.Background()
 
@@ -103,6 +119,39 @@ func TestOpen_EnforcesForeignKeysOnEveryPooledConnection(t *testing.T) {
 		if on != 1 {
 			t.Errorf("connection %d has foreign_keys = %d, want 1", i, on)
 		}
+
+		var busy int
+		if err := c.QueryRowContext(ctx, "PRAGMA busy_timeout").Scan(&busy); err != nil {
+			t.Fatalf("connection %d: PRAGMA busy_timeout: %v", i, err)
+		}
+		if busy != 5000 {
+			t.Errorf("connection %d has busy_timeout = %d, want 5000", i, busy)
+		}
+
+		var sync int
+		if err := c.QueryRowContext(ctx, "PRAGMA synchronous").Scan(&sync); err != nil {
+			t.Fatalf("connection %d: PRAGMA synchronous: %v", i, err)
+		}
+		if sync != 1 {
+			t.Errorf("connection %d has synchronous = %d, want 1 (NORMAL)", i, sync)
+		}
+	}
+}
+
+func TestStore_PathReturnsWhatOpenWasCalledWith(t *testing.T) {
+	// Later tasks reopen the same file to prove migrations are idempotent
+	// across a restart, or to report its size for vacuum telemetry. Both
+	// need the path back out of a *Store rather than having to thread it
+	// through separately from wherever Open was originally called.
+	path := filepath.Join(t.TempDir(), "path-test.db")
+	s, err := Open(context.Background(), path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer s.Close()
+
+	if got := s.Path(); got != path {
+		t.Errorf("Path() = %q, want %q", got, path)
 	}
 }
 
