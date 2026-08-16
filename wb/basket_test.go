@@ -258,6 +258,53 @@ func TestRouteHost_RangeIsKeyedOnTheVolume(t *testing.T) {
 	}
 }
 
+func TestRouteHost_RangeBoundsIncludeBothEnds(t *testing.T) {
+	// Both bounds are inclusive, and nothing above proves it: the volumes the
+	// live-fetched table uses (4320, 13094, 1415) all sit well inside their
+	// entries, the overlap test picks a volume in the middle of both entries,
+	// and the uncovered-volume test is far past the map's end. Narrowing
+	// either comparison in Route.host left the whole suite green.
+	//
+	// The consequence is not a wrong host but a refused product, because the
+	// capture's entries are adjacent with no slack: under `vol < e.To` volume
+	// 143 falls out of entry 0 and entry 1 starts at 144, so nothing covers
+	// it; under `e.From < vol` every volume that opens an entry drops out the
+	// same way, volume 0 included — roughly one product in 144 for the first
+	// case, and every product below nm 100000 for the second.
+	//
+	// Unlike the table above, these ids are arithmetic rather than fetched:
+	// what they pin is the comparison, and the hosts are read off
+	// upstreams-range.json, whose own boundaries are pinned by
+	// TestDecodeUpstreams_ReadsTheRangeRouteWithItsBounds.
+	route, err := decodeUpstreams(readFixture(t, "upstreams-range.json"))
+	if err != nil {
+		t.Fatalf("decodeUpstreams: %v", err)
+	}
+
+	for _, tc := range []struct {
+		nm    int64
+		vol   int64
+		host  string
+		guard string
+	}{
+		{99999, 0, "basket-01.wbcontent.net", "the very first volume the map covers"},
+		{14399999, 143, "basket-01.wbcontent.net", "the last volume of entry 0, its own To"},
+		{14400000, 144, "basket-02.wbcontent.net", "the first volume of entry 1, its own From"},
+	} {
+		if got := volume(tc.nm); got != tc.vol {
+			t.Fatalf("volume(%d)=%d, want %d", tc.nm, got, tc.vol)
+		}
+		got, err := route.host(tc.nm)
+		if err != nil {
+			t.Errorf("nm %d (vol %d, %s): %v", tc.nm, tc.vol, tc.guard, err)
+			continue
+		}
+		if got != tc.host {
+			t.Errorf("nm %d (vol %d, %s) landed on %q, want %q", tc.nm, tc.vol, tc.guard, got, tc.host)
+		}
+	}
+}
+
 func TestRouteHost_RangeRefusesAVolumeNoHostCovers(t *testing.T) {
 	// The capture stops at volume 18821, and product ids keep climbing. When
 	// the map runs out, the nearest host is a guess that returns a stranger's
