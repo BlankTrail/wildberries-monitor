@@ -109,10 +109,12 @@ const (
 // amount of care can be more precise than that.
 //
 // NmID and ImtID both name what the event is about, in the site's two
-// different numberings, and every event this package produces sets at least
-// one of them: an event naming neither tells its receiver that something
-// happened without telling them what to go and look at, which is most of the
-// way to not being worth sending.
+// different numberings, and every rule here sets one of them wherever the
+// reading it walked names anything at all: an event naming neither tells its
+// receiver that something happened without telling them what to go and look
+// at, which is most of the way to not being worth sending. One rule can still
+// produce such an event, and only because a payload can withhold the name —
+// see MinPriceFloorEvents.
 //
 // NmID is a nomenclature: one listing, one colour and size grouping, the id a
 // search row and a card are keyed on. ImtID is its parent — the id that groups
@@ -698,6 +700,16 @@ func PriceFloorEvents(before, after Observation, floor Money) ([]Event, error) {
 // names which listing holds it, so a seller learns that somebody is
 // undercutting an agreed price without having to check every competitor by
 // hand. The event names that holder in NmID.
+//
+// It names nobody when the reading does not: a payload stating a minimum
+// without a usable min_price_item leaves NmID at zero, which makes this the
+// one rule here that can emit an event naming neither id (see Event.NmID). No
+// capture has shown that shape, and the alternative — dropping a real floor
+// violation because the platform would not say who holds it, or naming the
+// match group in a field meant for a nomenclature — is worse than an event
+// that says the floor is broken in this region for this product and leaves
+// the reader to open the reading. A third id field for a shape nobody has
+// observed would be a field written once and read never.
 //
 // The floor, the crossing rule and the zero-Observation first cycle are the
 // same as PriceFloorEvents's, for the same reasons. Two differences worth
