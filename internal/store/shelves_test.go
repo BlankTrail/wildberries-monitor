@@ -110,12 +110,20 @@ func TestSaveShelves_PrefersThePhraseOverThePreset(t *testing.T) {
 		t.Fatalf("SaveShelves: %v", err)
 	}
 	var source, key string
+	var presetID int64
 	if err := s.db.QueryRowContext(ctx,
-		`SELECT source, source_key FROM shelves LIMIT 1`).Scan(&source, &key); err != nil {
+		`SELECT source, source_key, preset_id FROM shelves LIMIT 1`).Scan(&source, &key, &presetID); err != nil {
 		t.Fatalf("read shelf: %v", err)
 	}
 	if source != "query" || key != "кроссовки" {
 		t.Errorf("source/source_key = %q/%q, want \"query\"/\"кроссовки\" — the reading carried both a phrase and a preset", source, key)
+	}
+	// preset_id is stored regardless of which of the two won the key: it is a
+	// fact the reading carries on its own, independent of shelfSourceOf's
+	// choice, and saveShelf's own doc comment cites this test as the evidence
+	// for that — so the column has to be read back here to actually be one.
+	if presetID != 42 {
+		t.Errorf("preset_id = %d, want 42 — the reading's own preset id, kept even though the phrase won the key", presetID)
 	}
 }
 
@@ -348,6 +356,160 @@ func TestSaveShelves_TheSameReadingTwiceInOneSecondIsOneSlice(t *testing.T) {
 	}
 }
 
+func TestSaveShelves_DoesNotWriteProductsSnapshotsOrPositions(t *testing.T) {
+	// This is SaveShelves' central decision, pinned directly: a shelf slot is
+	// recorded as a place and an nmID, never routed through SaveProduct, for
+	// the reason spelled out at length in SaveShelves' own doc comment —
+	// wb.Shelves' rows carry no fetch time or region of their own, and a
+	// snapshot written from one would be filed at dest="" and compare as
+	// equal to every real region's reading of the same product. Every other
+	// test in this file only reads back shelves/shelf_items, so a mutation
+	// that ran every product on a shelf through SaveProduct before BeginTx
+	// would pass the whole suite while quietly writing five products and five
+	// snapshots nobody asked for.
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	if _, err := s.SaveShelves(ctx, oneShelvesReading()); err != nil {
+		t.Fatalf("SaveShelves: %v", err)
+	}
+	if got := countRows(t, s, "products"); got != 0 {
+		t.Errorf("products holds %d rows after SaveShelves, want 0 — a shelf slot is a place, not a product reading", got)
+	}
+	if got := countRows(t, s, "snapshots"); got != 0 {
+		t.Errorf("snapshots holds %d rows after SaveShelves, want 0", got)
+	}
+	if got := countRows(t, s, "positions"); got != 0 {
+		t.Errorf("positions holds %d rows after SaveShelves, want 0", got)
+	}
+}
+
+func TestSaveShelves_RewritingAShelfReplacesItsTitle(t *testing.T) {
+	// saveShelf upserts through ON CONFLICT (idx_shelves_natural_key,
+	// 0006_shelf_and_duplicate_keys.sql); the DO UPDATE half of that upsert had
+	// no test reading a rewritten column back, so a mutation emptying it out —
+	// leaving only the INSERT half live — passed the whole suite: every other
+	// test here only checks row counts, which the DELETE+INSERT on shelf_items
+	// already guarantees on its own. This proves the row itself is actually
+	// rewritten: WB renaming a shelf between two reads in the same second must
+	// not leave the stale title behind forever.
+	s := openTestStore(t)
+	ctx := context.Background()
+	s.SetClock(func() time.Time { return time.Date(2026, 8, 16, 9, 0, 0, 0, time.UTC) })
+
+	if _, err := s.SaveShelves(ctx, oneShelvesReading()); err != nil {
+		t.Fatalf("first SaveShelves: %v", err)
+	}
+	renamed := oneShelvesReading()
+	renamed.Shelves[0].Title = "Хиты продаж"
+	if _, err := s.SaveShelves(ctx, renamed); err != nil {
+		t.Fatalf("second SaveShelves: %v", err)
+	}
+
+	if got := countRows(t, s, "shelves"); got != 3 {
+		t.Errorf("shelves holds %d rows after the same slice saved twice, want 3 — the second save must reuse the row, not add one", got)
+	}
+	var title string
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT title FROM shelves WHERE kind = 'shelf' AND position = 0`).Scan(&title); err != nil {
+		t.Fatalf("read shelf: %v", err)
+	}
+	if title != "Хиты продаж" {
+		t.Errorf("title = %q, want %q — the site renamed the shelf on the second reading", title, "Хиты продаж")
+	}
+}
+
+func TestSaveShelves_TwoAudiencesInOneSecondAreTwoSlices(t *testing.T) {
+	// AppType joins the key for the identical reason Dest does (see
+	// TestSaveShelves_TwoRegionsInOneSecondAreTwoSlices): what WB advertises
+	// into one phrase in one region differs between desktop and mobile, so two
+	// readings taken for two audiences in one second are two facts, and a key
+	// missing app_type collapses them into one row whose slots are whichever
+	// reading was written last.
+	s := openTestStore(t)
+	ctx := context.Background()
+	s.SetClock(func() time.Time { return time.Date(2026, 8, 16, 9, 0, 0, 0, time.UTC) })
+
+	desktop := oneShelvesReading()
+	desktop.AppType = wb.AppWeb
+	desktop.Banners, desktop.Shelves = nil, []wb.Shelf{
+		{Title: "Похожие", Products: []wb.Product{shelfProduct(21)}},
+	}
+	mobile := oneShelvesReading()
+	mobile.AppType = wb.AppMobile
+	mobile.Banners, mobile.Shelves = nil, []wb.Shelf{
+		{Title: "Похожие", Products: []wb.Product{shelfProduct(31), shelfProduct(32)}},
+	}
+
+	if _, err := s.SaveShelves(ctx, desktop); err != nil {
+		t.Fatalf("desktop SaveShelves: %v", err)
+	}
+	if _, err := s.SaveShelves(ctx, mobile); err != nil {
+		t.Fatalf("mobile SaveShelves: %v", err)
+	}
+
+	if got := countRows(t, s, "shelves"); got != 2 {
+		t.Errorf("shelves holds %d rows after one phrase read for two audiences in one second, want 2", got)
+	}
+	for _, tc := range []struct {
+		appType int
+		want    []int64
+	}{
+		{wb.AppWeb, []int64{21}},
+		{wb.AppMobile, []int64{31, 32}},
+	} {
+		rows, err := s.db.QueryContext(ctx, `
+			SELECT i.nm_id FROM shelf_items i
+			JOIN shelves s ON s.id = i.shelf_id
+			WHERE s.app_type = ?
+			ORDER BY i.position`, tc.appType)
+		if err != nil {
+			t.Fatalf("read app_type %d items: %v", tc.appType, err)
+		}
+		var got []int64
+		for rows.Next() {
+			var nmID int64
+			if err := rows.Scan(&nmID); err != nil {
+				rows.Close()
+				t.Fatalf("scan app_type %d item: %v", tc.appType, err)
+			}
+			got = append(got, nmID)
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			t.Fatalf("rows app_type %d: %v", tc.appType, err)
+		}
+		if len(got) != len(tc.want) {
+			t.Fatalf("app_type %d holds %v, want %v — the other audience's reading overwrote it", tc.appType, got, tc.want)
+		}
+		for i := range tc.want {
+			if got[i] != tc.want[i] {
+				t.Errorf("app_type %d slot %d = %d, want %d", tc.appType, i, got[i], tc.want[i])
+			}
+		}
+	}
+}
+
+func TestShelves_RefuseADuplicateNaturalKey(t *testing.T) {
+	// idx_shelves_natural_key (0006_shelf_and_duplicate_keys.sql) is the
+	// ON CONFLICT target saveShelf upserts against. This asserts the
+	// constraint itself, independent of that Go code path: a database-level
+	// guarantee should not depend on every future writer going through
+	// saveShelf to get it, and this is also what makes saveShelf's
+	// ON CONFLICT clause valid SQL in the first place — SQLite refuses an
+	// ON CONFLICT target that names no matching UNIQUE index or PRIMARY KEY,
+	// so if this migration's index were ever dropped or shaped differently,
+	// every save in this file would fail outright rather than silently drift.
+	s := openTestStore(t)
+
+	execOK(t, s, `INSERT INTO shelves (source, source_key, kind, title, position, preset_id, dest, app_type, ts)
+	              VALUES ('query', 'socks', 'shelf', 'a', 0, 0, '-1257786', 1, 1000)`)
+	execFails(t, s, "a second shelf row sharing the natural key",
+		`INSERT INTO shelves (source, source_key, kind, title, position, preset_id, dest, app_type, ts)
+		 VALUES ('query', 'socks', 'shelf', 'b', 0, 0, '-1257786', 1, 1000)`)
+}
+
 func oneDuplicatesReading() wb.Duplicates {
 	minimal := wb.Money{Minor: 268100, Currency: "RUB"}
 	holder := shelfProduct(55)
@@ -567,12 +729,14 @@ func TestSaveDuplicates_AReadingWithNoMinimumIsNotAMinimumOfZero(t *testing.T) {
 }
 
 func TestSaveDuplicates_RewritingASliceReplacesItsListings(t *testing.T) {
-	// duplicates carries no unique constraint on (match_id, dest, ts) in
-	// 0002_signals.sql -- unlike review_summaries, there is no ON CONFLICT
-	// target to lean on, so SaveDuplicates finds the existing row itself
-	// (SELECT before INSERT/UPDATE, the same shape shouldWriteSnapshot already
-	// uses). This proves the second save reuses the row rather than adding a
-	// second one, and that the item list is rewritten rather than appended to.
+	// duplicates upserts through ON CONFLICT (idx_duplicates_match_dest_ts,
+	// 0006_shelf_and_duplicate_keys.sql). The DO UPDATE half had no test
+	// reading a rewritten column back, so a mutation emptying it out — leaving
+	// only the INSERT half live — passed the whole suite: the row-count checks
+	// below are already guaranteed by the DELETE+INSERT on duplicate_items on
+	// its own. Reading total back proves the row itself is rewritten: an
+	// hourly job re-reading this slice after WB corrected 9 to 12 must not
+	// leave the stale 9 behind forever.
 	s := openTestStore(t)
 	ctx := context.Background()
 	s.SetClock(func() time.Time { return time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC) })
@@ -593,4 +757,23 @@ func TestSaveDuplicates_RewritingASliceReplacesItsListings(t *testing.T) {
 	if got := countRows(t, s, "duplicate_items"); got != 1 {
 		t.Errorf("duplicate_items holds %d rows after the shorter reading replaced the longer one, want 1", got)
 	}
+	var total int64
+	if err := s.db.QueryRowContext(ctx, `SELECT total FROM duplicates`).Scan(&total); err != nil {
+		t.Fatalf("read duplicates: %v", err)
+	}
+	if total != 1 {
+		t.Errorf("total = %d, want 1 — the second reading's own count, not the first reading's stale one", total)
+	}
+}
+
+func TestDuplicates_RefuseADuplicateNaturalKey(t *testing.T) {
+	// idx_duplicates_match_dest_ts (0006_shelf_and_duplicate_keys.sql) is the
+	// ON CONFLICT target SaveDuplicates upserts against. This asserts the
+	// constraint itself, independent of that Go code path, for the identical
+	// reason TestShelves_RefuseADuplicateNaturalKey does for shelves.
+	s := openTestStore(t)
+
+	execOK(t, s, `INSERT INTO duplicates (match_id, dest, ts, total) VALUES (55, '-1257786', 1000, 3)`)
+	execFails(t, s, "a second duplicates row sharing the natural key",
+		`INSERT INTO duplicates (match_id, dest, ts, total) VALUES (55, '-1257786', 1000, 9)`)
 }

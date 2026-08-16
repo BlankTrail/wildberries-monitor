@@ -5,7 +5,6 @@ package store
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -36,19 +35,20 @@ const (
 // yesterday is the comparison this table exists for, and an overwrite would
 // answer only who is there now.
 //
-// The region joins them for the reason SaveDuplicates keys on (match_id, dest,
-// ts): what WB advertises into a phrase moves with the region, so one phrase
-// read for Moscow and for Penza in the same second is two readings, and a key
-// without the region collapses them into one row whose slots are whichever
-// reading was written last. wb.Shelves carries its own Dest — stamped by
-// Client.Shelves from the request it made, not read back out of a body that
-// states no region — which is what makes that key writable here at all.
+// The region and the audience both join that key, for the reason
+// SaveDuplicates keys on (match_id, dest, ts): what WB advertises into a
+// phrase moves with both, so one phrase read for Moscow and for Penza, or for
+// desktop and for mobile, in the same second is two readings — and a key
+// missing either collapses them into one row whose slots are whichever
+// reading was written last. wb.Shelves carries its own Dest and AppType —
+// stamped by Client.Shelves from the request it made, not read back out of a
+// body that states neither — which is what makes that key writable here at
+// all.
 //
-// 0002_signals.sql declares no UNIQUE constraint over that key — unlike
-// review_summaries' idx_review_summaries_imt_ts, there is no ON CONFLICT
-// target to upsert against here, so saveShelf below finds the existing row
-// itself with a SELECT before deciding whether to INSERT or UPDATE, the same
-// shape shouldWriteSnapshot already uses for the identical reason.
+// idx_shelves_natural_key (0006_shelf_and_duplicate_keys.sql) is that key as
+// a UNIQUE index, and the ON CONFLICT target saveShelf upserts against — the
+// same shape review_summaries' idx_review_summaries_imt_ts already gives
+// saveReviewSummary.
 //
 // The products on a shelf are recorded as a place and an nmID, and
 // deliberately do not go through SaveProduct the way a duplicate listing does.
@@ -57,12 +57,13 @@ const (
 // source shares, which sets neither a region nor a fetch time, and
 // Client.Shelves does not stamp them onto the rows afterwards the way
 // Client.SearchPage and Client.Card both do for their own products — the
-// reading names its region, each row on it does not. A shelf answers "this
-// listing was advertised here, in this slot, at this moment", which is a
-// different fact from what the listing cost, and only the first one is
-// actually in the document. SaveDuplicates faces the same gap and answers it
-// differently, with inRegionOf, because a duplicate listing arrives with the
-// price that made the reading worth taking; a shelf slot arrives with a place.
+// reading names its region and audience, each row on it does not. A shelf
+// answers "this listing was advertised here, in this slot, at this moment",
+// which is a different fact from what the listing cost, and only the first
+// one is actually in the document. SaveDuplicates faces the same gap and
+// answers it differently, with inRegionOf, because a duplicate listing arrives
+// with the price that made the reading worth taking; a shelf slot arrives with
+// a place.
 //
 // It returns how many slots were recorded across every shelf in the reading.
 func (s *Store) SaveShelves(ctx context.Context, sh wb.Shelves) (int, error) {
@@ -87,7 +88,7 @@ func (s *Store) SaveShelves(ctx context.Context, sh wb.Shelves) (int, error) {
 		{shelfKindShelf, sh.Shelves},
 	} {
 		for position, shelf := range group.shelfs {
-			slots, err := saveShelf(ctx, tx, source, key, group.kind, sh.Dest, sh.PresetID, ts, position, shelf)
+			slots, err := saveShelf(ctx, tx, source, key, group.kind, sh.Dest, sh.AppType, sh.PresetID, ts, position, shelf)
 			if err != nil {
 				return 0, err
 			}
@@ -130,39 +131,34 @@ func shelfSourceOf(sh wb.Shelves) (source, key string, err error) {
 // of the two won shelfSourceOf's choice (see TestSaveShelves_PrefersThePhraseOverThePreset,
 // which saves a reading naming both), and there is a real column for it.
 //
-// dest is both stored and part of the row this looks up, never one without the
-// other: a key that separates two regions while writing an empty string into
-// the column would leave two rows differing by a value neither of them states.
-// An empty dest is stored as it arrives rather than refused — a reading whose
-// caller named no region is still a reading of a real shelf, and the one thing
-// this must not do is invent one.
-func saveShelf(ctx context.Context, tx *sql.Tx, source, key, kind, dest string, presetID int64, ts int64, position int, shelf wb.Shelf) (int, error) {
+// dest and appType are both stored and both part of the key this upserts
+// against, never one without the other: a key that separates two regions or
+// two audiences while writing something else into the column would leave two
+// rows differing by a value neither of them states. An empty dest or a zero
+// appType is stored as it arrives rather than refused — a reading whose
+// caller named no region, or built by hand rather than through Client.Shelves,
+// is still a reading of a real shelf, and the one thing this must not do is
+// invent context it does not have.
+func saveShelf(ctx context.Context, tx *sql.Tx, source, key, kind, dest string, appType int, presetID int64, ts int64, position int, shelf wb.Shelf) (int, error) {
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO shelves (source, source_key, kind, title, position, preset_id, dest, app_type, ts)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT (source, source_key, kind, dest, app_type, ts, position) DO UPDATE SET
+		    title     = excluded.title,
+		    preset_id = excluded.preset_id`,
+		source, key, kind, shelf.Title, position, presetID, dest, appType, ts); err != nil {
+		return 0, fmt.Errorf("store: save shelf %q %s %d: %w", key, kind, position, err)
+	}
+
+	// Read back rather than LastInsertId, which says nothing useful after an
+	// upsert that updated an existing row instead of inserting one — the same
+	// reason saveReviewSummary reads its own id back in signals.go.
 	var shelfID int64
-	err := tx.QueryRowContext(ctx, `
+	if err := tx.QueryRowContext(ctx, `
 		SELECT id FROM shelves
-		WHERE source = ? AND source_key = ? AND kind = ? AND dest = ? AND ts = ? AND position = ?`,
-		source, key, kind, dest, ts, position).Scan(&shelfID)
-	switch {
-	case err == nil:
-		if _, err := tx.ExecContext(ctx,
-			`UPDATE shelves SET title = ?, preset_id = ? WHERE id = ?`,
-			shelf.Title, presetID, shelfID); err != nil {
-			return 0, fmt.Errorf("store: save shelf %q %s %d: %w", key, kind, position, err)
-		}
-	case errors.Is(err, sql.ErrNoRows):
-		res, err := tx.ExecContext(ctx, `
-			INSERT INTO shelves (source, source_key, kind, title, position, preset_id, dest, ts)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-			source, key, kind, shelf.Title, position, presetID, dest, ts)
-		if err != nil {
-			return 0, fmt.Errorf("store: save shelf %q %s %d: %w", key, kind, position, err)
-		}
-		shelfID, err = res.LastInsertId()
-		if err != nil {
-			return 0, fmt.Errorf("store: save shelf %q %s %d: %w", key, kind, position, err)
-		}
-	default:
-		return 0, fmt.Errorf("store: save shelf %q %s %d: read: %w", key, kind, position, err)
+		WHERE source = ? AND source_key = ? AND kind = ? AND dest = ? AND app_type = ? AND ts = ? AND position = ?`,
+		source, key, kind, dest, appType, ts, position).Scan(&shelfID); err != nil {
+		return 0, fmt.Errorf("store: save shelf %q %s %d: read back: %w", key, kind, position, err)
 	}
 
 	// The slots are rewritten rather than merged. Saving one reading twice must
@@ -189,10 +185,9 @@ func saveShelf(ctx context.Context, tx *sql.Tx, source, key, kind, dest string, 
 // the moment. Both halves are load-bearing: the same product's cheapest
 // listing is a different number in Moscow and in Penza, so a row that dropped
 // the region would let one reading overwrite the other and report a price
-// change that is really a change of region. As with shelves above,
-// 0002_signals.sql declares no UNIQUE constraint over (match_id, dest, ts), so
-// the existing row — if any — is found with a SELECT rather than an
-// ON CONFLICT clause.
+// change that is really a change of region. idx_duplicates_match_dest_ts
+// (0006_shelf_and_duplicate_keys.sql) is that key as a UNIQUE index, and the
+// ON CONFLICT target below upserts against.
 //
 // Every listing goes through SaveProduct — the one path a product takes in
 // this package — rather than into a narrower shape of this table's own. A
@@ -254,31 +249,24 @@ func (s *Store) SaveDuplicates(ctx context.Context, d wb.Duplicates) (int, error
 	}
 	defer tx.Rollback()
 
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO duplicates (match_id, dest, ts, total, min_price, min_price_currency, min_price_nm_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT (match_id, dest, ts) DO UPDATE SET
+		    total               = excluded.total,
+		    min_price           = excluded.min_price,
+		    min_price_currency  = excluded.min_price_currency,
+		    min_price_nm_id     = excluded.min_price_nm_id`,
+		d.MatchID, d.Dest, ts, d.Total, minPrice, currency, minPriceNmID); err != nil {
+		return 0, fmt.Errorf("store: save duplicates %d: %w", d.MatchID, err)
+	}
+
+	// Read back rather than LastInsertId, for the identical reason saveShelf
+	// reads its own id back above.
 	var sliceID int64
-	err = tx.QueryRowContext(ctx,
+	if err := tx.QueryRowContext(ctx,
 		`SELECT id FROM duplicates WHERE match_id = ? AND dest = ? AND ts = ?`,
-		d.MatchID, d.Dest, ts).Scan(&sliceID)
-	switch {
-	case err == nil:
-		if _, err := tx.ExecContext(ctx, `
-			UPDATE duplicates SET total = ?, min_price = ?, min_price_currency = ?, min_price_nm_id = ?
-			WHERE id = ?`,
-			d.Total, minPrice, currency, minPriceNmID, sliceID); err != nil {
-			return 0, fmt.Errorf("store: save duplicates %d: %w", d.MatchID, err)
-		}
-	case errors.Is(err, sql.ErrNoRows):
-		res, err := tx.ExecContext(ctx, `
-			INSERT INTO duplicates (match_id, dest, ts, total, min_price, min_price_currency, min_price_nm_id)
-			VALUES (?, ?, ?, ?, ?, ?, ?)`,
-			d.MatchID, d.Dest, ts, d.Total, minPrice, currency, minPriceNmID)
-		if err != nil {
-			return 0, fmt.Errorf("store: save duplicates %d: %w", d.MatchID, err)
-		}
-		sliceID, err = res.LastInsertId()
-		if err != nil {
-			return 0, fmt.Errorf("store: save duplicates %d: %w", d.MatchID, err)
-		}
-	default:
+		d.MatchID, d.Dest, ts).Scan(&sliceID); err != nil {
 		return 0, fmt.Errorf("store: save duplicates %d: read back: %w", d.MatchID, err)
 	}
 

@@ -107,8 +107,14 @@ var wantIndexes = map[string][]string{
 	"idx_questions_imt_created": {"imt_id", "created_at"},
 	// UNIQUE, not just an index: this is also the key -- see
 	// TestReviewSummaries_AreKeyedOnTheCardAndTheReading.
-	"idx_review_summaries_imt_ts":  {"imt_id", "ts"},
-	"idx_shelves_source_ts":        {"source", "source_key", "ts"},
+	"idx_review_summaries_imt_ts": {"imt_id", "ts"},
+	"idx_shelves_source_ts":       {"source", "source_key", "ts"},
+	// UNIQUE as of 0006_shelf_and_duplicate_keys.sql, and the ON CONFLICT
+	// target SaveShelves upserts against -- see saveShelf's own doc comment.
+	"idx_shelves_natural_key": {"source", "source_key", "kind", "dest", "app_type", "ts", "position"},
+	// UNIQUE as of 0006_shelf_and_duplicate_keys.sql, replacing the plain
+	// index of the same name over the identical columns -- also the
+	// ON CONFLICT target SaveDuplicates upserts against.
 	"idx_duplicates_match_dest_ts": {"match_id", "dest", "ts"},
 	"idx_observations_kind_at":     {"kind", "observed_at"},
 	// Every question asked of events is either "what happened to this

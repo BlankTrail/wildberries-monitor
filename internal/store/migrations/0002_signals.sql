@@ -251,11 +251,16 @@ CREATE TABLE brands (
 -- observed so far explains how they differ, and merging them would assume
 -- they are the same thing.
 --
--- dest is the region the shelf was read for. wb.Shelves carries no region of
--- its own, so the writer takes it from the products the shelf holds -- they all
--- carry one. Spec section 4.2 requires shelf snapshots to be pinned to a fixed
--- region precisely because their composition moves with it, so a shelf without
--- a region is not comparable with anything.
+-- dest is the region the shelf was read for. wb.Shelves carries its own Dest,
+-- stamped by Client.Shelves from the request it made -- the response body
+-- names no region, and the writer never took one from the products on the
+-- shelf either; see internal/store/shelves.go's own doc comment for why a
+-- shelf's rows carry a place and an nmID and nothing about the product
+-- itself. Spec section 4.2 requires shelf snapshots to be pinned to a fixed
+-- region precisely because their composition moves with it, so a shelf
+-- without a region is not comparable with anything. app_type joins it as of
+-- 0006_shelf_and_duplicate_keys.sql, once wb.Shelves carried an audience to
+-- go with the region.
 CREATE TABLE shelves (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     source     TEXT    NOT NULL,
