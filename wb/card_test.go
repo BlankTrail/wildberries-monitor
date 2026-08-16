@@ -339,13 +339,13 @@ func primedBasket(t *testing.T, upstreamsFixture string) *Basket {
 	l := &fakeLease{port: 999, replies: []*http.Response{reply(200, upstreamsFixture)}}
 	warm := NewClient(&fakeLeaser{leases: []*fakeLease{l}}, NewSessions())
 	b := NewBasket(warm)
-	if _, err := b.Hosts(context.Background()); err != nil {
-		t.Fatalf("prime the basket's host cache: %v", err)
+	if _, err := b.Route(context.Background()); err != nil {
+		t.Fatalf("prime the basket's route cache: %v", err)
 	}
-	// Once Hosts has cached the list, Basket.Hosts's own fast path
-	// (len(b.hosts) > 0) never touches b.client again, so CardURL below reads
-	// only the warm cache — the fakeLeaser scripted for the client under test
-	// never has to reserve a lease for this fetch.
+	// Once Route has cached the map, Basket.Route's own fast path
+	// (len(b.route.Entries) > 0) never touches b.client again, so CardURL below
+	// reads only the warm cache — the fakeLeaser scripted for the client under
+	// test never has to reserve a lease for this fetch.
 	return b
 }
 
