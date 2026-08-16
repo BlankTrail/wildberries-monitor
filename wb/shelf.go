@@ -56,6 +56,37 @@ type Shelves struct {
 	// response was generated against.
 	PresetID int64
 
+	// Dest is the region this reading was taken for and AppType the audience
+	// it was taken as — the conditions the composition of a shelf is only
+	// true under.
+	//
+	// What WB advertises into a search is regional and surface-specific in the
+	// same way a duplicate group's minimum price is: Duplicates.Dest carries
+	// its region for exactly that reason, and Observation's own doc comment
+	// states the general case. Without these two, a reading answers "these
+	// listings were advertised for this phrase" and cannot finish the sentence
+	// — so two readings of one phrase taken for Moscow and for Penza look like
+	// the same reading with different products on it, and a consumer keying
+	// them by phrase and moment alone silently keeps one of the two.
+	//
+	// Client.Shelves sets both from its own arguments, never from the body,
+	// which states neither: they are query parameters the request was made
+	// with, not facts the response restates, so a decode that produced one
+	// would have invented it. As with Reviews.ImtID and Duplicates.Dest,
+	// arguments rather than body is also what makes the pair survive a fetch
+	// that produced nothing to read them back from — a caller holding a failed
+	// reading still knows which region and which audience failed. Both are
+	// empty on a value built by hand or decoded straight from bytes by
+	// decodeShelves, which is handed a document and never an argument.
+	//
+	// AppType is the normalised value, the one the URL actually carried, not
+	// the raw q.AppType: Client.Shelves defaults a zero to AppWeb before both
+	// building the URL and stamping it here, the same way Client.SearchPage
+	// and Client.Card do, so the reading cannot claim an audience nobody
+	// fetched as.
+	Dest    string
+	AppType int
+
 	// Fetches is where the one request behind this response went and what it
 	// cost. See Fetch, and Envelope.Fetches for the identical field on the
 	// identical reasoning. Empty on a value decoded straight from bytes by
@@ -189,8 +220,18 @@ func (e Endpoints) ShelvesURL(q SearchQuery) string {
 // What the returned value does not carry is a bid — see Shelves's own doc
 // comment for what the payload stopped exposing and why.
 //
-// q.AppType is normalised inside ShelvesURL, the same default-to-web
-// treatment Client.SearchPage applies before building its own URL.
+// q.AppType is normalised here rather than left to ShelvesURL alone, the same
+// once-and-for-all treatment Client.SearchPage gives its own: ShelvesURL's
+// default is local to the URL string and never reaches back, so the returned
+// reading would otherwise name an audience — a zero — that the request it
+// describes did not use.
+//
+// The returned value names the region and the audience it was read for on
+// every path below, the failing ones included, which is why asked is assembled
+// before the request rather than filled in after it: what a shelf is showing
+// moves with both, and a caller holding a reading that did not arrive still
+// needs to know which conditions it was for. Client.Duplicates carries its own
+// region the same way and for the same reason — see Shelves's own doc comment.
 //
 // The request carries the same-domain "another __internal/*" header
 // profile (KindAPI) — Kind's own doc comment already groups this endpoint
@@ -200,19 +241,30 @@ func (e Endpoints) ShelvesURL(q SearchQuery) string {
 // Client.SearchPage builds its own: the shelves the site is showing belong
 // to the one results page a shopper is looking at.
 func (c *Client) Shelves(ctx context.Context, eps Endpoints, q SearchQuery) (Shelves, error) {
+	if q.AppType == 0 {
+		q.AppType = AppWeb
+	}
+	// asked names the conditions this request is being made under, on every
+	// path below including the failing ones. See this method's own doc comment.
+	asked := Shelves{Dest: q.Dest, AppType: q.AppType}
+
 	res, err := c.Get(ctx, eps.ShelvesURL(q), KindAPI, searchReferer(eps, q))
 	if err != nil {
-		return Shelves{Fetches: []Fetch{lostFetch(SourceShelves, err)}}, err
+		asked.Fetches = []Fetch{lostFetch(SourceShelves, err)}
+		return asked, err
 	}
 	from := []Fetch{fetchOf(SourceShelves, res)}
 	if res.Class != ClassOK {
-		return Shelves{Fetches: from}, fmt.Errorf("wb: shelves: status %d (%s)", res.Status, res.Class)
+		asked.Fetches = from
+		return asked, fmt.Errorf("wb: shelves: status %d (%s)", res.Status, res.Class)
 	}
 
 	s, err := decodeShelves(res.Body)
 	if err != nil {
-		return Shelves{Fetches: from}, fmt.Errorf("wb: shelves: %w", err)
+		asked.Fetches = from
+		return asked, fmt.Errorf("wb: shelves: %w", err)
 	}
+	s.Dest, s.AppType = asked.Dest, asked.AppType
 	s.Fetches = from
 	return s, nil
 }

@@ -4,6 +4,7 @@ package wb
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/url"
 	"os"
@@ -374,5 +375,105 @@ func TestClient_ShelvesPropagatesTheAllRejectedError(t *testing.T) {
 		t.Fatal("a shelf whose every product failed extraction was accepted without error")
 	} else if !strings.Contains(err.Error(), "shelf") {
 		t.Errorf("error %q does not mention the shelf that failed", err)
+	}
+}
+
+// --- Client.Shelves: the conditions the reading was taken under ---
+
+// TestClient_ShelvesCarriesTheRegionAndAudienceItWasAskedFor pins the context
+// onto the value. What is on a shelf moves with the region, the same way a
+// duplicate group's minimum price does (see Duplicates.MatchID), so a Shelves
+// that names neither is a list of advertised listings nobody can say where or
+// for whom they were shown.
+func TestClient_ShelvesCarriesTheRegionAndAudienceItWasAskedFor(t *testing.T) {
+	l := &fakeLease{port: 1, replies: []*http.Response{reply(200, string(shelvesFixture(t)))}}
+	c := NewClient(&fakeLeaser{leases: []*fakeLease{l}}, NewSessions())
+
+	got, err := c.Shelves(context.Background(), DefaultEndpoints(),
+		SearchQuery{Query: "кроссовки женские", Dest: "-1257786", AppType: AppMobile})
+	if err != nil {
+		t.Fatalf("Shelves: %v", err)
+	}
+	if got.Dest != "-1257786" {
+		t.Errorf("Dest=%q, want the -1257786 the fetch was made for", got.Dest)
+	}
+	if got.AppType != AppMobile {
+		t.Errorf("AppType=%d, want %d (AppMobile) — the audience the fetch was made as", got.AppType, AppMobile)
+	}
+}
+
+// TestClient_ShelvesCarriesTheRegionAndAudienceThroughEveryFailure is the half
+// that matters: both come from the argument, so they must survive a fetch that
+// produced nothing to read them back from — the same claim
+// TestClient_ReviewsCarriesTheImtIDThroughEveryFailure makes for its own
+// identity, and the reason Client.Duplicates assembles its asked value before
+// the request rather than after it. Each shape below fails at a different
+// return statement, so a build that stamps only the happy path fails here
+// rather than in the test above.
+func TestClient_ShelvesCarriesTheRegionAndAudienceThroughEveryFailure(t *testing.T) {
+	const allRejected = `{"metadata":{"query":"x","presetId":1},"data":{"shelfs":{"data":[
+		{"title":"promo","products":[{"notAnId":1}]}
+	]}}}`
+	for _, tc := range []struct {
+		what  string
+		lease *fakeLease
+	}{
+		{"a transport that never answered", &fakeLease{port: 7, err: errors.New("boom")}},
+		{"a non-OK status", &fakeLease{port: 7, replies: []*http.Response{reply(500, "")}}},
+		{"a body that did not decode", &fakeLease{port: 7, replies: []*http.Response{reply(200, "{not valid json")}}},
+		{"a shelf whose every product was rejected", &fakeLease{port: 7, replies: []*http.Response{reply(200, allRejected)}}},
+	} {
+		c := NewClient(&fakeLeaser{leases: []*fakeLease{tc.lease}}, NewSessions())
+		got, err := c.Shelves(context.Background(), DefaultEndpoints(),
+			SearchQuery{Query: "x", Dest: "-1257786", AppType: AppMobile})
+		if err == nil {
+			t.Fatalf("%s: was accepted without error", tc.what)
+		}
+		if got.Dest != "-1257786" {
+			t.Errorf("%s: Dest=%q, want the -1257786 the fetch was made for", tc.what, got.Dest)
+		}
+		if got.AppType != AppMobile {
+			t.Errorf("%s: AppType=%d, want %d (AppMobile)", tc.what, got.AppType, AppMobile)
+		}
+	}
+}
+
+// TestClient_ShelvesNormalisesTheAppTypeItStamps holds the stamped audience to
+// the one the URL actually carried. ShelvesURL applies its own AppWeb default
+// internally, so a caller leaving q.AppType at zero fetches the web shelves;
+// stamping the raw zero back would describe a fetch nobody made. Client.Card
+// and Client.SearchPage both normalise before stamping for this exact reason.
+func TestClient_ShelvesNormalisesTheAppTypeItStamps(t *testing.T) {
+	l := &fakeLease{port: 1, replies: []*http.Response{reply(200, string(shelvesFixture(t)))}}
+	c := NewClient(&fakeLeaser{leases: []*fakeLease{l}}, NewSessions())
+
+	got, err := c.Shelves(context.Background(), DefaultEndpoints(), SearchQuery{Query: "x", Dest: "-1"})
+	if err != nil {
+		t.Fatalf("Shelves: %v", err)
+	}
+	if got.AppType != AppWeb {
+		t.Errorf("AppType=%d, want %d (AppWeb) — the URL actually fetched defaulted to it, and the stamped reading must agree", got.AppType, AppWeb)
+	}
+	u, err := url.Parse(l.sent[0].URL.String())
+	if err != nil {
+		t.Fatalf("parse sent URL: %v", err)
+	}
+	if u.Query().Get("apptype") != "1" {
+		t.Errorf("apptype=%q on the wire, want 1 — the value the stamp above claims", u.Query().Get("apptype"))
+	}
+}
+
+// TestDecodeShelves_NamesNoContextOfItsOwn pins where the context does not come
+// from. The document states neither a region nor an audience — both are query
+// parameters, not facts the response restates — so a decode that produced
+// either would have invented it, and a Shelves assembled straight from bytes
+// names no conditions at all.
+func TestDecodeShelves_NamesNoContextOfItsOwn(t *testing.T) {
+	got, err := decodeShelves(shelvesFixture(t))
+	if err != nil {
+		t.Fatalf("decodeShelves: %v", err)
+	}
+	if got.Dest != "" || got.AppType != 0 {
+		t.Errorf("Dest=%q AppType=%d, want both empty: only the caller's own arguments can name them", got.Dest, got.AppType)
 	}
 }
