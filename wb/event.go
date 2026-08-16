@@ -793,7 +793,14 @@ func comparableDuplicates(beforeSeen Observation, before Duplicates, afterSeen O
 		return fmt.Errorf("%w: the duplicates of match group %d and the duplicates of match group %d",
 			ErrIdentityMismatch, before.MatchID, after.MatchID)
 	}
-	wasIn, nowIn := readingDest(beforeSeen, before), readingDest(afterSeen, after)
+	wasIn, err := regionOf(beforeSeen, before)
+	if err != nil {
+		return fmt.Errorf("the earlier reading: %w", err)
+	}
+	nowIn, err := regionOf(afterSeen, after)
+	if err != nil {
+		return fmt.Errorf("the later reading: %w", err)
+	}
 	if wasIn != "" && nowIn != "" && wasIn != nowIn {
 		return fmt.Errorf("%w: the minimum was read for dest %q and then for dest %q",
 			ErrContextMismatch, wasIn, nowIn)
@@ -801,13 +808,49 @@ func comparableDuplicates(beforeSeen Observation, before Duplicates, afterSeen O
 	return nil
 }
 
-// readingDest is the region a duplicates reading was taken for: the
-// observation's own where the caller stamped one, the reading's otherwise.
+// regionOf is the region one duplicates reading was actually taken for, as
+// opposed to the region an event about it gets stamped with (readingDest).
+//
+// The distinction is the whole point of this function. Duplicates.Dest is what
+// Client.Duplicates was required to be given and did fetch for; Observation.Dest
+// is a label the caller writes on the wrapper afterwards, and a caller that
+// stamps one "main" region on everything it takes, or forgets to update the
+// second wrapper, writes a label that is simply wrong. A guard that reads the
+// label sees one region where two were fetched and compares Moscow's cheapest
+// listing against Penza's — the exact comparison Duplicates.Dest exists to
+// refuse. So a guard rests on the fetch. Every other guard in this package
+// already does: DiffProducts takes its context from Product.Dest, and
+// DiffSellerCatalog from the rows, never from the Observation wrapping them.
+//
+// Where a reading states no region of its own — anything decodeDuplicates
+// produced, anything built by hand — the label is all there is, and is used.
+// Where it states one and the label contradicts it, the pair is refused rather
+// than resolved by preference: that is a corrupt reading, the same verdict
+// envelopeContext gives a page whose own rows disagree, and quietly picking a
+// winner would leave the event stamped with a region its reading was never
+// fetched for.
+func regionOf(seen Observation, d Duplicates) (string, error) {
+	if d.Dest == "" {
+		return seen.Dest, nil
+	}
+	if seen.Dest != "" && seen.Dest != d.Dest {
+		return "", fmt.Errorf("%w: it was fetched for dest %q but its observation is labelled dest %q",
+			ErrContextMismatch, d.Dest, seen.Dest)
+	}
+	return d.Dest, nil
+}
+
+// readingDest is the region an event about a duplicates reading is stamped
+// with: the observation's own where the caller stamped one, the reading's
+// otherwise.
 //
 // It is the same fallback eventContext applies elsewhere, spelled out here
-// because a Duplicates value carries no fetch time to pass alongside it. The
-// fallback is what makes the region usable at all for a caller that wrapped
-// the reading without repeating what Client.Duplicates was already told.
+// because a Duplicates value carries no fetch time to pass alongside it, and
+// it keeps the package's rule intact — an event carries the caller's own
+// context where the caller stated one. That preference is safe rather than
+// lax: where both are stated, comparableDuplicates has already refused the
+// pair unless they agree. See regionOf for why a guard must not read it this
+// way round.
 func readingDest(seen Observation, d Duplicates) string {
 	if seen.Dest != "" {
 		return seen.Dest

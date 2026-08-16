@@ -1121,6 +1121,67 @@ func TestMinPriceFloorEvents_TwoRegionsAreNotComparable(t *testing.T) {
 	}
 }
 
+// TestMinPriceFloorEvents_TheRegionGuardRestsOnTheFetchNotOnTheLabel is the
+// case the observation-first guard let through. Both readings are real fetches
+// — Client.Duplicates stamped Moscow on one and Penza on the other from the
+// dest it was required to be given — and both are wrapped in an observation
+// saying Moscow, which is what a caller stamping one "main" region on
+// everything it takes, or forgetting to update the second wrapper, produces.
+// A guard reading the wrapper sees one region and compares Moscow's cheapest
+// listing against Penza's, which is the exact comparison Duplicates.Dest was
+// added to refuse.
+// The second case is the one that keeps the split honest. Both readings were
+// fetched for the same region, so the comparison itself is sound — but the
+// label on both is another region's, and an event stamped from that label
+// would claim Penza's minimum price for a pair read in Moscow. A reading whose
+// own region contradicts its wrapper is a corrupt reading, refused in either
+// position, exactly as envelopeContext treats a page whose rows disagree.
+func TestMinPriceFloorEvents_TheRegionGuardRestsOnTheFetchNotOnTheLabel(t *testing.T) {
+	d := loadDuplicates(t)
+	earlierInMoscow := inRegion(atMinimalPrice(d, 280000), destMoscow)
+	laterInMoscow := inRegion(d, destMoscow)
+	laterInPenza := inRegion(d, destPenza)
+
+	for _, tc := range []struct {
+		what          string
+		before, after Observation
+	}{
+		{
+			"two regions fetched under one label",
+			seenDuplicates(earlierInMoscow, destMoscow, seenMonday),
+			seenDuplicates(laterInPenza, destMoscow, seenTuesday),
+		},
+		{
+			"one region fetched under another region's label",
+			seenDuplicates(earlierInMoscow, destPenza, seenMonday),
+			seenDuplicates(laterInMoscow, destPenza, seenTuesday),
+		},
+		{
+			// Only the earlier side contradicts anything: the later reading
+			// states no region of its own and takes its wrapper's word. A guard
+			// that checked only the reading it is about to emit an event for
+			// would accept this pair.
+			"only the earlier reading contradicts its label",
+			seenDuplicates(earlierInMoscow, destPenza, seenMonday),
+			seenDuplicates(atMinimalPrice(d, 268100), destPenza, seenTuesday),
+		},
+	} {
+		events, err := MinPriceFloorEvents(tc.before, tc.after, Money{Minor: 270000, Currency: "RUB"})
+		if err == nil || !errors.Is(err, ErrContextMismatch) {
+			t.Errorf("%s: err = %v, want it to wrap ErrContextMismatch; events = %v", tc.what, err, kindsOf(events))
+			continue
+		}
+		if events != nil {
+			t.Errorf("%s: still produced %v", tc.what, kindsOf(events))
+		}
+		for _, want := range []string{destMoscow, destPenza} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("%s: error %q does not name %s", tc.what, err, want)
+			}
+		}
+	}
+}
+
 // TestMinPriceFloorEvents_AReadingThatStatesNeitherIsComparableWithAnything is
 // the other side of both guards above. A reading that names no match group and
 // no region — every value decodeDuplicates produces on its own, and every one
