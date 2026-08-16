@@ -592,6 +592,32 @@ func TestEvents_AreIndexedByWhatTheyAreAbout(t *testing.T) {
 	}
 }
 
+// TestObservationsAndEvents_HaveProvenanceColumns pins the two columns
+// 0007_observation_provenance.sql adds: observations.payload_type, and
+// saved_at on both tables. Both are declared STRICT, so a future migration
+// that widens either to something a caller's raw value merely coerces into
+// (see TestObservations_KindIsTheStringFormNotTheIota above, for what that
+// coercion silently does to an INTEGER kind column) would still be caught
+// here as a type mismatch, not just a missing column.
+func TestObservationsAndEvents_HaveProvenanceColumns(t *testing.T) {
+	s := openTestStore(t)
+
+	if got := columnType(t, s, "observations", "payload_type"); got != "TEXT" {
+		t.Errorf("observations.payload_type is %s, want TEXT", got)
+	}
+	if got := columnType(t, s, "observations", "saved_at"); got != "INTEGER" {
+		t.Errorf("observations.saved_at is %s, want INTEGER", got)
+	}
+	if got := columnType(t, s, "events", "saved_at"); got != "INTEGER" {
+		t.Errorf("events.saved_at is %s, want INTEGER", got)
+	}
+
+	execOK(t, s, `INSERT INTO observations (observed_at, dest, app_type, kind, payload_type, payload, saved_at)
+	              VALUES (1000, '-1257786', 1, 'product', 'wb.Product', '{}', 1010)`)
+	execOK(t, s, `INSERT INTO events (id, kind, observed_at, nm_id, imt_id, dest, confidence, saved_at)
+	              VALUES (2, 'price-changed', 1000, 111, 222, '-1257786', 1.0, 1010)`)
+}
+
 func TestSchema_MoneyIsMinorUnits(t *testing.T) {
 	// Every amount in this schema is an integer count of minor units. A REAL
 	// column would accept 82.4 and lose a kopeck per row, and price

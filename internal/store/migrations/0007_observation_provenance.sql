@@ -1,0 +1,35 @@
+-- SPDX-License-Identifier: AGPL-3.0-or-later
+--
+-- Closes two gaps 0002_signals.sql left open in observations and events, both
+-- named in task 10's own doc comments before this migration existed to close
+-- them.
+--
+-- 1. observations never recorded the payload's concrete Go type. kind says
+--    what an observation claims to be; payload_type says what Payload
+--    actually was when it was serialised. wb keeps those two checks apart on
+--    purpose -- ErrPayloadKind exists precisely for a reading that names
+--    itself ObservationProduct and carries a Card -- and a row that only
+--    ever recorded kind could not reproduce that disagreement once the Go
+--    value behind it was gone. NOT NULL DEFAULT '' mirrors payload's own
+--    present-or-not convention: the empty string is "no payload", not a
+--    payload whose type nobody wrote down.
+--
+-- 2. Neither table recorded when the row was written, only when the reading
+--    it describes was taken (observed_at). A reading with no time of its own
+--    -- wb.Shelves states none -- falls back to the store's clock for
+--    observed_at (see effectiveObservedAt in events.go), which used to be
+--    the only clock reading in the row at all: "read at 14:00" and "no time
+--    given, learned about it at 14:00" became the same row. saved_at is a
+--    second, independent fact -- always the store's clock, on every row,
+--    dated or not -- so the two can no longer be confused. observed_at keeps
+--    meaning what it always has: the reading's own time when the site sent
+--    one.
+--
+-- Both new columns are NOT NULL DEFAULT 0/''. The default exists only so
+-- SQLite accepts the ALTER on a table that might already hold rows -- every
+-- writer in this package supplies both explicitly, the same way every writer
+-- already supplies observed_at, so the default is never the value a real row
+-- actually carries.
+ALTER TABLE observations ADD COLUMN payload_type TEXT    NOT NULL DEFAULT '';
+ALTER TABLE observations ADD COLUMN saved_at     INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE events       ADD COLUMN saved_at     INTEGER NOT NULL DEFAULT 0;

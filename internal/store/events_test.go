@@ -31,13 +31,13 @@ func TestSaveObservation_KeepsWhatWasSeenWhenAndWhere(t *testing.T) {
 		t.Error("SaveObservation returned row id 0; want the id of the row it wrote")
 	}
 
-	var kind, dest, payload string
+	var kind, dest, payloadType, payload string
 	var appType int
 	var observedAt int64
 	if err := s.db.QueryRowContext(ctx, `
-		SELECT kind, observed_at, dest, app_type, payload
+		SELECT kind, observed_at, dest, app_type, payload_type, payload
 		FROM observations WHERE id = ?`, id).
-		Scan(&kind, &observedAt, &dest, &appType, &payload); err != nil {
+		Scan(&kind, &observedAt, &dest, &appType, &payloadType, &payload); err != nil {
 		t.Fatalf("read observation: %v", err)
 	}
 	if kind != wb.ObservationProduct.String() {
@@ -48,6 +48,12 @@ func TestSaveObservation_KeepsWhatWasSeenWhenAndWhere(t *testing.T) {
 	}
 	if observedAt != at.Unix() {
 		t.Errorf("observed_at = %d, want %d — when the reading was taken, not when it was stored", observedAt, at.Unix())
+	}
+	// payload_type is the concrete Go type, recorded beside kind rather than
+	// derived from it: the two can disagree (wb.ErrPayloadKind), and a row
+	// holding only kind would lose the evidence of exactly that.
+	if payloadType != "wb.Product" {
+		t.Errorf("payload_type = %q, want %q", payloadType, "wb.Product")
 	}
 	if payload == "" {
 		t.Fatal("payload is empty for a reading that carried a product")
@@ -91,10 +97,14 @@ func TestSaveObservation_RendersAPayloadWithNoRawThroughJSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SaveObservation: %v", err)
 	}
-	var payload string
+	var payloadType, payload string
 	if err := s.db.QueryRowContext(ctx,
-		`SELECT payload FROM observations WHERE id = ?`, id).Scan(&payload); err != nil {
+		`SELECT payload_type, payload FROM observations WHERE id = ?`, id).
+		Scan(&payloadType, &payload); err != nil {
 		t.Fatalf("read observation: %v", err)
+	}
+	if payloadType != "wb.Reviews" {
+		t.Errorf("payload_type = %q, want %q", payloadType, "wb.Reviews")
 	}
 	var back struct {
 		Summary struct {
@@ -194,6 +204,143 @@ func TestSaveObservation_PrefersACardsRawOverAStructMarshal(t *testing.T) {
 	}
 }
 
+func TestSaveObservation_PreservesTheProductsNestedInADuplicatesReading(t *testing.T) {
+	// wb.Duplicates.Items and MinPriceItem are both wb.Product, and Product
+	// tags nearly every field json:"-" the same way it does at the top
+	// level (see TestSaveObservation_AProductWithNoRawStillSaves's own
+	// comment). A plain json.Marshal of the surrounding Duplicates value
+	// renders Total, MatchID and Dest honestly and silently empties every
+	// nested product doing it — no error, a row that looks like a real
+	// observation — which is what makes this different from, and worse
+	// than, a payload that fails to render at all.
+	s := openTestStore(t)
+	ctx := context.Background()
+	target := shelfProduct(51)
+
+	id, err := s.SaveObservation(ctx, wb.Observation{
+		Kind: wb.ObservationDuplicates,
+		At:   time.Date(2026, 8, 16, 14, 0, 0, 0, time.UTC),
+		Dest: "-1257786",
+		Payload: wb.Duplicates{
+			MatchID:      999,
+			Dest:         "-1257786",
+			Total:        2,
+			Items:        []wb.Product{target},
+			MinPriceItem: &target,
+		},
+	})
+	if err != nil {
+		t.Fatalf("SaveObservation: %v", err)
+	}
+	var payload string
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT payload FROM observations WHERE id = ?`, id).Scan(&payload); err != nil {
+		t.Fatalf("read observation: %v", err)
+	}
+	var back struct {
+		Total   int64
+		MatchID int64
+		Items   []struct {
+			ID int64 `json:"id"`
+		}
+		MinPriceItem struct {
+			ID int64 `json:"id"`
+		}
+	}
+	if err := json.Unmarshal([]byte(payload), &back); err != nil {
+		t.Fatalf("the stored payload is not valid JSON: %v", err)
+	}
+	if back.Total != 2 || back.MatchID != 999 {
+		t.Errorf("stored Total/MatchID = %d/%d, want 2/999 — the fields around the products, which must survive too", back.Total, back.MatchID)
+	}
+	if len(back.Items) != 1 || back.Items[0].ID != 51 {
+		t.Errorf("stored Items = %+v, want one product naming id 51 — its Raw, not an empty struct-marshal", back.Items)
+	}
+	if back.MinPriceItem.ID != 51 {
+		t.Errorf("stored MinPriceItem.id = %d, want 51", back.MinPriceItem.ID)
+	}
+}
+
+func TestSaveObservation_ADuplicatesReadingWithNoMinPriceItemStoresNullNotAnEmptyProduct(t *testing.T) {
+	// MinPriceItem is a pointer because a reading legitimately carries none —
+	// see its own doc comment. rawProductPtrJSON must render that as JSON
+	// null, the same "no row" signal a nil pointer means everywhere else in
+	// this package, not as {} — which would read back indistinguishable from
+	// a minimum-price listing whose fields all happened to be zero.
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	id, err := s.SaveObservation(ctx, wb.Observation{
+		Kind:    wb.ObservationDuplicates,
+		At:      time.Date(2026, 8, 16, 14, 0, 0, 0, time.UTC),
+		Dest:    "-1257786",
+		Payload: wb.Duplicates{MatchID: 999, Dest: "-1257786", Total: 0},
+	})
+	if err != nil {
+		t.Fatalf("SaveObservation: %v", err)
+	}
+	var payload string
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT payload FROM observations WHERE id = ?`, id).Scan(&payload); err != nil {
+		t.Fatalf("read observation: %v", err)
+	}
+	var back struct {
+		MinPriceItem *struct {
+			ID int64 `json:"id"`
+		}
+	}
+	if err := json.Unmarshal([]byte(payload), &back); err != nil {
+		t.Fatalf("the stored payload is not valid JSON: %v", err)
+	}
+	if back.MinPriceItem != nil {
+		t.Errorf("stored MinPriceItem = %+v, want null", back.MinPriceItem)
+	}
+}
+
+func TestSaveObservation_PreservesTheProductsInASellerCatalogReading(t *testing.T) {
+	// wb.Envelope.Products carries the identical problem: Client.SellerCatalogPage
+	// hands SaveObservation a real Envelope, whose Products slice is exactly
+	// as thin under a struct-marshal as Duplicates.Items is.
+	s := openTestStore(t)
+	ctx := context.Background()
+	total := int64(5)
+
+	id, err := s.SaveObservation(ctx, wb.Observation{
+		Kind: wb.ObservationSellerCatalog,
+		At:   time.Date(2026, 8, 16, 14, 0, 0, 0, time.UTC),
+		Dest: "-1257786",
+		Payload: wb.Envelope{
+			Products: []wb.Product{shelfProduct(51)},
+			Total:    &total,
+			Dropped:  1,
+		},
+	})
+	if err != nil {
+		t.Fatalf("SaveObservation: %v", err)
+	}
+	var payload string
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT payload FROM observations WHERE id = ?`, id).Scan(&payload); err != nil {
+		t.Fatalf("read observation: %v", err)
+	}
+	var back struct {
+		Total    int64
+		Dropped  int
+		Products []struct {
+			ID int64 `json:"id"`
+		}
+	}
+	if err := json.Unmarshal([]byte(payload), &back); err != nil {
+		t.Fatalf("the stored payload is not valid JSON: %v", err)
+	}
+	if back.Total != 5 || back.Dropped != 1 {
+		t.Errorf("stored Total/Dropped = %d/%d, want 5/1 — the fields around the products, which must survive too", back.Total, back.Dropped)
+	}
+	if len(back.Products) != 1 || back.Products[0].ID != 51 {
+		t.Errorf("stored Products = %+v, want one product naming id 51 — its Raw, not an empty struct-marshal", back.Products)
+	}
+}
+
 func TestSaveObservation_RefusesAPayloadItCannotRender(t *testing.T) {
 	// A reading with no payload is a real thing wb has a sentinel for
 	// (ErrNoPayload). A payload dropped on the way into the database is not,
@@ -225,13 +372,17 @@ func TestSaveObservation_AReadingWithNoPayloadIsStillAReading(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SaveObservation: %v", err)
 	}
-	var payload string
+	var payloadType, payload string
 	if err := s.db.QueryRowContext(ctx,
-		`SELECT payload FROM observations WHERE id = ?`, id).Scan(&payload); err != nil {
+		`SELECT payload_type, payload FROM observations WHERE id = ?`, id).
+		Scan(&payloadType, &payload); err != nil {
 		t.Fatalf("read observation: %v", err)
 	}
 	if payload != "" {
 		t.Errorf("payload = %q for a reading that carried none, want the empty string", payload)
+	}
+	if payloadType != "" {
+		t.Errorf("payload_type = %q for a reading that carried no payload, want the empty string — there is no Go type to name", payloadType)
 	}
 }
 
@@ -286,6 +437,11 @@ func TestSaveObservation_AReadingWithNoTimeFallsBackToTheStoresClock(t *testing.
 }
 
 func TestSaveObservation_DatesToWhenTheReadingWasTakenNotWhenItWasStored(t *testing.T) {
+	// observed_at and saved_at (0007_observation_provenance.sql) answer two
+	// different questions and must disagree here on purpose: the reading was
+	// taken at 14:00 and written a minute later, and a version of
+	// SaveObservation that let one leak into the other would collapse that
+	// distinction back to indistinguishable, the state 0007 exists to fix.
 	s := openTestStore(t)
 	ctx := context.Background()
 	at := time.Date(2026, 8, 16, 14, 0, 0, 0, time.UTC)
@@ -299,13 +455,17 @@ func TestSaveObservation_DatesToWhenTheReadingWasTakenNotWhenItWasStored(t *test
 	if err != nil {
 		t.Fatalf("SaveObservation: %v", err)
 	}
-	var observedAt int64
+	var observedAt, savedAt int64
 	if err := s.db.QueryRowContext(ctx,
-		`SELECT observed_at FROM observations WHERE id = ?`, id).Scan(&observedAt); err != nil {
+		`SELECT observed_at, saved_at FROM observations WHERE id = ?`, id).
+		Scan(&observedAt, &savedAt); err != nil {
 		t.Fatalf("read observation: %v", err)
 	}
 	if observedAt != at.Unix() {
 		t.Errorf("observed_at = %d, want %d — the reading's own time, not the store's clock at save time", observedAt, at.Unix())
+	}
+	if savedAt != saved.Unix() {
+		t.Errorf("saved_at = %d, want %d — the store's clock at save time, not the reading's own time", savedAt, saved.Unix())
 	}
 }
 
@@ -349,22 +509,33 @@ func TestSaveEvents_KeepsTheTwoNumberingsApart(t *testing.T) {
 	}
 
 	var nmID, imtID int64
+	var dest string
 	if err := s.db.QueryRowContext(ctx,
-		`SELECT nm_id, imt_id FROM events WHERE kind = ?`, string(wb.RatingDropped)).
-		Scan(&nmID, &imtID); err != nil {
+		`SELECT nm_id, imt_id, dest FROM events WHERE kind = ?`, string(wb.RatingDropped)).
+		Scan(&nmID, &imtID, &dest); err != nil {
 		t.Fatalf("read rating-dropped: %v", err)
 	}
 	if nmID != 0 || imtID != 4567 {
 		t.Errorf("rating-dropped stored nm_id/imt_id = %d/%d, want 0/4567 — a card's aggregate belongs to the imtId", nmID, imtID)
 	}
+	// dest is what tells a price drop in Moscow apart from the same drop in
+	// Penza; nothing here computes it back from anything else, so a store
+	// that dropped it on the way in would be silently unnoticed by the two
+	// checks above.
+	if dest != "-1257786" {
+		t.Errorf("rating-dropped stored dest = %q, want %q", dest, "-1257786")
+	}
 
 	if err := s.db.QueryRowContext(ctx,
-		`SELECT nm_id, imt_id FROM events WHERE kind = ?`, string(wb.CompetitorOutOfStock)).
-		Scan(&nmID, &imtID); err != nil {
+		`SELECT nm_id, imt_id, dest FROM events WHERE kind = ?`, string(wb.CompetitorOutOfStock)).
+		Scan(&nmID, &imtID, &dest); err != nil {
 		t.Fatalf("read competitor-out-of-stock: %v", err)
 	}
 	if nmID != 51 || imtID != 0 {
 		t.Errorf("competitor-out-of-stock stored nm_id/imt_id = %d/%d, want 51/0 — a listing belongs to the nmId", nmID, imtID)
+	}
+	if dest != "-1257786" {
+		t.Errorf("competitor-out-of-stock stored dest = %q, want %q", dest, "-1257786")
 	}
 }
 
@@ -443,7 +614,10 @@ func TestSaveEvents_DatesToWhenTheReadingWasTakenNotWhenItWasStored(t *testing.T
 	// An event's At is when the reading that revealed it was taken. Letting
 	// the store's own clock leak into observed_at would make every event
 	// look as though it happened at the moment of the database write, which
-	// is exactly the distinction anybody reading a history needs.
+	// is exactly the distinction anybody reading a history needs. saved_at
+	// (0007_observation_provenance.sql) is the other half: it must carry the
+	// store's clock, not At, or there would be nowhere left to record when
+	// this row was actually written.
 	s := openTestStore(t)
 	ctx := context.Background()
 	at := time.Date(2026, 8, 16, 15, 0, 0, 0, time.UTC)
@@ -453,14 +627,17 @@ func TestSaveEvents_DatesToWhenTheReadingWasTakenNotWhenItWasStored(t *testing.T
 	if _, err := s.SaveEvents(ctx, twoEvents(at)); err != nil {
 		t.Fatalf("SaveEvents: %v", err)
 	}
-	var observedAt int64
+	var observedAt, savedAt int64
 	if err := s.db.QueryRowContext(ctx,
-		`SELECT observed_at FROM events WHERE kind = ?`, string(wb.RatingDropped)).
-		Scan(&observedAt); err != nil {
+		`SELECT observed_at, saved_at FROM events WHERE kind = ?`, string(wb.RatingDropped)).
+		Scan(&observedAt, &savedAt); err != nil {
 		t.Fatalf("read event: %v", err)
 	}
 	if observedAt != at.Unix() {
 		t.Errorf("observed_at = %d, want %d", observedAt, at.Unix())
+	}
+	if savedAt != stored.Unix() {
+		t.Errorf("saved_at = %d, want %d — the store's clock at save time, not the reading's own time", savedAt, stored.Unix())
 	}
 }
 
