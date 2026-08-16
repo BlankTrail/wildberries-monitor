@@ -15,11 +15,11 @@ import (
 
 func TestGroupTimingsByPort_SeparatesKnownFromUnattributedPorts(t *testing.T) {
 	timings := []requestTiming{
-		{label: "a", ports: []int{0}, elapsed: time.Second},
-		{label: "b", ports: []int{5}, elapsed: time.Second},
-		{label: "c", ports: []int{0}, elapsed: time.Second},
-		{label: "d", ports: []int{5}, elapsed: time.Second},
-		{label: "e", ports: []int{7}, elapsed: time.Second},
+		{label: "a", from: []wb.Fetch{{Port: 0}}, elapsed: time.Second},
+		{label: "b", from: []wb.Fetch{{Port: 5}}, elapsed: time.Second},
+		{label: "c", from: []wb.Fetch{{Port: 0}}, elapsed: time.Second},
+		{label: "d", from: []wb.Fetch{{Port: 5}}, elapsed: time.Second},
+		{label: "e", from: []wb.Fetch{{Port: 7}}, elapsed: time.Second},
 	}
 	order, byPort, ungrouped := groupTimingsByPort(timings)
 
@@ -47,7 +47,7 @@ func TestGroupTimingsByPort_SeparatesKnownFromUnattributedPorts(t *testing.T) {
 // must not exist in byPort, and every zero-port entry must still be visible
 // somewhere.
 func TestGroupTimingsByPort_NeverFoldsUnattributedIntoAFakePortZero(t *testing.T) {
-	timings := []requestTiming{{label: "x", ports: []int{0}, elapsed: time.Second}}
+	timings := []requestTiming{{label: "x", from: []wb.Fetch{{Port: 0}}, elapsed: time.Second}}
 	_, byPort, ungrouped := groupTimingsByPort(timings)
 	if _, exists := byPort[0]; exists {
 		t.Error("byPort has a key 0 — a request that never landed was grouped as though it were a real port")
@@ -64,8 +64,8 @@ func TestGroupTimingsByPort_NeverFoldsUnattributedIntoAFakePortZero(t *testing.T
 // is precisely the comparison this table exists to make honestly.
 func TestGroupTimingsByPort_RefusesToFileACallWhoseHalvesUsedTwoPorts(t *testing.T) {
 	timings := []requestTiming{
-		{label: "card #1", ports: []int{20009, 20010}, elapsed: 14 * time.Second},
-		{label: "reviews #1", ports: []int{20009}, elapsed: time.Second},
+		{label: "card #1", from: []wb.Fetch{{Port: 20009}, {Port: 20010}}, elapsed: 14 * time.Second},
+		{label: "reviews #1", from: []wb.Fetch{{Port: 20009}}, elapsed: time.Second},
 	}
 	order, byPort, ungrouped := groupTimingsByPort(timings)
 
@@ -85,7 +85,7 @@ func TestGroupTimingsByPort_RefusesToFileACallWhoseHalvesUsedTwoPorts(t *testing
 // requests of one call left through the same port, so the call's own
 // duration belongs to that port and must be grouped, not set aside.
 func TestGroupTimingsByPort_FilesACallWhoseHalvesSharedOnePort(t *testing.T) {
-	timings := []requestTiming{{label: "card #1", ports: []int{20009, 20009}, elapsed: 14 * time.Second}}
+	timings := []requestTiming{{label: "card #1", from: []wb.Fetch{{Port: 20009}, {Port: 20009}}, elapsed: 14 * time.Second}}
 	order, byPort, ungrouped := groupTimingsByPort(timings)
 
 	if len(ungrouped) != 0 {
@@ -101,14 +101,16 @@ func TestGroupTimingsByPort_FilesACallWhoseHalvesSharedOnePort(t *testing.T) {
 // not attributable to the port that did answer — the elapsed time includes
 // the other half's whole failed budget.
 func TestSinglePort_RejectsAPartlyLandedCall(t *testing.T) {
-	if port, ok := singlePort([]int{20009, 0}); ok {
-		t.Errorf("singlePort([20009 0]) = %d, true; want it refused — half of that time was spent failing elsewhere", port)
+	landedThenLost := []wb.Fetch{{Source: wb.SourceCardStatic, Port: 20009}, {Source: wb.SourceCardLive}}
+	if port, ok := singlePort(landedThenLost); ok {
+		t.Errorf("singlePort(%v) = %d, true; want it refused — half of that time was spent failing elsewhere", landedThenLost, port)
 	}
 	if port, ok := singlePort(nil); ok {
 		t.Errorf("singlePort(nil) = %d, true; want it refused — no request was made at all", port)
 	}
-	if port, ok := singlePort([]int{20009, 20009}); !ok || port != 20009 {
-		t.Errorf("singlePort([20009 20009]) = %d, %v; want 20009, true", port, ok)
+	shared := []wb.Fetch{{Source: wb.SourceCardStatic, Port: 20009}, {Source: wb.SourceCardLive, Port: 20009}}
+	if port, ok := singlePort(shared); !ok || port != 20009 {
+		t.Errorf("singlePort(%v) = %d, %v; want 20009, true", shared, port, ok)
 	}
 }
 
@@ -126,8 +128,11 @@ func TestTimingOf_RecordsEveryRequestBehindOneCall(t *testing.T) {
 	if got.label != "card #1" || got.elapsed != 14*time.Second {
 		t.Errorf("timingOf = %+v, want the label and elapsed passed in", got)
 	}
-	if len(got.ports) != 2 || got.ports[0] != 20009 || got.ports[1] != 20010 {
-		t.Errorf("ports=%v, want [20009 20010] in the order wb reported them", got.ports)
+	if len(got.from) != 2 || got.from[0].Port != 20009 || got.from[1].Port != 20010 {
+		t.Errorf("from=%+v, want the two requests in the order wb reported them", got.from)
+	}
+	if got.from[0].Source != wb.SourceCardStatic || got.from[1].Source != wb.SourceCardLive {
+		t.Errorf("from=%+v, want each request's source kept — a row that lost it cannot say which half went where", got.from)
 	}
 	if got.attempts != 5 {
 		t.Errorf("attempts=%d, want 5 — every request behind the call, not just the first", got.attempts)
@@ -139,8 +144,8 @@ func TestTimingOf_RecordsEveryRequestBehindOneCall(t *testing.T) {
 // It must not invent a port for itself.
 func TestTimingOf_OfACallThatMadeNoRequest(t *testing.T) {
 	got := timingOf("duplicates #1", nil, time.Millisecond)
-	if len(got.ports) != 0 || got.attempts != 0 {
-		t.Errorf("timingOf(nil) = %+v, want no ports and no attempts", got)
+	if len(got.from) != 0 || got.attempts != 0 {
+		t.Errorf("timingOf(nil) = %+v, want no requests and no attempts", got)
 	}
 }
 
@@ -151,8 +156,8 @@ func TestTimingOf_OfACallThatMadeNoRequest(t *testing.T) {
 // reported as retried and the retry count would stop meaning anything.
 func TestPrintRequestTimings_JudgesARetryAgainstTheCallsOwnRequestCount(t *testing.T) {
 	quiet := []requestTiming{
-		{label: "reviews #1", ports: []int{9}, attempts: 1, elapsed: 10 * time.Second},
-		{label: "card #1", ports: []int{9, 9}, attempts: 2, elapsed: 3 * time.Second},
+		{label: "reviews #1", from: []wb.Fetch{{Port: 9}}, attempts: 1, elapsed: 10 * time.Second},
+		{label: "card #1", from: []wb.Fetch{{Port: 9}, {Port: 9}}, attempts: 2, elapsed: 3 * time.Second},
 	}
 	var buf bytes.Buffer
 	printRequestTimings(&buf, quiet)
@@ -163,8 +168,8 @@ func TestPrintRequestTimings_JudgesARetryAgainstTheCallsOwnRequestCount(t *testi
 	// The other direction, so the counter is not simply dead: the same
 	// two-request call, one of whose halves took a second attempt.
 	retried := []requestTiming{
-		{label: "reviews #1", ports: []int{9}, attempts: 1, elapsed: 10 * time.Second},
-		{label: "card #1", ports: []int{9, 9}, attempts: 3, elapsed: 3 * time.Second},
+		{label: "reviews #1", from: []wb.Fetch{{Port: 9}}, attempts: 1, elapsed: 10 * time.Second},
+		{label: "card #1", from: []wb.Fetch{{Port: 9}, {Port: 9}}, attempts: 3, elapsed: 3 * time.Second},
 	}
 	buf.Reset()
 	printRequestTimings(&buf, retried)
@@ -194,14 +199,17 @@ func TestMedian_OddAndEvenCounts(t *testing.T) {
 func TestPrintRequestTimings_NamesThePortsOfACallItCouldNotGroup(t *testing.T) {
 	var buf bytes.Buffer
 	printRequestTimings(&buf, []requestTiming{
-		{label: "card #1", ports: []int{20009, 20010}, attempts: 2, elapsed: 42 * time.Millisecond},
+		{label: "card #1", attempts: 2, elapsed: 42 * time.Millisecond, from: []wb.Fetch{
+			{Source: wb.SourceCardStatic, Port: 20009},
+			{Source: wb.SourceCardLive, Port: 20010},
+		}},
 	})
 	out := buf.String()
 	if !strings.Contains(out, "did not share a port") {
 		t.Errorf("output missing the explanation for an ungrouped call; got:\n%s", out)
 	}
-	if !strings.Contains(out, "ports 20009, 20010") {
-		t.Errorf("output does not name the ports the call did use — the whole point is that they are known now; got:\n%s", out)
+	if !strings.Contains(out, "card static→20009, card live→20010") {
+		t.Errorf("output does not say which half went through which port — the whole point is that both are known now; got:\n%s", out)
 	}
 	if !strings.Contains(out, "card #1") {
 		t.Errorf("output missing the request label; got:\n%s", out)
@@ -212,22 +220,30 @@ func TestPrintRequestTimings_NamesThePortsOfACallItCouldNotGroup(t *testing.T) {
 // shapes apart in the output: a call spread over two live ports, and a call
 // one of whose requests never reached a port at all.
 func TestPortsLabel_SaysWhichRequestNeverLanded(t *testing.T) {
-	if got := portsLabel([]int{20009, 0}); got != "ports 20009, none (never landed)" {
-		t.Errorf("portsLabel = %q, want the live port and the lost request named separately", got)
+	half := []wb.Fetch{{Source: wb.SourceSellerStatic, Port: 20009}, {Source: wb.SourceSellerProfile}}
+	if got := portsLabel(half); got != "seller static record→20009, seller profile→none (never landed)" {
+		t.Errorf("portsLabel = %q, want each source named against the port it did or did not reach", got)
 	}
 	if got := portsLabel(nil); got != "no port reported for this call" {
 		t.Errorf("portsLabel(nil) = %q, want it to say no port was reported", got)
 	}
-	if got := portsLabel([]int{0}); got != "port none (never landed)" {
-		t.Errorf("portsLabel([0]) = %q, want the singular form for one lost request", got)
+}
+
+// TestSourcesLabel_NamesEveryRequestInOrder is what keeps a grouped row from
+// being read as one request: the row is headed by a label this program chose
+// ("card #1"), and only wb can say what that call actually fetched.
+func TestSourcesLabel_NamesEveryRequestInOrder(t *testing.T) {
+	got := sourcesLabel([]wb.Fetch{{Source: wb.SourceCardStatic}, {Source: wb.SourceCardLive}})
+	if got != "card static, card live" {
+		t.Errorf("sourcesLabel = %q, want both sources in the order they were fetched", got)
 	}
 }
 
 func TestPrintRequestTimings_GroupsAKnownPortsRepeatsTogether(t *testing.T) {
 	var buf bytes.Buffer
 	printRequestTimings(&buf, []requestTiming{
-		{label: "catalog page1 #1", ports: []int{3}, attempts: 1, elapsed: 40 * time.Millisecond},
-		{label: "catalog page1 #2", ports: []int{3}, attempts: 1, elapsed: 5 * time.Millisecond},
+		{label: "catalog page1 #1", from: []wb.Fetch{{Port: 3}}, attempts: 1, elapsed: 40 * time.Millisecond},
+		{label: "catalog page1 #2", from: []wb.Fetch{{Port: 3}}, attempts: 1, elapsed: 5 * time.Millisecond},
 	})
 	out := buf.String()
 	if !strings.Contains(out, "port 3 (2 call(s), 2 request(s))") {

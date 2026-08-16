@@ -134,8 +134,14 @@ func TestRunSeller_ReportsTheSellerCallAsTwoRequestsThroughItsPort(t *testing.T)
 	// scripted lease takes is not this test's claim, and pinning it would
 	// make the test fail on a slow machine for a reason unrelated to what it
 	// asserts.
-	if !regexp.MustCompile(`seller profile #1\s+\S+\s+\(2 request\(s\), 2 attempt\(s\)\)`).MatchString(out) {
-		t.Errorf("summary does not show the seller call as the two requests it is; got:\n%s", out)
+	if !regexp.MustCompile(`seller #1\s+\S+\s+\(2 request\(s\): seller static record, seller profile; 2 attempt\(s\)\)`).MatchString(out) {
+		t.Errorf("summary does not show the seller call as the two named requests it is; got:\n%s", out)
+	}
+	// The row must not be headed by the name of one of its two halves: an
+	// operator reading it during a profile failure would take the elapsed
+	// time for the profile's own.
+	if strings.Contains(out, "seller profile #1 ") {
+		t.Errorf("the seller row is still labelled after one of its two halves; got:\n%s", out)
 	}
 	if strings.Contains(out, "no port reported") {
 		t.Errorf("summary still has a call with no port to name; got:\n%s", out)

@@ -165,8 +165,8 @@ func TestRunDuplicates_ReportsThePortOfEveryFetchIncludingTheCard(t *testing.T) 
 	// static one and the live one — not of one of them.
 	// Matched around the elapsed column, not through it: see the identical
 	// note in seller_test.go.
-	if !regexp.MustCompile(`card #1\s+\S+\s+\(2 request\(s\), 2 attempt\(s\)\)`).MatchString(summary.String()) {
-		t.Errorf("summary does not show the card as two requests through that port; got:\n%s", summary.String())
+	if !regexp.MustCompile(`card #1\s+\S+\s+\(2 request\(s\): card static, card live; 2 attempt\(s\)\)`).MatchString(summary.String()) {
+		t.Errorf("summary does not show the card as the two named requests it is; got:\n%s", summary.String())
 	}
 	if strings.Contains(summary.String(), "did not share a port") {
 		t.Errorf("summary set a call aside as ungrouped even though every request went through the one scripted port; got:\n%s", summary.String())

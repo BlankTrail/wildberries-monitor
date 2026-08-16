@@ -21,9 +21,12 @@ package wb
 // the two fetched it.
 //
 // A string rather than an enumerated int, unlike Class and Kind: nothing in
-// this package switches on a Source, and every consumer of one prints it — a
-// timing table, a log line, a JSONL row. An int would buy exhaustiveness that
-// no switch needs and cost a String method that every caller has to remember.
+// this package or its tools switches on a Source, and the one place that
+// reads it prints it — examples/wbsignals names every request in its timing
+// table by source, and for a call whose requests did not share a port it
+// prints which source went through which. An int would buy exhaustiveness
+// that no switch needs and cost a String method every caller has to remember
+// before a value of this type is fit to show anyone.
 //
 // Two constants below are not named the way they read: SourceSearchPage and
 // SourceCardLive, rather than SourceSearch and SourceCardDetail. Those two

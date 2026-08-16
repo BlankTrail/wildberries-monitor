@@ -114,7 +114,12 @@ func runSeller(ctx context.Context, c *wb.Client, eps wb.Endpoints, supplier int
 
 		start := time.Now()
 		s, sellerErr := c.Seller(ctx, eps, supplier)
-		t = append(t, timingOf(fmt.Sprintf("seller profile #%d", i), s.Fetches, time.Since(start)))
+		// "seller", not "seller profile": this one call fetches the static
+		// record and the profile both, and naming it after one of its two
+		// halves invites an operator reading the row during a profile failure
+		// to take the elapsed time for the profile's own. What it actually
+		// fetched is printed from the provenance itself.
+		t = append(t, timingOf(fmt.Sprintf("seller #%d", i), s.Fetches, time.Since(start)))
 
 		cstart := time.Now()
 		q := wb.SearchQuery{Dest: dest, AppType: mode.AppType(), Page: 1}

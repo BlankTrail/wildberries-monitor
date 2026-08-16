@@ -20,13 +20,16 @@ import (
 // "card #2") so a heterogeneous run — several different kinds of request, not
 // wbsearch's uniform page loop — still reads clearly grouped by port.
 //
-// ports is every port the requests behind that one call left through, read
-// from the call's own provenance (wb.Fetch.Port). One entry for the calls
-// that fetch once; two for wb.Client.Card and wb.Client.Seller, which fetch
-// from two sources apiece. A 0 among them is a request that never landed at
-// all and can be credited to no port — see wb.Fetch.Port. None at all is a
-// call that made no request (wb.Client.Duplicates against a product in no
-// duplicate group).
+// from is the call's own provenance, kept whole rather than projected down to
+// a list of ports: the source of each request is what lets a row name which
+// of its halves went where, and a row for a two-request call that named only
+// one of the two would mislead exactly where it is most needed — see
+// sourcesLabel and portsLabel. One entry for the calls that fetch once; two
+// for wb.Client.Card and wb.Client.Seller, which fetch from two sources
+// apiece. A zero Port among them is a request that never landed at all and
+// can be credited to no port — see wb.Fetch.Port. None at all is a call that
+// made no request (wb.Client.Duplicates against a product in no duplicate
+// group).
 //
 // elapsed is the whole call's wall clock, not one request's: wb reports a
 // port and an attempt count per request but not a duration, so a call that
@@ -35,7 +38,7 @@ import (
 // one port — see groupTimingsByPort.
 type requestTiming struct {
 	label    string
-	ports    []int
+	from     []wb.Fetch
 	attempts int
 	elapsed  time.Duration
 }
@@ -44,9 +47,8 @@ type requestTiming struct {
 // reported, so every check records the same thing the same way instead of
 // each reaching into wb.Fetch itself.
 func timingOf(label string, fetches []wb.Fetch, elapsed time.Duration) requestTiming {
-	t := requestTiming{label: label, elapsed: elapsed}
+	t := requestTiming{label: label, from: fetches, elapsed: elapsed}
 	for _, f := range fetches {
-		t.ports = append(t.ports, f.Port)
 		t.attempts += f.Cost.Attempts
 	}
 	return t
@@ -58,16 +60,16 @@ func timingOf(label string, fetches []wb.Fetch, elapsed time.Duration) requestTi
 // single port to be filed under: elapsed covers all of them together, so
 // crediting that duration to either port would attribute one port's time to
 // another. Nothing to report is not a port either.
-func singlePort(ports []int) (int, bool) {
-	if len(ports) == 0 {
+func singlePort(from []wb.Fetch) (int, bool) {
+	if len(from) == 0 {
 		return 0, false
 	}
-	for _, p := range ports {
-		if p == 0 || p != ports[0] {
+	for _, f := range from {
+		if f.Port == 0 || f.Port != from[0].Port {
 			return 0, false
 		}
 	}
-	return ports[0], true
+	return from[0].Port, true
 }
 
 // groupTimingsByPort buckets timings that can be credited to one port,
@@ -78,7 +80,7 @@ func singlePort(ports []int) (int, bool) {
 func groupTimingsByPort(timings []requestTiming) (order []int, byPort map[int][]requestTiming, ungrouped []requestTiming) {
 	byPort = map[int][]requestTiming{}
 	for _, t := range timings {
-		port, ok := singlePort(t.ports)
+		port, ok := singlePort(t.from)
 		if !ok {
 			ungrouped = append(ungrouped, t)
 			continue
@@ -91,25 +93,38 @@ func groupTimingsByPort(timings []requestTiming) (order []int, byPort map[int][]
 	return order, byPort, ungrouped
 }
 
-// portsLabel says what an ungrouped call's requests did use, so a row that
-// could not be filed under one port still names the ports it touched rather
-// than reading as "unknown".
-func portsLabel(ports []int) string {
-	if len(ports) == 0 {
+// sourcesLabel names which requests a call made, in the order it made them,
+// so a row headed "card #1" says that it is a static half and a live half
+// rather than leaving a reader to guess which of the two its figures belong
+// to. This is what wb.Fetch.Source is for: a call's label is chosen by this
+// program, but what it actually fetched is wb's own statement about it.
+func sourcesLabel(from []wb.Fetch) string {
+	names := make([]string, 0, len(from))
+	for _, f := range from {
+		names = append(names, string(f.Source))
+	}
+	return strings.Join(names, ", ")
+}
+
+// portsLabel says which of an ungrouped call's requests went through which
+// port, so a row that could not be filed under one port still says exactly
+// what it did rather than reading as "unknown". Source and port together,
+// because for a two-port call the interesting fact is not that there were two
+// ports but which half took which — a card whose gated live half moved to a
+// second port is a different event from one whose CDN half did.
+func portsLabel(from []wb.Fetch) string {
+	if len(from) == 0 {
 		return "no port reported for this call"
 	}
-	parts := make([]string, 0, len(ports))
-	for _, p := range ports {
-		if p == 0 {
-			parts = append(parts, "none (never landed)")
-			continue
+	parts := make([]string, 0, len(from))
+	for _, f := range from {
+		where := strconv.Itoa(f.Port)
+		if f.Port == 0 {
+			where = "none (never landed)"
 		}
-		parts = append(parts, strconv.Itoa(p))
+		parts = append(parts, string(f.Source)+"→"+where)
 	}
-	if len(parts) == 1 {
-		return "port " + parts[0]
-	}
-	return "ports " + strings.Join(parts, ", ")
+	return strings.Join(parts, ", ")
 }
 
 // median returns the median of a non-empty slice of durations, sorting a copy
@@ -166,7 +181,7 @@ func printRequestTimings(w io.Writer, timings []requestTiming) {
 		// "2 request(s)" would be wrong by half.
 		requests := 0
 		for _, r := range calls {
-			requests += len(r.ports)
+			requests += len(r.from)
 		}
 		fmt.Fprintf(w, "  port %d (%d call(s), %d request(s))", port, len(calls), requests)
 		if len(calls) > 1 {
@@ -178,7 +193,7 @@ func printRequestTimings(w io.Writer, timings []requestTiming) {
 				// 1: a two-request call spends two attempts when both land
 				// first try, and calling that a retry would report every
 				// healthy card fetch as having been retried.
-				if r.attempts > len(r.ports) {
+				if r.attempts > len(r.from) {
 					retried++
 				}
 			}
@@ -191,8 +206,8 @@ func printRequestTimings(w io.Writer, timings []requestTiming) {
 		}
 		fmt.Fprintln(w)
 		for _, r := range calls {
-			fmt.Fprintf(w, "      %-28s %-10s (%d request(s), %d attempt(s))\n",
-				r.label, r.elapsed.Round(time.Millisecond), len(r.ports), r.attempts)
+			fmt.Fprintf(w, "      %-28s %-10s (%d request(s): %s; %d attempt(s))\n",
+				r.label, r.elapsed.Round(time.Millisecond), len(r.from), sourcesLabel(r.from), r.attempts)
 		}
 	}
 
@@ -202,7 +217,7 @@ func printRequestTimings(w io.Writer, timings []requestTiming) {
 	fmt.Fprintf(w, "  not grouped — one call's requests did not share a port (%d call(s)):\n", len(ungrouped))
 	for _, r := range ungrouped {
 		fmt.Fprintf(w, "      %-28s %-10s %s (%d attempt(s))\n",
-			r.label, r.elapsed.Round(time.Millisecond), portsLabel(r.ports), r.attempts)
+			r.label, r.elapsed.Round(time.Millisecond), portsLabel(r.from), r.attempts)
 	}
 }
 
