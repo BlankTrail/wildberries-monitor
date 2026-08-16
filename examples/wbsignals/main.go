@@ -48,7 +48,7 @@
 // requests (3-8s once warm, against 17-78s cold) while a proxy rotation
 // throws that session away. wbsearch shows this by paging a search past a
 // single port; wbsignals has no pages to walk, so -repeat is what stands in
-// for them here. It has no effect on -what diff, whose own two- or
+// for them here. It is rejected outright with -what diff, whose own two- or
 // three-fetch structure already exists to answer this question directly —
 // see printCheckSummary's own doc comment for what this instrument can and
 // cannot show about which port answered which request.
@@ -133,7 +133,7 @@ func run() error {
 		perThread = flag.Int("ports-per-thread", 1, "BlankTrail ports per thread (blanktrail.PoolConfig.PortsPerThread)")
 		out       = flag.String("out", "", "JSONL output path (empty = stdout)")
 
-		repeat = flag.Int("repeat", 1, "how many times to repeat the fetch(es) for reviews/questions/seller/duplicates, pausing -delay between each — see the package doc comment on why this stands in for wbsearch's -pages here; no effect on -what diff")
+		repeat = flag.Int("repeat", 1, "how many times to repeat the fetch(es) for reviews/questions/seller/duplicates, pausing -delay between each — see the package doc comment on why this stands in for wbsearch's -pages here; rejected outright with -what diff")
 		delay  = flag.Duration("delay", 0, "pause between repeated fetches (-repeat) and between the two fetches -what diff makes, to test whether a port's session survives a gap rather than only immediate reuse (0 = no pause)")
 
 		questionsTake = flag.Int("questions-page-size", 20, "take/skip page size used while paging every question for the count-consistency check (-what questions)")
