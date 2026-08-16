@@ -5,6 +5,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"net/http"
 	"regexp"
 	"strings"
@@ -176,5 +177,82 @@ func TestRunSeller_NamesAnEmptySellerTypeRatherThanPrintingABareColon(t *testing
 	// actually rejects.
 	if !strings.Contains(summary.String(), `"Test Seller"`) {
 		t.Errorf("summary lost the seller's name along the way; got:\n%s", summary.String())
+	}
+}
+
+// sellerProfileFlagsFixture is a profile whose two flags both sit at their
+// zero values. It is separate from sellerProfileFixture so that changing it
+// cannot quietly weaken the other tests that share that one.
+func sellerProfileFlagsFixture(id int64) string {
+	return `{"id":` + fmt.Sprint(id) + `,"valuation":"4.5","feedbacksCount":10,` +
+		`"registrationDate":"2024-01-01T00:00:00Z","saleItemQuantity":3,"deliveryDuration":2,` +
+		`"isPremium":false,"supplierLoyaltyProgramLevel":0}`
+}
+
+// TestRunSeller_FlagsObservedAtZeroStayInTheRow is the live-run finding: with
+// omitempty on plain bool and int, a seller genuinely observed as not premium
+// and at loyalty level zero produced a row carrying neither field — identical
+// to the row of a seller whose profile never arrived. Both live suppliers read
+// that way.
+func TestRunSeller_FlagsObservedAtZeroStayInTheRow(t *testing.T) {
+	lease := &scriptedLease{replies: []*http.Response{
+		jsonReply(200, sellerStaticFixture(118143)),
+		jsonReply(200, sellerProfileFlagsFixture(118143)),
+		jsonReply(200, sellerCatalogFixture(118143, 555)),
+	}}
+	c := newTestClient(lease)
+
+	var rows, summary bytes.Buffer
+	if err := runSeller(context.Background(), c, wb.DefaultEndpoints(), 118143, "1259570991", wb.ModeDesktop, 1, 0,
+		&rows, &summary, func() blanktrail.Stats { return blanktrail.Stats{} }, egressSetup{}); err != nil {
+		t.Fatalf("runSeller: %v", err)
+	}
+
+	for _, want := range []string{`"is_premium":false`, `"loyalty_level":0`} {
+		if !strings.Contains(rows.String(), want) {
+			t.Errorf("row is missing %s, so an observed zero reads as an unread field; got:\n%s", want, rows.String())
+		}
+	}
+	if !strings.Contains(summary.String(), "premium:            false") {
+		t.Errorf("summary does not state the observed premium flag; got:\n%s", summary.String())
+	}
+	if !strings.Contains(summary.String(), "loyalty level:      0") {
+		t.Errorf("summary does not state the observed loyalty level; got:\n%s", summary.String())
+	}
+}
+
+// TestRunSeller_AProfileThatNeverLandedStatesNoFlags is the other half of the
+// same distinction, and the reason these two fields are pointers in the row
+// rather than plain values with omitempty removed. The row is written even
+// when the profile half fails, so a printed false there would assert that the
+// seller is not premium when nothing was read at all.
+func TestRunSeller_AProfileThatNeverLandedStatesNoFlags(t *testing.T) {
+	lease := &scriptedLease{replies: []*http.Response{
+		jsonReply(200, sellerStaticFixture(118143)),
+		jsonReply(500, ""), // the profile half fails
+		jsonReply(200, sellerCatalogFixture(118143, 555)),
+	}}
+	c := newTestClient(lease)
+
+	var rows, summary bytes.Buffer
+	if err := runSeller(context.Background(), c, wb.DefaultEndpoints(), 118143, "1259570991", wb.ModeDesktop, 1, 0,
+		&rows, &summary, func() blanktrail.Stats { return blanktrail.Stats{} }, egressSetup{}); err == nil {
+		t.Fatal("runSeller returned no error when the profile half failed")
+	}
+
+	// The row is still written — the static half is real data — and must not
+	// carry a flag nobody read.
+	if got := strings.Count(rows.String(), "\n"); got != 1 {
+		t.Fatalf("wrote %d JSONL row(s), want 1 even on a partial failure", got)
+	}
+	for _, unwanted := range []string{"is_premium", "loyalty_level"} {
+		if strings.Contains(rows.String(), unwanted) {
+			t.Errorf("row states %s although the profile never landed; got:\n%s", unwanted, rows.String())
+		}
+	}
+	for _, unwanted := range []string{"premium:", "loyalty level:"} {
+		if strings.Contains(summary.String(), unwanted) {
+			t.Errorf("summary states %q although the profile never landed; got:\n%s", unwanted, summary.String())
+		}
 	}
 }

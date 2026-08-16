@@ -26,8 +26,17 @@ type sellerRow struct {
 	RegisteredAt     *time.Time `json:"registered_at,omitempty"`
 	ItemCount        *int64     `json:"item_count,omitempty"`
 	DeliveryDuration *int64     `json:"delivery_duration,omitempty"`
-	IsPremium        bool       `json:"is_premium,omitempty"`
-	LoyaltyLevel     int        `json:"loyalty_level,omitempty"`
+	// IsPremium and LoyaltyLevel are pointers here although wb.Seller keeps
+	// them as plain values, and the difference is the whole point. wb.Seller
+	// answers "did the profile arrive?" through the five pointers above, so
+	// its own two flags need no absence of their own. This row does not have
+	// that luxury: it is written even when the profile half failed (see
+	// runSeller, which encodes a row whatever c.Seller returned), and a
+	// false printed on such a row asserts that the seller is not premium
+	// when nothing was ever read. Absent means unread; present means
+	// observed, including an observed false.
+	IsPremium    *bool `json:"is_premium,omitempty"`
+	LoyaltyLevel *int  `json:"loyalty_level,omitempty"`
 
 	CatalogPage1Count     int    `json:"catalog_page1_count"`
 	CatalogTotal          *int64 `json:"catalog_total,omitempty"`
@@ -38,8 +47,32 @@ type sellerRow struct {
 	FetchedAt time.Time `json:"fetched_at"`
 }
 
+// profileLanded reports whether the profile half of this seller fetch
+// arrived and decoded.
+//
+// Valuation is the witness. wb.Client.fillSellerProfile assigns all seven
+// profile fields together, after every error return, so either all of them
+// came from a decoded document or none did; and decodeSellerProfile refuses
+// a document with no valuation field at all, so a landed profile always has
+// one. That makes a non-nil Valuation exactly equivalent to "the profile
+// landed" — not a heuristic, and the only signal available here, since a
+// Fetch records where a request went and what it cost but not whether what
+// came back parsed.
+func profileLanded(s wb.Seller) bool { return s.Valuation != nil }
+
 func toSellerRow(s wb.Seller, env wb.Envelope, dest string, fetchedAt time.Time) sellerRow {
 	matching, withID := supplierMatchCounts(env.Products, s.ID)
+
+	// Copied into locals rather than pointed at s's fields directly: taking
+	// the address of a parameter's field would tie the row's lifetime to a
+	// value the caller may reuse for the next repeat.
+	var isPremium *bool
+	var loyalty *int
+	if profileLanded(s) {
+		premium, level := s.IsPremium, s.LoyaltyLevel
+		isPremium, loyalty = &premium, &level
+	}
+
 	return sellerRow{
 		SupplierID:            s.ID,
 		Name:                  s.Name,
@@ -50,8 +83,8 @@ func toSellerRow(s wb.Seller, env wb.Envelope, dest string, fetchedAt time.Time)
 		RegisteredAt:          s.RegisteredAt,
 		ItemCount:             s.ItemCount,
 		DeliveryDuration:      s.DeliveryDuration,
-		IsPremium:             s.IsPremium,
-		LoyaltyLevel:          s.LoyaltyLevel,
+		IsPremium:             isPremium,
+		LoyaltyLevel:          loyalty,
 		CatalogPage1Count:     len(env.Products),
 		CatalogTotal:          env.Total,
 		CatalogMatchingCount:  matching,
@@ -175,6 +208,16 @@ func sellerSummaryLines(row sellerRow) []string {
 	}
 	if row.FeedbackCount != nil {
 		lines = append(lines, fmt.Sprintf("feedback count:     %d", *row.FeedbackCount))
+	}
+	// Printed on the same terms as valuation and feedback count above: a
+	// profile that never landed says nothing here rather than saying "not
+	// premium". An operator reading this summary after a profile failure
+	// must not be told a fact nobody read.
+	if row.IsPremium != nil {
+		lines = append(lines, fmt.Sprintf("premium:            %t", *row.IsPremium))
+	}
+	if row.LoyaltyLevel != nil {
+		lines = append(lines, fmt.Sprintf("loyalty level:      %d", *row.LoyaltyLevel))
 	}
 	if row.CatalogTotal != nil {
 		lines = append(lines, fmt.Sprintf("catalogue total:    %d", *row.CatalogTotal))
