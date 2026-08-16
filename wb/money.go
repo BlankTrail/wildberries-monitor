@@ -34,19 +34,3 @@ func (m Money) String() string {
 	}
 	return s
 }
-
-// PriceSource records where a price came from. The reference merges prices from
-// two sources on different scales into one field; naming the source makes that
-// class of bug impossible to reproduce silently.
-type PriceSource string
-
-const (
-	// SourceSearch is a price from a search result.
-	SourceSearch PriceSource = "search"
-	// SourceCardDetail is a price from the card's live endpoint, which is the
-	// only source that also carries stock per size.
-	SourceCardDetail PriceSource = "card-detail"
-	// SourceCardCDN is a price from the card document on the CDN — the static
-	// half, which can lag the live one.
-	SourceCardCDN PriceSource = "card-cdn"
-)
