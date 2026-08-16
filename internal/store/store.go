@@ -92,7 +92,12 @@ func Open(ctx context.Context, path string) (*Store, error) {
 		return nil, fmt.Errorf("store: enable WAL: %w", err)
 	}
 
-	return &Store{db: db, path: path, now: time.Now}, nil
+	s := &Store{db: db, path: path, now: time.Now}
+	if err := s.migrate(ctx); err != nil {
+		db.Close()
+		return nil, err
+	}
+	return s, nil
 }
 
 // Path is the filesystem path Open was called with.
