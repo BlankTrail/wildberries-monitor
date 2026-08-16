@@ -128,6 +128,16 @@ func (s *Server) FailNext(path string, status int, body string) {
 	s.fails[path] = append(s.fails[path], failure{status: status, body: body})
 }
 
+// DropPort takes a port out of the server's own list without anyone having
+// closed it — what a proxy restart, or a close from outside this process, looks
+// like from the client's side. It is how a test reproduces a pool still holding
+// ports the proxy no longer has.
+func (s *Server) DropPort(port int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.ports, port)
+}
+
 // OpenPorts lists the currently open port numbers, ascending.
 func (s *Server) OpenPorts() []int {
 	s.mu.Lock()

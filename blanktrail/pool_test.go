@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -1283,5 +1284,210 @@ func TestPool_QuarantinesAPortThatCannotBeDialled(t *testing.T) {
 	defer l.Release()
 	if l.Port() == victim {
 		t.Error("the port that could not be dialled was handed out again")
+	}
+}
+
+// --- ports the proxy no longer has ---
+//
+// A run ended with fifteen attempts across fifteen ports, every one refusing
+// connections, and the control API reporting zero open ports: all nine had died
+// during the run. The pool kept leasing them because nothing ever asked whether
+// they were still there. Strikes are the wrong instrument for that — they are
+// for a port that misbehaves, and three chances to prove it — while a port the
+// proxy does not have is a fact, and one that will not change.
+
+// listCalls counts how many times the pool asked the proxy for its open-port
+// list. It is the number the rate limit is about.
+func listCalls(fake *fakebt.Server) int {
+	n := 0
+	for _, r := range fake.Requests() {
+		if r.Method == http.MethodGet && r.Path == "/api/v1/ports" {
+			n++
+		}
+	}
+	return n
+}
+
+// failToDial drives one request through the real ladder onto the real pool, with
+// the port refusing the connection.
+func failToDial(t *testing.T, p *Pool, port int) {
+	t.Helper()
+	l := &ladder{rt: &fakeRT{steps: []func() (*http.Response, error){refused()}}, port: port, rem: p}
+	if _, err := l.RoundTrip(newReq(t, http.MethodGet, "")); err == nil {
+		t.Fatalf("RoundTrip on port %d: no error from a refused connection", port)
+	}
+}
+
+func TestPool_RetiresAPortTheProxyNoLongerListsAtOnce(t *testing.T) {
+	fake := fakebt.New(t)
+	clock := newFakeClock()
+	cfg := testPoolConfig(t, fake, clock, 1, 2)
+	cfg.MaxPortStrikes = 3 // three strikes would still be pending after one failure
+
+	p, err := NewPool(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	defer p.Close()
+
+	victim := fake.OpenPorts()[0]
+	fake.DropPort(victim)
+	failToDial(t, p, victim)
+
+	st := p.Stats()
+	if st.Lost != 1 {
+		t.Errorf("Stats.Lost=%d, want 1 — a port the proxy does not list is lost, not merely suspect", st.Lost)
+	}
+	if st.Quarantined != 1 {
+		t.Errorf("Quarantined=%d after one refused connection to a port that is gone, want 1 — "+
+			"a strike counter gives a port that cannot exist two more chances to prove it", st.Quarantined)
+	}
+	// And it stays out: every later Acquire must find the survivor.
+	for i := 0; i < 3; i++ {
+		l, err := p.Acquire(context.Background())
+		if err != nil {
+			t.Fatalf("Acquire %d: %v", i, err)
+		}
+		if l.Port() == victim {
+			t.Fatal("a port the proxy no longer has was leased again")
+		}
+		l.Release()
+		clock.Advance(p.Cooldown())
+	}
+}
+
+func TestPool_APortStillListedOnlyCollectsAStrike(t *testing.T) {
+	// The other side of the split, and what stops the check from being a
+	// blanket "unreachable means gone": a port the proxy still has may be
+	// briefly unreachable for reasons of its own, and it keeps its three
+	// chances.
+	fake := fakebt.New(t)
+	clock := newFakeClock()
+	cfg := testPoolConfig(t, fake, clock, 1, 2)
+	cfg.MaxPortStrikes = 3
+
+	p, err := NewPool(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	defer p.Close()
+
+	victim := fake.OpenPorts()[0]
+	failToDial(t, p, victim)
+
+	if st := p.Stats(); st.Lost != 0 || st.Quarantined != 0 {
+		t.Errorf("Lost=%d Quarantined=%d after one failure on a port the proxy still lists, want 0 and 0",
+			st.Lost, st.Quarantined)
+	}
+	// Three of them do retire it, through the ordinary strike path.
+	clock.Advance(portListTTL)
+	failToDial(t, p, victim)
+	clock.Advance(portListTTL)
+	failToDial(t, p, victim)
+	if st := p.Stats(); st.Quarantined != 1 || st.Lost != 0 {
+		t.Errorf("Quarantined=%d Lost=%d after three strikes, want 1 and 0 — struck out is not the same as gone",
+			st.Quarantined, st.Lost)
+	}
+}
+
+func TestPool_AsksTheProxyOnceForABurstOfFailures(t *testing.T) {
+	// When a proxy restarts, every port fails at once. One listing has to
+	// answer for all of them: a call per failed attempt would aim a burst at
+	// the control API exactly when it is least able to take one, and would
+	// answer the same question nine times over.
+	fake := fakebt.New(t)
+	clock := newFakeClock()
+	cfg := testPoolConfig(t, fake, clock, 1, 4)
+
+	p, err := NewPool(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	defer p.Close()
+
+	ports := fake.OpenPorts()
+	before := listCalls(fake)
+	for i := 0; i < 3; i++ {
+		for _, port := range ports {
+			failToDial(t, p, port)
+		}
+	}
+	if got := listCalls(fake) - before; got != 1 {
+		t.Errorf("asked the proxy for its port list %d times for %d failures inside one window, want 1",
+			got, 3*len(ports))
+	}
+
+	// Past the window the question is worth asking again: a port lost later in
+	// a run must still be noticed on its next failure.
+	clock.Advance(portListTTL)
+	failToDial(t, p, ports[0])
+	if got := listCalls(fake) - before; got != 2 {
+		t.Errorf("listings=%d after the cache window elapsed, want 2", got)
+	}
+}
+
+func TestPool_DoesNotRetireAPortWhenItCannotAskTheProxy(t *testing.T) {
+	// A control API that cannot be reached is not evidence that a port was
+	// closed. Reading it as one would retire the whole pool the first time the
+	// proxy was busy.
+	fake := fakebt.New(t)
+	clock := newFakeClock()
+	cfg := testPoolConfig(t, fake, clock, 1, 2)
+
+	p, err := NewPool(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	defer p.Close()
+
+	victim := fake.OpenPorts()[0]
+	fake.DropPort(victim)
+	fake.FailNext("/api/v1/ports", 503, "busy")
+	failToDial(t, p, victim)
+
+	if st := p.Stats(); st.Lost != 0 {
+		t.Errorf("Stats.Lost=%d, want 0 — the listing failed, so nothing was learned about the port", st.Lost)
+	}
+}
+
+func TestPool_SaysSoWhenTheProxyHasLostEveryPort(t *testing.T) {
+	// What the decisive run actually was. The pool must end it with a sentence
+	// naming what happened rather than a generic exhaustion notice, and must
+	// not try to reopen into a proxy that is evidently restarting.
+	fake := fakebt.New(t)
+	clock := newFakeClock()
+	cfg := testPoolConfig(t, fake, clock, 1, 3)
+
+	p, err := NewPool(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	defer p.Close()
+
+	ports := fake.OpenPorts()
+	for _, port := range ports {
+		fake.DropPort(port)
+	}
+	for _, port := range ports {
+		failToDial(t, p, port)
+	}
+
+	if st := p.Stats(); st.Lost != int64(len(ports)) {
+		t.Errorf("Stats.Lost=%d, want %d", st.Lost, len(ports))
+	}
+
+	_, err = p.Acquire(context.Background())
+	if !errors.Is(err, ErrPoolExhausted) {
+		t.Fatalf("Acquire=%v, want it to wrap ErrPoolExhausted rather than wait forever", err)
+	}
+	for _, want := range []string{"no longer has any", "restarted"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not say %q — an operator reading this has to be told the transport lost the ports, "+
+				"not that this package gave up on them", err, want)
+		}
+	}
+	// Nothing was reopened behind the operator's back.
+	if got := fake.OpenPorts(); len(got) != 0 {
+		t.Errorf("the proxy has %v open after the pool lost every port; it must not reopen into a restarting proxy", got)
 	}
 }

@@ -15,8 +15,20 @@ import (
 )
 
 // ErrPoolExhausted is returned by Acquire when every port has been quarantined
-// and there is nothing left to hand out.
+// and there is nothing left to hand out. When ports were lost rather than
+// merely failing — the proxy no longer lists them — the error wraps this one
+// and says so, because the two call for completely different things from
+// whoever reads it.
 var ErrPoolExhausted = errors.New("blanktrail: every port in the pool is quarantined")
+
+// portListTTL bounds how often the pool asks the proxy which ports it still has
+// open. The question is only asked when a port has just proved unreachable, and
+// the answer is shared: when a proxy restarts, every port fails at once, and a
+// listing per failure would answer one question many times over while the
+// control API is at its least healthy. Two seconds is long enough to collapse
+// that burst into one call and short enough that a port lost later in a run is
+// noticed on its next failure rather than at the end of it.
+const portListTTL = 2 * time.Second
 
 // DeriveCooldown computes the default port cooldown from the ring the caller
 // described: with portsPerThread ports and a per-request delay somewhere in
@@ -160,6 +172,7 @@ type poolPort struct {
 	lastUsed    time.Time
 	leased      bool
 	quarantined bool
+	gone        bool // the proxy no longer lists this port; it cannot come back
 	broken      bool // renewal closed it but could not reopen it
 	failures    int  // consecutive failed attempts; any success clears it
 	requests    int
@@ -197,6 +210,15 @@ type Pool struct {
 	closed    bool // set inside closeOnce.Do; renewIfDue checks it before reopening a port
 	closeOnce sync.Once
 	stats     Stats
+
+	// liveMu guards the cached open-port listing below, and is held across the
+	// control-API call that refreshes it. That is deliberate: it means several
+	// ports failing at the same instant produce one listing rather than one
+	// each, since whoever arrives second waits and then finds the answer already
+	// there. It is never taken together with mu.
+	liveMu   sync.Mutex
+	listed   map[int]bool
+	listedAt time.Time
 }
 
 // Stats is a snapshot of pool activity, for the progress screen and the logs.
@@ -210,6 +232,12 @@ type Stats struct {
 	EgressRotations  int64
 	Renewals         int64
 	Quarantines      int64
+	// Lost counts ports the proxy stopped listing — closed from outside, or
+	// gone with a restart. They are counted apart from the rest of the
+	// quarantines because they are not a verdict this package reached about a
+	// port's behaviour; they are a fact it was told, and one that says the
+	// trouble is the transport rather than the target or the proxies.
+	Lost int64
 }
 
 // Stats returns a snapshot of pool activity.
@@ -477,7 +505,7 @@ func (p *Pool) take() (*poolPort, time.Duration, error) {
 	}
 
 	if alive == 0 {
-		return nil, 0, ErrPoolExhausted
+		return nil, 0, p.exhaustedLocked()
 	}
 	if best != nil {
 		best.mu.Lock()
@@ -489,6 +517,41 @@ func (p *Pool) take() (*poolPort, time.Duration, error) {
 		soonest = 0
 	}
 	return nil, soonest, nil
+}
+
+// exhaustedLocked explains an empty pool in the terms whoever reads it has to
+// act on. "Every port is quarantined" means this package gave up on them one by
+// one, which is a story about the target or the proxies; ports the proxy no
+// longer lists are a different story entirely, about the transport, and the
+// remedy is somewhere else — usually restarting it. Saying so here is the whole
+// point: a run that loses every port should end with a sentence that names what
+// happened, not with a generic exhaustion notice.
+//
+// Deliberately not a reopen. A pool that reopens ports it has just been told are
+// gone races whatever closed them — a proxy in the middle of a restart hands
+// back ports it is about to drop again, and the pool would thrash against it —
+// and this package's standing rule is that it never takes over a port it did not
+// itself open in this process. Failing loudly is the honest end.
+//
+// Caller must hold p.mu.
+func (p *Pool) exhaustedLocked() error {
+	lost, total := 0, len(p.ports)
+	for _, pt := range p.ports {
+		pt.mu.Lock()
+		if pt.gone {
+			lost++
+		}
+		pt.mu.Unlock()
+	}
+	switch {
+	case lost == 0:
+		return ErrPoolExhausted
+	case lost == total:
+		return fmt.Errorf("%w: the proxy no longer has any of the %d port(s) this pool opened, "+
+			"so it was restarted or they were closed from outside; nothing here can reopen them safely", ErrPoolExhausted, total)
+	default:
+		return fmt.Errorf("%w: %d of %d port(s) are no longer open on the proxy", ErrPoolExhausted, lost, total)
+	}
 }
 
 // giveBack returns a port taken by take without counting a request against it,
@@ -828,6 +891,79 @@ func (p *Pool) renewFailed(pt *poolPort, err error) error {
 		p.mixer.Penalise(pt.ch)
 	}
 	return err
+}
+
+// unreachable handles a port that could not be dialled at all. It asks the proxy
+// whether that port is still open and, if the answer is no, retires it on the
+// spot; anything else — the port is still listed, or the question could not be
+// answered — falls back to a strike.
+//
+// The two responses are different on purpose. A strike counter is for a port
+// that misbehaves: three chances, because it might come right. A port the proxy
+// does not have cannot come right, and spending two more requests discovering
+// that is two requests thrown at nothing — which, when a proxy restart takes
+// every port at once, is the difference between a run that says what happened
+// and a run that spends its whole budget finding out.
+func (p *Pool) unreachable(ctx context.Context, num int) {
+	if missing, known := p.portMissing(ctx, num); known && missing {
+		p.retire(num)
+		return
+	}
+	p.exhausted(num)
+}
+
+// portMissing reports whether the proxy's own list of open ports no longer
+// contains num. The second value is false when the question could not be
+// answered at all — the listing failed — and a caller must not read that as
+// "gone": a control API that cannot be reached is not evidence that a port was
+// closed.
+//
+// The listing is cached for portListTTL, which is what keeps this from becoming
+// one control-API call per failed attempt.
+func (p *Pool) portMissing(ctx context.Context, num int) (missing, known bool) {
+	p.liveMu.Lock()
+	defer p.liveMu.Unlock()
+
+	now := p.cfg.Now()
+	if p.listed == nil || now.Sub(p.listedAt) >= portListTTL {
+		ports, err := p.cl.ListPorts(ctx)
+		if err != nil {
+			return false, false
+		}
+		set := make(map[int]bool, len(ports))
+		for _, n := range ports {
+			set[n] = true
+		}
+		p.listed, p.listedAt = set, now
+	}
+	return !p.listed[num], true
+}
+
+// retire takes a port out of rotation at once, for a fact rather than a
+// suspicion: the proxy says it is not open. It is marked gone as well as
+// quarantined, so an empty pool can say which of the two things happened.
+//
+// The channel is deliberately not penalised, unlike the strike path. A port that
+// no longer exists says nothing whatever about the egress it used to send
+// through, and spending a healthy channel's weight on a local fault is how a
+// good proxy list gets thrown away for something it did not do.
+func (p *Pool) retire(num int) {
+	pt := p.port(num)
+	if pt == nil {
+		return
+	}
+	pt.mu.Lock()
+	already := pt.quarantined
+	pt.quarantined, pt.gone = true, true
+	pt.mu.Unlock()
+	if already {
+		return
+	}
+
+	p.mu.Lock()
+	p.stats.Quarantines++
+	p.stats.Lost++
+	p.mu.Unlock()
 }
 
 // exhausted records a failure that belongs to the port rather than to whatever

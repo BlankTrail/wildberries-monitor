@@ -72,6 +72,7 @@ type fakeRemedy struct {
 	exhaustedCalls int
 	waits          []time.Duration
 
+	unreachableCalls int
 	retries          int
 	transportRetries int
 	rotateOnNth      int // attemptFailed returns true on this failure number (0 = never)
@@ -86,8 +87,15 @@ func (r *fakeRemedy) attemptSucceeded(int)                    { r.successes++ }
 func (r *fakeRemedy) rotateEgress(context.Context, int) error { r.rotations++; return nil }
 func (r *fakeRemedy) markBadEgress(int)                       { r.markedBad++ }
 func (r *fakeRemedy) exhausted(int)                           { r.exhaustedCalls++ }
-func (r *fakeRemedy) maxRetries() int                         { return r.retries }
-func (r *fakeRemedy) maxTransportRetries() int                { return r.transportRetries }
+func (r *fakeRemedy) unreachable(_ context.Context, port int) {
+	r.unreachableCalls++
+	// The pool's own unreachable falls back to a strike when the port turns out
+	// to still exist; the stand-in keeps that shape so a ladder test can assert
+	// on either without knowing which the pool would have chosen.
+	r.exhausted(port)
+}
+func (r *fakeRemedy) maxRetries() int          { return r.retries }
+func (r *fakeRemedy) maxTransportRetries() int { return r.transportRetries }
 
 func (r *fakeRemedy) wait(_ context.Context, d time.Duration) error {
 	r.waits = append(r.waits, d)

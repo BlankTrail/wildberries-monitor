@@ -84,8 +84,12 @@ type remedy interface {
 	rotateEgress(ctx context.Context, port int) error
 	markBadEgress(port int)
 	// exhausted reports a failure that is the port's own: it spent the whole
-	// retry budget and is still not usable, or it could not be reached at all.
+	// retry budget and is still not usable.
 	exhausted(port int)
+	// unreachable reports that the port could not be dialled at all, which the
+	// pool answers by finding out whether the port still exists rather than by
+	// counting it like any other failure.
+	unreachable(ctx context.Context, port int)
 	// maxRetries budgets the repeats of a retryable status; maxTransportRetries
 	// budgets the repeats of a request that never got a response. They are
 	// separate because the remedies are: see their PoolConfig fields.
@@ -149,7 +153,7 @@ func (t *ladder) RoundTrip(req *http.Request) (*http.Response, error) {
 				// path, which by definition needs a working port to answer
 				// through — so the one failure that most deserves a quarantine
 				// was the one that never produced one.
-				t.rem.exhausted(t.port)
+				t.rem.unreachable(req.Context(), t.port)
 				return nil, err
 			}
 			// The egress did not carry the request at all: blame it, not the origin.
