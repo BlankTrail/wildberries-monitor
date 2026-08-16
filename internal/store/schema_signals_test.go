@@ -440,6 +440,24 @@ func TestSellers_AnAbsentRatingIsNotAZeroRating(t *testing.T) {
 	}
 }
 
+func TestShelves_RefuseAKindOutsideTheTwo(t *testing.T) {
+	// Banners and shelves share one table and are told apart by kind alone,
+	// so the CHECK is the only thing standing between them and a silent
+	// merge. The trap it guards against is close at hand: the payload names
+	// its own arrays "banners" and "shelfs", and a writer that reaches for
+	// the array's name instead of the singular writes a kind no reader ever
+	// queries for. Every "WHERE kind = 'shelf'" then quietly returns half
+	// the table, which is worse than an outright refusal on the first write.
+	s := openTestStore(t)
+
+	execFails(t, s, "a shelf whose kind is the payload's own array name",
+		`INSERT INTO shelves (id, source, source_key, kind, title, preset_id, dest, ts)
+		 VALUES (9, 'query', 'socks', 'shelfs', '', 0, '-1257786', 1000)`)
+	execFails(t, s, "a banner whose kind is the payload's own array name",
+		`INSERT INTO shelves (id, source, source_key, kind, title, preset_id, dest, ts)
+		 VALUES (10, 'query', 'socks', 'banners', '', 0, '-1257786', 1000)`)
+}
+
 func TestShelves_KeepTheSitesOwnOrder(t *testing.T) {
 	// A shelf is a ranked list: "third in 'people also buy'" is the whole
 	// point of storing it. Position is written, not inferred from insertion
