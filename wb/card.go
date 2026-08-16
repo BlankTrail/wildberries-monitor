@@ -125,6 +125,39 @@ func (e Endpoints) CardPageURL(nm int64) string {
 	return strings.ReplaceAll(e.ProductPage, "{id}", strconv.FormatInt(nm, 10))
 }
 
+// CardFetch is what one Client.Card call produced: both halves of the
+// product, and where each half came from.
+//
+// The provenance rides on a wrapper rather than on Card itself, unlike
+// Seller, which carries its own. Card is a decoded document, its fields
+// tagged to mirror the site's own card.json byte for byte (see Card.Raw,
+// which keeps that document whole); a transport field among them would claim
+// the site sent something it never sent, and would travel into anything that
+// re-encodes a Card. Product is the same shape for the same reason. Neither
+// of them is where telemetry belongs, so the pairing that already had to
+// exist to return two halves is what carries it.
+type CardFetch struct {
+	// Card is the static half — what the seller wrote — and Product the live
+	// half for one region at one moment. Both keep the meaning they have on
+	// their own types; see Client.Card for which of them survives a partial
+	// failure.
+	Card    Card
+	Product Product
+
+	// Fetches is the provenance of every request this call actually made, in
+	// the order it made them: the static half, then the live half. One entry
+	// only when the static half failed, because the live half is then never
+	// requested at all (see Client.Card) — a second entry there would name a
+	// request nobody sent and hide, from a per-port table, that the second
+	// host was never even asked.
+	//
+	// The CDN route lookup that resolves which host holds this product's
+	// card.json is not reported here. It is fetched at most once per Basket
+	// and served from that cache afterwards, so it belongs to the basket's
+	// lifetime rather than to this call; see Basket.Route.
+	Fetches []Fetch
+}
+
 // Card fetches both halves of a product and returns them together.
 //
 // The static half comes from the CDN, which has no gate; the live half from the
@@ -146,6 +179,12 @@ func (e Endpoints) CardPageURL(nm int64) string {
 // half to be paired with, and the live half is not attempted at all once the
 // static half has already failed.
 //
+// Every request this call makes reports itself on the returned
+// CardFetch.Fetches, the failed one included, on every path — see that
+// field. That is the same rule Client.Seller follows and the reason both
+// return a value rather than a longer list of results: two requests cannot
+// be described by one port and one cost.
+//
 // app is normalised once, here, the same way SearchPage normalises
 // q.AppType: CardDetailURL applies its own AppWeb default internally too (so a
 // caller building a URL directly still gets a sane one), but that default is
@@ -154,41 +193,51 @@ func (e Endpoints) CardPageURL(nm int64) string {
 // Product.AppType truthful about which audience the request that produced it
 // was actually sent as, rather than echoing back a zero the URL itself did not
 // use.
-func (c *Client) Card(ctx context.Context, b *Basket, eps Endpoints, nm int64, dest string, app int) (Card, Product, error) {
+func (c *Client) Card(ctx context.Context, b *Basket, eps Endpoints, nm int64, dest string, app int) (CardFetch, error) {
 	if app == 0 {
 		app = AppWeb
 	}
 	referer := eps.CardPageURL(nm)
 
+	// out accumulates the provenance as each request is made, so every return
+	// below carries what had been spent by the time it was taken — including
+	// the returns that carry nothing else.
+	var out CardFetch
+
 	cardURL, err := b.CardURL(ctx, nm)
 	if err != nil {
-		return Card{}, Product{}, err
+		return out, err
 	}
 	staticRes, err := c.Get(ctx, cardURL, KindPlain, referer)
 	if err != nil {
-		return Card{}, Product{}, err
+		out.Fetches = append(out.Fetches, lostFetch(SourceCardStatic, err))
+		return out, err
 	}
+	out.Fetches = append(out.Fetches, fetchOf(SourceCardStatic, staticRes))
 	if staticRes.Class != ClassOK {
-		return Card{}, Product{}, fmt.Errorf("card %d: status %d (%s)", nm, staticRes.Status, staticRes.Class)
+		return out, fmt.Errorf("card %d: status %d (%s)", nm, staticRes.Status, staticRes.Class)
 	}
 	card, err := decodeCard(staticRes.Body)
 	if err != nil {
-		return Card{}, Product{}, err
+		return out, err
 	}
+	out.Card = card
 
 	liveRes, err := c.Get(ctx, eps.CardDetailURL(nm, dest, app), KindAPI, referer)
 	if err != nil {
-		return card, Product{}, err
+		out.Fetches = append(out.Fetches, lostFetch(SourceCardLive, err))
+		return out, err
 	}
+	out.Fetches = append(out.Fetches, fetchOf(SourceCardLive, liveRes))
 	if liveRes.Class != ClassOK {
-		return card, Product{}, fmt.Errorf("card %d detail: status %d (%s)", nm, liveRes.Status, liveRes.Class)
+		return out, fmt.Errorf("card %d detail: status %d (%s)", nm, liveRes.Status, liveRes.Class)
 	}
 	env, err := decodeEnvelope(liveRes.Body)
 	if err != nil {
-		return card, Product{}, err
+		return out, err
 	}
 	if len(env.Products) == 0 {
-		return card, Product{}, fmt.Errorf("card %d detail: no product in the response (%d item(s) dropped by extraction)", nm, env.Dropped)
+		return out, fmt.Errorf("card %d detail: no product in the response (%d item(s) dropped by extraction)", nm, env.Dropped)
 	}
 	live := env.Products[0]
 	// decodeEnvelope silently drops a malformed item rather than failing the
@@ -199,10 +248,11 @@ func (c *Client) Card(ctx context.Context, b *Basket, eps Endpoints, nm int64, d
 	// {"products":[<malformed>, <nm 141504066's data>]} would silently attach
 	// a different product's price, stock and promotions to this card.
 	if live.ID != nm {
-		return card, Product{}, fmt.Errorf("card %d detail: response carries product %d instead (%d item(s) dropped by extraction)", nm, live.ID, env.Dropped)
+		return out, fmt.Errorf("card %d detail: response carries product %d instead (%d item(s) dropped by extraction)", nm, live.ID, env.Dropped)
 	}
 	live.Dest = dest
 	live.AppType = app
 	live.FetchedAt = c.now()
-	return card, live, nil
+	out.Product = live
+	return out, nil
 }

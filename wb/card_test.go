@@ -5,6 +5,7 @@ package wb
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net/http"
 	"net/url"
 	"os"
@@ -369,7 +370,9 @@ func TestClient_CardFetchesBothHalvesWithTheOwnHeaderProfile(t *testing.T) {
 	c := NewClient(&fakeLeaser{leases: []*fakeLease{staticLease, liveLease}}, NewSessions())
 	b := primedBasket(t, string(upstreamsFixture))
 
-	card, product, err := c.Card(context.Background(), b, DefaultEndpoints(), 1309449623, "-5892277", AppWeb)
+	fetched, err := c.Card(context.Background(), b, DefaultEndpoints(), 1309449623, "-5892277", AppWeb)
+	card := fetched.Card
+	product := fetched.Product
 	if err != nil {
 		t.Fatalf("Card: %v", err)
 	}
@@ -464,7 +467,8 @@ func TestClient_CardNormalizesTheDefaultAppType(t *testing.T) {
 	c := NewClient(&fakeLeaser{leases: []*fakeLease{staticLease, liveLease}}, NewSessions())
 	b := primedBasket(t, string(upstreamsFixture))
 
-	_, product, err := c.Card(context.Background(), b, DefaultEndpoints(), 1309449623, "-5892277", 0)
+	fetched, err := c.Card(context.Background(), b, DefaultEndpoints(), 1309449623, "-5892277", 0)
+	product := fetched.Product
 	if err != nil {
 		t.Fatalf("Card: %v", err)
 	}
@@ -505,7 +509,8 @@ func TestClient_CardStampsFetchedAt(t *testing.T) {
 	c.now = func() time.Time { return want }
 	b := primedBasket(t, string(upstreamsFixture))
 
-	_, product, err := c.Card(context.Background(), b, DefaultEndpoints(), 1309449623, "-5892277", AppWeb)
+	fetched, err := c.Card(context.Background(), b, DefaultEndpoints(), 1309449623, "-5892277", AppWeb)
+	product := fetched.Product
 	if err != nil {
 		t.Fatalf("Card: %v", err)
 	}
@@ -546,7 +551,9 @@ func TestClient_CardPropagatesALiveHalfFailureWithoutLosingTheStaticHalf(t *test
 	c := NewClient(&fakeLeaser{leases: []*fakeLease{staticLease, liveLease}}, NewSessions())
 	b := primedBasket(t, string(upstreamsFixture))
 
-	card, product, err := c.Card(context.Background(), b, DefaultEndpoints(), 1309449623, "-5892277", AppWeb)
+	fetched, err := c.Card(context.Background(), b, DefaultEndpoints(), 1309449623, "-5892277", AppWeb)
+	card := fetched.Card
+	product := fetched.Product
 	if err == nil {
 		t.Fatal("a 500 from the live half was accepted without error")
 	}
@@ -582,7 +589,9 @@ func TestClient_CardDoesNotFetchTheLiveHalfWhenTheStaticHalfFails(t *testing.T) 
 	c := NewClient(&fakeLeaser{leases: []*fakeLease{staticLease}}, NewSessions())
 	b := primedBasket(t, string(upstreamsFixture))
 
-	card, product, err := c.Card(context.Background(), b, DefaultEndpoints(), 1309449623, "-5892277", AppWeb)
+	fetched, err := c.Card(context.Background(), b, DefaultEndpoints(), 1309449623, "-5892277", AppWeb)
+	card := fetched.Card
+	product := fetched.Product
 	if err == nil {
 		t.Fatal("a 500 from the static half was accepted without error")
 	}
@@ -624,7 +633,9 @@ func TestClient_CardRejectsAProductIDThatDoesNotMatchTheRequest(t *testing.T) {
 	c := NewClient(&fakeLeaser{leases: []*fakeLease{staticLease, liveLease}}, NewSessions())
 	b := primedBasket(t, string(upstreamsFixture))
 
-	card, product, err := c.Card(context.Background(), b, DefaultEndpoints(), 1309449623, "-5892277", AppWeb)
+	fetched, err := c.Card(context.Background(), b, DefaultEndpoints(), 1309449623, "-5892277", AppWeb)
+	card := fetched.Card
+	product := fetched.Product
 	if err == nil {
 		t.Fatal("a detail response naming a different product was accepted without error")
 	}
@@ -655,7 +666,9 @@ func TestClient_CardRejectsAnEmptyProductsArray(t *testing.T) {
 	c := NewClient(&fakeLeaser{leases: []*fakeLease{staticLease, liveLease}}, NewSessions())
 	b := primedBasket(t, string(upstreamsFixture))
 
-	card, product, err := c.Card(context.Background(), b, DefaultEndpoints(), 1309449623, "-5892277", AppWeb)
+	fetched, err := c.Card(context.Background(), b, DefaultEndpoints(), 1309449623, "-5892277", AppWeb)
+	card := fetched.Card
+	product := fetched.Product
 	if err == nil {
 		t.Fatal("an empty products array was accepted without error")
 	}
@@ -664,5 +677,179 @@ func TestClient_CardRejectsAnEmptyProductsArray(t *testing.T) {
 	}
 	if card.NmID != 1309449623 {
 		t.Errorf("card.NmID=%d, want 1309449623 — the static half, already fetched successfully, must not be discarded", card.NmID)
+	}
+}
+
+// --- provenance ---
+//
+// Client.Card makes two requests to two different hosts, and each of them
+// leaves through its own port at its own cost. The tests below pin what the
+// call says about them, because a card reported as having come from one port
+// is a statement that is untrue of half of it.
+
+// cardFixtures reads the three files every Client.Card test scripts a lease
+// with, so a provenance test reads as what it asserts rather than as nine
+// lines of os.ReadFile.
+func cardFixtures(t *testing.T) (card, detail, upstreams string) {
+	t.Helper()
+	read := func(name string) string {
+		t.Helper()
+		b, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatalf("read fixture: %v", err)
+		}
+		return string(b)
+	}
+	return read("testdata/card.json"), read("testdata/card-detail.json"), read("testdata/upstreams.json")
+}
+
+func TestClient_CardReportsBothHalvesSeparately(t *testing.T) {
+	cardFixture, detailFixture, upstreamsFixture := cardFixtures(t)
+	// The live half is scripted to need three attempts, the static half one,
+	// so the two entries cannot be swapped, merged or duplicated without one
+	// of the numbers below going wrong.
+	staticLease := &fakeLease{port: 1, replies: []*http.Response{reply(200, cardFixture)}}
+	liveLease := &fakeLease{port: 2, replies: []*http.Response{
+		reply(498, "<html>challenge</html>"),
+		reply(498, "<html>challenge</html>"),
+		reply(200, detailFixture),
+	}}
+	c := NewClientWithRetry(&fakeLeaser{leases: []*fakeLease{staticLease, liveLease}}, NewSessions(),
+		RetryPolicy{Attempts: 15, AttemptsPerEgress: 3})
+	b := primedBasket(t, upstreamsFixture)
+
+	fetched, err := c.Card(context.Background(), b, DefaultEndpoints(), 1309449623, "-5892277", AppWeb)
+	if err != nil {
+		t.Fatalf("Card: %v", err)
+	}
+	if len(fetched.Fetches) != 2 {
+		t.Fatalf("provenance = %+v, want two entries: this call makes two requests", fetched.Fetches)
+	}
+	static, live := fetched.Fetches[0], fetched.Fetches[1]
+	if static.Source != SourceCardStatic || live.Source != SourceCardLive {
+		t.Errorf("sources = %q, %q; want %q then %q — in the order the requests were made",
+			static.Source, live.Source, SourceCardStatic, SourceCardLive)
+	}
+	if static.Port != 1 || live.Port != 2 {
+		t.Errorf("ports = %d, %d; want 1 then 2 — the halves left through different ports and must not be reported as one",
+			static.Port, live.Port)
+	}
+	if want := (FetchCost{Attempts: 1}); static.Cost != want {
+		t.Errorf("static half cost=%+v, want %+v", static.Cost, want)
+	}
+	if want := (FetchCost{Attempts: 3}); live.Cost != want {
+		t.Errorf("live half cost=%+v, want %+v — the CDN half is cheap and the gated half is not; one number for both hides exactly that",
+			live.Cost, want)
+	}
+}
+
+// TestClient_CardReportsTheLiveHalfItFailedOn is the case the provenance
+// exists for: the half that did not answer is the half an operator most wants
+// to see, and it must be reported with the port that refused and the budget
+// it burned rather than dropped because the call is returning an error.
+func TestClient_CardReportsTheLiveHalfItFailedOn(t *testing.T) {
+	cardFixture, detailFixture, upstreamsFixture := cardFixtures(t)
+	staticLease := &fakeLease{port: 1, replies: []*http.Response{reply(200, cardFixture)}}
+	liveLease := &fakeLease{port: 2, replies: []*http.Response{reply(500, detailFixture)}}
+	c := NewClient(&fakeLeaser{leases: []*fakeLease{staticLease, liveLease}}, NewSessions())
+	b := primedBasket(t, upstreamsFixture)
+
+	fetched, err := c.Card(context.Background(), b, DefaultEndpoints(), 1309449623, "-5892277", AppWeb)
+	if err == nil {
+		t.Fatal("a 500 from the live half was accepted without error")
+	}
+	if len(fetched.Fetches) != 2 {
+		t.Fatalf("provenance = %+v, want both halves: the one that worked and the one that did not", fetched.Fetches)
+	}
+	live := fetched.Fetches[1]
+	if live.Source != SourceCardLive || live.Port != 2 {
+		t.Errorf("failed half = %+v, want the live half on port 2", live)
+	}
+	if live.Cost.Attempts != 1 {
+		t.Errorf("failed half cost=%+v, want one attempt — a 500 is answered, not retried", live.Cost)
+	}
+}
+
+// TestClient_CardReportsALiveHalfThatNeverLanded is the live-half twin of
+// TestClient_CardReportsAStaticHalfThatNeverLanded, and the case where losing
+// the entry would cost the most: the static half succeeded, so the call comes
+// back with a real Card and only an error to hint that a second, expensive
+// request was ever attempted. Without its entry, the run would look like a
+// one-request call that cost one attempt.
+func TestClient_CardReportsALiveHalfThatNeverLanded(t *testing.T) {
+	cardFixture, _, upstreamsFixture := cardFixtures(t)
+	staticLease := &fakeLease{port: 1, replies: []*http.Response{reply(200, cardFixture)}}
+	liveLease := &fakeLease{port: 2, err: errors.New("boom")}
+	c := NewClient(&fakeLeaser{leases: []*fakeLease{staticLease, liveLease}}, NewSessions())
+	b := primedBasket(t, upstreamsFixture)
+
+	fetched, err := c.Card(context.Background(), b, DefaultEndpoints(), 1309449623, "-5892277", AppWeb)
+	if err == nil {
+		t.Fatal("a transport failure on the live half was accepted without error")
+	}
+	if fetched.Card.NmID != 1309449623 {
+		t.Errorf("card.NmID=%d, want the static half kept", fetched.Card.NmID)
+	}
+	if len(fetched.Fetches) != 2 {
+		t.Fatalf("provenance = %+v, want both halves: the static one that landed and the live one that never did", fetched.Fetches)
+	}
+	live := fetched.Fetches[1]
+	if live.Source != SourceCardLive {
+		t.Errorf("Source=%q, want %q", live.Source, SourceCardLive)
+	}
+	if live.Port != 0 {
+		t.Errorf("Port=%d, want 0 — nothing answered on the live half", live.Port)
+	}
+	if want := (FetchCost{Attempts: 2, TransportErrors: 2}); live.Cost != want {
+		t.Errorf("Cost=%+v, want %+v — the half that never landed is the one whose budget matters most", live.Cost, want)
+	}
+}
+
+// TestClient_CardReportsOnlyTheHalfItActuallyRequested is the other
+// direction, and the reason this call's provenance is a slice rather than a
+// fixed pair: when the static half fails, the live half is never requested at
+// all (see Client.Card), so inventing a second entry for it would claim a
+// request that was never sent — and hide, in a per-port table, that the
+// second host was never even asked.
+func TestClient_CardReportsOnlyTheHalfItActuallyRequested(t *testing.T) {
+	cardFixture, _, upstreamsFixture := cardFixtures(t)
+	staticLease := &fakeLease{port: 1, replies: []*http.Response{reply(500, cardFixture)}}
+	c := NewClient(&fakeLeaser{leases: []*fakeLease{staticLease}}, NewSessions())
+	b := primedBasket(t, upstreamsFixture)
+
+	fetched, err := c.Card(context.Background(), b, DefaultEndpoints(), 1309449623, "-5892277", AppWeb)
+	if err == nil {
+		t.Fatal("a 500 from the static half was accepted without error")
+	}
+	f := onlyFetch(t, fetched.Fetches)
+	if f.Source != SourceCardStatic || f.Port != 1 {
+		t.Errorf("provenance entry = %+v, want the static half on port 1", f)
+	}
+}
+
+// TestClient_CardReportsAStaticHalfThatNeverLanded covers the shape that has
+// no Result behind it at all: every attempt died at the transport level, so
+// there is no port to name and the only thing left to report is what the
+// attempt burned — which is exactly what a run's summary would otherwise be
+// missing for its most expensive fetch.
+func TestClient_CardReportsAStaticHalfThatNeverLanded(t *testing.T) {
+	_, _, upstreamsFixture := cardFixtures(t)
+	staticLease := &fakeLease{port: 1, err: errors.New("boom")}
+	c := NewClient(&fakeLeaser{leases: []*fakeLease{staticLease}}, NewSessions())
+	b := primedBasket(t, upstreamsFixture)
+
+	fetched, err := c.Card(context.Background(), b, DefaultEndpoints(), 1309449623, "-5892277", AppWeb)
+	if err == nil {
+		t.Fatal("a transport failure on the static half was accepted without error")
+	}
+	f := onlyFetch(t, fetched.Fetches)
+	if f.Source != SourceCardStatic {
+		t.Errorf("Source=%q, want %q", f.Source, SourceCardStatic)
+	}
+	if f.Port != 0 {
+		t.Errorf("Port=%d, want 0 — nothing answered, so no port earned credit for it", f.Port)
+	}
+	if want := (FetchCost{Attempts: 2, TransportErrors: 2}); f.Cost != want {
+		t.Errorf("Cost=%+v, want %+v — a fetch that never landed still spent the budget it spent", f.Cost, want)
 	}
 }

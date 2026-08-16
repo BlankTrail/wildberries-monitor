@@ -74,8 +74,9 @@ func evaluateRegionMismatch(diffErr error) error {
 // applies) works on Product, not Card.
 func fetchCardForDiff(ctx context.Context, c *wb.Client, eps wb.Endpoints, basket *wb.Basket, nm int64, dest string, appType int, label string) (wb.Product, requestTiming, error) {
 	start := time.Now()
-	card, product, err := c.Card(ctx, basket, eps, nm, dest, appType)
-	timing := requestTiming{label: label, elapsed: time.Since(start)}
+	fetched, err := c.Card(ctx, basket, eps, nm, dest, appType)
+	card, product := fetched.Card, fetched.Product
+	timing := timingOf(label, fetched.Fetches, time.Since(start))
 	if err != nil && card.NmID == 0 {
 		return wb.Product{}, timing, fmt.Errorf("card fetch failed entirely: %w", err)
 	}

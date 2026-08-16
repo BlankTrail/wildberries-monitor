@@ -806,7 +806,8 @@ func runCard(ctx context.Context, c *wb.Client, eps wb.Endpoints, nm int64, dest
 	basket := wb.NewBasket(c)
 	appType := mode.AppType()
 	fetchedAt := time.Now()
-	card, product, err := c.Card(ctx, basket, eps, nm, dest, appType)
+	fetched, err := c.Card(ctx, basket, eps, nm, dest, appType)
+	card, product := fetched.Card, fetched.Product
 	if err != nil && card.NmID == 0 {
 		// Nothing was fetched at all: the static half itself failed, so there
 		// is no partial row worth writing.
@@ -820,10 +821,13 @@ func runCard(ctx context.Context, c *wb.Client, eps wb.Endpoints, nm int64, dest
 		return fmt.Errorf("write card %d: %w", nm, encErr)
 	}
 
-	// No per-request timing here: wb.Client.Card hands back decoded halves, not
-	// the Results behind them (see runCard's own doc comment), so which port
-	// answered and how long it took are not available to pass on — and even if
-	// they were, one or two requests give nothing to compare a "first" against.
+	// Neither a cost nor a per-port timing table here, though wb reports both
+	// now (fetched.Fetches carries a port and a cost per request). This
+	// summary is page-shaped down to its wording — "requests sent: N (for M
+	// page(s))" — and a card is two requests to two hosts, not a page; feeding
+	// it through here would print a truthful number under a false label. A
+	// card's own two halves are laid out per port by examples/wbsignals, whose
+	// table is built for exactly that.
 	printSummary(summary, 1, 1, 1, 0, map[wb.Class]int{wb.ClassOK: 1}, wb.FetchCost{}, stats(), egress, nil)
 	if err != nil {
 		return fmt.Errorf("card %d: static half only, the live half (price, stock) failed: %w", nm, err)
@@ -878,9 +882,9 @@ func printSummary(w io.Writer, pages, products, uniqueIDs, dropped int, classes 
 	// one request per page and nothing else is the quiet case, which is why the
 	// test is against pages rather than wb.FetchCost.Retried: that one judges a
 	// single fetch, and only this caller knows how many fetches went into the
-	// total. The card path reports no cost at all (wb.Client.Card hands back
-	// decoded halves, not the Results behind them), so it stays silent here
-	// rather than printing zeroes as though they had been measured.
+	// total. The card path passes the zero cost deliberately (see runCard: the
+	// figures exist, the page-shaped wording here does not fit them), so it
+	// stays silent rather than labelling a card's requests as a page's.
 	if cost.Attempts > pages || cost.Rotations > 0 || cost.TransportErrors > 0 || cost.PortChanges > 0 {
 		fmt.Fprintln(w, "fetch cost:")
 		fmt.Fprintf(w, "  requests sent:      %d (for %d page(s))\n", cost.Attempts, pages)

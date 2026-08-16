@@ -136,8 +136,9 @@ func runDuplicates(ctx context.Context, c *wb.Client, eps wb.Endpoints, basket *
 		var t []requestTiming
 
 		cstart := time.Now()
-		card, product, cardErr := c.Card(ctx, basket, eps, nm, dest, mode.AppType())
-		t = append(t, requestTiming{label: fmt.Sprintf("card #%d", i), elapsed: time.Since(cstart)})
+		fetched, cardErr := c.Card(ctx, basket, eps, nm, dest, mode.AppType())
+		card, product := fetched.Card, fetched.Product
+		t = append(t, timingOf(fmt.Sprintf("card #%d", i), fetched.Fetches, time.Since(cstart)))
 		if cardErr != nil && card.NmID == 0 {
 			note = []string{
 				fmt.Sprintf("nm id:              %d", nm),

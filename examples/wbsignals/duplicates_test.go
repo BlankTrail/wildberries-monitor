@@ -155,11 +155,16 @@ func TestRunDuplicates_ReportsThePortForTheDuplicatesFetchItself(t *testing.T) {
 	if !strings.Contains(summary.String(), "minimal price:      600.00 RUB (held by 999)") {
 		t.Errorf("summary missing the minimal price line; got:\n%s", summary.String())
 	}
-	if !strings.Contains(summary.String(), "port 6 (1 request(s))") {
-		t.Errorf("summary does not group the duplicates fetch under port 6; got:\n%s", summary.String())
+	if !strings.Contains(summary.String(), "port 6 (2 request(s))") {
+		t.Errorf("summary does not group both the card and the duplicates fetch under port 6; got:\n%s", summary.String())
 	}
-	if !strings.Contains(summary.String(), "no port reported for this call") {
-		t.Errorf("summary should still show exactly the card fetch as unattributed (Client.Card reports no port); got:\n%s", summary.String())
+	// The card's own row must carry the attempts of both its halves — the
+	// static one and the live one — not of one of them.
+	if !strings.Contains(summary.String(), "card #1                      0s         (2 attempt(s))") {
+		t.Errorf("summary does not show the card as two requests through that port; got:\n%s", summary.String())
+	}
+	if strings.Contains(summary.String(), "did not share a port") {
+		t.Errorf("summary set a call aside as ungrouped even though every request went through the one scripted port; got:\n%s", summary.String())
 	}
 }
 

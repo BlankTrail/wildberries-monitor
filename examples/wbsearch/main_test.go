@@ -525,9 +525,9 @@ func TestPrintSummary_ReportsWhatThePagesCostWhenTheyWereNotFree(t *testing.T) {
 
 // TestPrintSummary_SaysNothingAboutCostWhenEveryPageLandedFirstTry keeps the
 // block honest at the other end. Three pages in three requests is the quiet
-// case and needs no paragraph; more to the point, the card path reports no cost
-// at all (wb.Client.Card hands back decoded halves, not the Results behind
-// them), so printing zeroes there would state a measurement nobody made.
+// case and needs no paragraph; more to the point, the card path passes the
+// zero cost on purpose (see runCard), so printing a block for it would label
+// a card's two requests as a page's.
 func TestPrintSummary_SaysNothingAboutCostWhenEveryPageLandedFirstTry(t *testing.T) {
 	for _, cost := range []wb.FetchCost{{Attempts: 3}, {}} {
 		var buf bytes.Buffer
