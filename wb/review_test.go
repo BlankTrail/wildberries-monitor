@@ -4,6 +4,7 @@ package wb
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"os"
 	"strings"
@@ -12,7 +13,7 @@ import (
 )
 
 // reviewsFixture loads the real capture once per call. It is 190 reviews
-// against a feedbackCount of 637 — see decodeReviews's own doc comment for
+// against a feedbackCount of 637 — see Client.Reviews's own doc comment for
 // why that gap is not a bug to fix but the whole shape of the endpoint.
 func reviewsFixture(t *testing.T) []byte {
 	t.Helper()
@@ -76,10 +77,17 @@ func TestDecodeReviews_SummaryReadsAggregatesNotComputedFromItems(t *testing.T) 
 	}
 }
 
-// TestDecodeReviews_KeepsSizeAndColorPerReview pins the brief's own example:
-// the size that is dragging the rating down is only findable if Size
-// survives on the individual review, not just the product.
-func TestDecodeReviews_KeepsSizeAndColorPerReview(t *testing.T) {
+// TestDecodeReviews_KeepsSizeColorTextAndValuationPerReview pins the brief's
+// own example (the size that is dragging the rating down is only findable if
+// Size survives on the individual review, not just the product) alongside
+// two fields a fix-round review found with no pinning assertion anywhere in
+// this file: Review.Text and Review.Valuation. Both had a mutation
+// (Text -> "", Valuation -> 0) that passed the whole wb suite — the package's
+// only Text assertion was on Answer.Text, and the only Valuation assertion
+// was on the summary's aggregate rating, ReviewSummary.Valuation, never on a
+// single review's own star rating, which is what "which size drags the
+// rating down" is computed from.
+func TestDecodeReviews_KeepsSizeColorTextAndValuationPerReview(t *testing.T) {
 	got, err := decodeReviews(reviewsFixture(t))
 	if err != nil {
 		t.Fatalf("decodeReviews: %v", err)
@@ -90,6 +98,12 @@ func TestDecodeReviews_KeepsSizeAndColorPerReview(t *testing.T) {
 	}
 	if r.Color != "Черный" {
 		t.Errorf("Color=%q, want %q", r.Color, "Черный")
+	}
+	if r.Text == "" {
+		t.Error("Text is empty, want the review's own body — the 265 KB call's whole reason to exist")
+	}
+	if r.Valuation != 5 {
+		t.Errorf("Valuation=%d, want 5 — this review's own star rating, not ReviewSummary.Valuation", r.Valuation)
 	}
 }
 
@@ -219,11 +233,29 @@ func TestDecodeReviews_SizeMatchingReadsAPopulatedNumber(t *testing.T) {
 // TestDecodeReviews_AcceptsAReviewMissingStatusIDReasonsAndTags pins the
 // brief's own legality claim: 20 of 190 reviews in the capture have no
 // statusId, 64 have no reasons, 118 have no tags, and none of that is an
-// error. Index 119 (id g55DGSYIWPiNAaktoqCa) is chosen because it is missing
-// reasons while carrying tags, so it exercises "some optional fields absent,
-// others present on the same review" rather than only the all-or-nothing
-// case.
+// error. Id 1OTRXr9GBYTgmonAkCLk is one of 8 reviews in the capture missing
+// all three at once, chosen (over a review missing only one or two of them)
+// so the test's own name matches what it actually exercises.
 func TestDecodeReviews_AcceptsAReviewMissingStatusIDReasonsAndTags(t *testing.T) {
+	got, err := decodeReviews(reviewsFixture(t))
+	if err != nil {
+		t.Fatalf("decodeReviews: %v", err)
+	}
+	r := findReview(t, got, "1OTRXr9GBYTgmonAkCLk")
+	if r.Reasons.Good != nil || r.Reasons.Bad != nil {
+		t.Errorf("Reasons=%+v, want the zero value — this review's payload carries no reasons key", r.Reasons)
+	}
+	if len(r.Tags) != 0 {
+		t.Errorf("Tags=%v, want none — this review's payload carries no tags key", r.Tags)
+	}
+}
+
+// TestDecodeReviews_AcceptsAReviewMissingReasonsButCarryingTags exercises the
+// other half of the same legality claim: a review with some optional fields
+// absent and others present on the same review, not only the all-or-nothing
+// case above. Index 119 (id g55DGSYIWPiNAaktoqCa) is missing reasons while
+// carrying two tags.
+func TestDecodeReviews_AcceptsAReviewMissingReasonsButCarryingTags(t *testing.T) {
 	got, err := decodeReviews(reviewsFixture(t))
 	if err != nil {
 		t.Fatalf("decodeReviews: %v", err)
@@ -292,7 +324,10 @@ func TestDecodeReviews_KeepsProsAndConsSeparate(t *testing.T) {
 
 // TestDecodeReviews_TagsHoldTagIDsInOrder pins Review.Tags against a review
 // carrying two tags, in the payload's own order, and against one carrying
-// none.
+// none. Tags is []int64, matching the wire's own integer ids exactly — an
+// earlier version of this package converted to decimal strings, which a
+// controller-level review overruled: see ReviewReasons's doc comment, which
+// carries the identical reasoning for Reasons.Good/Bad.
 func TestDecodeReviews_TagsHoldTagIDsInOrder(t *testing.T) {
 	got, err := decodeReviews(reviewsFixture(t))
 	if err != nil {
@@ -300,13 +335,13 @@ func TestDecodeReviews_TagsHoldTagIDsInOrder(t *testing.T) {
 	}
 
 	tagged := findReview(t, got, "BuZnt8od3d3OofYfNX7L")
-	want := []string{"19", "8"}
+	want := []int64{19, 8}
 	if len(tagged.Tags) != len(want) {
 		t.Fatalf("Tags=%v, want %v", tagged.Tags, want)
 	}
 	for i, w := range want {
 		if tagged.Tags[i] != w {
-			t.Errorf("Tags[%d]=%q, want %q", i, tagged.Tags[i], w)
+			t.Errorf("Tags[%d]=%d, want %d", i, tagged.Tags[i], w)
 		}
 	}
 
@@ -316,29 +351,64 @@ func TestDecodeReviews_TagsHoldTagIDsInOrder(t *testing.T) {
 	}
 }
 
-// TestDecodeReviews_ReasonsConvertsIntegerIDsToStrings closes a gap this
-// package's own implementation report flags: the brief types
-// ReviewReasons.Good/Bad as []string, but the payload's good/bad arrays
-// carry integer reason-catalogue ids (10065, 10074, …), not text. This pins
-// the conversion this package settled on — each id as its decimal string —
-// against a real review that carries populated reasons.
-func TestDecodeReviews_ReasonsConvertsIntegerIDsToStrings(t *testing.T) {
+// TestDecodeReviews_ReasonsHoldReasonCatalogueIDs pins ReviewReasons.Good/Bad
+// against a real review that carries populated reasons: the payload's
+// good/bad arrays are integer reason-catalogue ids (10065, 10074, …), and
+// Good/Bad are typed []int64 to match exactly — see ReviewReasons's doc
+// comment for why a string conversion (this package's own first attempt) was
+// overruled: it bought nothing against a wire payload of strings, and it
+// broke round-tripping a decoded Reviews value back through
+// json.Marshal/Unmarshal.
+func TestDecodeReviews_ReasonsHoldReasonCatalogueIDs(t *testing.T) {
 	got, err := decodeReviews(reviewsFixture(t))
 	if err != nil {
 		t.Fatalf("decodeReviews: %v", err)
 	}
 	r := findReview(t, got, "4m3XGKwTdwezpO03XgSC")
-	want := []string{"10065", "10066", "10074"}
+	want := []int64{10065, 10066, 10074}
 	if len(r.Reasons.Good) != len(want) {
 		t.Fatalf("Reasons.Good=%v, want %v", r.Reasons.Good, want)
 	}
 	for i, w := range want {
 		if r.Reasons.Good[i] != w {
-			t.Errorf("Reasons.Good[%d]=%q, want %q", i, r.Reasons.Good[i], w)
+			t.Errorf("Reasons.Good[%d]=%d, want %d", i, r.Reasons.Good[i], w)
 		}
 	}
 	if len(r.Reasons.Bad) != 0 {
 		t.Errorf("Reasons.Bad=%v, want none", r.Reasons.Bad)
+	}
+}
+
+// TestReviews_RoundTripsThroughJSON pins the round-tripping property
+// ReviewReasons's doc comment claims: a decoded Reviews value, marshalled
+// back to JSON and unmarshalled again, must read back the same reason ids —
+// the property a []string-typed ReviewReasons (this package's first attempt)
+// broke, since a marshalled []int64-turned-string reads back only as a
+// string, not the int64 ReviewReasons.Good declares.
+func TestReviews_RoundTripsThroughJSON(t *testing.T) {
+	got, err := decodeReviews(reviewsFixture(t))
+	if err != nil {
+		t.Fatalf("decodeReviews: %v", err)
+	}
+
+	raw, err := json.Marshal(got)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var back Reviews
+	if err := json.Unmarshal(raw, &back); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+
+	r := findReview(t, back, "4m3XGKwTdwezpO03XgSC")
+	want := []int64{10065, 10066, 10074}
+	if len(r.Reasons.Good) != len(want) {
+		t.Fatalf("round-tripped Reasons.Good=%v, want %v", r.Reasons.Good, want)
+	}
+	for i, w := range want {
+		if r.Reasons.Good[i] != w {
+			t.Errorf("round-tripped Reasons.Good[%d]=%d, want %d", i, r.Reasons.Good[i], w)
+		}
 	}
 }
 
@@ -505,6 +575,21 @@ func TestClient_ReviewsFetchesWithThePlainProfile(t *testing.T) {
 	wantReferer := DefaultEndpoints().CardPageURL(3337911982)
 	if got := h.Get("Referer"); got != wantReferer {
 		t.Errorf("Referer=%q, want %q", got, wantReferer)
+	}
+}
+
+// TestClient_ReviewsRejectsANonPositiveImtID mirrors basket.go's own guard
+// on CardURL (nm <= 0): without it, an imtID of 0 or less would still build
+// and send a request to a URL like .../feedbacks/v2/0 or .../feedbacks/v2/-1,
+// spending a real lease on a caller's bug rather than catching it locally.
+// No lease is scripted for the fakeLeaser below, so a request that reaches
+// Acquire at all fails this test on its own with "out of leases".
+func TestClient_ReviewsRejectsANonPositiveImtID(t *testing.T) {
+	c := NewClient(&fakeLeaser{}, NewSessions())
+	for _, imtID := range []int64{0, -1} {
+		if _, err := c.Reviews(context.Background(), DefaultEndpoints(), imtID); err == nil {
+			t.Errorf("imtID=%d was accepted without error", imtID)
+		}
 	}
 }
 
