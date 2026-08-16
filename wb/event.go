@@ -527,7 +527,10 @@ func reviewEvents(before, after Observation) ([]Event, error) {
 	if err != nil {
 		return nil, err
 	}
-	_, ratingChange := DiffReviews(earlier, later)
+	_, ratingChange, err := DiffReviews(earlier, later)
+	if err != nil {
+		return nil, err
+	}
 	if ratingChange == nil || later.Summary.Valuation >= earlier.Summary.Valuation {
 		return nil, nil
 	}
@@ -760,7 +763,10 @@ func NegativeReviewEvents(before, after Observation, atOrBelow int) ([]Event, er
 	if err != nil {
 		return nil, err
 	}
-	fresh, _ := DiffReviews(earlier, later)
+	fresh, _, err := DiffReviews(earlier, later)
+	if err != nil {
+		return nil, err
+	}
 
 	var out []Event
 	for _, r := range fresh {

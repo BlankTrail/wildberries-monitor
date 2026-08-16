@@ -910,14 +910,28 @@ func loadReviews(t *testing.T) Reviews {
 	if len(revs.Items) < 2 {
 		t.Fatalf("the reviews fixture carries %d items, this test needs at least two", len(revs.Items))
 	}
+	// The capture's own card. decodeReviews cannot know it — the body carries
+	// no imtId — so Client.Reviews stamps it from the argument, and a test
+	// reading the bytes directly has to do the same. Without it every reading
+	// in this package's tests would name no card, and the guard that refuses
+	// two different ones would never be reached by anything but the tests
+	// written for it.
+	revs.ImtID = reviewsFixtureImtID
 	return revs
 }
+
+// reviewsFixtureImtID is the id testdata/reviews.json was captured for, the
+// same one card.json reports as imt_id.
+const reviewsFixtureImtID = 3337911982
 
 func TestDiffReviews_TwoReadingsOfTheSameWindowReportNothing(t *testing.T) {
 	before := loadReviews(t)
 	after := loadReviews(t)
 
-	fresh, ratingChange := DiffReviews(before, after)
+	fresh, ratingChange, err := DiffReviews(before, after)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if len(fresh) != 0 {
 		t.Fatalf("expected no fresh reviews, got %d", len(fresh))
 	}
@@ -945,7 +959,10 @@ func TestDiffReviews_FreshnessIsDecidedByIDNotByCount(t *testing.T) {
 		t.Fatalf("the test moved the counter, which is exactly what it must not do")
 	}
 
-	fresh, _ := DiffReviews(before, after)
+	fresh, _, err := DiffReviews(before, after)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if len(fresh) != 1 || fresh[0].ID != arrival.ID {
 		got := make([]string, 0, len(fresh))
 		for _, r := range fresh {
@@ -962,7 +979,10 @@ func TestDiffReviews_AReviewThatOnlyLeftIsNotFresh(t *testing.T) {
 	after := loadReviews(t)
 	after.Items = after.Items[1:]
 
-	fresh, _ := DiffReviews(before, after)
+	fresh, _, err := DiffReviews(before, after)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if len(fresh) != 0 {
 		t.Fatalf("a shrinking window reported %d fresh reviews", len(fresh))
 	}
@@ -977,7 +997,10 @@ func TestDiffReviews_AnUnidentifiableReviewIsNeverFresh(t *testing.T) {
 	anonymous.ID = ""
 	after.Items = append(append([]Review{}, after.Items...), anonymous)
 
-	fresh, _ := DiffReviews(before, after)
+	fresh, _, err := DiffReviews(before, after)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if len(fresh) != 0 {
 		t.Fatalf("an id-less review was reported fresh: %d item(s)", len(fresh))
 	}
@@ -988,7 +1011,10 @@ func TestDiffReviews_AMovedRatingIsReported(t *testing.T) {
 	after := loadReviews(t)
 	after.Summary.Valuation = before.Summary.Valuation - 0.1
 
-	_, ratingChange := DiffReviews(before, after)
+	_, ratingChange, err := DiffReviews(before, after)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if ratingChange == nil {
 		t.Fatal("the rating moved and nothing was reported")
 	}
@@ -1008,9 +1034,75 @@ func TestDiffReviews_AnUnmovedRatingIsNotReported(t *testing.T) {
 	after := loadReviews(t)
 	after.Items = after.Items[1:]
 
-	_, ratingChange := DiffReviews(before, after)
+	_, ratingChange, err := DiffReviews(before, after)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if ratingChange != nil {
 		t.Fatalf("the rating did not move but %+v was reported", ratingChange)
+	}
+}
+
+// TestDiffReviews_TwoDifferentCardsAreNotComparable is the guard the rest of
+// this file has applied to products, cards and catalogues since task 6, now
+// reaching the one reading that could not state what it was about. The two
+// sides here are rigged so that a build with no guard has plenty to report —
+// a moved rating and an arrival — which is exactly the danger: not silence,
+// but a confident answer assembled from two different products.
+func TestDiffReviews_TwoDifferentCardsAreNotComparable(t *testing.T) {
+	before := loadReviews(t)
+	after := loadReviews(t)
+	after.ImtID = 4242424242
+	after.Summary.Valuation = before.Summary.Valuation - 0.4
+	arrival := after.Items[0]
+	arrival.ID = "8f1c2c4e-0000-4000-8000-000000000002"
+	after.Items = append(append([]Review{}, after.Items...), arrival)
+
+	fresh, ratingChange, err := DiffReviews(before, after)
+	if err == nil || !errors.Is(err, ErrIdentityMismatch) {
+		t.Fatalf("err = %v, want it to wrap ErrIdentityMismatch", err)
+	}
+	for _, id := range []string{"3337911982", "4242424242"} {
+		if !strings.Contains(err.Error(), id) {
+			t.Errorf("error %q does not name %s; a refusal that will not say which two cards is not actionable", err, id)
+		}
+	}
+	if fresh != nil {
+		t.Errorf("fresh = %d review(s), want nil: a comparison that could not be made reports nothing", len(fresh))
+	}
+	if ratingChange != nil {
+		t.Errorf("ratingChange = %+v, want nil: the rating of one card against another's did not move, it was never comparable", ratingChange)
+	}
+}
+
+// TestDiffReviews_AReadingThatNamesNoCardIsComparableWithAnything keeps the
+// documented first cycle working. A zero Reviews is how a caller says it holds
+// nothing yet, and a reading that names no card cannot disagree with one that
+// does — the same rule DiffSellerCatalog applies to a page with no rows. The
+// alternative is that the very first comparison, the one every caller starts
+// from, becomes an error.
+func TestDiffReviews_AReadingThatNamesNoCardIsComparableWithAnything(t *testing.T) {
+	real := loadReviews(t)
+	anonymous := loadReviews(t)
+	anonymous.ImtID = 0
+
+	for _, tc := range []struct {
+		what           string
+		before, after  Reviews
+		wantRatingMove bool
+	}{
+		{"a zero earlier reading", Reviews{}, real, true},
+		{"an earlier reading that names no card", anonymous, real, false},
+		{"a later reading that names no card", real, anonymous, false},
+	} {
+		_, ratingChange, err := DiffReviews(tc.before, tc.after)
+		if err != nil {
+			t.Errorf("%s: unexpected error: %v", tc.what, err)
+			continue
+		}
+		if (ratingChange != nil) != tc.wantRatingMove {
+			t.Errorf("%s: ratingChange = %+v, want moved=%v", tc.what, ratingChange, tc.wantRatingMove)
+		}
 	}
 }
 

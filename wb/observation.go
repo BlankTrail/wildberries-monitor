@@ -562,7 +562,28 @@ func productIDs(products []Product) map[int64]struct{} {
 // against a zero Reviews will report the rating as having moved from 0 — a
 // first reading has nothing to compare against, and the caller is the only one
 // that knows whether it holds one.
-func DiffReviews(before, after Reviews) (fresh []Review, ratingChange *Change) {
+//
+// There is an identity check, and it is the one guard that matters here.
+// Region is irrelevant to reviews; which card they belong to is not. Two
+// windows fetched for two different imtIds have nothing to say about each
+// other, and comparing them produces the most convincing wrong answer this
+// package can produce — a rating that "moved" and reviews that "arrived", none
+// of which happened. Such a pair is refused, with nil for both results, the
+// same way DiffProducts refuses two different products.
+//
+// An ImtID of zero on either side names no card and therefore cannot disagree
+// with one that does, so it is accepted: that is the zero Reviews of the first
+// cycle described above, and refusing it would turn a documented "nothing to
+// compare against" into an error for every caller's opening reading. It is
+// also every value decodeReviews produces on its own — only Client.Reviews
+// knows the id — so the guard engages exactly where the caller took the
+// trouble to say what it was reading.
+func DiffReviews(before, after Reviews) (fresh []Review, ratingChange *Change, err error) {
+	if before.ImtID != 0 && after.ImtID != 0 && before.ImtID != after.ImtID {
+		return nil, nil, fmt.Errorf("%w: the reviews of imtId %d and the reviews of imtId %d",
+			ErrIdentityMismatch, before.ImtID, after.ImtID)
+	}
+
 	seen := make(map[string]struct{}, len(before.Items))
 	for _, r := range before.Items {
 		if r.ID == "" {
@@ -587,7 +608,7 @@ func DiffReviews(before, after Reviews) (fresh []Review, ratingChange *Change) {
 			Now:   formatValuation(after.Summary.Valuation),
 		}
 	}
-	return fresh, ratingChange
+	return fresh, ratingChange, nil
 }
 
 // formatValuation renders a star rating the way the payload itself spells it —

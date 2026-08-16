@@ -720,6 +720,25 @@ func TestEventsFromChanges_AFreshReviewOnItsOwnIsNotARatingDrop(t *testing.T) {
 	requireNoEvents(t, "a fresh review that did not move the rating", events, err)
 }
 
+// TestEventsFromChanges_TwoCardsReviewsAreNotComparable is the review half of
+// the guard the catalogue rule already had: the pair is rigged so a build that
+// swallowed DiffReviews's refusal would report a rating drop that never
+// happened, on a card nobody was watching.
+func TestEventsFromChanges_TwoCardsReviewsAreNotComparable(t *testing.T) {
+	before := loadReviews(t)
+	after := loadReviews(t)
+	after.ImtID = 4242424242
+	after.Summary.Valuation = 4.1
+
+	events, err := EventsFromChanges(seenReviews(before, seenMonday), seenReviews(after, seenTuesday))
+	if err == nil || !errors.Is(err, ErrIdentityMismatch) {
+		t.Fatalf("err = %v, want it to wrap ErrIdentityMismatch; events = %v", err, kindsOf(events))
+	}
+	if events != nil {
+		t.Fatalf("still produced %v", kindsOf(events))
+	}
+}
+
 // --- question readings ---
 
 // loadQuestions decodes the captured questions page. Every one of its six
@@ -1101,6 +1120,23 @@ func TestNegativeReviewEvents_AThresholdOutsideTheScaleIsRefused(t *testing.T) {
 		if events != nil {
 			t.Errorf("threshold %d still produced %v", atOrBelow, kindsOf(events))
 		}
+	}
+}
+
+// TestNegativeReviewEvents_TwoCardsWindowsAreNotComparable is the same refusal
+// reaching the other DiffReviews caller. The arrival here is a genuine
+// one-star review, so a build that swallowed the refusal would hand an
+// operator a complaint about a product they never asked about.
+func TestNegativeReviewEvents_TwoCardsWindowsAreNotComparable(t *testing.T) {
+	before, after := withFreshReview(t, "fresh-0005", 1)
+	after.ImtID = 4242424242
+
+	events, err := NegativeReviewEvents(seenReviews(before, seenMonday), seenReviews(after, seenTuesday), 2)
+	if err == nil || !errors.Is(err, ErrIdentityMismatch) {
+		t.Fatalf("err = %v, want it to wrap ErrIdentityMismatch; events = %v", err, kindsOf(events))
+	}
+	if events != nil {
+		t.Fatalf("still produced %v", kindsOf(events))
 	}
 }
 
