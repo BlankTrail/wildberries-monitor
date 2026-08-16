@@ -50,7 +50,8 @@ func TestDecodeCard_ReadsTheStaticFacts(t *testing.T) {
 // reports — so an empty document was previously returned as (Card{}, nil), a
 // silent, and indistinguishable-from-real, empty card. The package rejects
 // the equivalent shape everywhere else (decodeEnvelope on a filters response,
-// decodeUpstreams on a non-mod route); decodeCard now does too.
+// decodeUpstreams on a route whose distribution method it cannot resolve);
+// decodeCard now does too.
 func TestDecodeCard_RejectsADocumentWithNoNmID(t *testing.T) {
 	for _, raw := range []string{`{}`, `null`} {
 		if _, err := decodeCard([]byte(raw)); err == nil {
