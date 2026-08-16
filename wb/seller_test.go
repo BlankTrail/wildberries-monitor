@@ -866,8 +866,15 @@ func TestClient_BrandFetchesWithThePlainProfile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Brand: %v", err)
 	}
-	want := Brand{ID: 1320613, SiteID: 1330613, Name: "RUSSIA SPORTS", URL: "russia-sports"}
-	if got != want {
+	want := Brand{
+		ID: 1320613, SiteID: 1330613, Name: "RUSSIA SPORTS", URL: "russia-sports",
+		// The one request this call makes, named and attributed: a directory
+		// entry costs a port like everything else, and the whole package now
+		// says which one. Compared as part of the whole value rather than
+		// separately, so a provenance quietly dropped fails here too.
+		Fetches: []Fetch{{Source: SourceBrand, Port: 1, Cost: FetchCost{Attempts: 1}}},
+	}
+	if !reflect.DeepEqual(got, want) {
 		t.Errorf("Brand=%+v, want %+v", got, want)
 	}
 

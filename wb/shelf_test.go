@@ -287,6 +287,43 @@ func TestClient_ShelvesUsesTheAPIProfileNotSearch(t *testing.T) {
 	}
 }
 
+// TestClient_ShelvesReportsTheFetchItMade closes the last endpoint that
+// fetched without saying from where. Nothing in this package's own tools
+// drives the shelves endpoint today, which is exactly why it is worth
+// pinning: an endpoint nobody watches is the one that quietly stops
+// reporting.
+func TestClient_ShelvesReportsTheFetchItMade(t *testing.T) {
+	l := &fakeLease{port: 8, replies: []*http.Response{reply(200, string(shelvesFixture(t)))}}
+	c := NewClient(&fakeLeaser{leases: []*fakeLease{l}}, NewSessions())
+
+	got, err := c.Shelves(context.Background(), DefaultEndpoints(), SearchQuery{Query: "x", Dest: "-1"})
+	if err != nil {
+		t.Fatalf("Shelves: %v", err)
+	}
+	f := onlyFetch(t, got.Fetches)
+	want := Fetch{Source: SourceShelves, Port: 8, Cost: FetchCost{Attempts: 1}}
+	if f != want {
+		t.Errorf("provenance = %+v, want %+v", f, want)
+	}
+}
+
+// TestClient_ShelvesReportsTheFetchThatFailed is the same claim on the path
+// where it matters more: a refused response still names the port that
+// refused it.
+func TestClient_ShelvesReportsTheFetchThatFailed(t *testing.T) {
+	l := &fakeLease{port: 8, replies: []*http.Response{reply(500, `{"data":{"shelfs":[]}}`)}}
+	c := NewClient(&fakeLeaser{leases: []*fakeLease{l}}, NewSessions())
+
+	got, err := c.Shelves(context.Background(), DefaultEndpoints(), SearchQuery{Query: "x", Dest: "-1"})
+	if err == nil {
+		t.Fatal("a 500 was accepted without error")
+	}
+	f := onlyFetch(t, got.Fetches)
+	if f.Source != SourceShelves || f.Port != 8 {
+		t.Errorf("provenance = %+v, want the shelves fetch on port 8", f)
+	}
+}
+
 func TestClient_ShelvesRefusesANonOKStatus(t *testing.T) {
 	l := &fakeLease{port: 1, replies: []*http.Response{reply(500, "")}}
 	c := NewClient(&fakeLeaser{leases: []*fakeLease{l}}, NewSessions())

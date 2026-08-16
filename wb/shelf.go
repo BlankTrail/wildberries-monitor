@@ -55,6 +55,12 @@ type Shelves struct {
 	// PresetID is metadata.presetId, WB's own id for the search preset this
 	// response was generated against.
 	PresetID int64
+
+	// Fetches is where the one request behind this response went and what it
+	// cost. See Fetch, and Envelope.Fetches for the identical field on the
+	// identical reasoning. Empty on a value decoded straight from bytes by
+	// decodeShelves, which is handed a document and never makes a request.
+	Fetches []Fetch
 }
 
 // rawShelfEntry mirrors one entry of the payload's banners.data or
@@ -196,15 +202,17 @@ func (e Endpoints) ShelvesURL(q SearchQuery) string {
 func (c *Client) Shelves(ctx context.Context, eps Endpoints, q SearchQuery) (Shelves, error) {
 	res, err := c.Get(ctx, eps.ShelvesURL(q), KindAPI, searchReferer(eps, q))
 	if err != nil {
-		return Shelves{}, err
+		return Shelves{Fetches: []Fetch{lostFetch(SourceShelves, err)}}, err
 	}
+	from := []Fetch{fetchOf(SourceShelves, res)}
 	if res.Class != ClassOK {
-		return Shelves{}, fmt.Errorf("wb: shelves: status %d (%s)", res.Status, res.Class)
+		return Shelves{Fetches: from}, fmt.Errorf("wb: shelves: status %d (%s)", res.Status, res.Class)
 	}
 
 	s, err := decodeShelves(res.Body)
 	if err != nil {
-		return Shelves{}, fmt.Errorf("wb: shelves: %w", err)
+		return Shelves{Fetches: from}, fmt.Errorf("wb: shelves: %w", err)
 	}
+	s.Fetches = from
 	return s, nil
 }

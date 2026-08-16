@@ -83,6 +83,13 @@ type Brand struct {
 	SiteID int64
 	Name   string
 	URL    string
+
+	// Fetches is where the one request behind this entry went and what it
+	// cost — see Fetch, and Seller.Fetches for why a domain value assembled
+	// by this package carries its own provenance rather than being wrapped.
+	// Empty on a Brand built by hand or decoded straight from bytes by
+	// decodeBrand, which is handed a document and never makes a request.
+	Fetches []Fetch
 }
 
 // --- static supplier record (supplier-by-id/<id>.json) ---
@@ -499,14 +506,16 @@ func (c *Client) Brand(ctx context.Context, _ Endpoints, id int64) (Brand, error
 	}
 	res, err := c.Get(ctx, brandStaticURL(id), KindPlain, "")
 	if err != nil {
-		return Brand{}, err
+		return Brand{Fetches: []Fetch{lostFetch(SourceBrand, err)}}, err
 	}
+	from := []Fetch{fetchOf(SourceBrand, res)}
 	if res.Class != ClassOK {
-		return Brand{}, fmt.Errorf("wb: brand %d: status %d (%s)", id, res.Status, res.Class)
+		return Brand{Fetches: from}, fmt.Errorf("wb: brand %d: status %d (%s)", id, res.Status, res.Class)
 	}
 	b, err := decodeBrand(res.Body)
 	if err != nil {
-		return Brand{}, fmt.Errorf("wb: brand %d: %w", id, err)
+		return Brand{Fetches: from}, fmt.Errorf("wb: brand %d: %w", id, err)
 	}
+	b.Fetches = from
 	return b, nil
 }
