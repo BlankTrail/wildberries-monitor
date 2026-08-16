@@ -15,6 +15,11 @@ type rawProduct struct {
 	NmID  int64 `json:"nmId"`
 	NmID2 int64 `json:"nmID"`
 
+	// MatchID mirrors Product.MatchID exactly — see that field's own doc
+	// comment for why a plain int64 is correct here rather than the pointer
+	// most other optional fields in this struct use.
+	MatchID int64 `json:"matchId"`
+
 	Root            *int64 `json:"root"`
 	Name            string `json:"name"`
 	Brand           string `json:"brand"`
@@ -71,6 +76,7 @@ func extractProduct(raw json.RawMessage) (Product, bool) {
 
 	p := Product{
 		ID:              id,
+		MatchID:         r.MatchID,
 		Root:            r.Root,
 		Name:            strings.TrimSpace(r.Name),
 		Brand:           strings.TrimSpace(r.Brand),

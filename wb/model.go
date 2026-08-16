@@ -83,7 +83,20 @@ func (s *Size) UnmarshalJSON(b []byte) error {
 // rather than zeroing them and the two must not be confused. Raw keeps the
 // original object so a field nobody extracted yet is not lost.
 type Product struct {
-	ID    int64  `json:"-"`
+	ID int64 `json:"-"`
+
+	// MatchID groups every seller's listing of the same physical product —
+	// the key Client.Duplicates and Endpoints.DuplicatesURL build a minimum-
+	// price-check request around. Unlike SupplierID and every other
+	// identifier-shaped field below that can legitimately be absent, this is
+	// a plain int64, not a pointer: the payload sends matchId as an
+	// always-present integer, and the site itself uses zero as the sentinel
+	// for "this listing belongs to no duplicate group" rather than omitting
+	// the key. Client.Duplicates relies on that distinction directly — see
+	// its own doc comment for why MatchID zero is answered without a
+	// request rather than treated as a missing field.
+	MatchID int64 `json:"-"`
+
 	Root  *int64 `json:"-"`
 	Name  string `json:"-"`
 	Brand string `json:"-"`

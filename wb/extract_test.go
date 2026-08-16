@@ -386,6 +386,9 @@ func TestExtractProduct_AgainstACapturedProduct(t *testing.T) {
 	if p.ID != 152540730 {
 		t.Errorf("ID=%d, want 152540730", p.ID)
 	}
+	if p.MatchID != 230503430 {
+		t.Errorf("MatchID=%d, want 230503430", p.MatchID)
+	}
 	// These are never asserted anywhere else. A mis-wired field in the
 	// extractProduct literal — Dist reading r.Time1, say — would pass the
 	// entire suite without this block.

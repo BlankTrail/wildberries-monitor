@@ -63,6 +63,16 @@ type Endpoints struct {
 	// is no version segment in the path for the site to bump, and no second
 	// host to reroute to by editing a file.
 	SellerCatalog string `yaml:"seller_catalog"`
+	// Duplicates is the minimum-price / duplicate-listing check: every other
+	// seller's listing of the same physical product, and which one
+	// currently holds the lowest price. It carries a version segment in its
+	// own path (v8), the same reason Reviews, Questions and SellerCatalog
+	// live here rather than as a hardcoded constant. Like SellerCatalog it
+	// carries no placeholder of its own — match_id, anchor_id,
+	// anchor_supplier_id and dest are query parameters
+	// Endpoints.DuplicatesURL appends — so a bare base address is all this
+	// field needs to hold.
+	Duplicates string `yaml:"duplicates"`
 }
 
 // searchTemplate is kept as one string, parameters and all, because the exact
@@ -87,6 +97,7 @@ func DefaultEndpoints() Endpoints {
 		Reviews:       "https://feedback-view-01.wb.ru/feedbacks/v2/{imtId}",
 		Questions:     "https://questions.wildberries.ru/api/v1/questions",
 		SellerCatalog: "https://www.wildberries.ru/__internal/u-catalog/sellers/v4/catalog",
+		Duplicates:    "https://www.wildberries.ru/__internal/meta/duplicates/ru/common/v8/search",
 	}
 }
 
@@ -180,6 +191,9 @@ func (e Endpoints) Validate() error {
 	}
 	if strings.TrimSpace(e.SellerCatalog) == "" {
 		return errors.New("seller_catalog is empty")
+	}
+	if strings.TrimSpace(e.Duplicates) == "" {
+		return errors.New("duplicates is empty")
 	}
 	return nil
 }
