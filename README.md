@@ -75,18 +75,35 @@ cannot fix either and throws away a solved challenge on the way.
 Independently of all that, a port's whole identity is renewed after N requests
 or after a time interval.
 
+A lease holder can also ask for a new egress itself, with `Lease.RotateEgress`.
+The pool judges an egress by what it can see — connection failures and non-2xx
+statuses — and a caller that knows the target may recognise a failure it cannot:
+a response that is technically fine and still means this exit address is not
+getting through. Releasing the lease and taking a fresh one is not the same
+thing, because that is a different port, not a different proxy. The change
+clears the port's consecutive-failure count, so the pool's own schedule measures
+the new address instead of carrying the old one's history into it.
+
 ## Reading Wildberries data (the `wb` package)
 
 `wb` reads Wildberries search results and product cards through a leased
-BlankTrail port. It knows nothing about proxies, retries or challenges —
-routing, fingerprints and challenge solving are `blanktrail`'s job, not this
-package's. It takes a `Leaser` (`wb.FromPool` adapts a `*blanktrail.Pool`) and
+BlankTrail port. Routing, fingerprints and challenge solving are `blanktrail`'s
+job, not this package's; what `wb` does decide is what a response means and what
+is worth doing about it — how many times a challenged request is worth
+repeating, and when the port's proxy has had enough tries and should be replaced
+(`wb.RetryPolicy`, and `wb.DefaultRetryPolicy` for the two sensible starting
+points). It takes a `Leaser` (`wb.FromPool` adapts a `*blanktrail.Pool`) and
 a `*wb.Sessions`, and hands back a `*wb.Client` that every request goes
 through.
 
 ```go
 eps := wb.DefaultEndpoints()
-client := wb.NewClient(wb.FromPool(pool), wb.NewSessions())
+
+// A pool with proxy channels can search for one that gets through, so a
+// challenge is worth retrying further than it is on direct egress; pass
+// DefaultRetryPolicy(false), or use NewClient, when there is nothing to search.
+client := wb.NewClientWithRetry(wb.FromPool(pool), wb.NewSessions(),
+    wb.DefaultRetryPolicy(true))
 
 env, err := client.SearchPage(ctx, eps, wb.SearchQuery{
     Query: "кроссовки женские",
