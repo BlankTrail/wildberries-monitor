@@ -140,7 +140,7 @@ func (s *Store) saveProductTx(ctx context.Context, tx *sql.Tx, p wb.Product, que
 	stats.Products++
 
 	fp := fingerprintOf(p)
-	write, anchor, err := s.shouldWriteSnapshot(ctx, tx, p.ID, p.Dest, fp, ts)
+	write, anchor, err := s.shouldWriteSnapshot(ctx, tx, p.ID, p.Dest, p.AppType, fp, ts)
 	if err != nil {
 		return SaveStats{}, err
 	}
@@ -399,13 +399,19 @@ func snapshotStock(p wb.Product) *int64 {
 
 // fingerprintVersion prefixes every digest.
 //
-// A later build that folds another field in produces different digests for the
-// same reading, and the prefix says so out loud instead of leaving two
+// A later build that folds a field in or out produces different digests for
+// the same reading, and the prefix says so out loud instead of leaving two
 // incomparable strings looking alike. The cost of the change is one extra
-// snapshot per product per region, once — which is also the correct behaviour,
-// since the first row computed under the new rule is the first row that
-// records the newly covered field.
-const fingerprintVersion = "1"
+// snapshot per product per region per audience, once — which is also the
+// correct behaviour, since the first row computed under the new rule is the
+// first row that reflects it.
+//
+// Bumped to "2" here: app_type moved out of the digest and into
+// shouldWriteSnapshot's query scope, which is exactly the kind of change this
+// prefix exists to mark — a "1" digest and a "2" digest are not answers to
+// the same question, and comparing them would compare a reading against a
+// rule it was never checked against.
+const fingerprintVersion = "2"
 
 // fingerprintOf digests the volatile half of a reading.
 //
@@ -436,20 +442,20 @@ const fingerprintVersion = "1"
 // order for every product.
 //
 // What is covered is exactly what a snapshot row carries, minus the columns
-// that identify it (nm_id, dest), date it (ts) or serve the change rule
-// (anchor, fingerprint). A field the row carries but the digest does not would
-// have its changes suppressed and lost with no record that they happened; a
-// field the digest covers but the row does not would write rows that say
-// nothing. dest is left out deliberately even though it is on the row: the
-// comparison is scoped to one region by the rule that uses this digest, and
-// hashing it as well would hide a lookup that forgot that scoping.
+// that identify it (nm_id, dest, app_type), date it (ts) or serve the change
+// rule (anchor, fingerprint). A field the row carries but the digest does not
+// would have its changes suppressed and lost with no record that they
+// happened; a field the digest covers but the row does not would write rows
+// that say nothing. dest and app_type are left out deliberately even though
+// both are on the row: shouldWriteSnapshot scopes its comparison to one
+// region and one audience by querying on them, and hashing either into the
+// digest as well would hide a lookup that forgot that scoping — the digest
+// describes the state observed, dest and app_type describe the conditions of
+// observation, and conflating the two would let two audiences reading the
+// same product on one schedule "unfreeze" each other on every pass (see
+// shouldWriteSnapshot).
 func fingerprintOf(p wb.Product) string {
 	h := sha256.New()
-
-	// The audience the reading was made as. It is not part of the comparison
-	// key, so a job that switches appType must be able to tell that its prices
-	// now come from a different audience.
-	fpInt(h, "app_type", int64(p.AppType))
 
 	fpOptFloat(h, "rating", p.Rating)
 	fpText(h, "rating_key", p.RatingKey)

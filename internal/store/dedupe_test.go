@@ -317,3 +317,163 @@ func TestSetRetention_MovesWhenTheAnchorIsDue(t *testing.T) {
 		t.Errorf("with the default AnchorEvery, two hours later: %d snapshot(s), want 0", same.Snapshots)
 	}
 }
+
+func TestSaveProduct_AgesTheAnchorByWhenItWasFetchedNotByWhenItWasWritten(t *testing.T) {
+	// A retried write, a drained queue, or a backfill run against old
+	// captures can land many readings within one wall-clock instant, each
+	// carrying its own older FetchedAt — see effectiveTS, which exists
+	// precisely so a deferred write is dated to when the site was read, not
+	// to when the transaction happened to commit. Ageing the anchor off the
+	// store's own clock instead of off ts would see every one of those
+	// readings as "more than a day since the last row" and turn each one
+	// into an anchor, which is spec section 5.2's rule run backwards in
+	// exactly the case FetchedAt was added to handle correctly.
+	s := openTestStore(t)
+	ctx := context.Background()
+	// The store's own clock never moves during this test: every SaveProduct
+	// call happens at this one wall-clock instant, as a backfill would.
+	freezeClock(s, time.Date(2026, 8, 17, 15, 0, 0, 0, time.UTC))
+
+	fetchedFirst := time.Date(2026, 8, 16, 9, 0, 0, 0, time.UTC)
+	p1 := sampleProduct()
+	p1.FetchedAt = fetchedFirst
+	if _, err := s.SaveProduct(ctx, p1, "winter jacket"); err != nil {
+		t.Fatalf("first SaveProduct: %v", err)
+	}
+
+	p2 := sampleProduct()
+	p2.FetchedAt = fetchedFirst.Add(time.Hour) // an hour later by the site's own clock
+	got, err := s.SaveProduct(ctx, p2, "winter jacket")
+	if err != nil {
+		t.Fatalf("second SaveProduct: %v", err)
+	}
+	// The store's wall clock is more than a day past the first reading's ts,
+	// but the two readings are only an hour apart by FetchedAt, and nothing
+	// about the product changed.
+	if got.Snapshots != 0 {
+		t.Errorf("Snapshots = %d, want 0 — an hour apart by FetchedAt with nothing changed, even though the store's own clock is over a day past the first reading", got.Snapshots)
+	}
+	if got.Anchors != 0 {
+		t.Errorf("Anchors = %d, want 0 — the age check must use ts, not the store's write-time clock", got.Anchors)
+	}
+	if n := countRows(t, s, "snapshots"); n != 1 {
+		t.Errorf("snapshots has %d rows; want 1", n)
+	}
+}
+
+func TestSaveProduct_BreaksATiedTimestampByTheLaterRow(t *testing.T) {
+	// Two rows sharing one second happen when a page, or one product's
+	// reading, is re-run inside its own pass (see insertPosition's own
+	// comment on the same case). The tie has to break toward the later row:
+	// a rule that can land on the earlier of two same-second rows instead
+	// would compare the next reading against a fingerprint that a later row
+	// already superseded.
+	s := openTestStore(t)
+	ctx := context.Background()
+	freezeClock(s, time.Date(2026, 8, 16, 9, 0, 0, 0, time.UTC))
+
+	p := sampleProduct()
+	if _, err := s.SaveProduct(ctx, p, "winter jacket"); err != nil {
+		t.Fatalf("first SaveProduct: %v", err)
+	}
+
+	p.Sizes[0].PriceProduct = ptrTo(int64(99900))
+	if _, err := s.SaveProduct(ctx, p, "winter jacket"); err != nil {
+		t.Fatalf("second SaveProduct (price moved, same second): %v", err)
+	}
+
+	p.Sizes[0].PriceProduct = ptrTo(int64(120000)) // back to the first reading's price
+	got, err := s.SaveProduct(ctx, p, "winter jacket")
+	if err != nil {
+		t.Fatalf("third SaveProduct (price reverted, same second): %v", err)
+	}
+	if got.Snapshots != 1 {
+		t.Errorf("reverting the price, all within one second: %d snapshot(s), want 1 — against the row written a moment ago (the second reading) this is a change, even though it now matches the very first row", got.Snapshots)
+	}
+	if n := countRows(t, s, "snapshots"); n != 3 {
+		t.Errorf("snapshots has %d rows; want 3", n)
+	}
+}
+
+func TestSaveProduct_KeepsDedupSeparateByAudience(t *testing.T) {
+	// Scoping the comparison by dest but not by app_type would let two
+	// audiences reading the same product on one schedule take turns
+	// "unfreezing" each other: web's reading would compare against
+	// android's last row and look like a change, and vice versa, even though
+	// nothing about either audience's own history moved. Three alternating
+	// rounds with nothing changing should cost one snapshot per audience —
+	// two total — not one every pass.
+	s := openTestStore(t)
+	ctx := context.Background()
+	start := time.Date(2026, 8, 16, 9, 0, 0, 0, time.UTC)
+	at := freezeClock(s, start)
+
+	web := sampleProduct()
+	web.AppType = 1
+	android := sampleProduct()
+	android.AppType = 32
+
+	var webStats, androidStats SaveStats
+	for i := 0; i < 3; i++ {
+		*at = start.Add(time.Duration(i) * time.Hour)
+		ws, err := s.SaveProduct(ctx, web, "winter jacket")
+		if err != nil {
+			t.Fatalf("web pass %d: %v", i, err)
+		}
+		webStats = webStats.Add(ws)
+
+		as, err := s.SaveProduct(ctx, android, "winter jacket")
+		if err != nil {
+			t.Fatalf("android pass %d: %v", i, err)
+		}
+		androidStats = androidStats.Add(as)
+	}
+
+	if webStats.Snapshots != 1 {
+		t.Errorf("web wrote %d snapshot(s) over three unchanged passes; want 1 — the first reading only", webStats.Snapshots)
+	}
+	if androidStats.Snapshots != 1 {
+		t.Errorf("android wrote %d snapshot(s) over three unchanged passes; want 1 — the first reading only", androidStats.Snapshots)
+	}
+	if n := countRows(t, s, "snapshots"); n != 2 {
+		t.Errorf("snapshots has %d rows for two audiences of one unchanging product; want 2 — one per audience, not one per pass", n)
+	}
+}
+
+func TestRetentionOrDefault_FillsInEachThresholdIndependently(t *testing.T) {
+	// A caller who sets one threshold and leaves the other two at zero must
+	// get the spec's defaults for those two. DefaultRetention is what an
+	// unconfigured store gets, and it has to stay what a partially configured
+	// one gets for the fields the caller never touched — not a store that
+	// silently thins everything as if DailyAfter and WeeklyAfter were zero.
+	s := openTestStore(t)
+	s.SetRetention(Retention{AnchorEvery: time.Hour})
+	got := s.retentionOrDefault()
+	want := Retention{
+		AnchorEvery: time.Hour,
+		DailyAfter:  30 * 24 * time.Hour,
+		WeeklyAfter: 365 * 24 * time.Hour,
+	}
+	if got != want {
+		t.Errorf("retentionOrDefault = %+v, want %+v", got, want)
+	}
+}
+
+func TestRetentionOrDefault_RoundsEachSubSecondThresholdUpToOneSecond(t *testing.T) {
+	// ts has one-second granularity, and the anchor comparison converts
+	// AnchorEvery to seconds by truncating integer division. A threshold
+	// under a second would truncate to zero, and "elapsed >= 0" holds for
+	// every reading whether or not it changed — every equal reading would
+	// become an anchor and dedup would silently stop working, even though
+	// SetRetention accepted the value with no error to report it through.
+	s := openTestStore(t)
+	s.SetRetention(Retention{
+		AnchorEvery: 500 * time.Millisecond,
+		DailyAfter:  1 * time.Millisecond,
+		WeeklyAfter: 999 * time.Microsecond,
+	})
+	got := s.retentionOrDefault()
+	if got.AnchorEvery != time.Second || got.DailyAfter != time.Second || got.WeeklyAfter != time.Second {
+		t.Errorf("retentionOrDefault = %+v, want every sub-second threshold rounded up to 1s rather than truncated toward zero", got)
+	}
+}

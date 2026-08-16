@@ -841,7 +841,7 @@ func TestFingerprintOf_ChangesWhenTheVolatileHalfMoves(t *testing.T) {
 		{"the delivery window", func(p *wb.Product) { p.Time2 = ptrTo(int64(50)) }},
 		{"the delivery distance", func(p *wb.Product) { p.Dist = ptrTo(int64(9)) }},
 		{"the shipping warehouse", func(p *wb.Product) { p.WarehouseID = ptrTo(int64(900)) }},
-		{"the audience the reading was made as", func(p *wb.Product) { p.AppType = 32 }},
+		{"the delivery window's start", func(p *wb.Product) { p.Time1 = ptrTo(int64(99)) }},
 	} {
 		t.Run(tc.what, func(t *testing.T) {
 			moved := sampleProduct()
@@ -858,9 +858,12 @@ func TestFingerprintOf_IgnoresTheStableHalfAndThePosition(t *testing.T) {
 	// of them in would write a snapshot on a page-two appearance or a
 	// re-titled listing — a price history full of rows where no price moved.
 	//
-	// The region is in this list for a different reason: task 6 compares only
-	// against readings of the same dest, so hashing it as well would hide a
-	// lookup that forgot that scoping.
+	// dest and app_type are in this list for a different reason than the rest:
+	// shouldWriteSnapshot compares only against readings of the same dest and
+	// the same app_type (see its own doc comment), so hashing either into the
+	// digest as well would hide a lookup that forgot that scoping. They are
+	// the conditions the reading was taken under, not part of what it
+	// observed.
 	want := fingerprintOf(sampleProduct())
 
 	for _, tc := range []struct {
@@ -876,6 +879,7 @@ func TestFingerprintOf_IgnoresTheStableHalfAndThePosition(t *testing.T) {
 		{"the moment it was read", func(p *wb.Product) { p.FetchedAt = time.Now() }},
 		{"the raw payload", func(p *wb.Product) { p.Raw = []byte(`{"reordered":true}`) }},
 		{"the region, which is already the key", func(p *wb.Product) { p.Dest = "-2133463" }},
+		{"the audience, which is already the key", func(p *wb.Product) { p.AppType = 32 }},
 	} {
 		t.Run(tc.what, func(t *testing.T) {
 			same := sampleProduct()
