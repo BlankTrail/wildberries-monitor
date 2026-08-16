@@ -73,6 +73,19 @@ type Endpoints struct {
 	// Endpoints.DuplicatesURL appends — so a bare base address is all this
 	// field needs to hold.
 	Duplicates string `yaml:"duplicates"`
+	// Shelves is the advertising-shelves address: the paid placements WB mixes
+	// into a search result, grouped by advertiser. It carries no version
+	// segment of its own today — unlike Search, CardDetail, SellerCatalog and
+	// Duplicates, all four of which do and have already needed an override for
+	// it — but it sits in the same www.wildberries.ru __internal family those
+	// four live in, not on a fixed, unshared host the way supplierStaticURL,
+	// brandStaticURL and sellerProfileURL are. A field, edited without a
+	// release, is the safer default for an address in that family, even one
+	// that has not yet been observed to move. Like SellerCatalog, Questions and
+	// Duplicates it carries no placeholder of its own — query, dest and
+	// apptype are query parameters Endpoints.ShelvesURL appends — so a bare
+	// base address is all this field needs to hold.
+	Shelves string `yaml:"shelves"`
 }
 
 // searchTemplate is kept as one string, parameters and all, because the exact
@@ -98,6 +111,7 @@ func DefaultEndpoints() Endpoints {
 		Questions:     "https://questions.wildberries.ru/api/v1/questions",
 		SellerCatalog: "https://www.wildberries.ru/__internal/u-catalog/sellers/v4/catalog",
 		Duplicates:    "https://www.wildberries.ru/__internal/meta/duplicates/ru/common/v8/search",
+		Shelves:       "https://www.wildberries.ru/__internal/banners/shelfs/search",
 	}
 }
 
@@ -194,6 +208,9 @@ func (e Endpoints) Validate() error {
 	}
 	if strings.TrimSpace(e.Duplicates) == "" {
 		return errors.New("duplicates is empty")
+	}
+	if strings.TrimSpace(e.Shelves) == "" {
+		return errors.New("shelves is empty")
 	}
 	return nil
 }
