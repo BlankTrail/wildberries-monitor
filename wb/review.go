@@ -149,6 +149,26 @@ type Reviews struct {
 	Summary ReviewSummary
 	Items   []Review
 
+	// ImtID is the card this fetch was keyed on — the parent id that groups
+	// every variant, never a variant's own nmId (see Client.Reviews for why
+	// the endpoint takes one and not the other, and Review.NmID for the id
+	// that does name a variant).
+	//
+	// It is what makes a Reviews value say which product it is about. Without
+	// it the aggregate is a rating and a count belonging to nobody in
+	// particular, and DiffReviews cannot tell one card's window from another's
+	// — it would report a rating as having moved when all that happened is
+	// that two different products were compared.
+	//
+	// Client.Reviews sets it from its own argument rather than reading it back
+	// out of the body, which carries no imtId at all: the identity has to
+	// survive a fetch that produced nothing to read, so a caller holding a
+	// failed reading still knows which card failed. Seller.ID is set the same
+	// way for the same reason. Zero only where nobody said which card this is
+	// — a value built by hand, or one decoded straight from bytes by
+	// decodeReviews.
+	ImtID int64
+
 	// Port is the worker port this fetch was served through, mirroring
 	// Envelope.Port — see that field's own doc comment for why a caller
 	// needs it: to tell whether a port's session survives across separate
@@ -348,7 +368,10 @@ func (e Endpoints) ReviewsURL(imtID int64) string {
 // or nothing, silently; there is no error return that distinguishes the two.
 // imtID <= 0 is rejected outright, the same guard basket.go's CardURL
 // applies to a nomenclature id, so a garbled or hostile id fails here rather
-// than reaching the URL builder as a literal "0" or negative segment.
+// than reaching the URL builder as a literal "0" or negative segment. That
+// rejection is the one path that returns no identity, because there was no
+// usable one to carry; every other path stamps imtID onto the returned value
+// (see Reviews.ImtID), including the three that return an error.
 //
 // The endpoint carries no gate headers (KindPlain): the capture shows Origin
 // and a Referer for the product's own page, no deviceid or spa-version. This
@@ -365,15 +388,15 @@ func (c *Client) Reviews(ctx context.Context, eps Endpoints, imtID int64) (Revie
 	referer := eps.CardPageURL(imtID)
 	res, err := c.Get(ctx, eps.ReviewsURL(imtID), KindPlain, referer)
 	if err != nil {
-		return Reviews{Cost: CostOf(err)}, err
+		return Reviews{ImtID: imtID, Cost: CostOf(err)}, err
 	}
 	if res.Class != ClassOK {
-		return Reviews{Port: res.Port, Cost: res.FetchCost}, fmt.Errorf("wb: reviews %d: status %d (%s)", imtID, res.Status, res.Class)
+		return Reviews{ImtID: imtID, Port: res.Port, Cost: res.FetchCost}, fmt.Errorf("wb: reviews %d: status %d (%s)", imtID, res.Status, res.Class)
 	}
 	revs, err := decodeReviews(res.Body)
 	if err != nil {
-		return Reviews{Port: res.Port, Cost: res.FetchCost}, fmt.Errorf("wb: reviews %d: %w", imtID, err)
+		return Reviews{ImtID: imtID, Port: res.Port, Cost: res.FetchCost}, fmt.Errorf("wb: reviews %d: %w", imtID, err)
 	}
-	revs.Port, revs.Cost = res.Port, res.FetchCost
+	revs.ImtID, revs.Port, revs.Cost = imtID, res.Port, res.FetchCost
 	return revs, nil
 }

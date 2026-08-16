@@ -617,6 +617,64 @@ func TestClient_ReviewsReportsNoPortOnATotalTransportFailure(t *testing.T) {
 	}
 }
 
+// TestClient_ReviewsCarriesTheImtIDItWasAskedFor pins the identity onto the
+// value: without it a Reviews value names no card at all, and two aggregates
+// fetched for two different listings look identical to anything comparing
+// them.
+func TestClient_ReviewsCarriesTheImtIDItWasAskedFor(t *testing.T) {
+	l := &fakeLease{port: 1, replies: []*http.Response{reply(200, string(reviewsFixture(t)))}}
+	c := NewClient(&fakeLeaser{leases: []*fakeLease{l}}, NewSessions())
+
+	got, err := c.Reviews(context.Background(), DefaultEndpoints(), 3337911982)
+	if err != nil {
+		t.Fatalf("Reviews: %v", err)
+	}
+	if got.ImtID != 3337911982 {
+		t.Errorf("ImtID=%d, want the 3337911982 the fetch was keyed on", got.ImtID)
+	}
+}
+
+// TestClient_ReviewsCarriesTheImtIDThroughEveryFailure is the half that
+// matters: the id comes from the argument, so it must survive a fetch that
+// produced nothing to read it back from. Seller.ID sets the same precedent for
+// the same reason — a caller holding a failed reading still needs to know
+// which card failed. Each of the three shapes fails at a different return
+// statement, so a build that stamps only the happy path fails here rather than
+// in the test above.
+func TestClient_ReviewsCarriesTheImtIDThroughEveryFailure(t *testing.T) {
+	for _, tc := range []struct {
+		what  string
+		lease *fakeLease
+	}{
+		{"a transport that never answered", &fakeLease{port: 7, err: errors.New("boom")}},
+		{"a non-OK status", &fakeLease{port: 7, replies: []*http.Response{reply(500, "")}}},
+		{"a body that did not decode", &fakeLease{port: 7, replies: []*http.Response{reply(200, "{not valid json")}}},
+	} {
+		c := NewClient(&fakeLeaser{leases: []*fakeLease{tc.lease}}, NewSessions())
+		got, err := c.Reviews(context.Background(), DefaultEndpoints(), 3337911982)
+		if err == nil {
+			t.Fatalf("%s: was accepted without error", tc.what)
+		}
+		if got.ImtID != 3337911982 {
+			t.Errorf("%s: ImtID=%d, want the 3337911982 the fetch was keyed on", tc.what, got.ImtID)
+		}
+	}
+}
+
+// TestDecodeReviews_NamesNoCardOfItsOwn pins where the identity does not come
+// from. The payload carries no imtId anywhere — it is the key the request was
+// made with, not a fact the response restates — so a decode that produced one
+// would have invented it.
+func TestDecodeReviews_NamesNoCardOfItsOwn(t *testing.T) {
+	got, err := decodeReviews(reviewsFixture(t))
+	if err != nil {
+		t.Fatalf("decodeReviews: %v", err)
+	}
+	if got.ImtID != 0 {
+		t.Errorf("ImtID=%d, want 0: the body names no card, so only the caller's own argument can", got.ImtID)
+	}
+}
+
 // TestClient_ReviewsRejectsANonPositiveImtID mirrors basket.go's own guard
 // on CardURL (nm <= 0): without it, an imtID of 0 or less would still build
 // and send a request to a URL like .../feedbacks/v2/0 or .../feedbacks/v2/-1,
