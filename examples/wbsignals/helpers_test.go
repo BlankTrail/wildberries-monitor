@@ -117,6 +117,34 @@ func cardPair(nm, priceMinor int64) []*http.Response {
 	}
 }
 
+// cardDetailFixtureWithMatch is cardDetailFixture with a non-zero matchId,
+// for exercising the "product belongs to a real duplicate group" path
+// (cardDetailFixture's own products entry never carries one).
+func cardDetailFixtureWithMatch(nm, priceMinor, matchID int64) string {
+	return fmt.Sprintf(`{"products":[{"id":%d,"matchId":%d,"name":"Test Product",`+
+		`"sizes":[{"name":"41","price":{"product":%d,"basic":%d}}]}],"total":1}`,
+		nm, matchID, priceMinor, priceMinor+200)
+}
+
+// cardTripleWithMatch is cardTriple for a product carrying matchID.
+func cardTripleWithMatch(nm, priceMinor, matchID int64) []*http.Response {
+	return []*http.Response{
+		jsonReply(200, upstreamsFixture()),
+		jsonReply(200, cardStaticFixture(nm)),
+		jsonReply(200, cardDetailFixtureWithMatch(nm, priceMinor, matchID)),
+	}
+}
+
+// duplicatesFixture is a decodeDuplicates-shaped document (wb/duplicate.go):
+// one duplicate listing, plus the metadata block naming the minimum price
+// and its holder.
+func duplicatesFixture(holderID, minimalPriceMinor int64) string {
+	return fmt.Sprintf(`{"products":[{"id":%d,"name":"Cheapest"}],"total":1,`+
+		`"metadata":{"minimal_price":%d,"min_price_item":{"id":%d,"name":"Cheapest",`+
+		`"sizes":[{"name":"41","price":{"product":%d}}]}}}`,
+		holderID, minimalPriceMinor, holderID, minimalPriceMinor)
+}
+
 // reviewsFixture is a decodeReviews-shaped document (wb/review.go) with n
 // items, each carrying a size and a colour when withSizeColor is true, and
 // neither when it is false — the one lever TestCheckSizeAndColor's own
@@ -149,6 +177,14 @@ func questionsPageFixture(startID, n int, count int64) string {
 // sellerStaticFixture is a decodeSellerStatic-shaped document (wb/seller.go).
 func sellerStaticFixture(id int64) string {
 	return `{"supplierId":` + fmt.Sprint(id) + `,"supplierName":"Test Seller","supplierFullName":"Test Seller LLC","sellerType":"C2C"}`
+}
+
+// sellerStaticFixtureNoType is sellerStaticFixture with sellerType absent —
+// a legitimate document per decodeSellerStatic's own doc comment (it only
+// rejects a document where name, full name AND type are all empty at once),
+// and the shape a live run against a real seller turned out to have.
+func sellerStaticFixtureNoType(id int64) string {
+	return `{"supplierId":` + fmt.Sprint(id) + `,"supplierName":"Test Seller","supplierFullName":"Test Seller LLC"}`
 }
 
 // sellerProfileFixture is a decodeSellerProfile-shaped document.

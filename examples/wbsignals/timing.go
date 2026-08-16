@@ -72,15 +72,25 @@ func median(ds []time.Duration) time.Duration {
 // The grouped half answers the same question wbsearch's own function of this
 // name exists to answer: whether a solved challenge on a port actually saved
 // time on a later request through that same port, or whether every request
-// paid the same cold cost regardless. The unattributed half exists because,
-// unlike wbsearch's SearchPage and Client.SellerCatalogPage, none of
-// Client.Reviews, Client.Questions, Client.QuestionCount, Client.Seller,
-// Client.Duplicates or Client.Card hand back which port served the request —
-// see the task report for the full extent of that gap. Elapsed time alone,
-// without a port to group it by, is still worth printing: a second fetch
-// answering markedly faster than the first is suggestive of a warm session
-// even without proof of which port carried it, though it is not the same
-// claim wbsearch's grouped table can make.
+// paid the same cold cost regardless. Client.Reviews, Client.Questions,
+// Client.QuestionCount, Client.Duplicates and Client.SellerCatalogPage all
+// carry Port (and Cost) out now, so reviews, questions, duplicates and the
+// seller catalogue half of check 3 can all show a real, grouped table —
+// they did not when this program first shipped; see the task report for
+// what changed in wb to make that true.
+//
+// The unattributed half still exists for one call this program still makes:
+// Client.Card. Its live half decodes through decodeEnvelope internally, the
+// same function SearchPage and SellerCatalogPage use, but never carries the
+// port that answered it out onto the single Product it returns — Product has
+// no field to hold one, unlike Envelope. Card is shared with wbsearch, so
+// widening it is a larger, riskier change than the other five turned out to
+// be; see the task report for the proposal, left for the controller to
+// weigh. Every card #N and duplicates→card fetch, and every fetch inside
+// -what diff, therefore lands here rather than in a grouped port bucket —
+// elapsed time alone, without a port to group it by, is still worth
+// printing: a second fetch answering markedly faster than the first is
+// suggestive of a warm session even without proof of which port carried it.
 func printRequestTimings(w io.Writer, timings []requestTiming) {
 	fmt.Fprintln(w, "requests, in service order:")
 	if len(timings) == 0 {
@@ -131,18 +141,14 @@ func printRequestTimings(w io.Writer, timings []requestTiming) {
 // pre-formatted strings rather than a struct, because the five checks share
 // nothing about their content, only the surrounding shape.
 //
-// What this cannot print, unlike wbsearch's own printSummary: a fetch cost
-// (attempts, egress rotations, transport errors) for any of reviews,
-// questions, seller's profile half, duplicates or diff. Client.SearchPage and
-// Client.SellerCatalogPage both carry FetchCost out on their Envelope: every
-// other method in wb.Client — Reviews, Questions, QuestionCount, Seller,
-// Duplicates, Card — calls Client.Get internally and returns only the decoded
-// payload, discarding the *wb.Result (and with it Port and FetchCost)
-// entirely. Client.SellerCatalogPage is therefore the only call in this whole
-// program that can report either one; every other line above is wall-clock
-// time measured from outside the call, nothing more. See the task report for
-// why this is recorded rather than worked around: wb is a package this task
-// treats as already built, not one this task edits.
+// What this still cannot print, unlike wbsearch's own printSummary: a fetch
+// cost (attempts, egress rotations, transport errors) for -what diff, or for
+// the card fetch inside -what duplicates, or for seller's own static/profile
+// halves. Reviews, Questions, QuestionCount and Duplicates now carry Port and
+// FetchCost out (see printRequestTimings's own doc comment); Client.Card and
+// Client.Seller's two independent fetches still do not — see the task report
+// for exactly why, and the smallest change that would close each remaining
+// gap.
 func printCheckSummary(w io.Writer, what string, lines []string, stats blanktrail.Stats, egress egressSetup, timings []requestTiming) {
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "--- "+what+" summary ---")

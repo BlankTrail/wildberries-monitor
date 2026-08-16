@@ -50,11 +50,63 @@ func TestCheckMinimalPriceAgreesWithHolder_BothDirections(t *testing.T) {
 
 func TestToDuplicatesRow_MatchIDZeroSkipsEveryOtherField(t *testing.T) {
 	row := toDuplicatesRow(141504066, 0, wb.Duplicates{Total: 999}, "1259570991", time.Now())
-	if !row.NoGroup {
-		t.Fatal("NoGroup=false for MatchID 0")
+	if row.Case != caseNoGroup {
+		t.Fatalf("Case=%q, want %q for MatchID 0", row.Case, caseNoGroup)
 	}
 	if row.MinimalPrice != "" || row.MinPriceHolderID != 0 {
 		t.Errorf("row=%+v, want every duplicates-derived field at its zero value", row)
+	}
+}
+
+// TestToDuplicatesRow_DistinguishesAllThreeCases is the coordinator's own
+// live-run finding, pinned: a product with a real duplicate group but an
+// empty answer must not look identical to one with no group at all, and
+// neither may look like a fetch that produced nothing.
+func TestToDuplicatesRow_DistinguishesAllThreeCases(t *testing.T) {
+	noGroup := toDuplicatesRow(1, 0, wb.Duplicates{}, "d", time.Now())
+	if noGroup.Case != caseNoGroup {
+		t.Errorf("no-matchId product: Case=%q, want %q", noGroup.Case, caseNoGroup)
+	}
+
+	emptyGroup := toDuplicatesRow(2, 555, wb.Duplicates{}, "d", time.Now())
+	if emptyGroup.Case != caseEmptyGroup {
+		t.Errorf("matchId present but nothing came back: Case=%q, want %q", emptyGroup.Case, caseEmptyGroup)
+	}
+
+	hasData := toDuplicatesRow(3, 555, wb.Duplicates{
+		Total:        1,
+		MinimalPrice: &wb.Money{Minor: 60000, Currency: "RUB"},
+		MinPriceItem: &wb.Product{ID: 999},
+	}, "d", time.Now())
+	if hasData.Case != caseHasData {
+		t.Errorf("matchId present with a minimum price: Case=%q, want %q", hasData.Case, caseHasData)
+	}
+
+	// The three must be pairwise distinct, not just individually plausible —
+	// a mutation collapsing two of them into the same value would pass each
+	// check above in isolation.
+	seen := map[string]bool{}
+	for _, c := range []string{noGroup.Case, emptyGroup.Case, hasData.Case} {
+		if seen[c] {
+			t.Fatalf("two of the three cases share the value %q", c)
+		}
+		seen[c] = true
+	}
+}
+
+// TestDuplicatesSummaryLines_NeverSaysNothingWasFetchedForAHealthyOutcome is
+// the exact live-run defect: an operator must never read "(nothing was
+// fetched)" for a product that legitimately has no duplicate group, nor for
+// one whose group came back empty. Both are answers, not failures.
+func TestDuplicatesSummaryLines_NeverSaysNothingWasFetchedForAHealthyOutcome(t *testing.T) {
+	for _, row := range []duplicatesRow{
+		toDuplicatesRow(1, 0, wb.Duplicates{}, "d", time.Now()),
+		toDuplicatesRow(2, 555, wb.Duplicates{}, "d", time.Now()),
+	} {
+		lines := duplicatesSummaryLines(row)
+		if len(lines) == 0 {
+			t.Errorf("Case=%q produced no summary lines, which printCheckSummary renders as \"(nothing was fetched)\"", row.Case)
+		}
 	}
 }
 
@@ -83,6 +135,34 @@ func TestRunDuplicates_MatchIDZeroSkipsTheDuplicatesRequestEntirely(t *testing.T
 	}
 }
 
+// TestRunDuplicates_ReportsThePortForTheDuplicatesFetchItself is the port
+// gap this task closed for wb.Client.Duplicates: the card fetch (which
+// stays unattributed — Client.Card does not report a port, see the task
+// report) is distinct from the duplicates fetch, which now does.
+func TestRunDuplicates_ReportsThePortForTheDuplicatesFetchItself(t *testing.T) {
+	lease := &scriptedLease{port: 6, replies: append(
+		cardTripleWithMatch(141504066, 100000, 555),
+		jsonReply(200, duplicatesFixture(999, 60000)),
+	)}
+	c := newTestClient(lease)
+
+	var rows, summary bytes.Buffer
+	err := runDuplicates(context.Background(), c, wb.DefaultEndpoints(), wb.NewBasket(c), 141504066, "1259570991", wb.ModeDesktop, 1, 0,
+		&rows, &summary, func() blanktrail.Stats { return blanktrail.Stats{} }, egressSetup{})
+	if err != nil {
+		t.Fatalf("runDuplicates: %v", err)
+	}
+	if !strings.Contains(summary.String(), "minimal price:      600.00 RUB (held by 999)") {
+		t.Errorf("summary missing the minimal price line; got:\n%s", summary.String())
+	}
+	if !strings.Contains(summary.String(), "port 6 (1 request(s))") {
+		t.Errorf("summary does not group the duplicates fetch under port 6; got:\n%s", summary.String())
+	}
+	if !strings.Contains(summary.String(), "port not reported by this endpoint (1 request(s))") {
+		t.Errorf("summary should still show exactly the card fetch as unattributed (Client.Card reports no port); got:\n%s", summary.String())
+	}
+}
+
 func TestRunDuplicates_ReportsWhenTheLiveHalfOfTheCardFails(t *testing.T) {
 	lease := &scriptedLease{replies: []*http.Response{
 		jsonReply(200, upstreamsFixture()),
@@ -99,5 +179,14 @@ func TestRunDuplicates_ReportsWhenTheLiveHalfOfTheCardFails(t *testing.T) {
 	}
 	if rows.Len() != 0 {
 		t.Errorf("rows=%q, want empty — no Product was ever available to check duplicates with", rows.String())
+	}
+	// A genuine failure must say so by name, not fall back to the same
+	// placeholder a healthy no-group outcome would otherwise be forced to
+	// share (see the task report for the live-run defect this replaced).
+	if strings.Contains(summary.String(), "(nothing was fetched)") {
+		t.Errorf("summary fell back to the generic placeholder instead of naming the failed stage; got:\n%s", summary.String())
+	}
+	if !strings.Contains(summary.String(), "the card's live half failed") {
+		t.Errorf("summary does not say which stage failed; got:\n%s", summary.String())
 	}
 }

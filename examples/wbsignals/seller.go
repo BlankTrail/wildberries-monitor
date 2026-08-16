@@ -147,10 +147,24 @@ func sellerSummaryLines(row sellerRow) []string {
 	if row.FetchedAt.IsZero() {
 		return nil
 	}
+	sellerType := row.Type
+	if sellerType == "" {
+		// A live run against a real seller printed a bare "type:" with
+		// nothing after it, which reads exactly like a value that failed to
+		// render. It is not: wb.Client.Seller (and decodeSellerStatic
+		// beneath it) thread sellerType through unchanged — see toSellerRow,
+		// two lines of pure assignment, no place for it to be dropped — so
+		// an empty value here is the static record's own. decodeSellerStatic
+		// only rejects a document where Name, FullName and Type are ALL
+		// empty at once (see its own doc comment); a seller with a real
+		// name and an empty type is a legitimate, already-observed shape,
+		// not a decode failure.
+		sellerType = "(empty — this seller's own static record carries no sellerType)"
+	}
 	lines := []string{
 		fmt.Sprintf("supplier id:        %d", row.SupplierID),
 		fmt.Sprintf("name / full name:   %q / %q", row.Name, row.FullName),
-		fmt.Sprintf("type:               %s", row.Type),
+		fmt.Sprintf("type:               %s", sellerType),
 		fmt.Sprintf("catalogue page 1:   %d item(s)", row.CatalogPage1Count),
 		fmt.Sprintf("catalogue matching: %d/%d carry this supplier id", row.CatalogMatchingCount, row.CatalogWithSupplierID),
 	}

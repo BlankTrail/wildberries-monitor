@@ -85,6 +85,41 @@ func TestRunReviews_SucceedsWhenEveryReviewCarriesSizeAndColor(t *testing.T) {
 	if !strings.Contains(summary.String(), "valuation:          4.8") {
 		t.Errorf("summary missing the valuation line; got:\n%s", summary.String())
 	}
+	// wb.Client.Reviews now carries Port and Cost out (it did not when this
+	// program first shipped — see the task report). A run must show a real,
+	// grouped port line, not fall back to "port not reported by this
+	// endpoint".
+	if strings.Contains(summary.String(), "port not reported by this endpoint") {
+		t.Errorf("summary fell back to the unattributed bucket for a reviews fetch, which now reports its own port; got:\n%s", summary.String())
+	}
+	if !strings.Contains(summary.String(), "port 1 (1 request(s))") {
+		t.Errorf("summary does not group the fetch under its own port; got:\n%s", summary.String())
+	}
+}
+
+// TestRunReviews_GroupsRepeatedFetchesUnderTheirSharedPort is the warm-
+// session table this whole gap existed to close: two fetches through the
+// same scripted lease (one port) must appear together, first against later,
+// not scattered across "port not reported" lines.
+func TestRunReviews_GroupsRepeatedFetchesUnderTheirSharedPort(t *testing.T) {
+	lease := &scriptedLease{port: 4, replies: []*http.Response{
+		jsonReply(200, reviewsFixture(3, true)),
+		jsonReply(200, reviewsFixture(3, true)),
+	}}
+	c := newTestClient(lease)
+
+	var rows, summary bytes.Buffer
+	err := runReviews(context.Background(), c, wb.DefaultEndpoints(), 174483154, 2, 0,
+		&rows, &summary, func() blanktrail.Stats { return blanktrail.Stats{} }, egressSetup{})
+	if err != nil {
+		t.Fatalf("runReviews: %v", err)
+	}
+	if !strings.Contains(summary.String(), "port 4 (2 request(s))") {
+		t.Errorf("summary does not group both fetches under port 4; got:\n%s", summary.String())
+	}
+	if !strings.Contains(summary.String(), "later median") {
+		t.Errorf("summary is missing the first-vs-later comparison for a port with two requests; got:\n%s", summary.String())
+	}
 }
 
 // TestRunReviews_FailsWhenNoReviewCarriesASize is the end-to-end version of

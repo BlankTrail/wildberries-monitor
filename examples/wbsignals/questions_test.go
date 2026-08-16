@@ -64,6 +64,16 @@ func TestRunQuestions_SucceedsWhenCheapAndDeclaredCountsAgree(t *testing.T) {
 	if !strings.Contains(summary.String(), "declared count:     6") {
 		t.Errorf("summary missing declared count; got:\n%s", summary.String())
 	}
+	// wb.Client.QuestionCount and wb.Client.Questions now carry Port and
+	// Cost out. Both requests here land on the same scripted lease (port 1
+	// by default), so they must be grouped together, not reported as
+	// unattributed.
+	if strings.Contains(summary.String(), "port not reported by this endpoint") {
+		t.Errorf("summary fell back to the unattributed bucket for questions, which now reports its own port; got:\n%s", summary.String())
+	}
+	if !strings.Contains(summary.String(), "port 1 (2 request(s))") {
+		t.Errorf("summary does not group the cheap count and the page fetch under port 1; got:\n%s", summary.String())
+	}
 }
 
 func TestRunQuestions_FailsWhenTheCheapCountDisagreesWithTheDeclaredCount(t *testing.T) {

@@ -105,3 +105,34 @@ func TestRunSeller_ReportsWhichHalfFailedOnAPartialResult(t *testing.T) {
 		t.Errorf("row is missing the profile data that did succeed; got:\n%s", rows.String())
 	}
 }
+
+// TestRunSeller_NamesAnEmptySellerTypeRatherThanPrintingABareColon is the
+// live-run finding: a seller whose static record carries no sellerType must
+// read as an observed fact, not as a value that silently failed to render
+// (which a bare "type:" with nothing after it looks exactly like).
+func TestRunSeller_NamesAnEmptySellerTypeRatherThanPrintingABareColon(t *testing.T) {
+	lease := &scriptedLease{replies: []*http.Response{
+		jsonReply(200, sellerStaticFixtureNoType(118143)),
+		jsonReply(200, sellerProfileFixture(118143)),
+		jsonReply(200, sellerCatalogFixture(118143, 555)),
+	}}
+	c := newTestClient(lease)
+
+	var rows, summary bytes.Buffer
+	if err := runSeller(context.Background(), c, wb.DefaultEndpoints(), 118143, "1259570991", wb.ModeDesktop, 1, 0,
+		&rows, &summary, func() blanktrail.Stats { return blanktrail.Stats{} }, egressSetup{}); err != nil {
+		t.Fatalf("runSeller: %v", err)
+	}
+	if strings.Contains(summary.String(), "type:               \n") {
+		t.Errorf("summary printed a bare \"type:\" line with nothing after it; got:\n%s", summary.String())
+	}
+	if !strings.Contains(summary.String(), "type:               (empty") {
+		t.Errorf("summary does not name the empty type as an observed fact; got:\n%s", summary.String())
+	}
+	// Name and full name still came through — only the type field is empty,
+	// so this is not the "all three empty" document decodeSellerStatic
+	// actually rejects.
+	if !strings.Contains(summary.String(), `"Test Seller"`) {
+		t.Errorf("summary lost the seller's name along the way; got:\n%s", summary.String())
+	}
+}

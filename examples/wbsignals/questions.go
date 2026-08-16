@@ -123,8 +123,11 @@ func runQuestions(ctx context.Context, c *wb.Client, eps wb.Endpoints, imt int64
 		var t []requestTiming
 
 		start := time.Now()
-		cheap, ferr := c.QuestionCount(ctx, eps, imt)
-		t = append(t, requestTiming{label: fmt.Sprintf("question count #%d", i), elapsed: time.Since(start)})
+		cheap, cheapPort, cheapCost, ferr := c.QuestionCount(ctx, eps, imt)
+		t = append(t, requestTiming{
+			label: fmt.Sprintf("question count #%d", i), elapsed: time.Since(start),
+			port: cheapPort, attempts: cheapCost.Attempts,
+		})
 		if ferr != nil {
 			return t, fmt.Errorf("question count %d (attempt %d/%d): %w", imt, i, repeat, ferr)
 		}
@@ -134,8 +137,11 @@ func runQuestions(ctx context.Context, c *wb.Client, eps wb.Endpoints, imt int64
 		skip := 0
 		for page := 1; page <= maxQuestionPages; page++ {
 			pstart := time.Now()
-			items, count, perr := c.Questions(ctx, eps, imt, take, skip)
-			t = append(t, requestTiming{label: fmt.Sprintf("questions #%d page %d", i, page), elapsed: time.Since(pstart)})
+			items, count, port, cost, perr := c.Questions(ctx, eps, imt, take, skip)
+			t = append(t, requestTiming{
+				label: fmt.Sprintf("questions #%d page %d", i, page), elapsed: time.Since(pstart),
+				port: port, attempts: cost.Attempts,
+			})
 			if perr != nil {
 				return t, fmt.Errorf("questions %d page %d (attempt %d/%d): %w", imt, page, i, repeat, perr)
 			}
