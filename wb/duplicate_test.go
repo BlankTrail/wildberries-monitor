@@ -235,8 +235,8 @@ func TestClient_DuplicatesSkipsTheRequestWhenMatchIDIsZero(t *testing.T) {
 	if l.calls != 0 {
 		t.Errorf("Acquire was called %d time(s); MatchID==0 must not issue a request", l.calls)
 	}
-	if got.Total != 0 || got.Items != nil || got.MinimalPrice != nil || got.MinPriceItem != nil {
-		t.Errorf("Duplicates=%+v, want the zero value — no duplicate group means nothing to report", got)
+	if got.Total != 0 || got.Items != nil || got.MinimalPrice != nil || got.MinPriceItem != nil || got.Port != 0 {
+		t.Errorf("Duplicates=%+v, want the zero value — no duplicate group means nothing to report, and no request means no port to name", got)
 	}
 }
 
@@ -286,6 +286,26 @@ func TestClient_DuplicatesFetchesAndDecodesTheRealFixture(t *testing.T) {
 	}
 	if got.MinPriceItem == nil || got.MinPriceItem.ID != 307531200 {
 		t.Errorf("MinPriceItem=%v, want the listing with id 307531200", got.MinPriceItem)
+	}
+}
+
+// TestClient_DuplicatesReportsThePortAndCostOfTheFetch mirrors
+// TestClient_ReviewsReportsThePortAndCostOfTheFetch: the same gap existed
+// here, for the same reason (decodeDuplicates goes through decodeEnvelope
+// internally but the *Result carrying Port never reached the caller).
+func TestClient_DuplicatesReportsThePortAndCostOfTheFetch(t *testing.T) {
+	l := &fakeLease{port: 9, replies: []*http.Response{reply(200, string(duplicatesFixture(t)))}}
+	c := NewClient(&fakeLeaser{leases: []*fakeLease{l}}, NewSessions())
+
+	got, err := c.Duplicates(context.Background(), DefaultEndpoints(), Product{ID: 1, MatchID: 5}, "-1")
+	if err != nil {
+		t.Fatalf("Duplicates: %v", err)
+	}
+	if got.Port != 9 {
+		t.Errorf("Port=%d, want 9", got.Port)
+	}
+	if got.Cost.Attempts != 1 {
+		t.Errorf("Cost.Attempts=%d, want 1", got.Cost.Attempts)
 	}
 }
 

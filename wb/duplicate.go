@@ -40,6 +40,17 @@ type Duplicates struct {
 	// len(Items) — the same aggregate-vs-window distinction this package
 	// already draws for ReviewSummary.Count and decodeQuestions's count.
 	Total int64
+
+	// Port is the worker port this fetch was served through, mirroring
+	// Envelope.Port — see that field's own doc comment for why a caller
+	// needs it. Zero both when the fetch never produced a response at all,
+	// and when MatchID == 0 skipped the request entirely (see Client.
+	// Duplicates's own doc comment): neither case has a port to name.
+	Port int
+	// Cost is what this fetch took to obtain, mirroring Envelope.Cost. Zero
+	// (not just unset) when MatchID == 0, for the identical reason: nothing
+	// was spent fetching an answer already known.
+	Cost FetchCost
 }
 
 // rawDuplicatesMetadata mirrors the one block of the payload's metadata
@@ -177,15 +188,16 @@ func (c *Client) Duplicates(ctx context.Context, eps Endpoints, p Product, dest 
 	referer := eps.CardPageURL(p.ID)
 	res, err := c.Get(ctx, eps.DuplicatesURL(p.MatchID, p.ID, supplierID, dest), KindAPI, referer)
 	if err != nil {
-		return Duplicates{}, err
+		return Duplicates{Cost: CostOf(err)}, err
 	}
 	if res.Class != ClassOK {
-		return Duplicates{}, fmt.Errorf("wb: duplicates %d: status %d (%s)", p.ID, res.Status, res.Class)
+		return Duplicates{Port: res.Port, Cost: res.FetchCost}, fmt.Errorf("wb: duplicates %d: status %d (%s)", p.ID, res.Status, res.Class)
 	}
 
 	d, err := decodeDuplicates(res.Body)
 	if err != nil {
-		return Duplicates{}, fmt.Errorf("wb: duplicates %d: %w", p.ID, err)
+		return Duplicates{Port: res.Port, Cost: res.FetchCost}, fmt.Errorf("wb: duplicates %d: %w", p.ID, err)
 	}
+	d.Port, d.Cost = res.Port, res.FetchCost
 	return d, nil
 }

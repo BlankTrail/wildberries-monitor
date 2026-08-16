@@ -5,6 +5,7 @@ package wb
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"os"
 	"strings"
@@ -575,6 +576,44 @@ func TestClient_ReviewsFetchesWithThePlainProfile(t *testing.T) {
 	wantReferer := DefaultEndpoints().CardPageURL(3337911982)
 	if got := h.Get("Referer"); got != wantReferer {
 		t.Errorf("Referer=%q, want %q", got, wantReferer)
+	}
+}
+
+// TestClient_ReviewsReportsThePortAndCostOfTheFetch pins the one thing a
+// caller comparing two fetches on the same port needs and could not get
+// before: which port answered, and what it cost. Envelope has carried this
+// since Client.SearchPage; Reviews did not, silently, until this field was
+// added.
+func TestClient_ReviewsReportsThePortAndCostOfTheFetch(t *testing.T) {
+	fixture := reviewsFixture(t)
+	l := &fakeLease{port: 7, replies: []*http.Response{reply(200, string(fixture))}}
+	c := NewClient(&fakeLeaser{leases: []*fakeLease{l}}, NewSessions())
+
+	got, err := c.Reviews(context.Background(), DefaultEndpoints(), 3337911982)
+	if err != nil {
+		t.Fatalf("Reviews: %v", err)
+	}
+	if got.Port != 7 {
+		t.Errorf("Port=%d, want 7 (the fake lease's own port)", got.Port)
+	}
+	if got.Cost.Attempts != 1 {
+		t.Errorf("Cost.Attempts=%d, want 1 (a first-try success)", got.Cost.Attempts)
+	}
+}
+
+// TestClient_ReviewsReportsNoPortOnATotalTransportFailure is the other
+// direction: a fetch that never got a response at all has no port to name,
+// and must say so with the zero value rather than a stale or invented one.
+func TestClient_ReviewsReportsNoPortOnATotalTransportFailure(t *testing.T) {
+	l := &fakeLease{port: 7, err: errors.New("boom")}
+	c := NewClient(&fakeLeaser{leases: []*fakeLease{l}}, NewSessions())
+
+	got, err := c.Reviews(context.Background(), DefaultEndpoints(), 3337911982)
+	if err == nil {
+		t.Fatal("a transport failure was accepted without error")
+	}
+	if got.Port != 0 {
+		t.Errorf("Port=%d, want 0 — nothing answered, so no port earned credit for it", got.Port)
 	}
 }
 

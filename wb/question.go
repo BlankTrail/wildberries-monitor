@@ -193,23 +193,28 @@ func (e Endpoints) QuestionCountURL(imtID int64) string {
 // feeding imtId into the template's {id} slot where a real request would
 // carry a variant's nmId. See Client.Reviews's doc comment for why this is
 // documented as an approximation rather than a pinned-down fact.
-func (c *Client) Questions(ctx context.Context, eps Endpoints, imtID int64, take, skip int) ([]Question, int64, error) {
+//
+// port and cost mirror Envelope.Port and Envelope.Cost — see Envelope.Port's
+// own doc comment for why a caller needs a port to group by: to tell whether
+// a port's session survives across separate requests. port is zero when the
+// fetch never produced a response at all.
+func (c *Client) Questions(ctx context.Context, eps Endpoints, imtID int64, take, skip int) (items []Question, count int64, port int, cost FetchCost, err error) {
 	if imtID <= 0 {
-		return nil, 0, fmt.Errorf("wb: questions: invalid imtId %d", imtID)
+		return nil, 0, 0, FetchCost{}, fmt.Errorf("wb: questions: invalid imtId %d", imtID)
 	}
 	referer := eps.CardPageURL(imtID)
 	res, err := c.Get(ctx, eps.QuestionsURL(imtID, take, skip), KindPlain, referer)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, 0, CostOf(err), err
 	}
 	if res.Class != ClassOK {
-		return nil, 0, fmt.Errorf("wb: questions %d: status %d (%s)", imtID, res.Status, res.Class)
+		return nil, 0, res.Port, res.FetchCost, fmt.Errorf("wb: questions %d: status %d (%s)", imtID, res.Status, res.Class)
 	}
-	items, count, err := decodeQuestions(res.Body)
+	items, count, err = decodeQuestions(res.Body)
 	if err != nil {
-		return nil, 0, fmt.Errorf("wb: questions %d: %w", imtID, err)
+		return nil, 0, res.Port, res.FetchCost, fmt.Errorf("wb: questions %d: %w", imtID, err)
 	}
-	return items, count, nil
+	return items, count, res.Port, res.FetchCost, nil
 }
 
 // QuestionCount fetches only the cheap aggregate: onlyCount=true, no question
@@ -218,21 +223,24 @@ func (c *Client) Questions(ctx context.Context, eps Endpoints, imtID int64, take
 // caller polling for new questions needs the cheap path to be the obvious,
 // separate thing to call, not an argument to thread through the expensive
 // one.
-func (c *Client) QuestionCount(ctx context.Context, eps Endpoints, imtID int64) (int64, error) {
+//
+// port and cost mirror the identical pair on Questions, for the identical
+// reason.
+func (c *Client) QuestionCount(ctx context.Context, eps Endpoints, imtID int64) (count int64, port int, cost FetchCost, err error) {
 	if imtID <= 0 {
-		return 0, fmt.Errorf("wb: question count: invalid imtId %d", imtID)
+		return 0, 0, FetchCost{}, fmt.Errorf("wb: question count: invalid imtId %d", imtID)
 	}
 	referer := eps.CardPageURL(imtID)
 	res, err := c.Get(ctx, eps.QuestionCountURL(imtID), KindPlain, referer)
 	if err != nil {
-		return 0, err
+		return 0, 0, CostOf(err), err
 	}
 	if res.Class != ClassOK {
-		return 0, fmt.Errorf("wb: question count %d: status %d (%s)", imtID, res.Status, res.Class)
+		return 0, res.Port, res.FetchCost, fmt.Errorf("wb: question count %d: status %d (%s)", imtID, res.Status, res.Class)
 	}
-	_, count, err := decodeQuestions(res.Body)
+	_, count, err = decodeQuestions(res.Body)
 	if err != nil {
-		return 0, fmt.Errorf("wb: question count %d: %w", imtID, err)
+		return 0, res.Port, res.FetchCost, fmt.Errorf("wb: question count %d: %w", imtID, err)
 	}
-	return count, nil
+	return count, res.Port, res.FetchCost, nil
 }

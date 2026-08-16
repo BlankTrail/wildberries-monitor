@@ -148,6 +148,16 @@ type Review struct {
 type Reviews struct {
 	Summary ReviewSummary
 	Items   []Review
+
+	// Port is the worker port this fetch was served through, mirroring
+	// Envelope.Port — see that field's own doc comment for why a caller
+	// needs it: to tell whether a port's session survives across separate
+	// requests, rather than paying the same cold, challenge-solving cost
+	// every time. Zero when the fetch never produced a response at all.
+	Port int
+	// Cost is what this fetch took to obtain — attempts, egress changes and
+	// connections lost on the way — mirroring Envelope.Cost.
+	Cost FetchCost
 }
 
 // rawReviewsDocument mirrors the top level of a reviews.json-shaped payload.
@@ -355,14 +365,15 @@ func (c *Client) Reviews(ctx context.Context, eps Endpoints, imtID int64) (Revie
 	referer := eps.CardPageURL(imtID)
 	res, err := c.Get(ctx, eps.ReviewsURL(imtID), KindPlain, referer)
 	if err != nil {
-		return Reviews{}, err
+		return Reviews{Cost: CostOf(err)}, err
 	}
 	if res.Class != ClassOK {
-		return Reviews{}, fmt.Errorf("wb: reviews %d: status %d (%s)", imtID, res.Status, res.Class)
+		return Reviews{Port: res.Port, Cost: res.FetchCost}, fmt.Errorf("wb: reviews %d: status %d (%s)", imtID, res.Status, res.Class)
 	}
 	revs, err := decodeReviews(res.Body)
 	if err != nil {
-		return Reviews{}, fmt.Errorf("wb: reviews %d: %w", imtID, err)
+		return Reviews{Port: res.Port, Cost: res.FetchCost}, fmt.Errorf("wb: reviews %d: %w", imtID, err)
 	}
+	revs.Port, revs.Cost = res.Port, res.FetchCost
 	return revs, nil
 }

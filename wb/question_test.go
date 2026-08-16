@@ -334,7 +334,7 @@ func TestClient_QuestionsFetchesWithThePlainProfile(t *testing.T) {
 	l := &fakeLease{port: 1, replies: []*http.Response{reply(200, string(fixture))}}
 	c := NewClient(&fakeLeaser{leases: []*fakeLease{l}}, NewSessions())
 
-	items, count, err := c.Questions(context.Background(), DefaultEndpoints(), 996564353, 20, 0)
+	items, count, _, _, err := c.Questions(context.Background(), DefaultEndpoints(), 996564353, 20, 0)
 	if err != nil {
 		t.Fatalf("Questions: %v", err)
 	}
@@ -373,6 +373,41 @@ func TestClient_QuestionsFetchesWithThePlainProfile(t *testing.T) {
 	}
 }
 
+// TestClient_QuestionsAndQuestionCountReportThePortAndCostOfTheFetch is the
+// same gap and the same fix as Client.Reviews and Client.Duplicates: neither
+// method returned which port answered or what it cost, so a caller paging
+// through several requests had no way to tell a warm port from a cold one.
+func TestClient_QuestionsAndQuestionCountReportThePortAndCostOfTheFetch(t *testing.T) {
+	fixture := questionsFixture(t)
+	ql := &fakeLease{port: 11, replies: []*http.Response{reply(200, string(fixture))}}
+	qc := NewClient(&fakeLeaser{leases: []*fakeLease{ql}}, NewSessions())
+
+	_, _, port, cost, err := qc.Questions(context.Background(), DefaultEndpoints(), 996564353, 20, 0)
+	if err != nil {
+		t.Fatalf("Questions: %v", err)
+	}
+	if port != 11 {
+		t.Errorf("Questions port=%d, want 11", port)
+	}
+	if cost.Attempts != 1 {
+		t.Errorf("Questions cost.Attempts=%d, want 1", cost.Attempts)
+	}
+
+	cl := &fakeLease{port: 12, replies: []*http.Response{reply(200, `{"count":6,"err":null}`)}}
+	cc := NewClient(&fakeLeaser{leases: []*fakeLease{cl}}, NewSessions())
+
+	_, ccPort, ccCost, err := cc.QuestionCount(context.Background(), DefaultEndpoints(), 996564353)
+	if err != nil {
+		t.Fatalf("QuestionCount: %v", err)
+	}
+	if ccPort != 12 {
+		t.Errorf("QuestionCount port=%d, want 12", ccPort)
+	}
+	if ccCost.Attempts != 1 {
+		t.Errorf("QuestionCount cost.Attempts=%d, want 1", ccCost.Attempts)
+	}
+}
+
 // TestClient_QuestionsSendsTakeAndSkipInTheGivenOrder is the brief's own
 // mutation target at the client level, not just the URL-builder level:
 // distinct values on each side (7 and 13) so a swap anywhere in the call
@@ -381,7 +416,7 @@ func TestClient_QuestionsSendsTakeAndSkipInTheGivenOrder(t *testing.T) {
 	l := &fakeLease{port: 1, replies: []*http.Response{reply(200, `{"questions":[],"count":0,"err":null}`)}}
 	c := NewClient(&fakeLeaser{leases: []*fakeLease{l}}, NewSessions())
 
-	if _, _, err := c.Questions(context.Background(), DefaultEndpoints(), 1, 7, 13); err != nil {
+	if _, _, _, _, err := c.Questions(context.Background(), DefaultEndpoints(), 1, 7, 13); err != nil {
 		t.Fatalf("Questions: %v", err)
 	}
 	if len(l.sent) != 1 {
@@ -406,7 +441,7 @@ func TestClient_QuestionCountSendsOnlyCountTrueAndPullsNoBody(t *testing.T) {
 	l := &fakeLease{port: 1, replies: []*http.Response{reply(200, `{"count":6,"err":null}`)}}
 	c := NewClient(&fakeLeaser{leases: []*fakeLease{l}}, NewSessions())
 
-	count, err := c.QuestionCount(context.Background(), DefaultEndpoints(), 996564353)
+	count, _, _, err := c.QuestionCount(context.Background(), DefaultEndpoints(), 996564353)
 	if err != nil {
 		t.Fatalf("QuestionCount: %v", err)
 	}
@@ -447,7 +482,7 @@ func TestClient_QuestionsRejectsANonPositiveImtID(t *testing.T) {
 	l := &countingLeaser{}
 	c := NewClient(l, NewSessions())
 	for _, imtID := range []int64{0, -1} {
-		if _, _, err := c.Questions(context.Background(), DefaultEndpoints(), imtID, 20, 0); err == nil {
+		if _, _, _, _, err := c.Questions(context.Background(), DefaultEndpoints(), imtID, 20, 0); err == nil {
 			t.Errorf("imtID=%d was accepted without error", imtID)
 		}
 	}
@@ -464,7 +499,7 @@ func TestClient_QuestionCountRejectsANonPositiveImtID(t *testing.T) {
 	l := &countingLeaser{}
 	c := NewClient(l, NewSessions())
 	for _, imtID := range []int64{0, -1} {
-		if _, err := c.QuestionCount(context.Background(), DefaultEndpoints(), imtID); err == nil {
+		if _, _, _, err := c.QuestionCount(context.Background(), DefaultEndpoints(), imtID); err == nil {
 			t.Errorf("imtID=%d was accepted without error", imtID)
 		}
 	}
@@ -477,7 +512,7 @@ func TestClient_QuestionsRefusesANonOKStatus(t *testing.T) {
 	l := &fakeLease{port: 1, replies: []*http.Response{reply(500, "")}}
 	c := NewClient(&fakeLeaser{leases: []*fakeLease{l}}, NewSessions())
 
-	if _, _, err := c.Questions(context.Background(), DefaultEndpoints(), 1, 20, 0); err == nil {
+	if _, _, _, _, err := c.Questions(context.Background(), DefaultEndpoints(), 1, 20, 0); err == nil {
 		t.Fatal("a 500 was accepted without error")
 	}
 }
@@ -486,7 +521,7 @@ func TestClient_QuestionCountRefusesANonOKStatus(t *testing.T) {
 	l := &fakeLease{port: 1, replies: []*http.Response{reply(500, "")}}
 	c := NewClient(&fakeLeaser{leases: []*fakeLease{l}}, NewSessions())
 
-	if _, err := c.QuestionCount(context.Background(), DefaultEndpoints(), 1); err == nil {
+	if _, _, _, err := c.QuestionCount(context.Background(), DefaultEndpoints(), 1); err == nil {
 		t.Fatal("a 500 was accepted without error")
 	}
 }
@@ -495,7 +530,7 @@ func TestClient_QuestionsPropagatesADecodeFailure(t *testing.T) {
 	l := &fakeLease{port: 1, replies: []*http.Response{reply(200, "{not valid json")}}
 	c := NewClient(&fakeLeaser{leases: []*fakeLease{l}}, NewSessions())
 
-	if _, _, err := c.Questions(context.Background(), DefaultEndpoints(), 1, 20, 0); err == nil {
+	if _, _, _, _, err := c.Questions(context.Background(), DefaultEndpoints(), 1, 20, 0); err == nil {
 		t.Fatal("a malformed body was accepted without error")
 	}
 }
@@ -504,7 +539,7 @@ func TestClient_QuestionCountPropagatesADecodeFailure(t *testing.T) {
 	l := &fakeLease{port: 1, replies: []*http.Response{reply(200, "{not valid json")}}
 	c := NewClient(&fakeLeaser{leases: []*fakeLease{l}}, NewSessions())
 
-	if _, err := c.QuestionCount(context.Background(), DefaultEndpoints(), 1); err == nil {
+	if _, _, _, err := c.QuestionCount(context.Background(), DefaultEndpoints(), 1); err == nil {
 		t.Fatal("a malformed body was accepted without error")
 	}
 }
