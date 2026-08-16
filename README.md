@@ -75,6 +75,16 @@ cannot fix either and throws away a solved challenge on the way.
 Independently of all that, a port's whole identity is renewed after N requests
 or after a time interval.
 
+The leased client's own repeating is budgeted twice, because the two failures
+call for different remedies. `MaxRetriesPerReq` (default 4) repeats a request
+that met a rate limit or a server error, honouring `Retry-After` — the origin
+asking to be asked again, where repeating through the same egress is exactly
+right. `MaxTransportRetries` (default 1) repeats a request whose connection died,
+where it mostly is not: that is evidence about the egress, and a caller who can
+replace the egress between attempts does the job far better. One immediate
+re-dial is kept because a connection can die between the idle-pool check and the
+write, which nothing above this layer can tell apart from a bad proxy.
+
 A lease holder can also ask for a new egress itself, with `Lease.RotateEgress`.
 The pool judges an egress by what it can see — connection failures and non-2xx
 statuses — and a caller that knows the target may recognise a failure it cannot:
