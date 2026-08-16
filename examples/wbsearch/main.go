@@ -596,6 +596,11 @@ func runSearch(ctx context.Context, c *wb.Client, eps wb.Endpoints, query, dest 
 			Page:    page,
 		})
 		if err != nil {
+			// A page that failed still spent requests, proxies and ports —
+			// usually more of each than any page that worked. SearchPage carries
+			// that out on the otherwise empty envelope precisely so the summary
+			// below is not left describing only the pages that succeeded.
+			cost.Add(env.Cost)
 			printSummary(summary, pagesFetched, productCount, len(uniqueIDs), totalDropped, classCounts, cost, stats(), egress)
 			return fmt.Errorf("page %d: %w", page, err)
 		}
@@ -802,6 +807,11 @@ func printSummary(w io.Writer, pages, products, uniqueIDs, dropped int, classes 
 	}
 	fmt.Fprintf(w, "  egress rotations:   %d\n", stats.EgressRotations)
 	fmt.Fprintf(w, "  ports quarantined:  %d/%d\n", stats.Quarantined, stats.Ports)
+	// Lost is not a verdict this program or the pool reached about a port; it is
+	// the proxy saying the port is no longer open. Printed beside the quarantine
+	// count and never folded into it, because it points somewhere completely
+	// different: at the transport, not at the proxies or the target.
+	fmt.Fprintf(w, "  ports lost:         %d (no longer open on the proxy)\n", stats.Lost)
 	fmt.Fprintln(w, "  per-port final egress: not available (see printSummary's doc comment)")
 
 	fmt.Fprintf(w, "pool stats:     %+v\n", stats)

@@ -81,6 +81,39 @@ type Result struct {
 	FetchCost
 }
 
+// FetchError is what Get returns when no attempt produced a response at all —
+// every one of them lost before the edge answered, so there is no status, no
+// body and no Result to hand back.
+//
+// It carries the cost as data and not only as text. The message says the same
+// thing, but a summary line cannot read a message: without this, a run could
+// report what its successful pages spent and nothing at all about the page that
+// failed, which is the one an operator most wants the number for. Unwrap reaches
+// the transport's own error, so errors.Is on a caller's sentinel still works.
+type FetchError struct {
+	URL  string
+	Cost FetchCost
+	Err  error
+}
+
+func (e *FetchError) Error() string {
+	return fmt.Sprintf("%s: giving up after %d attempt(s) over %d port(s), %d egress change(s), %d of them lost before a response: %v",
+		e.URL, e.Cost.Attempts, e.Cost.PortChanges+1, e.Cost.Rotations, e.Cost.TransportErrors, e.Err)
+}
+
+func (e *FetchError) Unwrap() error { return e.Err }
+
+// CostOf reports what a failed fetch spent, for an error that carries it. It
+// answers the zero cost for anything else, so a caller can add it to a running
+// total without asking what kind of failure it was.
+func CostOf(err error) FetchCost {
+	var fe *FetchError
+	if errors.As(err, &fe) {
+		return fe.Cost
+	}
+	return FetchCost{}
+}
+
 // Retry policy defaults for a challenged request. They are exported because the
 // program that assembles the pool is the one that knows whether there is a pool
 // of proxies to search at all, and it should name these rather than repeat the
@@ -321,8 +354,14 @@ attempts:
 	}
 
 	if lastErr != nil {
-		return nil, fmt.Errorf("%s: giving up after %d attempt(s) over %d port(s), %d egress change(s), %d of them lost before a response: %w",
-			url, spent, portChanges+1, rotations, faults, lastErr)
+		return nil, &FetchError{
+			URL: url,
+			Cost: FetchCost{
+				Attempts: spent, Rotations: rotations,
+				TransportErrors: faults, PortChanges: portChanges,
+			},
+			Err: lastErr,
+		}
 	}
 	if last == nil {
 		// Unreachable: withDefaults guarantees at least one attempt, and both
@@ -432,20 +471,26 @@ func (c *Client) SearchPage(ctx context.Context, eps Endpoints, q SearchQuery) (
 
 	res, err := c.Get(ctx, eps.SearchURL(q), KindSearch, searchReferer(eps, q))
 	if err != nil {
-		return Envelope{}, err
+		// The page is lost but the cost is not: it goes out on the otherwise
+		// empty envelope, because a run that reports what its successful pages
+		// spent and nothing about the one that failed describes the wrong half.
+		// The failed page is where the requests, the proxies and the ports
+		// actually went.
+		return Envelope{Cost: CostOf(err)}, err
 	}
 	if res.Class != ClassOK {
 		// What the fetch cost belongs in this message: a page that came back
 		// challenged after fifteen attempts through twelve proxies is a
 		// different problem from one challenged on the first, and the status
 		// alone reads identically for both.
-		return Envelope{}, fmt.Errorf("wb: search page %d: status %d (%s) after %d attempt(s), %d egress change(s), %d of them lost before a response",
-			q.Page, res.Status, res.Class, res.Attempts, res.Rotations, res.TransportErrors)
+		return Envelope{Cost: res.FetchCost}, fmt.Errorf(
+			"wb: search page %d: status %d (%s) after %d attempt(s) over %d port(s), %d egress change(s), %d of them lost before a response",
+			q.Page, res.Status, res.Class, res.Attempts, res.PortChanges+1, res.Rotations, res.TransportErrors)
 	}
 
 	env, err := decodeEnvelope(res.Body)
 	if err != nil {
-		return Envelope{}, fmt.Errorf("wb: search page %d: %w", q.Page, err)
+		return Envelope{Cost: res.FetchCost}, fmt.Errorf("wb: search page %d: %w", q.Page, err)
 	}
 	// Carried out with the data, not only reported when the fetch fails: a page
 	// that landed on the eleventh attempt through four proxies is what an

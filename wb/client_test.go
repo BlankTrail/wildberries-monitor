@@ -1192,3 +1192,67 @@ func TestClient_ReleasesEveryPortItTakesExactlyOnce(t *testing.T) {
 		}
 	})
 }
+
+func TestClient_SearchPageCarriesTheCostOfAPageThatFailed(t *testing.T) {
+	// The mirror of the successful-page gap, and the one the decisive run hit:
+	// the summary said "ports abandoned: 0" while the error for the same page
+	// said "over 15 port(s)". A failed page is where a run's requests, proxies
+	// and ports actually went, so its cost is the one a summary least affords
+	// to lose.
+	leases := make([]*fakeLease, 20)
+	for i := range leases {
+		leases[i] = &fakeLease{port: 20000 + i, err: portRefused()}
+	}
+	c := NewClientWithRetry(&fakeLeaser{leases: leases}, NewSessions(), DefaultRetryPolicy(true))
+
+	env, err := c.SearchPage(context.Background(), DefaultEndpoints(), SearchQuery{Query: "socks", Dest: "-1"})
+	if err == nil {
+		t.Fatal("SearchPage returned no error with every port refusing connections")
+	}
+	want := FetchCost{Attempts: 15, TransportErrors: 15, PortChanges: 14}
+	if env.Cost != want {
+		t.Errorf("Cost=%+v, want %+v — the envelope is empty but the cost is real", env.Cost, want)
+	}
+}
+
+func TestClient_SearchPageCarriesTheCostOfAPageTheEdgeRefused(t *testing.T) {
+	// The other failing path: attempts that did produce responses, all of them
+	// challenges. There is a Result here, so the cost was always available —
+	// it was simply dropped on the way out.
+	l := &fakeLease{port: 1, replies: challenges(20)}
+	c := NewClientWithRetry(&fakeLeaser{leases: []*fakeLease{l}}, NewSessions(), DefaultRetryPolicy(true))
+
+	env, err := c.SearchPage(context.Background(), DefaultEndpoints(), SearchQuery{Query: "socks", Dest: "-1"})
+	if err == nil {
+		t.Fatal("SearchPage accepted a page of challenges")
+	}
+	if env.Cost.Attempts != 15 || env.Cost.Rotations != 12 {
+		t.Errorf("Cost=%+v, want 15 attempts and 12 rotations", env.Cost)
+	}
+}
+
+func TestCostOf_ReadsWhatAFailedFetchSpent(t *testing.T) {
+	// The seam that makes the two tests above possible: the cost travels as
+	// data, not only inside the message. Anything that is not a FetchError
+	// answers the zero cost rather than making the caller ask what kind of
+	// failure it was.
+	inner := errors.New("boom")
+	fe := &FetchError{URL: "https://example.test/x", Cost: FetchCost{Attempts: 4, PortChanges: 1}, Err: inner}
+
+	if got := CostOf(fmt.Errorf("wb: search page 2: %w", fe)); got != fe.Cost {
+		t.Errorf("CostOf through a wrap = %+v, want %+v", got, fe.Cost)
+	}
+	if got := CostOf(errors.New("something else")); got != (FetchCost{}) {
+		t.Errorf("CostOf on a plain error = %+v, want the zero cost", got)
+	}
+	if !errors.Is(fe, inner) {
+		t.Error("FetchError does not unwrap to the failure underneath it")
+	}
+	// The text still has to say it too: the error is what an operator reads
+	// when no summary is printed at all.
+	for _, want := range []string{"4 attempt(s)", "2 port(s)", "boom"} {
+		if !strings.Contains(fe.Error(), want) {
+			t.Errorf("Error()=%q does not contain %q", fe.Error(), want)
+		}
+	}
+}

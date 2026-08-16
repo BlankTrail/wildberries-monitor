@@ -656,3 +656,51 @@ func TestRunSearch_SaysNothingAboutCostWhenEveryPageLandedFirstTry(t *testing.T)
 		t.Errorf("a run where every page landed first try printed a cost block:\n%s", summary.String())
 	}
 }
+
+func TestRunSearch_ReportsWhatThePageThatFailedCost(t *testing.T) {
+	// The contradiction the decisive run printed: "ports abandoned: 0" in the
+	// summary while the error for the same page said "over 15 port(s)". An
+	// operator reading that summary would conclude no port was ever abandoned,
+	// which is the opposite of what happened.
+	//
+	// Page one lands. Page two never gets a reply at all, so the whole budget
+	// goes on it — and that is the cost the summary has to show, since it is
+	// most of what the run did.
+	lease := &scriptedLease{replies: []*http.Response{jsonReply(200, page(observedPageSize))}}
+	c := wb.NewClientWithRetry(scriptedLeaser{lease}, wb.NewSessions(), wb.DefaultRetryPolicy(true))
+
+	var rows, summary bytes.Buffer
+	err := runSearch(context.Background(), c, wb.DefaultEndpoints(), "socks", "-1", wb.ModeDesktop, 5,
+		&rows, &summary, func() blanktrail.Stats { return blanktrail.Stats{} }, egressSetup{})
+	if err == nil {
+		t.Fatal("runSearch returned no error when page two could not be fetched")
+	}
+
+	out := summary.String()
+	// One request for page one, fifteen spent on page two.
+	if !strings.Contains(out, "requests sent:      16 (for 1 page(s))") {
+		t.Errorf("summary does not account for the failed page's requests; got:\n%s", out)
+	}
+	if !strings.Contains(out, "proxy changes:      12") {
+		t.Errorf("summary does not account for the failed page's proxy changes; got:\n%s", out)
+	}
+	if strings.Contains(out, "lost before reply:  0") {
+		t.Errorf("summary reports nothing lost before a reply, for a page where every attempt was; got:\n%s", out)
+	}
+}
+
+func TestPrintSummary_ReportsPortsTheProxyNoLongerHas(t *testing.T) {
+	// Lost ports are the pool being told a fact, not the pool reaching a
+	// verdict, so they are printed beside the quarantine count rather than
+	// folded into it: one points at the transport, the other at the proxies.
+	var buf bytes.Buffer
+	stats := blanktrail.Stats{Ports: 9, Quarantined: 9, Lost: 9}
+	printSummary(&buf, 1, 100, 100, 0, map[wb.Class]int{wb.ClassOK: 1}, wb.FetchCost{Attempts: 1}, stats, egressSetup{})
+
+	out := buf.String()
+	for _, want := range []string{"ports quarantined:  9/9", "ports lost:         9"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("summary output missing %q; got:\n%s", want, out)
+		}
+	}
+}
