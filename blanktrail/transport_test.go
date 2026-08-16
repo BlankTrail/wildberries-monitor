@@ -5,7 +5,9 @@ package blanktrail
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"testing"
@@ -484,5 +486,86 @@ func TestLadder_OneBudgetDoesNotConsumeTheOther(t *testing.T) {
 	}
 	if rt.calls != 4 {
 		t.Errorf("transport calls=%d, want 4", rt.calls)
+	}
+}
+
+// refused is the error net/http produces when the proxy — here the worker port
+// on this machine — will not accept a connection. The typed *net.OpError with
+// Op "proxyconnect" is what net/http returns for exactly this case; the message
+// underneath it is whatever the operating system says, in whatever language it
+// is set to, which is why nothing reads it.
+func refused() func() (*http.Response, error) {
+	return failWith(&net.OpError{
+		Op: "proxyconnect", Net: "tcp",
+		Err: errors.New("dial tcp 127.0.0.1:20006: connection refused"),
+	})
+}
+
+func TestPortUnreachable_ReadsTheTypeNotTheMessage(t *testing.T) {
+	// The whole point of the predicate: it must hold for a proxyconnect error
+	// whose message says nothing recognisable, and must not hold for an ordinary
+	// dial failure whose message says something very recognisable indeed.
+	opaque := &net.OpError{Op: "proxyconnect", Net: "tcp", Err: errors.New("〜")}
+	if !PortUnreachable(fmt.Errorf("request https://example.test/x: %w", opaque)) {
+		t.Error("a wrapped proxyconnect error was not recognised; the check must survive wrapping and ignore the message")
+	}
+	for _, err := range []error{
+		errors.New("proxyconnect tcp: dial tcp 127.0.0.1:20006: connection refused"),
+		&net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")},
+		&net.OpError{Op: "read", Net: "tcp", Err: errors.New("connection reset by peer")},
+		nil,
+	} {
+		if PortUnreachable(err) {
+			t.Errorf("PortUnreachable(%v)=true; only a failure to reach the port itself counts, "+
+				"and a message that merely reads like one is not the same thing", err)
+		}
+	}
+}
+
+func TestLadder_AnUnreachablePortIsThePortsFaultNotTheEgress(t *testing.T) {
+	// The failure the last battle test died on. Nothing left the machine, so
+	// the egress is innocent: marking it bad burns a healthy proxy for a local
+	// fault, and retrying through a port that is not there cannot work. The
+	// strike is the only remedy that fits.
+	rt := &fakeRT{steps: []func() (*http.Response, error){refused()}}
+	rem := &fakeRemedy{retries: 4, transportRetries: 4}
+	l := &ladder{rt: rt, port: 20006, rem: rem}
+
+	if _, err := l.RoundTrip(newReq(t, http.MethodGet, "")); err == nil {
+		t.Fatal("RoundTrip returned no error for a port that refused the connection")
+	}
+	if rem.markedBad != 0 {
+		t.Errorf("markedBad=%d, want 0 — no egress carried this request, so none of them earned the blame", rem.markedBad)
+	}
+	if rem.failures != 0 || rem.rotations != 0 {
+		t.Errorf("failures=%d rotations=%d, want 0 and 0 — a new upstream cannot fix a port that will not answer",
+			rem.failures, rem.rotations)
+	}
+	if rem.exhaustedCalls != 1 {
+		t.Errorf("exhausted called %d times, want 1 — the strike counter is the only thing that can retire this port", rem.exhaustedCalls)
+	}
+	if rt.calls != 1 {
+		t.Errorf("transport calls=%d, want 1 — the transport budget is not spent re-dialling a port that is not there", rt.calls)
+	}
+}
+
+func TestLadder_AnOrdinaryDialFailureStillBlamesTheEgress(t *testing.T) {
+	// The other side of the split, and what keeps the test above from being
+	// vacuous: a connection that failed somewhere past our own port is exactly
+	// the case the egress-blaming path exists for, and it must be untouched.
+	rt := &fakeRT{steps: []func() (*http.Response, error){
+		failWith(errors.New("dial tcp: connection refused")),
+	}}
+	rem := &fakeRemedy{retries: 4, transportRetries: 0, rotateOnNth: 1}
+	l := &ladder{rt: rt, port: 20007, rem: rem}
+
+	if _, err := l.RoundTrip(newReq(t, http.MethodGet, "")); err == nil {
+		t.Fatal("RoundTrip returned no error")
+	}
+	if rem.markedBad != 1 || rem.rotations != 1 {
+		t.Errorf("markedBad=%d rotations=%d, want 1 and 1", rem.markedBad, rem.rotations)
+	}
+	if rem.exhaustedCalls != 0 {
+		t.Errorf("exhausted called %d times for a failure that is the egress's, not the port's", rem.exhaustedCalls)
 	}
 }

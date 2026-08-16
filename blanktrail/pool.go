@@ -830,9 +830,10 @@ func (p *Pool) renewFailed(pt *poolPort, err error) error {
 	return err
 }
 
-// exhausted records that a port spent its whole retry budget and still came back
-// blocked. Enough strikes and the port is quarantined: continuing to hand it out
-// only burns proxies and time.
+// exhausted records a failure that belongs to the port rather than to whatever
+// it was pointed at: it spent its whole retry budget and still came back
+// blocked, or it could not be reached at all. Enough strikes and the port is
+// quarantined: continuing to hand it out only burns proxies and time.
 func (p *Pool) exhausted(num int) {
 	pt := p.port(num)
 	if pt == nil {

@@ -1240,3 +1240,48 @@ func TestLease_RotateEgressIsRefusedOnceTheLeaseIsReleased(t *testing.T) {
 		t.Errorf("upstream changed to %q through a released lease", after)
 	}
 }
+
+func TestPool_QuarantinesAPortThatCannotBeDialled(t *testing.T) {
+	// The gap the last battle test exposed from the other end: nine ports, one
+	// of them refusing connections outright, and nothing quarantined all run.
+	// The strike counter was only ever reached from the status path, which by
+	// definition needs a working port to answer through — so the one failure
+	// that most deserves a quarantine was the one that could never cause one.
+	//
+	// This drives the real seam, ladder onto pool, rather than calling
+	// exhausted directly the way the test above does: what was broken was not
+	// the counter but the route to it.
+	fake := fakebt.New(t)
+	clock := newFakeClock()
+	cfg := testPoolConfig(t, fake, clock, 1, 2)
+	cfg.MaxPortStrikes = 2
+
+	p, err := NewPool(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	defer p.Close()
+
+	victim := fake.OpenPorts()[0]
+	for i := 0; i < cfg.MaxPortStrikes; i++ {
+		rt := &fakeRT{steps: []func() (*http.Response, error){refused()}}
+		l := &ladder{rt: rt, port: victim, rem: p}
+		if _, err := l.RoundTrip(newReq(t, http.MethodGet, "")); err == nil {
+			t.Fatalf("RoundTrip %d: no error from a port that refused the connection", i)
+		}
+	}
+
+	if st := p.Stats(); st.Quarantined != 1 {
+		t.Errorf("Quarantined=%d after %d refused connections, want 1", st.Quarantined, cfg.MaxPortStrikes)
+	}
+	// And the pool keeps working on what is left, rather than the dead port
+	// coming back round on the next Acquire.
+	l, err := p.Acquire(context.Background())
+	if err != nil {
+		t.Fatalf("Acquire after quarantine: %v", err)
+	}
+	defer l.Release()
+	if l.Port() == victim {
+		t.Error("the port that could not be dialled was handed out again")
+	}
+}

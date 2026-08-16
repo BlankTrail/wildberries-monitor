@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"io"
 	"math/rand"
 	"net"
@@ -42,6 +43,27 @@ func newBaseTransport(scheme, proxyHost string, port int, ca *x509.CertPool, ins
 	}
 }
 
+// PortUnreachable reports whether err is the transport failing to reach the
+// worker port itself — the local listener refusing a connection, or gone —
+// rather than anything that happened to the request after it was through.
+//
+// It is a structural test, not a message match. net/http returns
+// *net.OpError{Op: "proxyconnect"} for exactly this case: the typed error was
+// added (Go issue 16997) so that callers would not have to read strings, and
+// the strings are the worst thing to read here — the same refusal is "connection
+// refused" on one operating system and a sentence about the target machine
+// actively refusing it on another, in whatever language that machine is set to.
+//
+// The distinction earns its place because the two failures have opposite
+// remedies. An upstream that will not carry the request is answered by replacing
+// the egress. A port that will not accept a connection is answered by nothing
+// done to that port: it never reached an upstream, so no egress is to blame, and
+// a caller holding it should take a different port instead.
+func PortUnreachable(err error) bool {
+	var opErr *net.OpError
+	return errors.As(err, &opErr) && opErr.Op == "proxyconnect"
+}
+
 // remedy is the narrow view of the pool that the ladder needs. Keeping it an
 // interface is what lets the ladder be tested without opening a single port.
 //
@@ -61,8 +83,8 @@ type remedy interface {
 	attemptSucceeded(port int)
 	rotateEgress(ctx context.Context, port int) error
 	markBadEgress(port int)
-	// exhausted reports that the whole retry budget was spent and the response is
-	// still not usable.
+	// exhausted reports a failure that is the port's own: it spent the whole
+	// retry budget and is still not usable, or it could not be reached at all.
 	exhausted(port int)
 	// maxRetries budgets the repeats of a retryable status; maxTransportRetries
 	// budgets the repeats of a request that never got a response. They are
@@ -111,6 +133,25 @@ func (t *ladder) RoundTrip(req *http.Request) (*http.Response, error) {
 
 		resp, err := t.rt.RoundTrip(req.Clone(req.Context()))
 		if err != nil {
+			if PortUnreachable(err) {
+				// The request never left this machine: the port's own listener
+				// refused it, or is gone. Two things follow, and both are the
+				// opposite of what the branch below does. No egress carried
+				// anything, so marking one bad would burn an innocent proxy for
+				// a local fault — that is how a healthy proxy list gets eaten by
+				// a dead port. And no repeat through a port that is not there
+				// can succeed, so the budget is not spent on it.
+				//
+				// The strike is the only remedy that fits: it is the port that
+				// failed, and enough of them takes it out of the pool. Until
+				// this branch existed nothing could ever strike a port for being
+				// unreachable — the counter was reached only from the status
+				// path, which by definition needs a working port to answer
+				// through — so the one failure that most deserves a quarantine
+				// was the one that never produced one.
+				t.rem.exhausted(t.port)
+				return nil, err
+			}
 			// The egress did not carry the request at all: blame it, not the origin.
 			t.rem.markBadEgress(t.port)
 			if t.rem.attemptFailed(t.port) {
