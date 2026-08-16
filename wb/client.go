@@ -483,20 +483,21 @@ func (c *Client) SearchPage(ctx context.Context, eps Endpoints, q SearchQuery) (
 		// challenged after fifteen attempts through twelve proxies is a
 		// different problem from one challenged on the first, and the status
 		// alone reads identically for both.
-		return Envelope{Cost: res.FetchCost}, fmt.Errorf(
+		return Envelope{Cost: res.FetchCost, Port: res.Port}, fmt.Errorf(
 			"wb: search page %d: status %d (%s) after %d attempt(s) over %d port(s), %d egress change(s), %d of them lost before a response",
 			q.Page, res.Status, res.Class, res.Attempts, res.PortChanges+1, res.Rotations, res.TransportErrors)
 	}
 
 	env, err := decodeEnvelope(res.Body)
 	if err != nil {
-		return Envelope{Cost: res.FetchCost}, fmt.Errorf("wb: search page %d: %w", q.Page, err)
+		return Envelope{Cost: res.FetchCost, Port: res.Port}, fmt.Errorf("wb: search page %d: %w", q.Page, err)
 	}
 	// Carried out with the data, not only reported when the fetch fails: a page
 	// that landed on the eleventh attempt through four proxies is what an
 	// operator needs to see, and it looks identical to a first-try page once
 	// this Result goes out of scope.
 	env.Cost = res.FetchCost
+	env.Port = res.Port
 
 	// The clock is read once for the whole page, not once per product: every
 	// row from the same response describes the same fetch and must carry the

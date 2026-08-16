@@ -174,6 +174,18 @@ type Envelope struct {
 	// outright. Transport telemetry rather than decoded data, hence its own
 	// field rather than three more loose ints among the products.
 	Cost FetchCost
+
+	// Port is the worker port this page was fetched through — see Result.Port,
+	// which is where this comes from. A caller comparing how long a port's
+	// first request took against its later ones needs this to group by; without
+	// it, that comparison could only be made inside this package, where it
+	// cannot answer the question it exists for: whether a session actually
+	// survives on a port across separate requests, not just within one.
+	//
+	// Zero when the fetch never produced a response at all (see FetchError) —
+	// a request that never landed may have tried several ports (see
+	// FetchCost.PortChanges) and cannot be attributed to a single one.
+	Port int
 }
 
 // FetchCost is what one fetch spent. A first-try success is Attempts 1 and the

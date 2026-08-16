@@ -401,7 +401,7 @@ func TestBuildEgressSetup_CombinesEveryChannelFlagAtOnce(t *testing.T) {
 func TestPrintSummary_ReportsEgressRotationsQuarantinesAndTheMissingPerPortAnswer(t *testing.T) {
 	var buf bytes.Buffer
 	stats := blanktrail.Stats{Ports: 50, Quarantined: 3, EgressRotations: 842}
-	printSummary(&buf, 3, 250, 250, 0, map[wb.Class]int{wb.ClassOK: 3}, wb.FetchCost{Attempts: 3}, stats, egressSetup{})
+	printSummary(&buf, 3, 250, 250, 0, map[wb.Class]int{wb.ClassOK: 3}, wb.FetchCost{Attempts: 3}, stats, egressSetup{}, nil)
 
 	out := buf.String()
 	for _, want := range []string{"egress rotations:   842", "ports quarantined:  3/50", "per-port final egress: not available"} {
@@ -424,7 +424,7 @@ func TestPrintSummary_ReportsProxiesLoadedAndRemainingWhenAProxiesFileWasUsed(t 
 	setup := egressSetup{rotor: rotor, proxiesLoaded: 3, proxiesBad: 1}
 
 	var buf bytes.Buffer
-	printSummary(&buf, 1, 1, 1, 0, map[wb.Class]int{wb.ClassOK: 1}, wb.FetchCost{Attempts: 1}, blanktrail.Stats{}, setup)
+	printSummary(&buf, 1, 1, 1, 0, map[wb.Class]int{wb.ClassOK: 1}, wb.FetchCost{Attempts: 1}, blanktrail.Stats{}, setup, nil)
 
 	out := buf.String()
 	if !strings.Contains(out, "proxies loaded:     3 (1 lines skipped as unparsable)") {
@@ -508,7 +508,7 @@ func TestValidateEgressFlags_RejectsNegativeRetryNumbers(t *testing.T) {
 func TestPrintSummary_ReportsWhatThePagesCostWhenTheyWereNotFree(t *testing.T) {
 	var buf bytes.Buffer
 	cost := wb.FetchCost{Attempts: 11, Rotations: 4, TransportErrors: 2, PortChanges: 1}
-	printSummary(&buf, 3, 250, 250, 0, map[wb.Class]int{wb.ClassOK: 3}, cost, blanktrail.Stats{}, egressSetup{})
+	printSummary(&buf, 3, 250, 250, 0, map[wb.Class]int{wb.ClassOK: 3}, cost, blanktrail.Stats{}, egressSetup{}, nil)
 
 	out := buf.String()
 	for _, want := range []string{
@@ -531,7 +531,7 @@ func TestPrintSummary_ReportsWhatThePagesCostWhenTheyWereNotFree(t *testing.T) {
 func TestPrintSummary_SaysNothingAboutCostWhenEveryPageLandedFirstTry(t *testing.T) {
 	for _, cost := range []wb.FetchCost{{Attempts: 3}, {}} {
 		var buf bytes.Buffer
-		printSummary(&buf, 3, 250, 250, 0, map[wb.Class]int{wb.ClassOK: 3}, cost, blanktrail.Stats{}, egressSetup{})
+		printSummary(&buf, 3, 250, 250, 0, map[wb.Class]int{wb.ClassOK: 3}, cost, blanktrail.Stats{}, egressSetup{}, nil)
 		if strings.Contains(buf.String(), "fetch cost") {
 			t.Errorf("summary printed a cost block for %+v; got:\n%s", cost, buf.String())
 		}
@@ -614,7 +614,7 @@ func TestRunSearch_ReportsWhatTheWholeWalkCostAcrossPages(t *testing.T) {
 	c := wb.NewClientWithRetry(scriptedLeaser{lease}, wb.NewSessions(), wb.DefaultRetryPolicy(true))
 
 	var rows, summary bytes.Buffer
-	err := runSearch(context.Background(), c, wb.DefaultEndpoints(), "socks", "-1", wb.ModeDesktop, 5,
+	err := runSearch(context.Background(), c, wb.DefaultEndpoints(), "socks", "-1", wb.ModeDesktop, 5, 0,
 		&rows, &summary, func() blanktrail.Stats { return blanktrail.Stats{} }, egressSetup{})
 	if err != nil {
 		t.Fatalf("runSearch: %v", err)
@@ -648,7 +648,7 @@ func TestRunSearch_SaysNothingAboutCostWhenEveryPageLandedFirstTry(t *testing.T)
 	c := wb.NewClientWithRetry(scriptedLeaser{lease}, wb.NewSessions(), wb.DefaultRetryPolicy(true))
 
 	var rows, summary bytes.Buffer
-	if err := runSearch(context.Background(), c, wb.DefaultEndpoints(), "socks", "-1", wb.ModeDesktop, 5,
+	if err := runSearch(context.Background(), c, wb.DefaultEndpoints(), "socks", "-1", wb.ModeDesktop, 5, 0,
 		&rows, &summary, func() blanktrail.Stats { return blanktrail.Stats{} }, egressSetup{}); err != nil {
 		t.Fatalf("runSearch: %v", err)
 	}
@@ -670,7 +670,7 @@ func TestRunSearch_ReportsWhatThePageThatFailedCost(t *testing.T) {
 	c := wb.NewClientWithRetry(scriptedLeaser{lease}, wb.NewSessions(), wb.DefaultRetryPolicy(true))
 
 	var rows, summary bytes.Buffer
-	err := runSearch(context.Background(), c, wb.DefaultEndpoints(), "socks", "-1", wb.ModeDesktop, 5,
+	err := runSearch(context.Background(), c, wb.DefaultEndpoints(), "socks", "-1", wb.ModeDesktop, 5, 0,
 		&rows, &summary, func() blanktrail.Stats { return blanktrail.Stats{} }, egressSetup{})
 	if err == nil {
 		t.Fatal("runSearch returned no error when page two could not be fetched")
@@ -695,12 +695,244 @@ func TestPrintSummary_ReportsPortsTheProxyNoLongerHas(t *testing.T) {
 	// folded into it: one points at the transport, the other at the proxies.
 	var buf bytes.Buffer
 	stats := blanktrail.Stats{Ports: 9, Quarantined: 9, Lost: 9}
-	printSummary(&buf, 1, 100, 100, 0, map[wb.Class]int{wb.ClassOK: 1}, wb.FetchCost{Attempts: 1}, stats, egressSetup{})
+	printSummary(&buf, 1, 100, 100, 0, map[wb.Class]int{wb.ClassOK: 1}, wb.FetchCost{Attempts: 1}, stats, egressSetup{}, nil)
 
 	out := buf.String()
 	for _, want := range []string{"ports quarantined:  9/9", "ports lost:         9"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("summary output missing %q; got:\n%s", want, out)
 		}
+	}
+}
+
+// --- per-request timing ---
+//
+// This is the coordinator's own finding, made testable: nine ports for ten
+// pages exercised only the cold path, because a summary of totals cannot show
+// whether any single port ever got a second, warmer request. These tests pin
+// the plumbing that makes the shape visible — grouping by port, first against
+// the median of the rest, attempts carried alongside so a retried request is
+// never mistaken for a cold one — and the -delay flag that lets a run test
+// whether the warm path survives a gap, not just immediate reuse.
+
+func TestValidateFlags_RejectsNegativeDelay(t *testing.T) {
+	if err := validateFlags("q", "d", "key", 1, 1, 1, 0, -time.Second); err == nil {
+		t.Error("a negative -delay was accepted")
+	}
+	if err := validateFlags("q", "d", "key", 1, 1, 1, 0, 0); err != nil {
+		t.Errorf("-delay 0 (no pause) = %v, want nil", err)
+	}
+}
+
+func TestSleepBetweenRequests_WaitsOutTheDuration(t *testing.T) {
+	start := time.Now()
+	if err := sleepBetweenRequests(context.Background(), 20*time.Millisecond); err != nil {
+		t.Fatalf("sleepBetweenRequests: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed < 20*time.Millisecond {
+		t.Errorf("returned after %v, want at least 20ms", elapsed)
+	}
+}
+
+// TestSleepBetweenRequests_StopsEarlyOnCancelledContext guards the property
+// -delay depends on for being usable at all on a long run: Ctrl-C during a
+// deliberately long pause must not be swallowed by the wait.
+func TestSleepBetweenRequests_StopsEarlyOnCancelledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	start := time.Now()
+	err := sleepBetweenRequests(ctx, time.Hour)
+	if err == nil {
+		t.Fatal("sleepBetweenRequests returned nil on an already-cancelled context")
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("returned after %v, want it to stop almost immediately", elapsed)
+	}
+}
+
+// TestAppendTiming_SkipsAFetchThatNeverLandedOnAPort guards the one case a
+// timing entry cannot be attributed correctly: env.Port == 0 means no
+// response ever came back at all (see Envelope.Port's own doc comment), and
+// the fetch may have tried several ports on its way to failing. Recording it
+// against port zero would misattribute a sample to a port that answered
+// nothing.
+func TestAppendTiming_SkipsAFetchThatNeverLandedOnAPort(t *testing.T) {
+	got := appendTiming(nil, 1, wb.Envelope{Port: 0}, 5*time.Second)
+	if len(got) != 0 {
+		t.Errorf("appendTiming with Port=0 recorded %d entries, want 0", len(got))
+	}
+}
+
+// TestAppendTiming_RecordsPortAndAttempts is the case that matters: a landed
+// fetch's port, attempt count and elapsed time all have to survive into the
+// recorded entry, in the order fetches arrive.
+func TestAppendTiming_RecordsPortAndAttempts(t *testing.T) {
+	var timings []requestTiming
+	timings = appendTiming(timings, 1, wb.Envelope{Port: 20001, Cost: wb.FetchCost{Attempts: 1}}, 8*time.Second)
+	timings = appendTiming(timings, 2, wb.Envelope{Port: 20001, Cost: wb.FetchCost{Attempts: 3}}, 900*time.Millisecond)
+
+	if len(timings) != 2 {
+		t.Fatalf("got %d timings, want 2", len(timings))
+	}
+	if timings[0].port != 20001 || timings[0].attempts != 1 || timings[0].elapsed != 8*time.Second {
+		t.Errorf("timings[0]=%+v, want port 20001, 1 attempt, 8s", timings[0])
+	}
+	if timings[1].attempts != 3 {
+		t.Errorf("timings[1].attempts=%d, want 3", timings[1].attempts)
+	}
+}
+
+func TestGroupTimingsByPort_PreservesFirstSeenOrderAndPerPortServiceOrder(t *testing.T) {
+	timings := []requestTiming{
+		{page: 1, port: 20004, elapsed: time.Second},
+		{page: 2, port: 20001, elapsed: 2 * time.Second},
+		{page: 3, port: 20004, elapsed: 3 * time.Second},
+		{page: 4, port: 20001, elapsed: 4 * time.Second},
+	}
+	order, byPort := groupTimingsByPort(timings)
+
+	if got := order; len(got) != 2 || got[0] != 20004 || got[1] != 20001 {
+		t.Errorf("order=%v, want [20004 20001] (first-seen order)", got)
+	}
+	if got := byPort[20004]; len(got) != 2 || got[0].page != 1 || got[1].page != 3 {
+		t.Errorf("byPort[20004]=%v, want pages [1 3] in service order", got)
+	}
+	if got := byPort[20001]; len(got) != 2 || got[0].page != 2 || got[1].page != 4 {
+		t.Errorf("byPort[20001]=%v, want pages [2 4] in service order", got)
+	}
+}
+
+func TestMedian_OddAndEvenCounts(t *testing.T) {
+	odd := median([]time.Duration{3 * time.Second, 1 * time.Second, 2 * time.Second})
+	if odd != 2*time.Second {
+		t.Errorf("median of [3s 1s 2s]=%v, want 2s", odd)
+	}
+	even := median([]time.Duration{1 * time.Second, 4 * time.Second, 2 * time.Second, 3 * time.Second})
+	if even != 2500*time.Millisecond {
+		t.Errorf("median of [1s 4s 2s 3s]=%v, want 2.5s", even)
+	}
+	if got := median(nil); got != 0 {
+		t.Errorf("median(nil)=%v, want 0", got)
+	}
+}
+
+// TestPrintRequestTimings_ShowsFirstAgainstLaterMedianPerPort is the "at a
+// glance" requirement itself: a cold first request and a fast, repeated warm
+// one on the same port must read as obviously different without doing any
+// arithmetic by hand, and a port with only one request must say so rather
+// than print a misleading "median" of nothing.
+func TestPrintRequestTimings_ShowsFirstAgainstLaterMedianPerPort(t *testing.T) {
+	timings := []requestTiming{
+		{page: 1, port: 20001, attempts: 1, elapsed: 8 * time.Second},
+		{page: 2, port: 20001, attempts: 1, elapsed: 300 * time.Millisecond},
+		{page: 3, port: 20001, attempts: 1, elapsed: 320 * time.Millisecond},
+		{page: 4, port: 20009, attempts: 1, elapsed: 7500 * time.Millisecond},
+	}
+	var buf bytes.Buffer
+	printRequestTimings(&buf, timings)
+	out := buf.String()
+
+	for _, want := range []string{
+		"port 20001 (3 request(s)) — first 8s (1 attempt(s)), later median 310ms (2 later, 0 retried)",
+		"port 20009 (1 request(s)) — first 7.5s (1 attempt(s)), no later request on this port to compare",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output missing %q; got:\n%s", want, out)
+		}
+	}
+	// The raw, in-order detail the task asked for by name — "how long each
+	// request took ... in the order that port served them" — not only the
+	// at-a-glance synopsis line above it.
+	for _, want := range []string{"#1  8s", "#2  300ms", "#3  320ms"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output missing per-request detail %q; got:\n%s", want, out)
+		}
+	}
+}
+
+// TestPrintRequestTimings_FlagsARetriedLaterRequestSoItIsNotMistakenForCold is
+// the other half of the same requirement: a later request that took three
+// attempts naturally took longer than a clean warm one, for a reason that has
+// nothing to do with the port's session, and the retried count exists so a
+// reader does not misread it as evidence the warm path failed.
+func TestPrintRequestTimings_FlagsARetriedLaterRequestSoItIsNotMistakenForCold(t *testing.T) {
+	timings := []requestTiming{
+		{page: 1, port: 1, attempts: 1, elapsed: 8 * time.Second},
+		{page: 2, port: 1, attempts: 3, elapsed: 4 * time.Second}, // slow, but retried — not cold
+	}
+	var buf bytes.Buffer
+	printRequestTimings(&buf, timings)
+	out := buf.String()
+	if !strings.Contains(out, "1 later, 1 retried") {
+		t.Errorf("output does not flag the retried later request; got:\n%s", out)
+	}
+	if !strings.Contains(out, "#2  4s         (3 attempt(s))") {
+		t.Errorf("output does not show attempts for the slow-but-retried entry; got:\n%s", out)
+	}
+}
+
+func TestPrintRequestTimings_NoTimingsPrintsNone(t *testing.T) {
+	var buf bytes.Buffer
+	printRequestTimings(&buf, nil)
+	if !strings.Contains(buf.String(), "requests by port, in service order:\n  (none)") {
+		t.Errorf("empty timings did not print the (none) placeholder; got:\n%s", buf.String())
+	}
+}
+
+// TestRunSearch_RecordsPerPortTimingInServiceOrder wires the whole path
+// together through the loop itself, not just the print function: three pages
+// on the one port a single-lease test can offer land as three timing entries,
+// in order, each carrying the port SearchPage reported and the attempts the
+// page actually cost — the plumbing the coordinator's finding showed was
+// entirely missing before this.
+func TestRunSearch_RecordsPerPortTimingInServiceOrder(t *testing.T) {
+	lease := &scriptedLease{replies: []*http.Response{
+		jsonReply(200, page(observedPageSize)),
+		jsonReply(200, page(observedPageSize)),
+		jsonReply(200, page(1)), // short page: ends the walk
+	}}
+	c := wb.NewClientWithRetry(scriptedLeaser{lease}, wb.NewSessions(), wb.DefaultRetryPolicy(true))
+
+	var rows, summary bytes.Buffer
+	if err := runSearch(context.Background(), c, wb.DefaultEndpoints(), "socks", "-1", wb.ModeDesktop, 5, 0,
+		&rows, &summary, func() blanktrail.Stats { return blanktrail.Stats{} }, egressSetup{}); err != nil {
+		t.Fatalf("runSearch: %v", err)
+	}
+
+	out := summary.String()
+	if !strings.Contains(out, "port 1 (3 request(s))") {
+		t.Errorf("summary does not group the three pages under port 1; got:\n%s", out)
+	}
+	if !strings.Contains(out, "0 retried") {
+		t.Errorf("summary does not report zero retried later requests for a run with no challenges; got:\n%s", out)
+	}
+}
+
+// TestRunSearch_DelayPausesBetweenRequestsButNotBeforeTheFirst checks -delay's
+// wiring end to end: the pause has to land between requests two and three
+// pages apart, not before the very first request goes out.
+func TestRunSearch_DelayPausesBetweenRequestsButNotBeforeTheFirst(t *testing.T) {
+	lease := &scriptedLease{replies: []*http.Response{
+		jsonReply(200, page(observedPageSize)),
+		jsonReply(200, page(1)),
+	}}
+	c := wb.NewClientWithRetry(scriptedLeaser{lease}, wb.NewSessions(), wb.DefaultRetryPolicy(true))
+
+	const delay = 25 * time.Millisecond
+	var rows, summary bytes.Buffer
+	start := time.Now()
+	if err := runSearch(context.Background(), c, wb.DefaultEndpoints(), "socks", "-1", wb.ModeDesktop, 5, delay,
+		&rows, &summary, func() blanktrail.Stats { return blanktrail.Stats{} }, egressSetup{}); err != nil {
+		t.Fatalf("runSearch: %v", err)
+	}
+	elapsed := time.Since(start)
+
+	// Two pages means exactly one gap between them; a delay before the first
+	// request too would push this past 2×delay.
+	if elapsed < delay {
+		t.Errorf("runSearch with -delay %v took %v, want at least one pause", delay, elapsed)
+	}
+	if elapsed > 2*delay {
+		t.Errorf("runSearch with -delay %v took %v, want under 2× the delay (only one gap for two pages)", delay, elapsed)
 	}
 }

@@ -944,6 +944,9 @@ func TestClient_SearchPageCarriesWhatTheFetchCost(t *testing.T) {
 	if env.Cost != want {
 		t.Errorf("Cost=%+v, want %+v — one dead connection, two challenges, then a new proxy got it", env.Cost, want)
 	}
+	if env.Port != 20013 {
+		t.Errorf("Port=%d, want 20013 — the port that actually answered, for a per-port timing comparison", env.Port)
+	}
 }
 
 func TestClient_SearchPageReportsAFirstTryPageAsCostingOneAttempt(t *testing.T) {
@@ -963,6 +966,9 @@ func TestClient_SearchPageReportsAFirstTryPageAsCostingOneAttempt(t *testing.T) 
 	}
 	if env.Cost.Retried() {
 		t.Error("a first-try page reports itself as retried")
+	}
+	if env.Port != 1 {
+		t.Errorf("Port=%d, want 1", env.Port)
 	}
 }
 
@@ -1213,6 +1219,13 @@ func TestClient_SearchPageCarriesTheCostOfAPageThatFailed(t *testing.T) {
 	if env.Cost != want {
 		t.Errorf("Cost=%+v, want %+v — the envelope is empty but the cost is real", env.Cost, want)
 	}
+	// No Result was ever produced — every attempt died at the transport level
+	// — so there is no single port to blame; the fetch tried 15 of them.
+	// Reporting any one of those as "the" port would misattribute a timing
+	// sample to a port that may have answered nothing at all.
+	if env.Port != 0 {
+		t.Errorf("Port=%d, want 0 (unattributable: no response ever came back)", env.Port)
+	}
 }
 
 func TestClient_SearchPageCarriesTheCostOfAPageTheEdgeRefused(t *testing.T) {
@@ -1228,6 +1241,12 @@ func TestClient_SearchPageCarriesTheCostOfAPageTheEdgeRefused(t *testing.T) {
 	}
 	if env.Cost.Attempts != 15 || env.Cost.Rotations != 12 {
 		t.Errorf("Cost=%+v, want 15 attempts and 12 rotations", env.Cost)
+	}
+	// Unlike the transport-error case above, every attempt here did get a
+	// response — there was always a Result, just never an OK one — so the port
+	// it last answered on is known and worth keeping.
+	if env.Port != 1 {
+		t.Errorf("Port=%d, want 1", env.Port)
 	}
 }
 

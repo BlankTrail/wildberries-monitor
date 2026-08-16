@@ -38,6 +38,17 @@
 // they pick themselves from whether there is a pool of proxies to search at all
 // (15 attempts) or a single direct address (2).
 //
+// The closing summary breaks search-page timing down per port, in the order
+// each port served its requests, first against the median of the rest — this
+// is how to tell whether a port's session actually survives across separate
+// requests (a fast warm path) or whether every request pays the same cold,
+// challenge-solving cost regardless (a session that buys nothing). A run with
+// far more ports than pages never shows this, because almost every port only
+// ever gets one, necessarily cold, request; -ports-per-thread well below
+// -pages is what makes the comparison possible at all, and -delay adds a pause
+// between requests to test whether the session survives a gap, not just
+// immediate reuse.
+//
 // JSONL rows go to -out (or stdout when it is empty); preflight findings and
 // the closing summary always go to stderr, so a run can be piped straight
 // into a file without the summary landing in the middle of it.
@@ -114,6 +125,8 @@ func run() error {
 
 		challengeAttempts = flag.Int("challenge-attempts", 0, "total attempts for a request the edge answers with a challenge or the proxy kills before it answers at all (0 = automatic: 15 when any egress channel is configured, 2 on direct egress)")
 		attemptsPerEgress = flag.Int("attempts-per-egress", wb.DefaultAttemptsPerEgress, "attempts through one proxy before the port's upstream is replaced; past this, every attempt takes a fresh proxy")
+
+		delay = flag.Duration("delay", 0, "pause between search-page requests, to test whether a port's session survives a gap rather than only back-to-back reuse (0 = no pause)")
 	)
 	flag.Usage = usage
 	flag.Parse()
@@ -127,7 +140,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	if err := validateFlags(*query, *dest, apiKey, *pages, *threads, *perThread, *cardID); err != nil {
+	if err := validateFlags(*query, *dest, apiKey, *pages, *threads, *perThread, *cardID, *delay); err != nil {
 		return err
 	}
 	if err := validateEgressFlags(*proxyScheme, *rotateURLF, *rotateProxy, *requestTimeout, *portTimeout,
@@ -186,7 +199,7 @@ func run() error {
 	if *cardID != 0 {
 		return runCard(ctx, wbClient, eps, *cardID, *dest, mode, rows, os.Stderr, pool.Stats, egress)
 	}
-	return runSearch(ctx, wbClient, eps, *query, *dest, mode, *pages, rows, os.Stderr, pool.Stats, egress)
+	return runSearch(ctx, wbClient, eps, *query, *dest, mode, *pages, *delay, rows, os.Stderr, pool.Stats, egress)
 }
 
 // poolConfig builds the pool this run drives. It is a named function rather
@@ -424,7 +437,7 @@ func parseMode(s string) (wb.Mode, error) {
 // time, so a run with no arguments at all — the case this program must fail
 // cleanly on — explains itself in a single message instead of a game of
 // whack-a-mole across repeated invocations.
-func validateFlags(query, dest, apiKey string, pages, threads, perThread int, cardID int64) error {
+func validateFlags(query, dest, apiKey string, pages, threads, perThread int, cardID int64, delay time.Duration) error {
 	var problems []string
 	if cardID == 0 && strings.TrimSpace(query) == "" {
 		problems = append(problems, "-query is required unless -card is set")
@@ -446,6 +459,9 @@ func validateFlags(query, dest, apiKey string, pages, threads, perThread int, ca
 	}
 	if perThread < 1 {
 		problems = append(problems, "-ports-per-thread must be at least 1")
+	}
+	if delay < 0 {
+		problems = append(problems, "-delay must not be negative")
 	}
 	if len(problems) == 0 {
 		return nil
@@ -568,15 +584,59 @@ func toSearchRow(p wb.Product) searchRow {
 	return row
 }
 
+// requestTiming is one page fetch's wall-clock cost, kept in the order the
+// port it landed on served it. It exists to answer the question totals cannot:
+// whether a port's session actually survives across separate requests, or
+// whether every one of them pays the same cold, challenge-solving cost the
+// first did. A run that hands out many more ports than it fetches pages never
+// touches this — each port only ever gets the one, necessarily cold, request —
+// which is exactly the gap this type closes.
+type requestTiming struct {
+	page     int
+	port     int
+	attempts int
+	elapsed  time.Duration
+}
+
+// appendTiming records one page fetch's timing, keyed to the port it landed
+// on. A fetch that never produced a single response (env.Port == 0 — see
+// Envelope.Port's own doc comment) may have tried several ports on its way to
+// failing and cannot be credited to any one of them, so it is left out rather
+// than misattributed to a port that never answered.
+func appendTiming(timings []requestTiming, page int, env wb.Envelope, elapsed time.Duration) []requestTiming {
+	if env.Port == 0 {
+		return timings
+	}
+	return append(timings, requestTiming{page: page, port: env.Port, attempts: env.Cost.Attempts, elapsed: elapsed})
+}
+
+// sleepBetweenRequests pauses for d, or stops early when ctx is done — a run
+// with a long -delay between pages must still exit promptly on Ctrl-C rather
+// than finish waiting out a pause nobody wants any more.
+func sleepBetweenRequests(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
+}
+
 // runSearch walks the search from page one, writing a JSONL row per product,
 // until a page comes back shorter than a full page or pageBudget is spent.
+//
+// delay, when positive, pauses between requests (not before the first) so a
+// run can deliberately test whether a port's session survives a gap, not just
+// immediate reuse — see -delay's own flag description.
 //
 // rows is the JSONL sink and summary is where the closing report goes — stdout
 // or -out, and stderr, in a real run. stats reads the pool rather than being
 // the pool, for the same reason printSummary takes an io.Writer instead of
 // baking in os.Stderr: this loop is worth testing, and neither a live pool nor
 // a captured stderr is available to a test.
-func runSearch(ctx context.Context, c *wb.Client, eps wb.Endpoints, query, dest string, mode wb.Mode, pageBudget int, rows, summary io.Writer, stats func() blanktrail.Stats, egress egressSetup) error {
+func runSearch(ctx context.Context, c *wb.Client, eps wb.Endpoints, query, dest string, mode wb.Mode, pageBudget int, delay time.Duration, rows, summary io.Writer, stats func() blanktrail.Stats, egress egressSetup) error {
 	enc := json.NewEncoder(rows)
 
 	var (
@@ -586,22 +646,34 @@ func runSearch(ctx context.Context, c *wb.Client, eps wb.Endpoints, query, dest 
 		cost         wb.FetchCost
 		classCounts  = map[wb.Class]int{}
 		uniqueIDs    = map[int64]struct{}{}
+		timings      []requestTiming
 	)
 
 	for page := 1; page <= pageBudget; page++ {
+		if page > 1 && delay > 0 {
+			if err := sleepBetweenRequests(ctx, delay); err != nil {
+				printSummary(summary, pagesFetched, productCount, len(uniqueIDs), totalDropped, classCounts, cost, stats(), egress, timings)
+				return err
+			}
+		}
+
+		start := time.Now()
 		env, err := c.SearchPage(ctx, eps, wb.SearchQuery{
 			Query:   query,
 			Dest:    dest,
 			AppType: mode.AppType(),
 			Page:    page,
 		})
+		elapsed := time.Since(start)
+		timings = appendTiming(timings, page, env, elapsed)
+
 		if err != nil {
 			// A page that failed still spent requests, proxies and ports —
 			// usually more of each than any page that worked. SearchPage carries
 			// that out on the otherwise empty envelope precisely so the summary
 			// below is not left describing only the pages that succeeded.
 			cost.Add(env.Cost)
-			printSummary(summary, pagesFetched, productCount, len(uniqueIDs), totalDropped, classCounts, cost, stats(), egress)
+			printSummary(summary, pagesFetched, productCount, len(uniqueIDs), totalDropped, classCounts, cost, stats(), egress, timings)
 			return fmt.Errorf("page %d: %w", page, err)
 		}
 		// SearchPage only ever returns successfully when the fetch classified
@@ -620,7 +692,7 @@ func runSearch(ctx context.Context, c *wb.Client, eps wb.Endpoints, query, dest 
 			uniqueIDs[p.ID] = struct{}{}
 			productCount++
 			if err := enc.Encode(toSearchRow(p)); err != nil {
-				printSummary(summary, pagesFetched, productCount, len(uniqueIDs), totalDropped, classCounts, cost, stats(), egress)
+				printSummary(summary, pagesFetched, productCount, len(uniqueIDs), totalDropped, classCounts, cost, stats(), egress, timings)
 				return fmt.Errorf("write row for product %d: %w", p.ID, err)
 			}
 		}
@@ -634,7 +706,7 @@ func runSearch(ctx context.Context, c *wb.Client, eps wb.Endpoints, query, dest 
 		}
 	}
 
-	printSummary(summary, pagesFetched, productCount, len(uniqueIDs), totalDropped, classCounts, cost, stats(), egress)
+	printSummary(summary, pagesFetched, productCount, len(uniqueIDs), totalDropped, classCounts, cost, stats(), egress, timings)
 	return nil
 }
 
@@ -729,17 +801,21 @@ func runCard(ctx context.Context, c *wb.Client, eps wb.Endpoints, nm int64, dest
 	if err != nil && card.NmID == 0 {
 		// Nothing was fetched at all: the static half itself failed, so there
 		// is no partial row worth writing.
-		printSummary(summary, 0, 0, 0, 0, nil, wb.FetchCost{}, stats(), egress)
+		printSummary(summary, 0, 0, 0, 0, nil, wb.FetchCost{}, stats(), egress, nil)
 		return fmt.Errorf("card %d: %w", nm, err)
 	}
 
 	enc := json.NewEncoder(rows)
 	if encErr := enc.Encode(toCardRow(card, product, dest, appType, fetchedAt)); encErr != nil {
-		printSummary(summary, 0, 0, 0, 0, nil, wb.FetchCost{}, stats(), egress)
+		printSummary(summary, 0, 0, 0, 0, nil, wb.FetchCost{}, stats(), egress, nil)
 		return fmt.Errorf("write card %d: %w", nm, encErr)
 	}
 
-	printSummary(summary, 1, 1, 1, 0, map[wb.Class]int{wb.ClassOK: 1}, wb.FetchCost{}, stats(), egress)
+	// No per-request timing here: wb.Client.Card hands back decoded halves, not
+	// the Results behind them (see runCard's own doc comment), so which port
+	// answered and how long it took are not available to pass on — and even if
+	// they were, one or two requests give nothing to compare a "first" against.
+	printSummary(summary, 1, 1, 1, 0, map[wb.Class]int{wb.ClassOK: 1}, wb.FetchCost{}, stats(), egress, nil)
 	if err != nil {
 		return fmt.Errorf("card %d: static half only, the live half (price, stock) failed: %w", nm, err)
 	}
@@ -754,14 +830,22 @@ func runCard(ctx context.Context, c *wb.Client, eps wb.Endpoints, nm int64, dest
 // sat on direct the whole time. w is a parameter (rather than os.Stderr
 // baked in) so a test can capture it.
 //
-// One thing this cannot print: which egress each port ended the run on — the
-// literal answer to "which proxies actually work". blanktrail.Pool exposes no
-// way to read a port's current egress except through an active Lease, and a
-// lease is released back before the caller learns whether the request behind
-// it even succeeded. Stats().EgressRotations and Quarantines are the closest
-// approximation available without changing the SDK; see the task report for
-// why this wasn't bridged with a new exported method on Pool.
-func printSummary(w io.Writer, pages, products, uniqueIDs, dropped int, classes map[wb.Class]int, cost wb.FetchCost, stats blanktrail.Stats, egress egressSetup) {
+// timings is the other question totals cannot answer: whether the "a port is
+// a session" model actually holds — whether a solved challenge on a port
+// saves the next request on that same port real time, or whether every
+// request pays the same cold cost regardless. A summary of totals cannot show
+// that even in principle: it was the reason a run of nine ports for ten pages
+// looked identical whether the warm path worked or not, since nine of those
+// ten requests were each some port's only one.
+//
+// One thing this still cannot print: which egress each port ended the run
+// on — the literal answer to "which proxies actually work". blanktrail.Pool
+// exposes no way to read a port's current egress except through an active
+// Lease, and a lease is released back before the caller learns whether the
+// request behind it even succeeded. Stats().EgressRotations and Quarantines
+// are the closest approximation available without changing the SDK; see the
+// task report for why this wasn't bridged with a new exported method on Pool.
+func printSummary(w io.Writer, pages, products, uniqueIDs, dropped int, classes map[wb.Class]int, cost wb.FetchCost, stats blanktrail.Stats, egress egressSetup, timings []requestTiming) {
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "--- summary ---")
 	fmt.Fprintf(w, "pages fetched:  %d\n", pages)
@@ -800,6 +884,8 @@ func printSummary(w io.Writer, pages, products, uniqueIDs, dropped int, classes 
 		fmt.Fprintf(w, "  ports abandoned:    %d\n", cost.PortChanges)
 	}
 
+	printRequestTimings(w, timings)
+
 	fmt.Fprintln(w, "egress:")
 	if egress.rotor != nil {
 		fmt.Fprintf(w, "  proxies loaded:     %d (%d lines skipped as unparsable)\n", egress.proxiesLoaded, egress.proxiesBad)
@@ -812,7 +898,90 @@ func printSummary(w io.Writer, pages, products, uniqueIDs, dropped int, classes 
 	// count and never folded into it, because it points somewhere completely
 	// different: at the transport, not at the proxies or the target.
 	fmt.Fprintf(w, "  ports lost:         %d (no longer open on the proxy)\n", stats.Lost)
-	fmt.Fprintln(w, "  per-port final egress: not available (see printSummary's doc comment)")
+	fmt.Fprintln(w, "  per-port final egress: not available (see printSummary's doc comment); "+
+		"'requests by port' above is the closest available substitute for judging a port's health")
 
 	fmt.Fprintf(w, "pool stats:     %+v\n", stats)
+}
+
+// printRequestTimings shows, per port, in the order it served them, whether a
+// solved challenge on that port actually saved time on the next request — the
+// question this instrument exists to answer, and the one a summary of totals
+// cannot: a run of nine ports for ten pages looks the same in the totals
+// whether the warm path works or not, because nine of those ten requests were
+// each some port's only one and never got a chance to be warm.
+//
+// Deliberately no average across ports: a mean over a cold-heavy run — many
+// ports, one request each — reads as "everything is slow" even when every
+// port that did get a second chance answered fast. The shape only exists per
+// port, which is why this groups instead of aggregating.
+//
+// Attempts are printed alongside every duration, first and later alike, so a
+// slow later request is never mistaken for a cold start: a request that took
+// three attempts naturally took longer than a first-try one, for a completely
+// different reason than a cold port, and only the attempt count tells the two
+// apart.
+func printRequestTimings(w io.Writer, timings []requestTiming) {
+	fmt.Fprintln(w, "requests by port, in service order:")
+	if len(timings) == 0 {
+		fmt.Fprintln(w, "  (none)")
+		return
+	}
+
+	order, byPort := groupTimingsByPort(timings)
+	for _, port := range order {
+		reqs := byPort[port]
+		fmt.Fprintf(w, "  port %d (%d request(s))", port, len(reqs))
+		if len(reqs) > 1 {
+			later := make([]time.Duration, 0, len(reqs)-1)
+			retried := 0
+			for _, r := range reqs[1:] {
+				later = append(later, r.elapsed)
+				if r.attempts > 1 {
+					retried++
+				}
+			}
+			fmt.Fprintf(w, " — first %s (%d attempt(s)), later median %s (%d later, %d retried)",
+				reqs[0].elapsed.Round(time.Millisecond), reqs[0].attempts,
+				median(later).Round(time.Millisecond), len(later), retried)
+		} else {
+			fmt.Fprintf(w, " — first %s (%d attempt(s)), no later request on this port to compare",
+				reqs[0].elapsed.Round(time.Millisecond), reqs[0].attempts)
+		}
+		fmt.Fprintln(w)
+		for i, r := range reqs {
+			fmt.Fprintf(w, "      #%d  %-10s (%d attempt(s))\n", i+1, r.elapsed.Round(time.Millisecond), r.attempts)
+		}
+	}
+}
+
+// groupTimingsByPort buckets timings by port, keeping each port's own
+// requests in the order it served them. order lists the ports in the order
+// each was first seen, so the printed table's row order is stable across two
+// runs that hit the same ports in the same sequence rather than shuffling
+// with Go's randomised map iteration.
+func groupTimingsByPort(timings []requestTiming) (order []int, byPort map[int][]requestTiming) {
+	byPort = map[int][]requestTiming{}
+	for _, t := range timings {
+		if _, ok := byPort[t.port]; !ok {
+			order = append(order, t.port)
+		}
+		byPort[t.port] = append(byPort[t.port], t)
+	}
+	return order, byPort
+}
+
+// median returns the median of a non-empty slice of durations. It sorts a
+// copy, so the caller's own service-order slice is left untouched.
+func median(ds []time.Duration) time.Duration {
+	if len(ds) == 0 {
+		return 0
+	}
+	sorted := append([]time.Duration(nil), ds...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+	mid := len(sorted) / 2
+	if len(sorted)%2 == 1 {
+		return sorted[mid]
+	}
+	return (sorted[mid-1] + sorted[mid]) / 2
 }
