@@ -130,6 +130,15 @@ type PortSpec struct {
 	Decompress     bool // hand the client an identity-encoded body
 	EnableHTTP3    bool // re-originate over HTTP/3 where the target offers it
 
+	// TimeoutSeconds is how long the port itself waits for one request before
+	// giving up. Zero leaves the port's own default in place.
+	//
+	// Keep it well below the caller's own budget. The port raises this on its own
+	// while it is clearing a challenge, so a low value here does not cut a
+	// challenge short — it only bounds an ordinary request that is going nowhere,
+	// which is what a dead upstream looks like.
+	TimeoutSeconds int
+
 	MaxConcurrent int    // in-flight requests allowed on the port
 	RetryDelayMs  int    // proxy-side retry delay
 	IdleSeconds   int    // per-port idle timeout (0 = inherit the global one)
@@ -159,7 +168,12 @@ func DefaultPortSpec() PortSpec {
 		JSSolver:       true,
 		KeepSessions:   true,
 		Decompress:     true,
-		LeakGuard:      "warn",
+		// A dead upstream should be recognised in seconds, not minutes. The port
+		// raises this itself while it clears a challenge, so bounding it here costs
+		// a slow challenge nothing and costs a bad proxy the whole wait.
+		TimeoutSeconds: 30,
+
+		LeakGuard: "warn",
 
 		// MaxConcurrent is deliberately left at its zero value, so the field is
 		// left out of the open request and the port keeps its own policy.
@@ -214,6 +228,7 @@ type openPortRequest struct {
 	MaxConcurrent   *int    `json:"max_concurrent,omitempty"`
 	RetryDelayMs    *int    `json:"retry_delay_ms,omitempty"`
 	IdleSeconds     *int    `json:"idle_seconds,omitempty"`
+	TimeoutSeconds  *int    `json:"timeout_seconds,omitempty"`
 	LeakGuard       string  `json:"leak_guard,omitempty"`
 }
 
@@ -255,6 +270,10 @@ func (s PortSpec) request(port int, eg Egress) openPortRequest {
 	if s.IdleSeconds > 0 {
 		n := s.IdleSeconds
 		req.IdleSeconds = &n
+	}
+	if s.TimeoutSeconds > 0 {
+		n := s.TimeoutSeconds
+		req.TimeoutSeconds = &n
 	}
 	switch {
 	case eg.Gateway != "":

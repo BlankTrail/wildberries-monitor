@@ -71,9 +71,14 @@ type PoolConfig struct {
 	Cooldown time.Duration
 
 	// RequestTimeout bounds one request through a leased port, retries included
-	// (default 60s). Keep it comfortably above MaxRetriesPerReq × maxRetryAfter,
-	// or a throttled target will exhaust the deadline in pauses before a retry
-	// can run.
+	// (default 300s). It has to be generous: a port clearing an interactive
+	// challenge can legitimately take minutes, and cutting it short throws the
+	// work away along with the session. A dead upstream is caught long before
+	// this by the port's own TimeoutSeconds, so the two are not redundant — this
+	// one exists so that slow-but-working is not mistaken for broken.
+	//
+	// Keep it comfortably above MaxRetriesPerReq × maxRetryAfter, or a throttled
+	// target will exhaust the deadline in pauses before a retry can run.
 	RequestTimeout time.Duration
 	// MaxRetriesPerReq is how many times the ladder retries a blocked request
 	// before handing the blocked response back (default 4).
@@ -208,7 +213,7 @@ func NewPool(ctx context.Context, cfg PoolConfig) (*Pool, error) {
 		return nil, errors.New("blanktrail: PoolConfig.Client is required")
 	}
 	if cfg.RequestTimeout <= 0 {
-		cfg.RequestTimeout = 60 * time.Second
+		cfg.RequestTimeout = 300 * time.Second
 	}
 	if cfg.MaxRetriesPerReq <= 0 {
 		cfg.MaxRetriesPerReq = 4

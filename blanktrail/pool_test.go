@@ -278,7 +278,11 @@ func TestNewPool_FillsInTheDefaultsARealCallerLeavesUnset(t *testing.T) {
 	if want := DeriveCooldown(2, 3*time.Second, 3*time.Second); p.Cooldown() != want {
 		t.Errorf("Cooldown=%v, want %v derived from the delay defaults", p.Cooldown(), want)
 	}
-	if want := 60 * time.Second; p.cfg.RequestTimeout != want {
+	// Five minutes, not one. A port clearing an interactive challenge can take
+	// minutes, and cutting it short discards the work and the session with it. A
+	// dead upstream is caught much sooner by the port's own timeout, so a
+	// generous budget here does not mean waiting on a broken proxy.
+	if want := 300 * time.Second; p.cfg.RequestTimeout != want {
 		t.Errorf("RequestTimeout=%v, want %v", p.cfg.RequestTimeout, want)
 	}
 	if p.cfg.MaxRetriesPerReq != 4 {
