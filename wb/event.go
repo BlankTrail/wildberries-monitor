@@ -205,9 +205,10 @@ var (
 // PriceFloorEvents, MinPriceFloorEvents and NegativeReviewEvents.
 //
 // The two readings must be of the same kind and, underneath, of the same thing
-// in the same context: the guards live in task 6's Diff functions and their
-// errors are returned unchanged. On any error the event list is nil, never
-// empty.
+// in the same context: the guards live in task 6's Diff functions — and, for a
+// questions reading, which has no Diff function to carry one, in questionEvents
+// itself — and their errors are returned unchanged. On any error the event list
+// is nil, never empty.
 //
 // Every rule here is an arrival or a transition rather than a state, which is
 // why a zero Observation is not accepted as "no earlier reading": with nothing
@@ -576,20 +577,55 @@ func reviewEvents(before, after Observation) ([]Event, error) {
 //
 // Freshness is decided by id, the same way task 6 decides it for reviews, and
 // a question carrying no id is never fresh: it cannot be told apart from one
-// already seen, so reporting it would emit the same question forever. The rule
-// assumes the caller compares like with like — two readings of the same page
-// of the same query — exactly as the seller catalogue does.
+// already seen, so reporting it would emit the same question forever.
+//
+// The reading is a Questions rather than the bare []Question it used to be, and
+// that is the identity guard this rule was missing. Two windows fetched for two
+// different cards have nothing to say about each other, and comparing them
+// produces the most convincing wrong answer in this catalogue: every unanswered
+// question on the later card reported as freshly arrived, an inbox of work that
+// never appeared and a card nobody was watching. Such a pair is refused with
+// ErrIdentityMismatch and a nil list — the identity error, not the context one:
+// nothing here was read under different conditions, the two readings are simply
+// of different things. Questions is the type Reviews's shape was mirrored into,
+// this is the defect DiffReviews already refuses, and so it is refused the same
+// way. There is no context check for the reason DiffReviews has none either:
+// questions are not regional, and Questions carries no Dest or AppType to
+// check.
+//
+// The identity is the envelope's and never an item's, though both carry an
+// imtId. They are different claims: Questions.ImtID is the card the request
+// asked for, stamped from the argument Client.Questions was handed, while
+// Question.ImtID is the card the site filed one particular question under —
+// which question.go keeps deliberately underived from the other, because a
+// disagreement between them is a fact worth noticing rather than resolving. A
+// guard reading the items would spend that fact: one question filed under a
+// neighbour would make two honest readings of the same card uncomparable, and a
+// window that came back empty — every result of Client.QuestionCount, and any
+// card whose questions were all removed — would name nothing to guard on at
+// all. It is regionOf's reasoning in the other numbering: a guard rests on what
+// the fetch was for, not on whatever happens to be lying in the payload.
+//
+// An ImtID of zero on either side names no card and cannot disagree with one
+// that does, so it is accepted — the same exemption DiffReviews grants, for the
+// same reason. Zero is what a Questions assembled straight from decodeQuestions
+// carries, that function being handed bytes and no argument, so the guard
+// engages exactly where a caller took the trouble to say what was read.
 func questionEvents(before, after Observation) ([]Event, error) {
-	earlier, err := payloadOf[[]Question](before)
+	earlier, err := payloadOf[Questions](before)
 	if err != nil {
 		return nil, err
 	}
-	later, err := payloadOf[[]Question](after)
+	later, err := payloadOf[Questions](after)
 	if err != nil {
 		return nil, err
+	}
+	if earlier.ImtID != 0 && later.ImtID != 0 && earlier.ImtID != later.ImtID {
+		return nil, fmt.Errorf("%w: the questions of imtId %d and the questions of imtId %d",
+			ErrIdentityMismatch, earlier.ImtID, later.ImtID)
 	}
 	var out []Event
-	for _, q := range freshQuestions(earlier, later) {
+	for _, q := range freshQuestions(earlier.Items, later.Items) {
 		if q.Answer != nil {
 			continue
 		}

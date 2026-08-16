@@ -39,8 +39,12 @@ func seenReviews(revs Reviews, at time.Time) Observation {
 	return Observation{At: at, Kind: ObservationReviews, Payload: revs}
 }
 
-func seenQuestions(items []Question, at time.Time) Observation {
-	return Observation{At: at, Kind: ObservationQuestions, Payload: items}
+// seenQuestions wraps a questions reading the way a caller holding the result
+// of Client.Questions would. The payload is the envelope rather than a bare
+// []Question because the envelope is the only thing that says which card was
+// read — see questionEvents.
+func seenQuestions(qs Questions, at time.Time) Observation {
+	return Observation{At: at, Kind: ObservationQuestions, Payload: qs}
 }
 
 func seenDuplicates(d Duplicates, dest string, at time.Time) Observation {
@@ -780,9 +784,9 @@ func TestEventsFromChanges_TwoCardsReviewsAreNotComparable(t *testing.T) {
 // questions is answered, which is exactly why the unanswered ones below are
 // built by hand: a test asserting "no event" against this fixture alone would
 // pass because nothing in it can ever fire, not because the rule works.
-func loadQuestions(t *testing.T) []Question {
+func loadQuestions(t *testing.T) Questions {
 	t.Helper()
-	items, _, err := decodeQuestions(questionsFixture(t))
+	items, count, err := decodeQuestions(questionsFixture(t))
 	if err != nil {
 		t.Fatalf("decode the questions fixture: %v", err)
 	}
@@ -794,8 +798,18 @@ func loadQuestions(t *testing.T) []Question {
 			t.Fatalf("question %q in the fixture is unanswered; this file's tests assume every captured question is answered", q.ID)
 		}
 	}
-	return items
+	// The card the capture was taken against. decodeQuestions is handed bytes
+	// and no argument, so it cannot know it; Client.Questions stamps it from
+	// its own imtId, and a test reading the bytes directly has to do the same.
+	// loadReviews stamps the reviews fixture for the identical reason: without
+	// it every reading here names no card, and the guard that refuses two
+	// different ones would never be reached by anything but its own test.
+	return Questions{Items: items, Count: count, ImtID: questionsFixtureImtID}
 }
+
+// questionsFixtureImtID is the card testdata/questions.json was captured
+// against — the imtId every one of its six entries is filed under.
+const questionsFixtureImtID = 996564353
 
 // unanswered copies one real question, gives it its own id and strips the
 // seller's reply.
@@ -807,10 +821,17 @@ func unanswered(items []Question, id string) Question {
 	return q
 }
 
+// withQuestion copies a reading and appends one question to it, so a test
+// moves exactly one thing between the two sides of a comparison.
+func withQuestion(qs Questions, q Question) Questions {
+	qs.Items = append(append([]Question{}, qs.Items...), q)
+	return qs
+}
+
 func TestEventsFromChanges_AQuestionThatArrivedUnansweredIsAnEvent(t *testing.T) {
 	before := loadQuestions(t)
-	arrival := unanswered(before, "q-0000-0001")
-	after := append(append([]Question{}, before...), arrival)
+	arrival := unanswered(before.Items, "q-0000-0001")
+	after := withQuestion(before, arrival)
 
 	events, err := EventsFromChanges(seenQuestions(before, seenMonday), seenQuestions(after, seenTuesday))
 	if err != nil {
@@ -833,12 +854,12 @@ func TestEventsFromChanges_AQuestionThatArrivedWithAnAnswerIsNotAnEvent(t *testi
 	// The arrival half of the rule is satisfied — this question is genuinely
 	// new — so only the answer check can stop it.
 	before := loadQuestions(t)
-	arrival := before[0]
+	arrival := before.Items[0]
 	arrival.ID = "q-0000-0002"
 
 	events, err := EventsFromChanges(
 		seenQuestions(before, seenMonday),
-		seenQuestions(append(append([]Question{}, before...), arrival), seenTuesday),
+		seenQuestions(withQuestion(before, arrival), seenTuesday),
 	)
 	requireNoEvents(t, "a question that arrived already answered", events, err)
 }
@@ -849,8 +870,7 @@ func TestEventsFromChanges_AnUnansweredQuestionDoesNotFireOnEveryCycle(t *testin
 	// somebody replies — the fastest way to teach an operator to ignore the
 	// whole feed.
 	base := loadQuestions(t)
-	waiting := unanswered(base, "q-0000-0003")
-	both := append(append([]Question{}, base...), waiting)
+	both := withQuestion(base, unanswered(base.Items, "q-0000-0003"))
 
 	events, err := EventsFromChanges(seenQuestions(both, seenMonday), seenQuestions(both, seenTuesday))
 	requireNoEvents(t, "a question that was already waiting", events, err)
@@ -861,11 +881,69 @@ func TestEventsFromChanges_AQuestionWithNoIDIsNeverFresh(t *testing.T) {
 	// same question forever. The same rule task 6 applies to a review with no
 	// id.
 	before := loadQuestions(t)
-	anonymous := unanswered(before, "")
-	after := append(append([]Question{}, before...), anonymous)
+	after := withQuestion(before, unanswered(before.Items, ""))
 
 	events, err := EventsFromChanges(seenQuestions(before, seenMonday), seenQuestions(after, seenTuesday))
 	requireNoEvents(t, "a question carrying no id", events, err)
+}
+
+// TestEventsFromChanges_TwoCardsQuestionsAreNotComparable is the questions half
+// of the guard reviews already have. The pair is rigged the same way: the later
+// reading is of another card entirely, so a build that compares the two windows
+// anyway reports its every unanswered question as freshly arrived — an inbox of
+// work that never appeared, on a card nobody was watching.
+func TestEventsFromChanges_TwoCardsQuestionsAreNotComparable(t *testing.T) {
+	const otherCard = 4242424242
+	before := loadQuestions(t)
+	stray := unanswered(before.Items, "q-other-card-0001")
+	stray.NmID, stray.ImtID = 211723795, otherCard
+	after := Questions{Items: []Question{stray}, Count: 1, ImtID: otherCard}
+
+	events, err := EventsFromChanges(seenQuestions(before, seenMonday), seenQuestions(after, seenTuesday))
+	if err == nil || !errors.Is(err, ErrIdentityMismatch) {
+		t.Fatalf("err = %v, want it to wrap ErrIdentityMismatch; events = %v", err, kindsOf(events))
+	}
+	if events != nil {
+		t.Fatalf("still produced %v", kindsOf(events))
+	}
+}
+
+// TestEventsFromChanges_AQuestionsReadingThatNamesNoCardIsStillComparable pins
+// the exemption DiffReviews grants for the same reason: a reading that names no
+// card cannot disagree with one that does. Zero is what a Questions assembled
+// straight from decodeQuestions carries, so refusing it would turn every
+// hand-built reading into an error and leave the guard engaged nowhere.
+func TestEventsFromChanges_AQuestionsReadingThatNamesNoCardIsStillComparable(t *testing.T) {
+	before := loadQuestions(t)
+	after := withQuestion(before, unanswered(before.Items, "q-0000-0004"))
+	after.ImtID = 0
+
+	events, err := EventsFromChanges(seenQuestions(before, seenMonday), seenQuestions(after, seenTuesday))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	requireEventCount(t, events, 1)
+	eventOfKind(t, events, QuestionUnanswered)
+}
+
+// TestEventsFromChanges_AQuestionFiledUnderANeighbouringCardDoesNotRefuseThePair
+// pins the other half of that choice: identity is the envelope's, never an
+// item's. The two ids are different claims — what the request asked for against
+// what the site filed one question under (see Questions.ImtID) — and a guard
+// reading the items would call two honest readings of one card uncomparable
+// because a single stray question names a neighbour.
+func TestEventsFromChanges_AQuestionFiledUnderANeighbouringCardDoesNotRefuseThePair(t *testing.T) {
+	before := loadQuestions(t)
+	arrival := unanswered(before.Items, "q-0000-0005")
+	arrival.ImtID = 4242424242
+	after := withQuestion(before, arrival)
+
+	events, err := EventsFromChanges(seenQuestions(before, seenMonday), seenQuestions(after, seenTuesday))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	requireEventCount(t, events, 1)
+	eventOfKind(t, events, QuestionUnanswered)
 }
 
 // --- the price floor, which only the user can set ---
