@@ -68,6 +68,9 @@ func TestMigrate_RecordsEveryMigrationItApplied(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadMigrations: %v", err)
 	}
+	if len(all) == 0 {
+		t.Fatal("loadMigrations returned no migrations at all; the embedded set should never be empty")
+	}
 	want := all[len(all)-1].version
 
 	v, err := s.SchemaVersion(context.Background())
@@ -271,7 +274,11 @@ func TestMigrate_RefusesADatabaseNewerThanThisBuild(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 
-	if _, err := Open(context.Background(), path); err == nil {
+	if s2, err := Open(context.Background(), path); err == nil {
+		// Not expected to be reached, but leaving the connection open on the
+		// failure path this test exists to catch would leak a handle on
+		// every run that regresses.
+		s2.Close()
 		t.Error("Open succeeded on a database with migration 999 applied, which no embedded file carries; want a refusal naming it")
 	}
 }
