@@ -64,7 +64,11 @@ type remedy interface {
 	// exhausted reports that the whole retry budget was spent and the response is
 	// still not usable.
 	exhausted(port int)
+	// maxRetries budgets the repeats of a retryable status; maxTransportRetries
+	// budgets the repeats of a request that never got a response. They are
+	// separate because the remedies are: see their PoolConfig fields.
 	maxRetries() int
+	maxTransportRetries() int
 	wait(ctx context.Context, d time.Duration) error
 }
 
@@ -82,13 +86,23 @@ func (t *ladder) RoundTrip(req *http.Request) (*http.Response, error) {
 	// Only idempotent, body-less requests are safe to replay. Anything else goes
 	// through exactly once — replaying a POST could duplicate a side effect.
 	replayable := (req.Method == http.MethodGet || req.Method == http.MethodHead) && req.Body == nil
-	retryBudget := t.rem.maxRetries()
+	statusBudget, transportBudget := t.rem.maxRetries(), t.rem.maxTransportRetries()
 	if !replayable {
-		retryBudget = 0
+		statusBudget, transportBudget = 0, 0
 	}
 
-	var delay time.Duration
-	for attempt := 0; ; attempt++ {
+	// The two budgets are spent separately, because the two failures they cover
+	// are unrelated: a request that meets a throttle, then a dead connection,
+	// then another throttle has used one of each and has both remedies still
+	// available. Only the backoff curve reads the combined attempt count, since
+	// what it is pacing is this port, not either failure in particular.
+	var (
+		delay            time.Duration
+		attempt          int
+		statusRetries    int
+		transportRetries int
+	)
+	for ; ; attempt++ {
 		if attempt > 0 {
 			if err := t.rem.wait(req.Context(), delay); err != nil {
 				return nil, err
@@ -102,9 +116,10 @@ func (t *ladder) RoundTrip(req *http.Request) (*http.Response, error) {
 			if t.rem.attemptFailed(t.port) {
 				_ = t.rem.rotateEgress(req.Context(), t.port)
 			}
-			if attempt >= retryBudget {
+			if transportRetries >= transportBudget {
 				return nil, err
 			}
+			transportRetries++
 			delay = backoff(attempt + 1)
 			continue
 		}
@@ -125,10 +140,11 @@ func (t *ladder) RoundTrip(req *http.Request) (*http.Response, error) {
 		if !Retryable(resp.StatusCode) {
 			return resp, nil
 		}
-		if attempt >= retryBudget {
+		if statusRetries >= statusBudget {
 			t.rem.exhausted(t.port)
 			return resp, nil
 		}
+		statusRetries++
 
 		delay = backoff(attempt + 1)
 		if after := RetryAfter(resp.Header); after > delay {

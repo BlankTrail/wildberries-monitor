@@ -288,6 +288,13 @@ func TestNewPool_FillsInTheDefaultsARealCallerLeavesUnset(t *testing.T) {
 	if p.cfg.MaxRetriesPerReq != 4 {
 		t.Errorf("MaxRetriesPerReq=%d, want 4", p.cfg.MaxRetriesPerReq)
 	}
+	// One, and deliberately far below the status budget above. Repeating a
+	// dead connection through the same egress mostly buys another dead
+	// connection; a caller that can replace the egress between attempts does
+	// that job properly, and multiplying the two budgets only makes it wait.
+	if p.cfg.MaxTransportRetries != 1 {
+		t.Errorf("MaxTransportRetries=%d, want 1", p.cfg.MaxTransportRetries)
+	}
 	if p.cfg.RotateAfterFailures != 3 {
 		t.Errorf("RotateAfterFailures=%d, want 3", p.cfg.RotateAfterFailures)
 	}
@@ -564,6 +571,9 @@ func TestPoolRemedy_TransportErrorMarksTheEgressWithoutBurningTheChannel(t *test
 	cfg.Channels = []Channel{ch}
 	cfg.RotateAfterFailures = 2
 	cfg.MaxRetriesPerReq = 3
+	// The transport budget is separate from the status one and defaults to 1,
+	// which is short of the two dead connections this test scripts.
+	cfg.MaxTransportRetries = 3
 
 	p, err := NewPool(context.Background(), cfg)
 	if err != nil {

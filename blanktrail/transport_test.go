@@ -70,8 +70,9 @@ type fakeRemedy struct {
 	exhaustedCalls int
 	waits          []time.Duration
 
-	retries     int
-	rotateOnNth int // attemptFailed returns true on this failure number (0 = never)
+	retries          int
+	transportRetries int
+	rotateOnNth      int // attemptFailed returns true on this failure number (0 = never)
 }
 
 func (r *fakeRemedy) attemptFailed(int) bool {
@@ -84,6 +85,7 @@ func (r *fakeRemedy) rotateEgress(context.Context, int) error { r.rotations++; r
 func (r *fakeRemedy) markBadEgress(int)                       { r.markedBad++ }
 func (r *fakeRemedy) exhausted(int)                           { r.exhaustedCalls++ }
 func (r *fakeRemedy) maxRetries() int                         { return r.retries }
+func (r *fakeRemedy) maxTransportRetries() int                { return r.transportRetries }
 
 func (r *fakeRemedy) wait(_ context.Context, d time.Duration) error {
 	r.waits = append(r.waits, d)
@@ -316,7 +318,9 @@ func TestLadder_ConnectionFailureBlamesTheEgress(t *testing.T) {
 		failWith(boom),
 		respond(200, nil, "data"),
 	}}
-	rem := &fakeRemedy{retries: 2, rotateOnNth: 1}
+	// transportRetries, not retries: since the two budgets were split, the
+	// status budget does not pay for a dead connection.
+	rem := &fakeRemedy{retries: 2, transportRetries: 2, rotateOnNth: 1}
 	l := &ladder{rt: rt, port: 20009, rem: rem}
 
 	resp, err := l.RoundTrip(newReq(t, http.MethodGet, ""))
@@ -399,5 +403,86 @@ func TestSleepCtx_HonoursCancellation(t *testing.T) {
 	cancel()
 	if err := sleepCtx(ctx, time.Hour); !errors.Is(err, context.Canceled) {
 		t.Errorf("err=%v, want context.Canceled", err)
+	}
+}
+
+// The two budgets below are separate because the failures they cover are: a
+// retryable status is the origin asking to be asked again, while a dead
+// connection is evidence about the egress, which repeating through that same
+// egress does nothing about. They shared one number until a caller appeared
+// that repeats a dead connection itself, with a fresh proxy between attempts —
+// at which point the ladder doing it too only multiplied the wait.
+
+func TestLadder_ADeadConnectionSpendsOnlyTheTransportBudget(t *testing.T) {
+	boom := errors.New("dial tcp: connection refused")
+	rt := &fakeRT{steps: []func() (*http.Response, error){failWith(boom)}}
+	// A generous status budget that must not pay for this.
+	rem := &fakeRemedy{retries: 4, transportRetries: 1}
+	l := &ladder{rt: rt, port: 20020, rem: rem}
+
+	if _, err := l.RoundTrip(newReq(t, http.MethodGet, "")); err == nil {
+		t.Fatal("RoundTrip returned no error for a connection that never came up")
+	}
+	if rt.calls != 2 {
+		t.Errorf("transport calls=%d, want 2 — one attempt and one retry, the transport budget, "+
+			"not the four the status budget allows", rt.calls)
+	}
+}
+
+func TestLadder_TheTransportBudgetDoesNotTouchTheThrottledPath(t *testing.T) {
+	// The other half, and the reason the split was worth making: turning the
+	// transport budget down must leave the retries that actually work — a rate
+	// limit or a server error, the ones that honour Retry-After — exactly as
+	// they were.
+	rt := &fakeRT{steps: []func() (*http.Response, error){
+		respond(429, nil, "slow down"),
+		respond(503, nil, "unavailable"),
+		respond(429, nil, "slow down"),
+		respond(500, nil, "boom"),
+		respond(200, nil, "data"),
+	}}
+	rem := &fakeRemedy{retries: 4, transportRetries: 1}
+	l := &ladder{rt: rt, port: 20021, rem: rem}
+
+	resp, err := l.RoundTrip(newReq(t, http.MethodGet, ""))
+	if err != nil {
+		t.Fatalf("RoundTrip: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Errorf("status=%d, want 200 on the fifth attempt", resp.StatusCode)
+	}
+	if rt.calls != 5 {
+		t.Errorf("transport calls=%d, want 5 — four status retries plus the first attempt, "+
+			"whatever the transport budget says", rt.calls)
+	}
+	if rem.exhaustedCalls != 0 {
+		t.Errorf("exhausted called %d times for a request that succeeded inside its budget", rem.exhaustedCalls)
+	}
+}
+
+func TestLadder_OneBudgetDoesNotConsumeTheOther(t *testing.T) {
+	// A request that meets a throttle, then a dead connection, then another
+	// throttle has used one of each and still has both remedies. Counting them
+	// together — the single counter this used to keep — would strand it one
+	// short on whichever failure came last.
+	boom := errors.New("dial tcp: connection refused")
+	rt := &fakeRT{steps: []func() (*http.Response, error){
+		respond(429, nil, "slow down"),
+		failWith(boom),
+		respond(503, nil, "unavailable"),
+		respond(200, nil, "data"),
+	}}
+	rem := &fakeRemedy{retries: 2, transportRetries: 1}
+	l := &ladder{rt: rt, port: 20022, rem: rem}
+
+	resp, err := l.RoundTrip(newReq(t, http.MethodGet, ""))
+	if err != nil {
+		t.Fatalf("RoundTrip: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Errorf("status=%d, want 200: two status retries and one transport retry are all within budget", resp.StatusCode)
+	}
+	if rt.calls != 4 {
+		t.Errorf("transport calls=%d, want 4", rt.calls)
 	}
 }

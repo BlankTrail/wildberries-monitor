@@ -80,9 +80,33 @@ type PoolConfig struct {
 	// Keep it comfortably above MaxRetriesPerReq × maxRetryAfter, or a throttled
 	// target will exhaust the deadline in pauses before a retry can run.
 	RequestTimeout time.Duration
-	// MaxRetriesPerReq is how many times the ladder retries a blocked request
-	// before handing the blocked response back (default 4).
+	// MaxRetriesPerReq is how many times the ladder repeats a request that came
+	// back with a retryable STATUS — a rate limit or a server-side error, the
+	// two Retryable names — before handing that response back (default 4). It
+	// covers nothing else: a status the origin meant as final is returned at
+	// once, and a request that never got a response at all is governed by
+	// MaxTransportRetries instead.
+	//
+	// This is the budget that honours Retry-After, so it is worth keeping
+	// generous: a throttled origin that asks for a pause and gets one is the
+	// case where repeating actually works.
 	MaxRetriesPerReq int
+	// MaxTransportRetries is how many times the ladder repeats a request that
+	// never produced a response at all — the connection refused, dropped or
+	// forcibly closed (default 1). Zero or less means the default; there is no
+	// way to switch it off, because one immediate re-dial costs a fast failure
+	// and catches a connection that died between the idle-pool check and the
+	// write, which nothing above this layer can distinguish from a bad proxy.
+	//
+	// It is small on purpose, and separate from MaxRetriesPerReq on purpose. The
+	// two failures call for different remedies: a retryable status is the
+	// origin asking to be asked again, and repeating it through the same egress
+	// is exactly right, whereas a dead connection is evidence about the egress
+	// itself, and repeating it through that same egress mostly buys another dead
+	// connection. A caller that can replace the egress between attempts — see
+	// Lease.RotateEgress — does that job far better, and multiplying its budget
+	// by this one only multiplies the wait before it gets its turn.
+	MaxTransportRetries int
 	// RotateAfterFailures is how many consecutive failed attempts a port may
 	// collect before its egress is replaced (default 3). A failure is any non-2xx
 	// response — unless CountFailure excludes it — or a transport error; this
@@ -217,6 +241,9 @@ func NewPool(ctx context.Context, cfg PoolConfig) (*Pool, error) {
 	}
 	if cfg.MaxRetriesPerReq <= 0 {
 		cfg.MaxRetriesPerReq = 4
+	}
+	if cfg.MaxTransportRetries <= 0 {
+		cfg.MaxTransportRetries = 1
 	}
 	if cfg.Spec.Browser == "" {
 		cfg.Spec = DefaultPortSpec()
@@ -828,5 +855,7 @@ func (p *Pool) exhausted(num int) {
 }
 
 func (p *Pool) maxRetries() int { return p.cfg.MaxRetriesPerReq }
+
+func (p *Pool) maxTransportRetries() int { return p.cfg.MaxTransportRetries }
 
 func (p *Pool) wait(ctx context.Context, d time.Duration) error { return p.cfg.Sleep(ctx, d) }
