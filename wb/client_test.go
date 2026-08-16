@@ -950,8 +950,8 @@ func TestClient_SearchPageCarriesWhatTheFetchCost(t *testing.T) {
 	}
 	// Envelope comes back from two different endpoints. Without the source on
 	// the entry, a table of both cannot say which of them fetched this page.
-	if f.Source != SourceSearchPage {
-		t.Errorf("Source=%q, want %q", f.Source, SourceSearchPage)
+	if f.Source != SourceSearch {
+		t.Errorf("Source=%q, want %q", f.Source, SourceSearch)
 	}
 }
 

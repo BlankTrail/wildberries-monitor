@@ -476,27 +476,27 @@ func (c *Client) SearchPage(ctx context.Context, eps Endpoints, q SearchQuery) (
 		// spent and nothing about the one that failed describes the wrong half.
 		// The failed page is where the requests, the proxies and the ports
 		// actually went.
-		return Envelope{Fetches: []Fetch{lostFetch(SourceSearchPage, err)}}, err
+		return Envelope{Fetches: []Fetch{lostFetch(SourceSearch, err)}}, err
 	}
 	if res.Class != ClassOK {
 		// What the fetch cost belongs in this message: a page that came back
 		// challenged after fifteen attempts through twelve proxies is a
 		// different problem from one challenged on the first, and the status
 		// alone reads identically for both.
-		return Envelope{Fetches: []Fetch{fetchOf(SourceSearchPage, res)}}, fmt.Errorf(
+		return Envelope{Fetches: []Fetch{fetchOf(SourceSearch, res)}}, fmt.Errorf(
 			"wb: search page %d: status %d (%s) after %d attempt(s) over %d port(s), %d egress change(s), %d of them lost before a response",
 			q.Page, res.Status, res.Class, res.Attempts, res.PortChanges+1, res.Rotations, res.TransportErrors)
 	}
 
 	env, err := decodeEnvelope(res.Body)
 	if err != nil {
-		return Envelope{Fetches: []Fetch{fetchOf(SourceSearchPage, res)}}, fmt.Errorf("wb: search page %d: %w", q.Page, err)
+		return Envelope{Fetches: []Fetch{fetchOf(SourceSearch, res)}}, fmt.Errorf("wb: search page %d: %w", q.Page, err)
 	}
 	// Carried out with the data, not only reported when the fetch fails: a page
 	// that landed on the eleventh attempt through four proxies is what an
 	// operator needs to see, and it looks identical to a first-try page once
 	// this Result goes out of scope.
-	env.Fetches = []Fetch{fetchOf(SourceSearchPage, res)}
+	env.Fetches = []Fetch{fetchOf(SourceSearch, res)}
 
 	// The clock is read once for the whole page, not once per product: every
 	// row from the same response describes the same fetch and must carry the

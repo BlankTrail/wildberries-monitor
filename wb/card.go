@@ -225,10 +225,10 @@ func (c *Client) Card(ctx context.Context, b *Basket, eps Endpoints, nm int64, d
 
 	liveRes, err := c.Get(ctx, eps.CardDetailURL(nm, dest, app), KindAPI, referer)
 	if err != nil {
-		out.Fetches = append(out.Fetches, lostFetch(SourceCardLive, err))
+		out.Fetches = append(out.Fetches, lostFetch(SourceCardDetail, err))
 		return out, err
 	}
-	out.Fetches = append(out.Fetches, fetchOf(SourceCardLive, liveRes))
+	out.Fetches = append(out.Fetches, fetchOf(SourceCardDetail, liveRes))
 	if liveRes.Class != ClassOK {
 		return out, fmt.Errorf("card %d detail: status %d (%s)", nm, liveRes.Status, liveRes.Class)
 	}

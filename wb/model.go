@@ -198,7 +198,7 @@ type Envelope struct {
 	// the products. See Fetch for what each entry carries and why.
 	//
 	// The entry's Source is what tells apart the two endpoints that both
-	// answer with this type: Client.SearchPage reports SourceSearchPage,
+	// answer with this type: Client.SearchPage reports SourceSearch,
 	// Client.SellerCatalogPage reports SourceSellerCatalog. An Envelope built
 	// by hand or decoded straight from bytes reports nothing at all, the same
 	// way it carries no Rank.

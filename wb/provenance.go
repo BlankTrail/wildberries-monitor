@@ -27,25 +27,16 @@ package wb
 // prints which source went through which. An int would buy exhaustiveness
 // that no switch needs and cost a String method every caller has to remember
 // before a value of this type is fit to show anyone.
-//
-// Two constants below are not named the way they read: SourceSearchPage and
-// SourceCardLive, rather than SourceSearch and SourceCardDetail. Those two
-// names are already taken, by PriceSource — an unrelated type recording which
-// endpoint a *price* was read from, which is decoded data and not transport
-// telemetry. The names each constant did get come from this package's own
-// vocabulary rather than being mangled around the clash: SearchPage is the
-// method that makes the request, and "the live half" is what Client.Card's
-// own doc comment calls the detail fetch it pairs with the static one.
 type Source string
 
 const (
-	// SourceSearchPage is one page of search results.
-	SourceSearchPage Source = "search page"
+	// SourceSearch is one page of search results.
+	SourceSearch Source = "search page"
 	// SourceCardStatic is a product's static half, from the media-basket CDN.
 	SourceCardStatic Source = "card static"
-	// SourceCardLive is a product's live half — price, stock, promotions —
+	// SourceCardDetail is a product's live half — price, stock, promotions —
 	// from the site's own detail endpoint.
-	SourceCardLive Source = "card live"
+	SourceCardDetail Source = "card live"
 	// SourceReviews is one card's review window and aggregate.
 	SourceReviews Source = "reviews"
 	// SourceQuestions is one page of one card's buyer questions.

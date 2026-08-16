@@ -726,9 +726,9 @@ func TestClient_CardReportsBothHalvesSeparately(t *testing.T) {
 		t.Fatalf("provenance = %+v, want two entries: this call makes two requests", fetched.Fetches)
 	}
 	static, live := fetched.Fetches[0], fetched.Fetches[1]
-	if static.Source != SourceCardStatic || live.Source != SourceCardLive {
+	if static.Source != SourceCardStatic || live.Source != SourceCardDetail {
 		t.Errorf("sources = %q, %q; want %q then %q — in the order the requests were made",
-			static.Source, live.Source, SourceCardStatic, SourceCardLive)
+			static.Source, live.Source, SourceCardStatic, SourceCardDetail)
 	}
 	if static.Port != 1 || live.Port != 2 {
 		t.Errorf("ports = %d, %d; want 1 then 2 — the halves left through different ports and must not be reported as one",
@@ -762,7 +762,7 @@ func TestClient_CardReportsTheLiveHalfItFailedOn(t *testing.T) {
 		t.Fatalf("provenance = %+v, want both halves: the one that worked and the one that did not", fetched.Fetches)
 	}
 	live := fetched.Fetches[1]
-	if live.Source != SourceCardLive || live.Port != 2 {
+	if live.Source != SourceCardDetail || live.Port != 2 {
 		t.Errorf("failed half = %+v, want the live half on port 2", live)
 	}
 	if live.Cost.Attempts != 1 {
@@ -794,8 +794,8 @@ func TestClient_CardReportsALiveHalfThatNeverLanded(t *testing.T) {
 		t.Fatalf("provenance = %+v, want both halves: the static one that landed and the live one that never did", fetched.Fetches)
 	}
 	live := fetched.Fetches[1]
-	if live.Source != SourceCardLive {
-		t.Errorf("Source=%q, want %q", live.Source, SourceCardLive)
+	if live.Source != SourceCardDetail {
+		t.Errorf("Source=%q, want %q", live.Source, SourceCardDetail)
 	}
 	if live.Port != 0 {
 		t.Errorf("Port=%d, want 0 — nothing answered on the live half", live.Port)

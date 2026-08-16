@@ -101,14 +101,14 @@ func TestGroupTimingsByPort_FilesACallWhoseHalvesSharedOnePort(t *testing.T) {
 // not attributable to the port that did answer — the elapsed time includes
 // the other half's whole failed budget.
 func TestSinglePort_RejectsAPartlyLandedCall(t *testing.T) {
-	landedThenLost := []wb.Fetch{{Source: wb.SourceCardStatic, Port: 20009}, {Source: wb.SourceCardLive}}
+	landedThenLost := []wb.Fetch{{Source: wb.SourceCardStatic, Port: 20009}, {Source: wb.SourceCardDetail}}
 	if port, ok := singlePort(landedThenLost); ok {
 		t.Errorf("singlePort(%v) = %d, true; want it refused — half of that time was spent failing elsewhere", landedThenLost, port)
 	}
 	if port, ok := singlePort(nil); ok {
 		t.Errorf("singlePort(nil) = %d, true; want it refused — no request was made at all", port)
 	}
-	shared := []wb.Fetch{{Source: wb.SourceCardStatic, Port: 20009}, {Source: wb.SourceCardLive, Port: 20009}}
+	shared := []wb.Fetch{{Source: wb.SourceCardStatic, Port: 20009}, {Source: wb.SourceCardDetail, Port: 20009}}
 	if port, ok := singlePort(shared); !ok || port != 20009 {
 		t.Errorf("singlePort(%v) = %d, %v; want 20009, true", shared, port, ok)
 	}
@@ -122,7 +122,7 @@ func TestSinglePort_RejectsAPartlyLandedCall(t *testing.T) {
 func TestTimingOf_RecordsEveryRequestBehindOneCall(t *testing.T) {
 	got := timingOf("card #1", []wb.Fetch{
 		{Source: wb.SourceCardStatic, Port: 20009, Cost: wb.FetchCost{Attempts: 1}},
-		{Source: wb.SourceCardLive, Port: 20010, Cost: wb.FetchCost{Attempts: 4}},
+		{Source: wb.SourceCardDetail, Port: 20010, Cost: wb.FetchCost{Attempts: 4}},
 	}, 14*time.Second)
 
 	if got.label != "card #1" || got.elapsed != 14*time.Second {
@@ -131,7 +131,7 @@ func TestTimingOf_RecordsEveryRequestBehindOneCall(t *testing.T) {
 	if len(got.from) != 2 || got.from[0].Port != 20009 || got.from[1].Port != 20010 {
 		t.Errorf("from=%+v, want the two requests in the order wb reported them", got.from)
 	}
-	if got.from[0].Source != wb.SourceCardStatic || got.from[1].Source != wb.SourceCardLive {
+	if got.from[0].Source != wb.SourceCardStatic || got.from[1].Source != wb.SourceCardDetail {
 		t.Errorf("from=%+v, want each request's source kept — a row that lost it cannot say which half went where", got.from)
 	}
 	if got.attempts != 5 {
@@ -201,7 +201,7 @@ func TestPrintRequestTimings_NamesThePortsOfACallItCouldNotGroup(t *testing.T) {
 	printRequestTimings(&buf, []requestTiming{
 		{label: "card #1", attempts: 2, elapsed: 42 * time.Millisecond, from: []wb.Fetch{
 			{Source: wb.SourceCardStatic, Port: 20009},
-			{Source: wb.SourceCardLive, Port: 20010},
+			{Source: wb.SourceCardDetail, Port: 20010},
 		}},
 	})
 	out := buf.String()
@@ -233,7 +233,7 @@ func TestPortsLabel_SaysWhichRequestNeverLanded(t *testing.T) {
 // being read as one request: the row is headed by a label this program chose
 // ("card #1"), and only wb can say what that call actually fetched.
 func TestSourcesLabel_NamesEveryRequestInOrder(t *testing.T) {
-	got := sourcesLabel([]wb.Fetch{{Source: wb.SourceCardStatic}, {Source: wb.SourceCardLive}})
+	got := sourcesLabel([]wb.Fetch{{Source: wb.SourceCardStatic}, {Source: wb.SourceCardDetail}})
 	if got != "card static, card live" {
 		t.Errorf("sourcesLabel = %q, want both sources in the order they were fetched", got)
 	}

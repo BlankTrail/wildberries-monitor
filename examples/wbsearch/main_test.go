@@ -757,7 +757,7 @@ func TestSleepBetweenRequests_StopsEarlyOnCancelledContext(t *testing.T) {
 // failing. Recording it against port zero would misattribute a sample to a
 // port that answered nothing.
 func TestAppendTiming_SkipsAFetchThatNeverLandedOnAPort(t *testing.T) {
-	env := wb.Envelope{Fetches: []wb.Fetch{{Source: wb.SourceSearchPage, Port: 0, Cost: wb.FetchCost{Attempts: 15}}}}
+	env := wb.Envelope{Fetches: []wb.Fetch{{Source: wb.SourceSearch, Port: 0, Cost: wb.FetchCost{Attempts: 15}}}}
 	got := appendTiming(nil, 1, env, 5*time.Second)
 	if len(got) != 0 {
 		t.Errorf("appendTiming with Port=0 recorded %d entries, want 0", len(got))
@@ -769,7 +769,7 @@ func TestAppendTiming_SkipsAFetchThatNeverLandedOnAPort(t *testing.T) {
 // recorded entry, in the order fetches arrive.
 func TestAppendTiming_RecordsPortAndAttempts(t *testing.T) {
 	page := func(port, attempts int) wb.Envelope {
-		return wb.Envelope{Fetches: []wb.Fetch{{Source: wb.SourceSearchPage, Port: port, Cost: wb.FetchCost{Attempts: attempts}}}}
+		return wb.Envelope{Fetches: []wb.Fetch{{Source: wb.SourceSearch, Port: port, Cost: wb.FetchCost{Attempts: attempts}}}}
 	}
 	var timings []requestTiming
 	timings = appendTiming(timings, 1, page(20001, 1), 8*time.Second)

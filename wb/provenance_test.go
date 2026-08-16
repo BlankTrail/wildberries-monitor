@@ -23,7 +23,7 @@ func onlyFetch(t *testing.T, fetches []Fetch) Fetch {
 func TestTotalCost_SumsEveryRequestInAProvenance(t *testing.T) {
 	got := TotalCost([]Fetch{
 		{Source: SourceCardStatic, Port: 1, Cost: FetchCost{Attempts: 2, Rotations: 3, TransportErrors: 4, PortChanges: 5}},
-		{Source: SourceCardLive, Port: 2, Cost: FetchCost{Attempts: 20, Rotations: 30, TransportErrors: 40, PortChanges: 50}},
+		{Source: SourceCardDetail, Port: 2, Cost: FetchCost{Attempts: 20, Rotations: 30, TransportErrors: 40, PortChanges: 50}},
 	})
 	want := FetchCost{Attempts: 22, Rotations: 33, TransportErrors: 44, PortChanges: 55}
 	if got != want {
@@ -51,8 +51,8 @@ func TestFetchOf_TakesThePortAndCostFromTheResult(t *testing.T) {
 		Status: 200, Port: 20009,
 		FetchCost: FetchCost{Attempts: 4, Rotations: 1, TransportErrors: 2, PortChanges: 3},
 	}
-	got := fetchOf(SourceCardLive, res)
-	want := Fetch{Source: SourceCardLive, Port: 20009, Cost: res.FetchCost}
+	got := fetchOf(SourceCardDetail, res)
+	want := Fetch{Source: SourceCardDetail, Port: 20009, Cost: res.FetchCost}
 	if got != want {
 		t.Errorf("fetchOf = %+v, want %+v", got, want)
 	}
