@@ -72,13 +72,15 @@ func (s *Store) SaveSearchPage(ctx context.Context, env wb.Envelope, query strin
 	}
 	defer tx.Rollback()
 
-	// One reading of the clock for the whole page: these products were seen by
-	// one request, and timestamps a second apart would sort them as separate
-	// readings of the same moment.
-	now := s.now().UTC().Unix()
+	// One reading of the clock for the whole page, used only as the fallback
+	// for a product that carries no FetchedAt of its own (see saveProductTx):
+	// real products from every wb producer already carry the fetch's own
+	// instant, stamped once for the whole page (Client.SearchPage's own
+	// comment), so this call matters only for a page built by hand.
+	fallback := s.now().UTC().Unix()
 
 	for _, p := range env.Products {
-		one, err := s.saveProductTx(ctx, tx, p, query, now)
+		one, err := s.saveProductTx(ctx, tx, p, query, fallback)
 		if err != nil {
 			return SaveStats{}, err
 		}
@@ -100,6 +102,8 @@ func (s *Store) SaveProduct(ctx context.Context, p wb.Product, query string) (Sa
 	}
 	defer tx.Rollback()
 
+	// Same fallback role as SaveSearchPage's: only used when p carries no
+	// FetchedAt of its own — see effectiveTS.
 	stats, err := s.saveProductTx(ctx, tx, p, query, s.now().UTC().Unix())
 	if err != nil {
 		return SaveStats{}, err
@@ -118,7 +122,7 @@ func (s *Store) SaveProduct(ctx context.Context, p wb.Product, query string) (Sa
 // is one decision rather than one per caller. The order matters: the products
 // row goes first because foreign keys are on and enforced immediately, so a
 // snapshot cannot reference a product that is not there yet.
-func (s *Store) saveProductTx(ctx context.Context, tx *sql.Tx, p wb.Product, query string, now int64) (SaveStats, error) {
+func (s *Store) saveProductTx(ctx context.Context, tx *sql.Tx, p wb.Product, query string, fallback int64) (SaveStats, error) {
 	var stats SaveStats
 	if p.ID == 0 {
 		// nmID is the identity of everything below. Without one, every
@@ -126,14 +130,18 @@ func (s *Store) saveProductTx(ctx context.Context, tx *sql.Tx, p wb.Product, que
 		return SaveStats{}, fmt.Errorf("store: save product: the reading carries no nmID")
 	}
 
-	if err := upsertProductRow(ctx, tx, p, now); err != nil {
+	// The reading is dated to when it was actually fetched, not to when this
+	// transaction happens to run — see effectiveTS.
+	ts := effectiveTS(p, fallback)
+
+	if err := upsertProductRow(ctx, tx, p, ts); err != nil {
 		return SaveStats{}, err
 	}
 	stats.Products++
 
 	// Every reading is written. Suppressing the ones that changed nothing is a
 	// rule of its own and it is applied at this point.
-	snapshotID, err := insertSnapshot(ctx, tx, p, fingerprintOf(p), now, false)
+	snapshotID, err := insertSnapshot(ctx, tx, p, fingerprintOf(p), ts, false)
 	if err != nil {
 		return SaveStats{}, err
 	}
@@ -148,12 +156,39 @@ func (s *Store) saveProductTx(ctx context.Context, tx *sql.Tx, p wb.Product, que
 	// and a zero written here would compare against a real first place as its
 	// equal (see wb.Product.Rank).
 	if query != "" && p.Rank > 0 {
-		if err := insertPosition(ctx, tx, p, query, now); err != nil {
+		if err := insertPosition(ctx, tx, p, query, ts); err != nil {
 			return SaveStats{}, err
 		}
 		stats.Positions++
 	}
 	return stats, nil
+}
+
+// effectiveTS is the moment a reading is dated: the instant it was actually
+// fetched, not the instant this transaction happened to run.
+//
+// Every producer in wb stamps FetchedAt itself — Client.SearchPage and
+// Client.SellerCatalogPage read the clock once and stamp every product on the
+// page with that one instant (see SearchPage's own comment); Client.Card
+// stamps its live half the same way. So for real traffic this is exactly the
+// "one page, one timestamp" rule the caller already relies on, just dated
+// correctly: a write that runs later than the fetch — a retry, a queued
+// batch drained minutes or hours after it was read, a backfill run against
+// yesterday's capture — must still date the row to when the site was read,
+// not to whenever the transaction that wrote it happened to commit. ts is
+// what task 6's "has this changed since last time" and task 11's retention
+// both key off, so dating it to write time rather than read time would be
+// wrong for every deferred write, silently.
+//
+// fallback, the store's own clock, covers the one legitimate case where
+// FetchedAt is unknown: a reading built by hand rather than produced by a wb
+// Client. ts is NOT NULL and a member of the primary key on positions, so it
+// can never be left at FetchedAt's zero value.
+func effectiveTS(p wb.Product, fallback int64) int64 {
+	if p.FetchedAt.IsZero() {
+		return fallback
+	}
+	return p.FetchedAt.UTC().Unix()
 }
 
 // upsertProductRow writes the stable half.

@@ -194,17 +194,63 @@ func TestSaveProduct_SplitsOneReadingAcrossTheThreeTables(t *testing.T) {
 	}
 
 	var (
-		query, posDest string
-		posTS          int64
-		rank, page     int
+		query, posDest    string
+		posTS             int64
+		rank, page, posAT int
 	)
 	if err := s.db.QueryRowContext(ctx,
-		`SELECT query, dest, ts, rank, page FROM positions`).Scan(&query, &posDest, &posTS, &rank, &page); err != nil {
+		`SELECT query, dest, app_type, ts, rank, page FROM positions`).
+		Scan(&query, &posDest, &posAT, &posTS, &rank, &page); err != nil {
 		t.Fatalf("read positions: %v", err)
 	}
-	if query != "winter jacket" || posDest != "-1257786" || posTS != at.Unix() || rank != 12 || page != 1 {
-		t.Errorf("position = (%q, %q, %d, %d, %d), want (%q, %q, %d, 12, 1)",
-			query, posDest, posTS, rank, page, "winter jacket", "-1257786", at.Unix())
+	if query != "winter jacket" || posDest != "-1257786" || posAT != 1 || posTS != at.Unix() || rank != 12 || page != 1 {
+		t.Errorf("position = (%q, %q, %d, %d, %d, %d), want (%q, %q, 1, %d, 12, 1)",
+			query, posDest, posAT, posTS, rank, page, "winter jacket", "-1257786", at.Unix())
+	}
+}
+
+func TestSaveProduct_KeepsPositionsOfDifferentAudiencesApart(t *testing.T) {
+	// A rank measured as Android and a rank measured as Web describe different
+	// audiences, and the schema puts app_type in positions' primary key for
+	// exactly that reason (see migrations/0001_core.sql). Nothing before this
+	// test read the app_type column back, so a writer that lost the audience —
+	// a wrong constant, a swapped argument, a forgotten default — passed every
+	// other check while silently folding two audiences' history into one row.
+	s := openTestStore(t)
+	ctx := context.Background()
+	freezeClock(s, time.Date(2026, 8, 16, 9, 0, 0, 0, time.UTC))
+
+	web := sampleProduct()
+	web.AppType, web.Rank = 1, 5
+	if _, err := s.SaveProduct(ctx, web, "winter jacket"); err != nil {
+		t.Fatalf("first SaveProduct: %v", err)
+	}
+
+	android := sampleProduct()
+	android.AppType, android.Rank = 32, 9
+	if _, err := s.SaveProduct(ctx, android, "winter jacket"); err != nil {
+		t.Fatalf("second SaveProduct: %v", err)
+	}
+
+	if n := countRows(t, s, "positions"); n != 2 {
+		t.Fatalf("positions has %d row(s) for two audiences at one ts; want 2 — one ON CONFLICT collision would leave 1", n)
+	}
+
+	rows, err := s.db.QueryContext(ctx, `SELECT app_type, rank FROM positions ORDER BY app_type`)
+	if err != nil {
+		t.Fatalf("read positions: %v", err)
+	}
+	defer rows.Close()
+	got := map[int]int{}
+	for rows.Next() {
+		var appType, rank int
+		if err := rows.Scan(&appType, &rank); err != nil {
+			t.Fatalf("scan positions: %v", err)
+		}
+		got[appType] = rank
+	}
+	if got[1] != 5 || got[32] != 9 {
+		t.Errorf("positions by app_type = %v, want {1:5, 32:9}", got)
 	}
 }
 
@@ -361,6 +407,45 @@ func TestSaveProduct_WritesEverySizeAndEveryWarehouse(t *testing.T) {
 	}
 }
 
+func TestSaveProduct_WritesEachSizePriceUnderItsOwnColumn(t *testing.T) {
+	// snapshots carries only the cheapest size's price pair; snapshot_sizes is
+	// the only place a size's own prices survive at all. price_basic and
+	// price_product are both plain minor-unit integers, so nothing about the
+	// schema stops a writer that swapped the two arguments — every value here
+	// is deliberately distinct from every other so a swap or a dropped column
+	// shows up as a wrong number rather than an accidental match.
+	s := openTestStore(t)
+	ctx := context.Background()
+	freezeClock(s, time.Date(2026, 8, 16, 9, 0, 0, 0, time.UTC))
+
+	p := sampleProduct()
+	p.Sizes = []wb.Size{{
+		Name: "M", OrigName: "46",
+		PriceBasic:   ptrTo(int64(319000)),
+		PriceProduct: ptrTo(int64(120000)),
+		PriceTotal:   ptrTo(int64(240000)),
+	}}
+	if _, err := s.SaveProduct(ctx, p, "winter jacket"); err != nil {
+		t.Fatalf("SaveProduct: %v", err)
+	}
+
+	var basic, product, total sql.NullInt64
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT price_basic, price_product, price_total FROM snapshot_sizes`).
+		Scan(&basic, &product, &total); err != nil {
+		t.Fatalf("read snapshot_sizes: %v", err)
+	}
+	if !basic.Valid || basic.Int64 != 319000 {
+		t.Errorf("price_basic = %v, want 319000", basic)
+	}
+	if !product.Valid || product.Int64 != 120000 {
+		t.Errorf("price_product = %v, want 120000", product)
+	}
+	if !total.Valid || total.Int64 != 240000 {
+		t.Errorf("price_total = %v, want 240000 — the payload's own total, never written by any other test", total)
+	}
+}
+
 func TestSaveProduct_KeepsAnAbsentFieldApartFromAZeroOne(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
@@ -402,6 +487,38 @@ func TestSaveProduct_KeepsAnAbsentFieldApartFromAZeroOne(t *testing.T) {
 	}
 	if root.Valid {
 		t.Errorf("root_id = %v for a reading that carried none; want NULL", root)
+	}
+}
+
+func TestSaveProduct_ANoLongerReportedStockIsNotAZeroStock(t *testing.T) {
+	// wb.Product.TotalStock returns ok=false only when neither the per-size
+	// breakdown nor the flat TotalQuantity is present at all — a card whose
+	// product stopped reporting stock entirely, not one that reported an empty
+	// breakdown or a flat zero (both of which every other test in this file
+	// already exercises as a present 0). No test before this one leaves both
+	// sources absent at once, so snapshotStock's own nil branch — read this
+	// as "unknown" — was never actually observed at the database.
+	//
+	// A store that folds "the site stopped saying" into "the site said zero"
+	// would fire a stockout alert on every such reading, for a product that
+	// might be fully stocked and simply omitted from this particular payload.
+	s := openTestStore(t)
+	ctx := context.Background()
+	freezeClock(s, time.Date(2026, 8, 16, 9, 0, 0, 0, time.UTC))
+
+	p := sampleProduct()
+	p.Sizes = nil
+	p.TotalQuantity = nil
+	if _, err := s.SaveProduct(ctx, p, "winter jacket"); err != nil {
+		t.Fatalf("SaveProduct: %v", err)
+	}
+
+	var total sql.NullInt64
+	if err := s.db.QueryRowContext(ctx, `SELECT total_quantity FROM snapshots`).Scan(&total); err != nil {
+		t.Fatalf("read total_quantity: %v", err)
+	}
+	if total.Valid {
+		t.Errorf("total_quantity = %v for a reading with neither a size breakdown nor a flat total; want NULL, not 0", total)
 	}
 }
 
@@ -788,5 +905,92 @@ func TestFingerprintOf_TellsAnAbsentFieldFromAZeroOne(t *testing.T) {
 
 	if fingerprintOf(absent) == fingerprintOf(zero) {
 		t.Error("a reading that carried no stock, rating or distance digests the same as one that reported zero for all three")
+	}
+}
+
+func TestFingerprintOf_TellsAnAbsentIntFromAZeroOneOnItsOwn(t *testing.T) {
+	// The test above changes three fields (stock, rating, distance) at once,
+	// so a bug confined to fpOptInt's own nil marker can hide behind
+	// fpOptFloat's separate, correctly-behaving one: Rating alone already
+	// makes the two digests differ, whether or not fpOptInt's marker is
+	// distinct from a formatted zero. This isolates the property to a single
+	// *int64 field — Dist — with every other field, Rating included, held
+	// identical between the two readings, so only fpOptInt's own behaviour can
+	// make the digests differ here.
+	absent := sampleProduct()
+	absent.Dist = nil
+
+	zero := sampleProduct()
+	zero.Dist = ptrTo(int64(0))
+
+	if fingerprintOf(absent) == fingerprintOf(zero) {
+		t.Error("a reading with no delivery distance digests the same as one that reported a distance of zero")
+	}
+}
+
+func TestSaveProduct_DatesTheReadingByWhenItWasFetchedNotWhenItWasWritten(t *testing.T) {
+	// wb stamps every product it produces with FetchedAt — the instant the
+	// site was actually read, once per page (see Client.SearchPage's own
+	// comment) or once per card. A write delayed by a retry, a queued batch
+	// drained later, or a backfill run against an old capture must still date
+	// its rows to that instant, not to whenever this transaction happens to
+	// commit — ts feeds both task 6's change comparison and task 11's
+	// retention, and dating it to write time would silently misdate both for
+	// every deferred write.
+	s := openTestStore(t)
+	ctx := context.Background()
+	// The store's clock is well after the reading's own FetchedAt, standing in
+	// for a write that runs some time after the fetch it is writing.
+	freezeClock(s, time.Date(2026, 8, 16, 15, 0, 0, 0, time.UTC))
+
+	fetchedAt := time.Date(2026, 8, 16, 9, 0, 0, 0, time.UTC)
+	p := sampleProduct()
+	p.FetchedAt = fetchedAt
+	if _, err := s.SaveProduct(ctx, p, "winter jacket"); err != nil {
+		t.Fatalf("SaveProduct: %v", err)
+	}
+
+	var snapshotTS int64
+	if err := s.db.QueryRowContext(ctx, `SELECT ts FROM snapshots`).Scan(&snapshotTS); err != nil {
+		t.Fatalf("read snapshots: %v", err)
+	}
+	if snapshotTS != fetchedAt.Unix() {
+		t.Errorf("snapshots.ts = %d, want %d — the reading's own FetchedAt, not the store's clock", snapshotTS, fetchedAt.Unix())
+	}
+
+	var positionTS int64
+	if err := s.db.QueryRowContext(ctx, `SELECT ts FROM positions`).Scan(&positionTS); err != nil {
+		t.Fatalf("read positions: %v", err)
+	}
+	if positionTS != fetchedAt.Unix() {
+		t.Errorf("positions.ts = %d, want %d — the reading's own FetchedAt, not the store's clock", positionTS, fetchedAt.Unix())
+	}
+}
+
+func TestSaveProduct_FallsBackToTheStoresClockWhenFetchedAtIsZero(t *testing.T) {
+	// Every wb producer stamps FetchedAt, but a reading built by hand — a test
+	// fixture, a manual insert — carries none. ts is NOT NULL and a member of
+	// positions' primary key, so a zero FetchedAt cannot be written through:
+	// the store's own clock is the only fallback that keeps such a reading
+	// nameable at all.
+	s := openTestStore(t)
+	ctx := context.Background()
+	at := time.Date(2026, 8, 16, 9, 0, 0, 0, time.UTC)
+	freezeClock(s, at)
+
+	p := sampleProduct()
+	if !p.FetchedAt.IsZero() {
+		t.Fatalf("sampleProduct now sets FetchedAt; this test needs one that does not")
+	}
+	if _, err := s.SaveProduct(ctx, p, "winter jacket"); err != nil {
+		t.Fatalf("SaveProduct: %v", err)
+	}
+
+	var snapshotTS int64
+	if err := s.db.QueryRowContext(ctx, `SELECT ts FROM snapshots`).Scan(&snapshotTS); err != nil {
+		t.Fatalf("read snapshots: %v", err)
+	}
+	if snapshotTS != at.Unix() {
+		t.Errorf("snapshots.ts = %d, want %d — the store's clock, since the reading carried no FetchedAt", snapshotTS, at.Unix())
 	}
 }
