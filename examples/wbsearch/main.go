@@ -184,9 +184,9 @@ func run() error {
 		retryPolicy(*challengeAttempts, *attemptsPerEgress, len(egress.channels) > 0))
 
 	if *cardID != 0 {
-		return runCard(ctx, wbClient, eps, *cardID, *dest, mode, rows, pool, egress)
+		return runCard(ctx, wbClient, eps, *cardID, *dest, mode, rows, os.Stderr, pool.Stats, egress)
 	}
-	return runSearch(ctx, wbClient, eps, *query, *dest, mode, *pages, rows, pool, egress)
+	return runSearch(ctx, wbClient, eps, *query, *dest, mode, *pages, rows, os.Stderr, pool.Stats, egress)
 }
 
 // poolConfig builds the pool this run drives. It is a named function rather
@@ -570,13 +570,20 @@ func toSearchRow(p wb.Product) searchRow {
 
 // runSearch walks the search from page one, writing a JSONL row per product,
 // until a page comes back shorter than a full page or pageBudget is spent.
-func runSearch(ctx context.Context, c *wb.Client, eps wb.Endpoints, query, dest string, mode wb.Mode, pageBudget int, rows io.Writer, pool *blanktrail.Pool, egress egressSetup) error {
+//
+// rows is the JSONL sink and summary is where the closing report goes — stdout
+// or -out, and stderr, in a real run. stats reads the pool rather than being
+// the pool, for the same reason printSummary takes an io.Writer instead of
+// baking in os.Stderr: this loop is worth testing, and neither a live pool nor
+// a captured stderr is available to a test.
+func runSearch(ctx context.Context, c *wb.Client, eps wb.Endpoints, query, dest string, mode wb.Mode, pageBudget int, rows, summary io.Writer, stats func() blanktrail.Stats, egress egressSetup) error {
 	enc := json.NewEncoder(rows)
 
 	var (
 		pagesFetched int
 		productCount int
 		totalDropped int
+		cost         wb.FetchCost
 		classCounts  = map[wb.Class]int{}
 		uniqueIDs    = map[int64]struct{}{}
 	)
@@ -589,7 +596,7 @@ func runSearch(ctx context.Context, c *wb.Client, eps wb.Endpoints, query, dest 
 			Page:    page,
 		})
 		if err != nil {
-			printSummary(os.Stderr, pagesFetched, productCount, len(uniqueIDs), totalDropped, classCounts, pool.Stats(), egress)
+			printSummary(summary, pagesFetched, productCount, len(uniqueIDs), totalDropped, classCounts, cost, stats(), egress)
 			return fmt.Errorf("page %d: %w", page, err)
 		}
 		// SearchPage only ever returns successfully when the fetch classified
@@ -599,12 +606,16 @@ func runSearch(ctx context.Context, c *wb.Client, eps wb.Endpoints, query, dest 
 		classCounts[wb.ClassOK]++
 		pagesFetched++
 		totalDropped += env.Dropped
+		// The page landed, but not necessarily on the first ask. What it took
+		// is only visible here: SearchPage's Envelope carries it, and nothing
+		// downstream of this loop sees the fetch at all.
+		cost.Add(env.Cost)
 
 		for _, p := range env.Products {
 			uniqueIDs[p.ID] = struct{}{}
 			productCount++
 			if err := enc.Encode(toSearchRow(p)); err != nil {
-				printSummary(os.Stderr, pagesFetched, productCount, len(uniqueIDs), totalDropped, classCounts, pool.Stats(), egress)
+				printSummary(summary, pagesFetched, productCount, len(uniqueIDs), totalDropped, classCounts, cost, stats(), egress)
 				return fmt.Errorf("write row for product %d: %w", p.ID, err)
 			}
 		}
@@ -618,7 +629,7 @@ func runSearch(ctx context.Context, c *wb.Client, eps wb.Endpoints, query, dest 
 		}
 	}
 
-	printSummary(os.Stderr, pagesFetched, productCount, len(uniqueIDs), totalDropped, classCounts, pool.Stats(), egress)
+	printSummary(summary, pagesFetched, productCount, len(uniqueIDs), totalDropped, classCounts, cost, stats(), egress)
 	return nil
 }
 
@@ -705,7 +716,7 @@ func toCardRow(card wb.Card, product wb.Product, dest string, appType int, fetch
 // rather than discarding it just because the second request failed — see
 // Client.Card's own doc comment on why it returns the partial Card alongside
 // the error in that case.
-func runCard(ctx context.Context, c *wb.Client, eps wb.Endpoints, nm int64, dest string, mode wb.Mode, rows io.Writer, pool *blanktrail.Pool, egress egressSetup) error {
+func runCard(ctx context.Context, c *wb.Client, eps wb.Endpoints, nm int64, dest string, mode wb.Mode, rows, summary io.Writer, stats func() blanktrail.Stats, egress egressSetup) error {
 	basket := wb.NewBasket(c)
 	appType := mode.AppType()
 	fetchedAt := time.Now()
@@ -713,17 +724,17 @@ func runCard(ctx context.Context, c *wb.Client, eps wb.Endpoints, nm int64, dest
 	if err != nil && card.NmID == 0 {
 		// Nothing was fetched at all: the static half itself failed, so there
 		// is no partial row worth writing.
-		printSummary(os.Stderr, 0, 0, 0, 0, nil, pool.Stats(), egress)
+		printSummary(summary, 0, 0, 0, 0, nil, wb.FetchCost{}, stats(), egress)
 		return fmt.Errorf("card %d: %w", nm, err)
 	}
 
 	enc := json.NewEncoder(rows)
 	if encErr := enc.Encode(toCardRow(card, product, dest, appType, fetchedAt)); encErr != nil {
-		printSummary(os.Stderr, 0, 0, 0, 0, nil, pool.Stats(), egress)
+		printSummary(summary, 0, 0, 0, 0, nil, wb.FetchCost{}, stats(), egress)
 		return fmt.Errorf("write card %d: %w", nm, encErr)
 	}
 
-	printSummary(os.Stderr, 1, 1, 1, 0, map[wb.Class]int{wb.ClassOK: 1}, pool.Stats(), egress)
+	printSummary(summary, 1, 1, 1, 0, map[wb.Class]int{wb.ClassOK: 1}, wb.FetchCost{}, stats(), egress)
 	if err != nil {
 		return fmt.Errorf("card %d: static half only, the live half (price, stock) failed: %w", nm, err)
 	}
@@ -745,7 +756,7 @@ func runCard(ctx context.Context, c *wb.Client, eps wb.Endpoints, nm int64, dest
 // it even succeeded. Stats().EgressRotations and Quarantines are the closest
 // approximation available without changing the SDK; see the task report for
 // why this wasn't bridged with a new exported method on Pool.
-func printSummary(w io.Writer, pages, products, uniqueIDs, dropped int, classes map[wb.Class]int, stats blanktrail.Stats, egress egressSetup) {
+func printSummary(w io.Writer, pages, products, uniqueIDs, dropped int, classes map[wb.Class]int, cost wb.FetchCost, stats blanktrail.Stats, egress egressSetup) {
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "--- summary ---")
 	fmt.Fprintf(w, "pages fetched:  %d\n", pages)
@@ -763,6 +774,20 @@ func printSummary(w io.Writer, pages, products, uniqueIDs, dropped int, classes 
 	sort.Slice(keys, func(i, j int) bool { return keys[i].String() < keys[j].String() })
 	for _, c := range keys {
 		fmt.Fprintf(w, "  %s: %d\n", c, classes[c])
+	}
+
+	// What the pages cost to get. Printed only when there is something to say —
+	// one request per page and nothing else is the quiet case, which is why the
+	// test is against pages rather than wb.FetchCost.Retried: that one judges a
+	// single fetch, and only this caller knows how many fetches went into the
+	// total. The card path reports no cost at all (wb.Client.Card hands back
+	// decoded halves, not the Results behind them), so it stays silent here
+	// rather than printing zeroes as though they had been measured.
+	if cost.Attempts > pages || cost.Rotations > 0 || cost.TransportErrors > 0 {
+		fmt.Fprintln(w, "fetch cost:")
+		fmt.Fprintf(w, "  requests sent:      %d (for %d page(s))\n", cost.Attempts, pages)
+		fmt.Fprintf(w, "  proxy changes:      %d\n", cost.Rotations)
+		fmt.Fprintf(w, "  lost before reply:  %d\n", cost.TransportErrors)
 	}
 
 	fmt.Fprintln(w, "egress:")

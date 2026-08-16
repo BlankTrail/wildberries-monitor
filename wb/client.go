@@ -73,27 +73,11 @@ type Result struct {
 	// can be traced back to the exit it came from.
 	Session string
 	Port    int
-	// Attempts counts the requests this result took, so a caller can see a
-	// challenge retry.
-	Attempts int
-	// Rotations counts how many of those attempts first replaced the port's
-	// upstream proxy. Attempts alone can no longer tell a request that was
-	// repeated through one address from one that searched several: with an
-	// egress pool the second is the whole point, and without one it is
-	// impossible, so a run that expected to search and did not shows up here.
-	Rotations int
-	// TransportErrors counts the attempts that never got a response at all —
-	// the proxy refusing, dropping or forcibly closing the connection. Both that
-	// and a challenge are retried the same way and cost the same budget, but
-	// they mean different things and call for different action: "the edge
-	// challenged us four times" is the target's defence, "the connection died
-	// four times" is the proxies. Without this the two are indistinguishable in
-	// a Result, because a dead connection leaves no status and no body behind.
-	//
-	// When every attempt dies this way there is no Result to carry it: Get
-	// returns the last error instead, wrapped with how much of the budget went
-	// into it.
-	TransportErrors int
+	// FetchCost is what this response took to obtain — attempts, egress changes
+	// and connections lost on the way. Embedded, so res.Attempts still reads as
+	// a field of the result, while res.FetchCost hands the whole tally to
+	// whatever carries it further (see Envelope.Cost).
+	FetchCost
 }
 
 // Retry policy defaults for a challenged request. They are exported because the
@@ -396,6 +380,11 @@ func (c *Client) SearchPage(ctx context.Context, eps Endpoints, q SearchQuery) (
 	if err != nil {
 		return Envelope{}, fmt.Errorf("wb: search page %d: %w", q.Page, err)
 	}
+	// Carried out with the data, not only reported when the fetch fails: a page
+	// that landed on the eleventh attempt through four proxies is what an
+	// operator needs to see, and it looks identical to a first-try page once
+	// this Result goes out of scope.
+	env.Cost = res.FetchCost
 
 	// The clock is read once for the whole page, not once per product: every
 	// row from the same response describes the same fetch and must carry the

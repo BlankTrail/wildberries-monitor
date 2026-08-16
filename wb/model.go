@@ -165,4 +165,53 @@ type Envelope struct {
 	// of an Envelope, so a non-zero Dropped here always accompanies at least
 	// one surviving Product.
 	Dropped int
+
+	// Cost is what fetching this page took. It is carried out with the data
+	// because a page that landed on the eleventh attempt through four proxies
+	// is exactly what an operator needs to see, and it is indistinguishable
+	// from a page that landed first try once the Result behind it is gone —
+	// which used to happen here, leaving cost visible only when a fetch failed
+	// outright. Transport telemetry rather than decoded data, hence its own
+	// field rather than three more loose ints among the products.
+	Cost FetchCost
+}
+
+// FetchCost is what one fetch spent. A first-try success is Attempts 1 and the
+// rest zero; anything more says the run is working for its data, and how.
+type FetchCost struct {
+	// Attempts counts the requests this fetch took, so a caller can see a retry.
+	Attempts int
+	// Rotations counts how many of those attempts first replaced the port's
+	// upstream proxy. Attempts alone cannot tell a request repeated through one
+	// address from one that searched several: with an egress pool the second is
+	// the whole point, and without one it is impossible, so a run that expected
+	// to search and did not shows up here.
+	Rotations int
+	// TransportErrors counts the attempts that never got a response at all —
+	// the proxy refusing, dropping or forcibly closing the connection. Both that
+	// and a challenge are retried the same way and cost the same budget, but
+	// they mean different things and call for different action: "the edge
+	// challenged us four times" is the target's defence, "the connection died
+	// four times" is the proxies. Without this the two are indistinguishable
+	// once a fetch has succeeded, because a dead connection leaves no status
+	// and no body behind.
+	//
+	// When every attempt dies this way there is no Result to carry it at all:
+	// Client.Get returns the last error instead, wrapped with how much of the
+	// budget went into it.
+	TransportErrors int
+}
+
+// Add accumulates another fetch into a running total, so a caller walking pages
+// can report what the whole run cost rather than what its last page did.
+func (c *FetchCost) Add(other FetchCost) {
+	c.Attempts += other.Attempts
+	c.Rotations += other.Rotations
+	c.TransportErrors += other.TransportErrors
+}
+
+// Retried reports whether this cost describes anything worth mentioning: a
+// fetch that took more than one request, or lost one before a response.
+func (c FetchCost) Retried() bool {
+	return c.Attempts > 1 || c.Rotations > 0 || c.TransportErrors > 0
 }

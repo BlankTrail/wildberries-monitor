@@ -916,3 +916,77 @@ func TestClient_DoesNotRetryARequestItCouldNotBuild(t *testing.T) {
 		t.Errorf("sent %d requests and asked for %d egress changes for a request that was never built", len(l.sent), l.rotations)
 	}
 }
+
+func TestClient_SearchPageCarriesWhatTheFetchCost(t *testing.T) {
+	// A page that succeeds is where this matters. The failing case always had
+	// its cost in the error text; a page that landed on the fourth attempt
+	// through a second proxy used to look exactly like one that landed first
+	// try, which is backwards for an instrument whose job is telling an
+	// operator what a run cost.
+	body := `{"metadata":{},"products":[{"id":1},{"id":2}],"total":2}`
+	l := &fakeLease{port: 20013, dropAt: killedAt(1), replies: []*http.Response{
+		reply(498, "<html>challenge</html>"),
+		reply(498, "<html>challenge</html>"),
+		reply(200, body),
+	}}
+	c := NewClientWithRetry(&fakeLeaser{leases: []*fakeLease{l}}, NewSessions(),
+		RetryPolicy{Attempts: 15, AttemptsPerEgress: 3})
+
+	env, err := c.SearchPage(context.Background(), DefaultEndpoints(), SearchQuery{Query: "socks", Dest: "-1"})
+	if err != nil {
+		t.Fatalf("SearchPage: %v", err)
+	}
+	if len(env.Products) != 2 {
+		t.Fatalf("got %d products, want 2", len(env.Products))
+	}
+	want := FetchCost{Attempts: 4, Rotations: 1, TransportErrors: 1}
+	if env.Cost != want {
+		t.Errorf("Cost=%+v, want %+v — one dead connection, two challenges, then a new proxy got it", env.Cost, want)
+	}
+}
+
+func TestClient_SearchPageReportsAFirstTryPageAsCostingOneAttempt(t *testing.T) {
+	// The other end of the scale, and the one that keeps the field honest: a
+	// page that landed immediately must say so, not carry whatever the previous
+	// fetch cost or a zero that reads as "not measured".
+	body := `{"metadata":{},"products":[{"id":1}],"total":1}`
+	l := &fakeLease{port: 1, replies: []*http.Response{reply(200, body)}}
+	c := NewClientWithRetry(&fakeLeaser{leases: []*fakeLease{l}}, NewSessions(), DefaultRetryPolicy(true))
+
+	env, err := c.SearchPage(context.Background(), DefaultEndpoints(), SearchQuery{Query: "socks", Dest: "-1"})
+	if err != nil {
+		t.Fatalf("SearchPage: %v", err)
+	}
+	if want := (FetchCost{Attempts: 1}); env.Cost != want {
+		t.Errorf("Cost=%+v, want %+v", env.Cost, want)
+	}
+	if env.Cost.Retried() {
+		t.Error("a first-try page reports itself as retried")
+	}
+}
+
+func TestFetchCost_AddsUpAcrossPages(t *testing.T) {
+	// What a run's summary is built from: the per-page costs, summed. Adding
+	// the wrong field into the wrong total is invisible in any single page.
+	var total FetchCost
+	total.Add(FetchCost{Attempts: 1})
+	total.Add(FetchCost{Attempts: 4, Rotations: 1, TransportErrors: 2})
+	total.Add(FetchCost{Attempts: 11, Rotations: 8})
+
+	if want := (FetchCost{Attempts: 16, Rotations: 9, TransportErrors: 2}); total != want {
+		t.Errorf("total=%+v, want %+v", total, want)
+	}
+	if !total.Retried() {
+		t.Error("a total of sixteen attempts does not report itself as retried")
+	}
+	// Each field on its own is enough to make a cost worth printing: a single
+	// attempt that lost a connection on the way is not a quiet page.
+	for _, c := range []FetchCost{{Attempts: 2}, {Attempts: 1, Rotations: 1}, {Attempts: 1, TransportErrors: 1}} {
+		if !c.Retried() {
+			t.Errorf("%+v does not report itself as retried", c)
+		}
+	}
+	if (FetchCost{Attempts: 1}).Retried() {
+		t.Error("a plain first-try fetch reports itself as retried")
+	}
+}

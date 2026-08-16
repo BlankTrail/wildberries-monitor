@@ -5,6 +5,10 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -397,7 +401,7 @@ func TestBuildEgressSetup_CombinesEveryChannelFlagAtOnce(t *testing.T) {
 func TestPrintSummary_ReportsEgressRotationsQuarantinesAndTheMissingPerPortAnswer(t *testing.T) {
 	var buf bytes.Buffer
 	stats := blanktrail.Stats{Ports: 50, Quarantined: 3, EgressRotations: 842}
-	printSummary(&buf, 3, 250, 250, 0, map[wb.Class]int{wb.ClassOK: 3}, stats, egressSetup{})
+	printSummary(&buf, 3, 250, 250, 0, map[wb.Class]int{wb.ClassOK: 3}, wb.FetchCost{Attempts: 3}, stats, egressSetup{})
 
 	out := buf.String()
 	for _, want := range []string{"egress rotations:   842", "ports quarantined:  3/50", "per-port final egress: not available"} {
@@ -420,7 +424,7 @@ func TestPrintSummary_ReportsProxiesLoadedAndRemainingWhenAProxiesFileWasUsed(t 
 	setup := egressSetup{rotor: rotor, proxiesLoaded: 3, proxiesBad: 1}
 
 	var buf bytes.Buffer
-	printSummary(&buf, 1, 1, 1, 0, map[wb.Class]int{wb.ClassOK: 1}, blanktrail.Stats{}, setup)
+	printSummary(&buf, 1, 1, 1, 0, map[wb.Class]int{wb.ClassOK: 1}, wb.FetchCost{Attempts: 1}, blanktrail.Stats{}, setup)
 
 	out := buf.String()
 	if !strings.Contains(out, "proxies loaded:     3 (1 lines skipped as unparsable)") {
@@ -493,5 +497,157 @@ func TestValidateEgressFlags_RejectsNegativeRetryNumbers(t *testing.T) {
 	}
 	if err := validateEgressFlags("http", "", "", 300*time.Second, 30, 0, 0); err != nil {
 		t.Errorf("zero on both = %v, want nil: zero is how a caller asks for the defaults", err)
+	}
+}
+
+// TestPrintSummary_ReportsWhatThePagesCostWhenTheyWereNotFree is the summary
+// half of carrying wb.FetchCost out of a successful page. A run that landed
+// eleven requests and four proxies deep is exactly what an operator needs to
+// see, and until the cost was carried out of SearchPage it looked identical to
+// a run where every page landed first try.
+func TestPrintSummary_ReportsWhatThePagesCostWhenTheyWereNotFree(t *testing.T) {
+	var buf bytes.Buffer
+	cost := wb.FetchCost{Attempts: 11, Rotations: 4, TransportErrors: 2}
+	printSummary(&buf, 3, 250, 250, 0, map[wb.Class]int{wb.ClassOK: 3}, cost, blanktrail.Stats{}, egressSetup{})
+
+	out := buf.String()
+	for _, want := range []string{"requests sent:      11 (for 3 page(s))", "proxy changes:      4", "lost before reply:  2"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("summary output missing %q; got:\n%s", want, out)
+		}
+	}
+}
+
+// TestPrintSummary_SaysNothingAboutCostWhenEveryPageLandedFirstTry keeps the
+// block honest at the other end. Three pages in three requests is the quiet
+// case and needs no paragraph; more to the point, the card path reports no cost
+// at all (wb.Client.Card hands back decoded halves, not the Results behind
+// them), so printing zeroes there would state a measurement nobody made.
+func TestPrintSummary_SaysNothingAboutCostWhenEveryPageLandedFirstTry(t *testing.T) {
+	for _, cost := range []wb.FetchCost{{Attempts: 3}, {}} {
+		var buf bytes.Buffer
+		printSummary(&buf, 3, 250, 250, 0, map[wb.Class]int{wb.ClassOK: 3}, cost, blanktrail.Stats{}, egressSetup{})
+		if strings.Contains(buf.String(), "fetch cost") {
+			t.Errorf("summary printed a cost block for %+v; got:\n%s", cost, buf.String())
+		}
+	}
+}
+
+// --- the search loop ---
+//
+// runSearch had no test at all, which is how the line that accumulates each
+// page's cost into the run total could be deleted with this suite still green.
+// It needs three things a live run supplies and a test cannot: a leased
+// transport, a pool to read stats from, and somewhere to put the summary. The
+// first is an interface (wb.Leaser) and the other two are now parameters, so
+// all three are reachable.
+
+// scriptedLease answers from a list of responses and records nothing else. It
+// implements wb.Lease; RotateEgress changes the session string, as a real port
+// does when its exit address moves.
+type scriptedLease struct {
+	replies  []*http.Response
+	sent     int
+	rotated  int
+	released int
+}
+
+func (l *scriptedLease) Do(*http.Request) (*http.Response, error) {
+	if l.sent >= len(l.replies) {
+		return nil, errors.New("scriptedLease: no reply scripted")
+	}
+	r := l.replies[l.sent]
+	l.sent++
+	return r, nil
+}
+
+func (l *scriptedLease) Session() string { return fmt.Sprintf("1#%d", l.rotated) }
+func (l *scriptedLease) Port() int       { return 1 }
+func (l *scriptedLease) RotateEgress(context.Context) error {
+	l.rotated++
+	return nil
+}
+func (l *scriptedLease) Release() { l.released++ }
+
+// scriptedLeaser hands the same lease to every fetch, the way a one-port pool
+// effectively does.
+type scriptedLeaser struct{ lease *scriptedLease }
+
+func (s scriptedLeaser) Acquire(context.Context) (wb.Lease, error) { return s.lease, nil }
+
+func jsonReply(status int, body string) *http.Response {
+	return &http.Response{
+		StatusCode: status,
+		Header:     http.Header{},
+		Body:       io.NopCloser(strings.NewReader(body)),
+	}
+}
+
+// page renders a search response with n products, so a full page can be told
+// from a short one — the walk's own stop condition.
+func page(n int) string {
+	ids := make([]string, n)
+	for i := range ids {
+		ids[i] = fmt.Sprintf(`{"id":%d}`, i+1)
+	}
+	return `{"metadata":{},"products":[` + strings.Join(ids, ",") + `],"total":1000}`
+}
+
+func TestRunSearch_ReportsWhatTheWholeWalkCostAcrossPages(t *testing.T) {
+	// Page one lands first try. Page two is challenged three times, changes
+	// proxy, and lands on the fourth attempt — and comes back short, ending the
+	// walk. The run cost five requests for two pages, and that total exists
+	// nowhere but in the accumulation this test is here to pin: each page's
+	// cost is on its own Envelope and is gone as soon as the loop moves on.
+	lease := &scriptedLease{replies: []*http.Response{
+		jsonReply(200, page(observedPageSize)),
+		jsonReply(498, "<html>challenge</html>"),
+		jsonReply(498, "<html>challenge</html>"),
+		jsonReply(498, "<html>challenge</html>"),
+		jsonReply(200, page(2)),
+	}}
+	c := wb.NewClientWithRetry(scriptedLeaser{lease}, wb.NewSessions(), wb.DefaultRetryPolicy(true))
+
+	var rows, summary bytes.Buffer
+	err := runSearch(context.Background(), c, wb.DefaultEndpoints(), "socks", "-1", wb.ModeDesktop, 5,
+		&rows, &summary, func() blanktrail.Stats { return blanktrail.Stats{} }, egressSetup{})
+	if err != nil {
+		t.Fatalf("runSearch: %v", err)
+	}
+
+	out := summary.String()
+	for _, want := range []string{
+		"pages fetched:  2",
+		"requests sent:      5 (for 2 page(s))",
+		"proxy changes:      1",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("summary missing %q; got:\n%s", want, out)
+		}
+	}
+	if got := strings.Count(rows.String(), "\n"); got != observedPageSize+2 {
+		t.Errorf("wrote %d JSONL rows, want %d", got, observedPageSize+2)
+	}
+	if lease.rotated != 1 {
+		t.Errorf("the transport was asked for %d egress changes, want 1", lease.rotated)
+	}
+}
+
+func TestRunSearch_SaysNothingAboutCostWhenEveryPageLandedFirstTry(t *testing.T) {
+	// The quiet run, through the same path: two pages, two requests, no block.
+	// Without this, printing the cost unconditionally would pass the test above.
+	lease := &scriptedLease{replies: []*http.Response{
+		jsonReply(200, page(observedPageSize)),
+		jsonReply(200, page(1)),
+	}}
+	c := wb.NewClientWithRetry(scriptedLeaser{lease}, wb.NewSessions(), wb.DefaultRetryPolicy(true))
+
+	var rows, summary bytes.Buffer
+	if err := runSearch(context.Background(), c, wb.DefaultEndpoints(), "socks", "-1", wb.ModeDesktop, 5,
+		&rows, &summary, func() blanktrail.Stats { return blanktrail.Stats{} }, egressSetup{}); err != nil {
+		t.Fatalf("runSearch: %v", err)
+	}
+	if strings.Contains(summary.String(), "fetch cost") {
+		t.Errorf("a run where every page landed first try printed a cost block:\n%s", summary.String())
 	}
 }
