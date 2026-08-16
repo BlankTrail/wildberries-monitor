@@ -19,6 +19,15 @@
 //	go run ./examples/wbsearch -query "кроссовки женские" -dest 1259570991 -pages 3 -threads 2 -ports-per-thread 5
 //	go run ./examples/wbsearch -card 1309449623 -dest -5892277
 //
+// By default every port egresses from this machine's own IP. -proxies,
+// -rotate-url and -gateway each add a blanktrail.Channel, and blanktrail.Mixer
+// spreads ports across whatever combination is given — more than one at once
+// is legitimate. This is what lets a run actually exercise the pool's own
+// bad-egress handling (rotateEgress, markBadEgress, port quarantine) instead
+// of only ever seeing the one address this machine has:
+//
+//	go run ./examples/wbsearch -query "кроссовки женские" -dest 1259570991 -proxies proxies.txt -proxy-scheme socks5 -threads 8 -ports-per-thread 20
+//
 // JSONL rows go to -out (or stdout when it is empty); preflight findings and
 // the closing summary always go to stderr, so a run can be piped straight
 // into a file without the summary landing in the middle of it.
@@ -83,6 +92,15 @@ func run() error {
 		perThread = flag.Int("ports-per-thread", 1, "BlankTrail ports per thread (blanktrail.PoolConfig.PortsPerThread)")
 		out       = flag.String("out", "", "JSONL output path (empty = stdout)")
 		cardID    = flag.Int64("card", 0, "fetch one product card by nm id instead of searching, and exit")
+
+		proxiesPath = flag.String("proxies", "", "file of upstream proxies, one per line — see blanktrail.Parse for accepted line formats (feeds a list channel; empty = no list channel)")
+		proxyScheme = flag.String("proxy-scheme", "http", "scheme assumed for -proxies and -rotate-proxy entries that carry none (http, https, socks5, socks5h, socks4)")
+		rotateURLF  = flag.String("rotate-url", "", "a rotating proxy's IP-change URL (feeds a rotating channel; requires -rotate-proxy — see -h notes)")
+		rotateProxy = flag.String("rotate-proxy", "", "the rotating proxy's fixed entry-point address, in the same format as a -proxies line (required together with -rotate-url)")
+		gatewayName = flag.String("gateway", "", "vendor VPN gateway name, as already configured in BlankTrail (feeds a gateway channel)")
+
+		requestTimeout = flag.Duration("request-timeout", 300*time.Second, "the caller's own budget per request, retries included (blanktrail.PoolConfig.RequestTimeout)")
+		portTimeout    = flag.Int("port-timeout", 30, "seconds the port itself waits for one request before giving up (blanktrail.PortSpec.TimeoutSeconds)")
 	)
 	flag.Usage = usage
 	flag.Parse()
@@ -99,9 +117,17 @@ func run() error {
 	if err := validateFlags(*query, *dest, apiKey, *pages, *threads, *perThread, *cardID); err != nil {
 		return err
 	}
+	if err := validateEgressFlags(*proxyScheme, *rotateURLF, *rotateProxy, *requestTimeout, *portTimeout); err != nil {
+		return err
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
+
+	egress, err := buildEgressSetup(ctx, *proxiesPath, *proxyScheme, *rotateURLF, *rotateProxy, *gatewayName)
+	if err != nil {
+		return err
+	}
 
 	client, err := blanktrail.NewClient(*control, apiKey)
 	if err != nil {
@@ -123,7 +149,7 @@ func run() error {
 		return errors.New("preflight failed; see the findings above (Challenge Breaker is usually the one that matters)")
 	}
 
-	pool, err := blanktrail.NewPool(ctx, poolConfig(client, mode, *threads, *perThread, rep.CA))
+	pool, err := blanktrail.NewPool(ctx, poolConfig(client, mode, *threads, *perThread, rep.CA, egress.channels, *requestTimeout, *portTimeout))
 	if err != nil {
 		return fmt.Errorf("open pool: %w", err)
 	}
@@ -143,9 +169,9 @@ func run() error {
 	wbClient := wb.NewClient(wb.FromPool(pool), wb.NewSessions())
 
 	if *cardID != 0 {
-		return runCard(ctx, wbClient, eps, *cardID, *dest, mode, rows, pool)
+		return runCard(ctx, wbClient, eps, *cardID, *dest, mode, rows, pool, egress)
 	}
-	return runSearch(ctx, wbClient, eps, *query, *dest, mode, *pages, rows, pool)
+	return runSearch(ctx, wbClient, eps, *query, *dest, mode, *pages, rows, pool, egress)
 }
 
 // poolConfig builds the pool this run drives. It is a named function rather
@@ -162,17 +188,157 @@ func run() error {
 // nothing. Worse, every egress rotation also discards a solved challenge, which
 // costs far more than the request that triggered it. wb.CountFailure is the
 // package that knows the target answering the question the pool cannot.
-func poolConfig(client *blanktrail.Client, mode wb.Mode, threads, perThread int, ca *x509.CertPool) blanktrail.PoolConfig {
+//
+// channels is what -proxies, -rotate-url and -gateway assembled; an empty
+// slice means none of them were set, and this falls back to the direct
+// channel exactly as before those flags existed. requestTimeout and
+// portTimeoutSeconds are -request-timeout and -port-timeout: two independent
+// budgets (see blanktrail.PoolConfig.RequestTimeout's own doc comment on why
+// they must not be collapsed into one), both defaulted here too so a caller
+// that passes the zero value — as the existing tests do — gets the same
+// behaviour this function had before either flag existed.
+func poolConfig(client *blanktrail.Client, mode wb.Mode, threads, perThread int, ca *x509.CertPool, channels []blanktrail.Channel, requestTimeout time.Duration, portTimeoutSeconds int) blanktrail.PoolConfig {
+	spec := mode.Spec(blanktrail.DefaultPortSpec())
+	if portTimeoutSeconds > 0 {
+		spec.TimeoutSeconds = portTimeoutSeconds
+	}
+	if len(channels) == 0 {
+		channels = []blanktrail.Channel{blanktrail.NewDirectChannel("direct")}
+	}
+	if requestTimeout <= 0 {
+		requestTimeout = 300 * time.Second
+	}
 	return blanktrail.PoolConfig{
 		Client:         client,
 		Threads:        threads,
 		PortsPerThread: perThread,
-		Spec:           mode.Spec(blanktrail.DefaultPortSpec()),
-		Channels:       []blanktrail.Channel{blanktrail.NewDirectChannel("direct")},
+		Spec:           spec,
+		Channels:       channels,
 		CA:             ca,
-		RequestTimeout: 60 * time.Second,
+		RequestTimeout: requestTimeout,
 		CountFailure:   wb.CountFailure,
 	}
+}
+
+// --- egress ---
+//
+// blanktrail offers four kinds of channel: a proxy list, a rotating proxy
+// behind an IP-change URL, a vendor gateway, and direct. Before this, wbsearch
+// could only ever use direct — the one channel a live run against a mixed,
+// partly-hostile proxy list never actually exercises. What follows wires the
+// other three onto -proxies, -rotate-url and -gateway, all optional and all
+// combinable: blanktrail.Mixer spreads ports over whatever combination of
+// channels it is given.
+
+// egressSetup is what the egress flags assembled: the channels to hand the
+// pool, plus the bits the closing summary needs that blanktrail.Pool.Stats()
+// has no way to report once the channels are already wired into the pool.
+type egressSetup struct {
+	channels []blanktrail.Channel
+
+	// rotor is non-nil only when -proxies was set; its Len() is read again
+	// after the run for the summary line "proxies in rotor". That number will
+	// usually not move over the course of a run: blanktrail.Rotor.MarkBad
+	// counts failures against an upstream rather than removing it, and
+	// Rotor.Next forgives every upstream and starts over once the whole list
+	// has failed, rather than shrinking to nothing (see that method's own
+	// comment). So "left in the rotor" answers "how big is the list the pool
+	// is still drawing from", not "how many of them are currently believed
+	// good" — the pool's own EgressRotations and Quarantines counters, printed
+	// alongside it, are the closest this program can get to the latter; see
+	// the task report for why a true per-proxy verdict is not available.
+	rotor *blanktrail.Rotor
+
+	proxiesLoaded int // valid upstreams parsed from -proxies; 0 when -proxies is unset
+	proxiesBad    int // -proxies lines that failed to parse
+}
+
+// validProxyScheme mirrors the scheme set blanktrail.Parse accepts (see
+// upstream.go's validSchemes, which is unexported). Kept in sync by hand: it
+// is a short, stable list, and the alternative — exporting it just for this
+// one check — would widen blanktrail's public surface for a single flag
+// validation elsewhere in the repo.
+func validProxyScheme(s string) bool {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "http", "https", "socks5", "socks5h", "socks", "socks4":
+		return true
+	default:
+		return false
+	}
+}
+
+// validateEgressFlags checks the flags that shape the pool's egress channels,
+// the same way validateFlags front-loads the core ones: every problem is
+// reported at once, before any file is read or any network call is made.
+//
+// rotateURL and rotateProxy are required together. blanktrail.NewRotatingChannel
+// needs a fixed entry-point address to route requests through — separate from
+// rotateURL, which only ever changes what real IP sits behind that address —
+// and nothing else supplies one.
+func validateEgressFlags(proxyScheme, rotateURL, rotateProxy string, requestTimeout time.Duration, portTimeout int) error {
+	var problems []string
+	if !validProxyScheme(proxyScheme) {
+		problems = append(problems, fmt.Sprintf("-proxy-scheme %q is not one of: http, https, socks5, socks5h, socks4", proxyScheme))
+	}
+	if rotateURL != "" && strings.TrimSpace(rotateProxy) == "" {
+		problems = append(problems, "-rotate-proxy is required together with -rotate-url (the rotating channel's fixed entry-point address; see -h)")
+	}
+	if rotateProxy != "" && strings.TrimSpace(rotateURL) == "" {
+		problems = append(problems, "-rotate-proxy has no effect without -rotate-url")
+	}
+	if requestTimeout <= 0 {
+		problems = append(problems, "-request-timeout must be positive")
+	}
+	if portTimeout <= 0 {
+		problems = append(problems, "-port-timeout must be positive")
+	}
+	if len(problems) == 0 {
+		return nil
+	}
+	return fmt.Errorf("invalid flags:\n  - %s", strings.Join(problems, "\n  - "))
+}
+
+// buildEgressSetup turns the egress flags into the channels blanktrail.Mixer
+// will spread ports over. An empty result (no flags set at all) means direct
+// egress, exactly like before these flags existed; poolConfig is what
+// substitutes the direct channel, so this stays silent about that default
+// rather than duplicating it.
+//
+// A proxy list is credentials-adjacent, so neither branch below ever prints
+// the file's contents or a full proxy string — errors carry counts and, at
+// most, a path or a URL, never the parsed upstreams themselves.
+func buildEgressSetup(ctx context.Context, proxiesPath, proxyScheme, rotateURL, rotateProxy, gateway string) (egressSetup, error) {
+	var setup egressSetup
+
+	if proxiesPath != "" {
+		src := blanktrail.Source{Kind: "file", Location: proxiesPath, DefaultScheme: proxyScheme}
+		ups, bad, err := src.Load(ctx)
+		if err != nil {
+			return egressSetup{}, fmt.Errorf("-proxies: %w", err)
+		}
+		if len(ups) == 0 {
+			return egressSetup{}, fmt.Errorf("-proxies %q: no usable proxies (%d lines skipped as unparsable)", proxiesPath, len(bad))
+		}
+		rotor := blanktrail.NewStaticRotor(ups)
+		setup.channels = append(setup.channels, blanktrail.NewListChannel("proxies", rotor))
+		setup.rotor = rotor
+		setup.proxiesLoaded = len(ups)
+		setup.proxiesBad = len(bad)
+	}
+
+	if rotateURL != "" {
+		ups, bad := blanktrail.Parse(rotateProxy, proxyScheme)
+		if len(ups) != 1 || len(bad) != 0 {
+			return egressSetup{}, fmt.Errorf("-rotate-proxy: could not parse a single upstream address (%d parsed, %d unparsable)", len(ups), len(bad))
+		}
+		setup.channels = append(setup.channels, blanktrail.NewRotatingChannel("rotating", ups[0], rotateURL, 0))
+	}
+
+	if gateway != "" {
+		setup.channels = append(setup.channels, blanktrail.NewGatewayChannel("gateway", gateway))
+	}
+
+	return setup, nil
 }
 
 // apiKeyFromEnv reads the API key from the environment, trying this program's
@@ -269,9 +435,14 @@ Breaker the target refuses nearly every request, and preflight says so before
 any page is fetched rather than leaving it to be diagnosed from a wall of
 failed requests.
 
+By default every port egresses from this machine's own IP. -proxies,
+-rotate-url and -gateway each add an egress channel, and more than one at
+once is legitimate: ports are spread across whatever combination is given.
+
 Usage:
   go run ./examples/wbsearch -query "кроссовки женские" -dest 1259570991 -pages 3
   go run ./examples/wbsearch -card 1309449623 -dest -5892277
+  go run ./examples/wbsearch -query "кроссовки женские" -dest 1259570991 -proxies proxies.txt -proxy-scheme socks5
 
 Flags:
 `)
@@ -345,7 +516,7 @@ func toSearchRow(p wb.Product) searchRow {
 
 // runSearch walks the search from page one, writing a JSONL row per product,
 // until a page comes back shorter than a full page or pageBudget is spent.
-func runSearch(ctx context.Context, c *wb.Client, eps wb.Endpoints, query, dest string, mode wb.Mode, pageBudget int, rows io.Writer, pool *blanktrail.Pool) error {
+func runSearch(ctx context.Context, c *wb.Client, eps wb.Endpoints, query, dest string, mode wb.Mode, pageBudget int, rows io.Writer, pool *blanktrail.Pool, egress egressSetup) error {
 	enc := json.NewEncoder(rows)
 
 	var (
@@ -364,7 +535,7 @@ func runSearch(ctx context.Context, c *wb.Client, eps wb.Endpoints, query, dest 
 			Page:    page,
 		})
 		if err != nil {
-			printSummary(pagesFetched, productCount, len(uniqueIDs), totalDropped, classCounts, pool.Stats())
+			printSummary(os.Stderr, pagesFetched, productCount, len(uniqueIDs), totalDropped, classCounts, pool.Stats(), egress)
 			return fmt.Errorf("page %d: %w", page, err)
 		}
 		// SearchPage only ever returns successfully when the fetch classified
@@ -379,7 +550,7 @@ func runSearch(ctx context.Context, c *wb.Client, eps wb.Endpoints, query, dest 
 			uniqueIDs[p.ID] = struct{}{}
 			productCount++
 			if err := enc.Encode(toSearchRow(p)); err != nil {
-				printSummary(pagesFetched, productCount, len(uniqueIDs), totalDropped, classCounts, pool.Stats())
+				printSummary(os.Stderr, pagesFetched, productCount, len(uniqueIDs), totalDropped, classCounts, pool.Stats(), egress)
 				return fmt.Errorf("write row for product %d: %w", p.ID, err)
 			}
 		}
@@ -393,7 +564,7 @@ func runSearch(ctx context.Context, c *wb.Client, eps wb.Endpoints, query, dest 
 		}
 	}
 
-	printSummary(pagesFetched, productCount, len(uniqueIDs), totalDropped, classCounts, pool.Stats())
+	printSummary(os.Stderr, pagesFetched, productCount, len(uniqueIDs), totalDropped, classCounts, pool.Stats(), egress)
 	return nil
 }
 
@@ -480,7 +651,7 @@ func toCardRow(card wb.Card, product wb.Product, dest string, appType int, fetch
 // rather than discarding it just because the second request failed — see
 // Client.Card's own doc comment on why it returns the partial Card alongside
 // the error in that case.
-func runCard(ctx context.Context, c *wb.Client, eps wb.Endpoints, nm int64, dest string, mode wb.Mode, rows io.Writer, pool *blanktrail.Pool) error {
+func runCard(ctx context.Context, c *wb.Client, eps wb.Endpoints, nm int64, dest string, mode wb.Mode, rows io.Writer, pool *blanktrail.Pool, egress egressSetup) error {
 	basket := wb.NewBasket(c)
 	appType := mode.AppType()
 	fetchedAt := time.Now()
@@ -488,17 +659,17 @@ func runCard(ctx context.Context, c *wb.Client, eps wb.Endpoints, nm int64, dest
 	if err != nil && card.NmID == 0 {
 		// Nothing was fetched at all: the static half itself failed, so there
 		// is no partial row worth writing.
-		printSummary(0, 0, 0, 0, nil, pool.Stats())
+		printSummary(os.Stderr, 0, 0, 0, 0, nil, pool.Stats(), egress)
 		return fmt.Errorf("card %d: %w", nm, err)
 	}
 
 	enc := json.NewEncoder(rows)
 	if encErr := enc.Encode(toCardRow(card, product, dest, appType, fetchedAt)); encErr != nil {
-		printSummary(0, 0, 0, 0, nil, pool.Stats())
+		printSummary(os.Stderr, 0, 0, 0, 0, nil, pool.Stats(), egress)
 		return fmt.Errorf("write card %d: %w", nm, encErr)
 	}
 
-	printSummary(1, 1, 1, 0, map[wb.Class]int{wb.ClassOK: 1}, pool.Stats())
+	printSummary(os.Stderr, 1, 1, 1, 0, map[wb.Class]int{wb.ClassOK: 1}, pool.Stats(), egress)
 	if err != nil {
 		return fmt.Errorf("card %d: static half only, the live half (price, stock) failed: %w", nm, err)
 	}
@@ -507,16 +678,29 @@ func runCard(ctx context.Context, c *wb.Client, eps wb.Endpoints, nm int64, dest
 
 // --- summary ---
 
-func printSummary(pages, products, uniqueIDs, dropped int, classes map[wb.Class]int, stats blanktrail.Stats) {
-	fmt.Fprintln(os.Stderr)
-	fmt.Fprintln(os.Stderr, "--- summary ---")
-	fmt.Fprintf(os.Stderr, "pages fetched:  %d\n", pages)
-	fmt.Fprintf(os.Stderr, "products seen:  %d\n", products)
-	fmt.Fprintf(os.Stderr, "unique ids:     %d\n", uniqueIDs)
-	fmt.Fprintf(os.Stderr, "dropped items:  %d\n", dropped)
-	fmt.Fprintln(os.Stderr, "class distribution:")
+// printSummary is the whole point of a run against a mixed, partly-hostile
+// proxy list: pass/fail counts alone cannot tell anyone whether the run
+// actually cycled through bad egresses and settled on working ones, or just
+// sat on direct the whole time. w is a parameter (rather than os.Stderr
+// baked in) so a test can capture it.
+//
+// One thing this cannot print: which egress each port ended the run on — the
+// literal answer to "which proxies actually work". blanktrail.Pool exposes no
+// way to read a port's current egress except through an active Lease, and a
+// lease is released back before the caller learns whether the request behind
+// it even succeeded. Stats().EgressRotations and Quarantines are the closest
+// approximation available without changing the SDK; see the task report for
+// why this wasn't bridged with a new exported method on Pool.
+func printSummary(w io.Writer, pages, products, uniqueIDs, dropped int, classes map[wb.Class]int, stats blanktrail.Stats, egress egressSetup) {
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "--- summary ---")
+	fmt.Fprintf(w, "pages fetched:  %d\n", pages)
+	fmt.Fprintf(w, "products seen:  %d\n", products)
+	fmt.Fprintf(w, "unique ids:     %d\n", uniqueIDs)
+	fmt.Fprintf(w, "dropped items:  %d\n", dropped)
+	fmt.Fprintln(w, "class distribution:")
 	if len(classes) == 0 {
-		fmt.Fprintln(os.Stderr, "  (none)")
+		fmt.Fprintln(w, "  (none)")
 	}
 	keys := make([]wb.Class, 0, len(classes))
 	for c := range classes {
@@ -524,7 +708,17 @@ func printSummary(pages, products, uniqueIDs, dropped int, classes map[wb.Class]
 	}
 	sort.Slice(keys, func(i, j int) bool { return keys[i].String() < keys[j].String() })
 	for _, c := range keys {
-		fmt.Fprintf(os.Stderr, "  %s: %d\n", c, classes[c])
+		fmt.Fprintf(w, "  %s: %d\n", c, classes[c])
 	}
-	fmt.Fprintf(os.Stderr, "pool stats:     %+v\n", stats)
+
+	fmt.Fprintln(w, "egress:")
+	if egress.rotor != nil {
+		fmt.Fprintf(w, "  proxies loaded:     %d (%d lines skipped as unparsable)\n", egress.proxiesLoaded, egress.proxiesBad)
+		fmt.Fprintf(w, "  proxies in rotor:   %d\n", egress.rotor.Len())
+	}
+	fmt.Fprintf(w, "  egress rotations:   %d\n", stats.EgressRotations)
+	fmt.Fprintf(w, "  ports quarantined:  %d/%d\n", stats.Quarantined, stats.Ports)
+	fmt.Fprintln(w, "  per-port final egress: not available (see printSummary's doc comment)")
+
+	fmt.Fprintf(w, "pool stats:     %+v\n", stats)
 }

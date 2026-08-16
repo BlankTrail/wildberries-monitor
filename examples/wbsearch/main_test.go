@@ -3,10 +3,15 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/BlankTrail/wildberries-monitor/blanktrail"
 	"github.com/BlankTrail/wildberries-monitor/wb"
 )
 
@@ -29,7 +34,7 @@ import (
 // anything but wb.CountFailure's policy, or dropping it back to nil, fails
 // here.
 func TestPoolConfig_HandsTheFailurePolicyToThePool(t *testing.T) {
-	cfg := poolConfig(nil, wb.ModeDesktop, 1, 1, nil)
+	cfg := poolConfig(nil, wb.ModeDesktop, 1, 1, nil, nil, 0, 0)
 
 	if cfg.CountFailure == nil {
 		t.Fatal("PoolConfig.CountFailure is nil: the pool falls back to counting every non-2xx, " +
@@ -59,17 +64,63 @@ func TestPoolConfig_HandsTheFailurePolicyToThePool(t *testing.T) {
 // port spec, or a mobile run announces the mobile app behind a desktop
 // fingerprint.
 func TestPoolConfig_CarriesTheModesProfile(t *testing.T) {
-	if got := poolConfig(nil, wb.ModeMobile, 1, 1, nil).Spec; got.OS != "android" {
+	if got := poolConfig(nil, wb.ModeMobile, 1, 1, nil, nil, 0, 0).Spec; got.OS != "android" {
 		t.Errorf("mobile pool spec OS=%q, want android", got.OS)
 	}
-	if got := poolConfig(nil, wb.ModeDesktop, 1, 1, nil).Spec; got.OS != "windows" {
+	if got := poolConfig(nil, wb.ModeDesktop, 1, 1, nil, nil, 0, 0).Spec; got.OS != "windows" {
 		t.Errorf("desktop pool spec OS=%q, want windows", got.OS)
 	}
 	// DefaultPortSpec's other fields have to survive the mode overlay — a zero
 	// base would leave JSSolver false, and the target refuses nearly every
 	// request without the solver.
-	if !poolConfig(nil, wb.ModeDesktop, 1, 1, nil).Spec.JSSolver {
+	if !poolConfig(nil, wb.ModeDesktop, 1, 1, nil, nil, 0, 0).Spec.JSSolver {
 		t.Error("JSSolver is off; without Challenge Breaker the target refuses nearly every request")
+	}
+}
+
+// TestPoolConfig_DefaultsToDirectWhenNoChannelsAreGiven pins the fallback that
+// keeps every run made before -proxies/-rotate-url/-gateway existed working
+// unchanged: an empty (or nil) channel slice must still open a pool that
+// egresses from this machine's own IP, not an empty, unusable Channels list.
+func TestPoolConfig_DefaultsToDirectWhenNoChannelsAreGiven(t *testing.T) {
+	cfg := poolConfig(nil, wb.ModeDesktop, 1, 1, nil, nil, 0, 0)
+	if len(cfg.Channels) != 1 || cfg.Channels[0].Kind() != blanktrail.KindDirect {
+		t.Fatalf("Channels=%v, want exactly one direct channel", cfg.Channels)
+	}
+}
+
+// TestPoolConfig_CarriesTheGivenChannelsAndTimeouts checks the flags this
+// milestone adds actually reach the PoolConfig the pool is opened with —
+// not just that they parse.
+func TestPoolConfig_CarriesTheGivenChannelsAndTimeouts(t *testing.T) {
+	chs := []blanktrail.Channel{blanktrail.NewGatewayChannel("gw", "nl")}
+	cfg := poolConfig(nil, wb.ModeDesktop, 1, 1, nil, chs, 45*time.Second, 12)
+
+	if len(cfg.Channels) != 1 || cfg.Channels[0].Name() != "gw" {
+		t.Errorf("Channels=%v, want the given gateway channel passed through unchanged", cfg.Channels)
+	}
+	if cfg.RequestTimeout != 45*time.Second {
+		t.Errorf("RequestTimeout=%v, want 45s", cfg.RequestTimeout)
+	}
+	if cfg.Spec.TimeoutSeconds != 12 {
+		t.Errorf("Spec.TimeoutSeconds=%d, want 12", cfg.Spec.TimeoutSeconds)
+	}
+}
+
+// TestPoolConfig_ZeroTimeoutsFallBackToTheOldDefaults guards the other branch:
+// a caller passing the zero value for either timeout — as every call before
+// these flags existed effectively did — must get exactly what this function
+// gave out before the flags were added, not a pool opened with a zero
+// RequestTimeout (which blanktrail.NewPool would itself default to 300s,
+// masking a real bug here) or a zero port TimeoutSeconds (a port that never
+// gives up on a dead upstream).
+func TestPoolConfig_ZeroTimeoutsFallBackToTheOldDefaults(t *testing.T) {
+	cfg := poolConfig(nil, wb.ModeDesktop, 1, 1, nil, nil, 0, 0)
+	if cfg.RequestTimeout != 300*time.Second {
+		t.Errorf("RequestTimeout=%v, want the 300s default", cfg.RequestTimeout)
+	}
+	if cfg.Spec.TimeoutSeconds != 30 {
+		t.Errorf("Spec.TimeoutSeconds=%d, want DefaultPortSpec's 30", cfg.Spec.TimeoutSeconds)
 	}
 }
 
@@ -125,5 +176,257 @@ func TestOpenOutput_EmptyPathIsStdout(t *testing.T) {
 	closeRows()
 	if _, err := os.Stdout.Stat(); err != nil {
 		t.Errorf("stdout is no longer usable after the cleanup func ran: %v", err)
+	}
+}
+
+// --- egress flags ---
+
+// TestValidateEgressFlags_AcceptsEveryLegitimateCombination checks the cases
+// this milestone's flags are meant to support: nothing set (direct egress,
+// unchanged from before), one channel flag alone, and several at once — the
+// Mixer is explicitly meant to take more than one.
+func TestValidateEgressFlags_AcceptsEveryLegitimateCombination(t *testing.T) {
+	cases := []struct {
+		name                           string
+		scheme, rotateURL, rotateProxy string
+	}{
+		{"nothing set", "http", "", ""},
+		{"proxy-scheme only, still valid on its own", "socks5", "", ""},
+		{"rotate-url with its required rotate-proxy", "http", "http://rotate.example/go", "1.2.3.4:1080"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if err := validateEgressFlags(c.scheme, c.rotateURL, c.rotateProxy, 300*time.Second, 30); err != nil {
+				t.Errorf("validateEgressFlags(%+v) = %v, want nil", c, err)
+			}
+		})
+	}
+}
+
+// TestValidateEgressFlags_RejectsRotateURLWithoutRotateProxy pins the one
+// design decision this task added beyond the flags it was literally given:
+// blanktrail.NewRotatingChannel needs a fixed entry-point address distinct
+// from the rotate URL, and -rotate-proxy is where it comes from. Silently
+// building a rotating channel from a zero-value Upstream would open a pool
+// that egresses nowhere usable, so this must fail loudly instead.
+func TestValidateEgressFlags_RejectsRotateURLWithoutRotateProxy(t *testing.T) {
+	err := validateEgressFlags("http", "http://rotate.example/go", "", 300*time.Second, 30)
+	if err == nil {
+		t.Fatal("validateEgressFlags with -rotate-url but no -rotate-proxy = nil, want an error")
+	}
+}
+
+// TestValidateEgressFlags_RejectsRotateProxyWithoutRotateURL guards the
+// mirror mistake: a lone -rotate-proxy with no -rotate-url would silently do
+// nothing, which is exactly the kind of typo this validation exists to catch
+// before any network call is made.
+func TestValidateEgressFlags_RejectsRotateProxyWithoutRotateURL(t *testing.T) {
+	err := validateEgressFlags("http", "", "1.2.3.4:1080", 300*time.Second, 30)
+	if err == nil {
+		t.Fatal("validateEgressFlags with -rotate-proxy but no -rotate-url = nil, want an error")
+	}
+}
+
+// TestValidateEgressFlags_RejectsBadSchemeTimeoutsAndReportsAllAtOnce mirrors
+// validateFlags' own contract (see TestValidateFlags-style tests elsewhere in
+// this file): every problem is collected into one error, not just the first.
+func TestValidateEgressFlags_RejectsBadSchemeTimeoutsAndReportsAllAtOnce(t *testing.T) {
+	err := validateEgressFlags("ftp", "", "", 0, 0)
+	if err == nil {
+		t.Fatal("validateEgressFlags with a bad scheme and two non-positive timeouts = nil, want an error")
+	}
+	msg := err.Error()
+	for _, want := range []string{"proxy-scheme", "request-timeout", "port-timeout"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("error %q does not mention %q", msg, want)
+		}
+	}
+}
+
+// --- egress wiring ---
+
+// TestBuildEgressSetup_NoFlagsYieldsNoChannels pins the fallback: when none of
+// -proxies/-rotate-url/-gateway are set, buildEgressSetup must hand back an
+// empty channel slice so poolConfig's own direct-channel fallback is what
+// decides the default, rather than this func inventing a second copy of it.
+func TestBuildEgressSetup_NoFlagsYieldsNoChannels(t *testing.T) {
+	setup, err := buildEgressSetup(context.Background(), "", "http", "", "", "")
+	if err != nil {
+		t.Fatalf("buildEgressSetup: %v", err)
+	}
+	if len(setup.channels) != 0 {
+		t.Errorf("channels=%v, want none", setup.channels)
+	}
+	if setup.rotor != nil {
+		t.Error("rotor is non-nil with -proxies unset")
+	}
+}
+
+// TestBuildEgressSetup_ProxiesFeedsAListChannelAndCountsBothGoodAndBadLines is
+// the core of the 15,000-proxy scenario this milestone exists for: a proxy
+// file's usable lines have to reach a list channel's rotor, and the unusable
+// ones have to be counted (for the summary) without ever being echoed back —
+// a proxy list is credentials-adjacent.
+func TestBuildEgressSetup_ProxiesFeedsAListChannelAndCountsBothGoodAndBadLines(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "proxies.txt")
+	const body = "1.1.1.1:1080\nnot a proxy\n2.2.2.2:2222\nuser:pass@3.3.3.3:3333\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write proxies file: %v", err)
+	}
+
+	setup, err := buildEgressSetup(context.Background(), path, "socks5", "", "", "")
+	if err != nil {
+		t.Fatalf("buildEgressSetup: %v", err)
+	}
+	if len(setup.channels) != 1 || setup.channels[0].Kind() != blanktrail.KindList {
+		t.Fatalf("channels=%v, want exactly one list channel", setup.channels)
+	}
+	if setup.proxiesLoaded != 3 {
+		t.Errorf("proxiesLoaded=%d, want 3", setup.proxiesLoaded)
+	}
+	if setup.proxiesBad != 1 {
+		t.Errorf("proxiesBad=%d, want 1", setup.proxiesBad)
+	}
+	if setup.rotor == nil {
+		t.Fatal("rotor is nil with -proxies set")
+	}
+	if got := setup.rotor.Len(); got != 3 {
+		t.Errorf("rotor.Len()=%d, want 3", got)
+	}
+}
+
+// TestBuildEgressSetup_ProxiesFileWithNoUsableLinesIsAnError guards the
+// all-bad-lines case: opening a pool against a list channel with zero
+// upstreams would only fail later, deep inside blanktrail.NewPool, with a
+// far less specific message. This must be caught here instead.
+func TestBuildEgressSetup_ProxiesFileWithNoUsableLinesIsAnError(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "proxies.txt")
+	if err := os.WriteFile(path, []byte("not a proxy\nftp://also-bad:1\n"), 0o600); err != nil {
+		t.Fatalf("write proxies file: %v", err)
+	}
+	_, err := buildEgressSetup(context.Background(), path, "socks5", "", "", "")
+	if err == nil {
+		t.Fatal("buildEgressSetup with an all-unparsable proxies file = nil error, want one")
+	}
+}
+
+// TestBuildEgressSetup_MissingProxiesFileIsAWrappedError guards the everyday
+// operator mistake — a typo'd -proxies path — surfacing as a clear error
+// rather than a panic or a silent empty channel.
+func TestBuildEgressSetup_MissingProxiesFileIsAWrappedError(t *testing.T) {
+	_, err := buildEgressSetup(context.Background(), filepath.Join(t.TempDir(), "does-not-exist.txt"), "http", "", "", "")
+	if err == nil {
+		t.Fatal("buildEgressSetup with a missing -proxies file = nil, want an error")
+	}
+}
+
+// TestBuildEgressSetup_RotateURLFeedsARotatingChannel checks the channel this
+// task had to add a flag beyond the original spec for (-rotate-proxy — see
+// validateEgressFlags' doc comment) actually gets built once both flags are
+// present.
+func TestBuildEgressSetup_RotateURLFeedsARotatingChannel(t *testing.T) {
+	setup, err := buildEgressSetup(context.Background(), "", "http", "http://rotate.example/go", "9.9.9.9:1080", "")
+	if err != nil {
+		t.Fatalf("buildEgressSetup: %v", err)
+	}
+	if len(setup.channels) != 1 || setup.channels[0].Kind() != blanktrail.KindRotating {
+		t.Fatalf("channels=%v, want exactly one rotating channel", setup.channels)
+	}
+}
+
+// TestBuildEgressSetup_UnparsableRotateProxyIsAnError guards -rotate-proxy
+// against the same malformed input -proxies lines can have, but here it must
+// fail outright rather than skip a bad line: a rotating channel has exactly
+// one entry point, so there is nothing to fall back to.
+func TestBuildEgressSetup_UnparsableRotateProxyIsAnError(t *testing.T) {
+	_, err := buildEgressSetup(context.Background(), "", "http", "http://rotate.example/go", "not a proxy", "")
+	if err == nil {
+		t.Fatal("buildEgressSetup with an unparsable -rotate-proxy = nil, want an error")
+	}
+}
+
+// TestBuildEgressSetup_GatewayFeedsAGatewayChannel is the simplest of the
+// three: -gateway needs nothing else, so it should always produce exactly one
+// gateway channel carrying the given name.
+func TestBuildEgressSetup_GatewayFeedsAGatewayChannel(t *testing.T) {
+	setup, err := buildEgressSetup(context.Background(), "", "http", "", "", "nl")
+	if err != nil {
+		t.Fatalf("buildEgressSetup: %v", err)
+	}
+	if len(setup.channels) != 1 || setup.channels[0].Kind() != blanktrail.KindGateway {
+		t.Fatalf("channels=%v, want exactly one gateway channel", setup.channels)
+	}
+}
+
+// TestBuildEgressSetup_CombinesEveryChannelFlagAtOnce is the case the task
+// specifically calls out as legitimate: several channel flags together, all
+// feeding one Mixer.
+func TestBuildEgressSetup_CombinesEveryChannelFlagAtOnce(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "proxies.txt")
+	if err := os.WriteFile(path, []byte("1.1.1.1:1080\n"), 0o600); err != nil {
+		t.Fatalf("write proxies file: %v", err)
+	}
+
+	setup, err := buildEgressSetup(context.Background(), path, "socks5", "http://rotate.example/go", "9.9.9.9:1080", "nl")
+	if err != nil {
+		t.Fatalf("buildEgressSetup: %v", err)
+	}
+	if len(setup.channels) != 3 {
+		t.Fatalf("channels=%v, want 3 (list, rotating, gateway)", setup.channels)
+	}
+	kinds := map[blanktrail.ChannelKind]bool{}
+	for _, ch := range setup.channels {
+		kinds[ch.Kind()] = true
+	}
+	for _, want := range []blanktrail.ChannelKind{blanktrail.KindList, blanktrail.KindRotating, blanktrail.KindGateway} {
+		if !kinds[want] {
+			t.Errorf("channels=%v, missing kind %q", setup.channels, want)
+		}
+	}
+}
+
+// --- summary ---
+
+// TestPrintSummary_ReportsEgressRotationsQuarantinesAndTheMissingPerPortAnswer
+// checks the fields this milestone adds to the closing summary: the whole
+// point of running against a mixed proxy list is judging afterwards which
+// egresses survived, and the pool-level counters (rotations, quarantines) are
+// what blanktrail.Pool actually exposes for that — printSummary must surface
+// them, and must not silently omit the one thing it cannot answer (per-port
+// final egress) rather than just leaving it out unexplained.
+func TestPrintSummary_ReportsEgressRotationsQuarantinesAndTheMissingPerPortAnswer(t *testing.T) {
+	var buf bytes.Buffer
+	stats := blanktrail.Stats{Ports: 50, Quarantined: 3, EgressRotations: 842}
+	printSummary(&buf, 3, 250, 250, 0, map[wb.Class]int{wb.ClassOK: 3}, stats, egressSetup{})
+
+	out := buf.String()
+	for _, want := range []string{"egress rotations:   842", "ports quarantined:  3/50", "per-port final egress: not available"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("summary output missing %q; got:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "proxies loaded") {
+		t.Errorf("summary printed a proxies-loaded line with no -proxies set; got:\n%s", out)
+	}
+}
+
+// TestPrintSummary_ReportsProxiesLoadedAndRemainingWhenAProxiesFileWasUsed
+// checks the other half: when -proxies fed a rotor, the summary has to show
+// both how many were loaded and how many the rotor still holds — the two
+// numbers the task asked for by name.
+func TestPrintSummary_ReportsProxiesLoadedAndRemainingWhenAProxiesFileWasUsed(t *testing.T) {
+	ups, _ := blanktrail.Parse("1.1.1.1:1\n2.2.2.2:2\n3.3.3.3:3", "socks5")
+	rotor := blanktrail.NewStaticRotor(ups)
+	setup := egressSetup{rotor: rotor, proxiesLoaded: 3, proxiesBad: 1}
+
+	var buf bytes.Buffer
+	printSummary(&buf, 1, 1, 1, 0, map[wb.Class]int{wb.ClassOK: 1}, blanktrail.Stats{}, setup)
+
+	out := buf.String()
+	if !strings.Contains(out, "proxies loaded:     3 (1 lines skipped as unparsable)") {
+		t.Errorf("summary output missing the proxies-loaded line; got:\n%s", out)
+	}
+	if !strings.Contains(out, "proxies in rotor:   3") {
+		t.Errorf("summary output missing the proxies-in-rotor line; got:\n%s", out)
 	}
 }
