@@ -188,26 +188,21 @@ type Envelope struct {
 	// one surviving Product.
 	Dropped int
 
-	// Cost is what fetching this page took. It is carried out with the data
-	// because a page that landed on the eleventh attempt through four proxies
-	// is exactly what an operator needs to see, and it is indistinguishable
-	// from a page that landed first try once the Result behind it is gone —
-	// which used to happen here, leaving cost visible only when a fetch failed
-	// outright. Transport telemetry rather than decoded data, hence its own
-	// field rather than three more loose ints among the products.
-	Cost FetchCost
-
-	// Port is the worker port this page was fetched through — see Result.Port,
-	// which is where this comes from. A caller comparing how long a port's
-	// first request took against its later ones needs this to group by; without
-	// it, that comparison could only be made inside this package, where it
-	// cannot answer the question it exists for: whether a session actually
-	// survives on a port across separate requests, not just within one.
+	// Fetches is where the request behind this page went and what it cost:
+	// one entry, because one page is one request. It is carried out with the
+	// data rather than only on failure, because a page that landed on the
+	// eleventh attempt through four proxies is exactly what an operator needs
+	// to see, and it is indistinguishable from a page that landed first try
+	// once the Result behind it is gone. Transport telemetry rather than
+	// decoded data, hence one field of its own rather than loose ints among
+	// the products. See Fetch for what each entry carries and why.
 	//
-	// Zero when the fetch never produced a response at all (see FetchError) —
-	// a request that never landed may have tried several ports (see
-	// FetchCost.PortChanges) and cannot be attributed to a single one.
-	Port int
+	// The entry's Source is what tells apart the two endpoints that both
+	// answer with this type: Client.SearchPage reports SourceSearchPage,
+	// Client.SellerCatalogPage reports SourceSellerCatalog. An Envelope built
+	// by hand or decoded straight from bytes reports nothing at all, the same
+	// way it carries no Rank.
+	Fetches []Fetch
 }
 
 // FetchCost is what one fetch spent. A first-try success is Attempts 1 and the

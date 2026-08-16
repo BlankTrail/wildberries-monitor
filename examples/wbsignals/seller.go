@@ -119,10 +119,7 @@ func runSeller(ctx context.Context, c *wb.Client, eps wb.Endpoints, supplier int
 		cstart := time.Now()
 		q := wb.SearchQuery{Dest: dest, AppType: mode.AppType(), Page: 1}
 		env, catErr := c.SellerCatalogPage(ctx, eps, supplier, q)
-		t = append(t, requestTiming{
-			label: fmt.Sprintf("seller catalog page1 #%d", i), port: env.Port,
-			attempts: env.Cost.Attempts, elapsed: time.Since(cstart),
-		})
+		t = append(t, timingOf(fmt.Sprintf("seller catalog page1 #%d", i), env.Fetches, time.Since(cstart)))
 
 		row := toSellerRow(s, env, dest, time.Now())
 		if werr := jsonEncode(enc, "seller", row); werr != nil {

@@ -751,13 +751,14 @@ func TestSleepBetweenRequests_StopsEarlyOnCancelledContext(t *testing.T) {
 }
 
 // TestAppendTiming_SkipsAFetchThatNeverLandedOnAPort guards the one case a
-// timing entry cannot be attributed correctly: env.Port == 0 means no
-// response ever came back at all (see Envelope.Port's own doc comment), and
-// the fetch may have tried several ports on its way to failing. Recording it
-// against port zero would misattribute a sample to a port that answered
-// nothing.
+// timing entry cannot be attributed correctly: a provenance entry with Port
+// == 0 means no response ever came back at all (see wb.Fetch.Port's own doc
+// comment), and the fetch may have tried several ports on its way to
+// failing. Recording it against port zero would misattribute a sample to a
+// port that answered nothing.
 func TestAppendTiming_SkipsAFetchThatNeverLandedOnAPort(t *testing.T) {
-	got := appendTiming(nil, 1, wb.Envelope{Port: 0}, 5*time.Second)
+	env := wb.Envelope{Fetches: []wb.Fetch{{Source: wb.SourceSearchPage, Port: 0, Cost: wb.FetchCost{Attempts: 15}}}}
+	got := appendTiming(nil, 1, env, 5*time.Second)
 	if len(got) != 0 {
 		t.Errorf("appendTiming with Port=0 recorded %d entries, want 0", len(got))
 	}
@@ -767,9 +768,12 @@ func TestAppendTiming_SkipsAFetchThatNeverLandedOnAPort(t *testing.T) {
 // fetch's port, attempt count and elapsed time all have to survive into the
 // recorded entry, in the order fetches arrive.
 func TestAppendTiming_RecordsPortAndAttempts(t *testing.T) {
+	page := func(port, attempts int) wb.Envelope {
+		return wb.Envelope{Fetches: []wb.Fetch{{Source: wb.SourceSearchPage, Port: port, Cost: wb.FetchCost{Attempts: attempts}}}}
+	}
 	var timings []requestTiming
-	timings = appendTiming(timings, 1, wb.Envelope{Port: 20001, Cost: wb.FetchCost{Attempts: 1}}, 8*time.Second)
-	timings = appendTiming(timings, 2, wb.Envelope{Port: 20001, Cost: wb.FetchCost{Attempts: 3}}, 900*time.Millisecond)
+	timings = appendTiming(timings, 1, page(20001, 1), 8*time.Second)
+	timings = appendTiming(timings, 2, page(20001, 3), 900*time.Millisecond)
 
 	if len(timings) != 2 {
 		t.Fatalf("got %d timings, want 2", len(timings))

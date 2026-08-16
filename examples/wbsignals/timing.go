@@ -8,46 +8,108 @@ import (
 	"io"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/BlankTrail/wildberries-monitor/blanktrail"
+	"github.com/BlankTrail/wildberries-monitor/wb"
 )
 
-// requestTiming is one fetch's wall-clock cost, kept in the order it ran.
-// label names what the fetch was ("reviews #1", "seller catalog page 1",
-// "card <dest2>") so a heterogeneous run — several different kinds of
-// request, not wbsearch's uniform page loop — still reads clearly grouped by
-// port.
+// requestTiming is one wb.Client call's wall-clock cost, kept in the order it
+// ran. label names what the call was ("reviews #1", "seller catalog page 1",
+// "card #2") so a heterogeneous run — several different kinds of request, not
+// wbsearch's uniform page loop — still reads clearly grouped by port.
 //
-// port is 0 when the wb.Client method behind this fetch does not report
-// which port served it — see printCheckSummary's own doc comment for which
-// of the five checks that is true for. A zero is never grouped with a real
-// port number: doing so would silently claim every unattributed fetch shared
-// one identity, which is worse than admitting the identity is unknown.
+// ports is every port the requests behind that one call left through, read
+// from the call's own provenance (wb.Fetch.Port). One entry for the calls
+// that fetch once; two for wb.Client.Card and wb.Client.Seller, which fetch
+// from two sources apiece. A 0 among them is a request that never landed at
+// all and can be credited to no port — see wb.Fetch.Port. None at all is a
+// call that made no request (wb.Client.Duplicates against a product in no
+// duplicate group).
+//
+// elapsed is the whole call's wall clock, not one request's: wb reports a
+// port and an attempt count per request but not a duration, so a call that
+// made two requests has one measurable time covering both. That is why
+// grouping happens per call and only when every one of its requests shared
+// one port — see groupTimingsByPort.
 type requestTiming struct {
 	label    string
-	port     int
+	ports    []int
 	attempts int
 	elapsed  time.Duration
 }
 
-// groupTimingsByPort buckets timings with a known port (port != 0), keeping
-// each port's own requests in service order. unattributed carries every
-// timing whose port is unknown, in the order they ran. order lists the known
-// ports in first-seen order, mirroring wbsearch's own groupTimingsByPort.
-func groupTimingsByPort(timings []requestTiming) (order []int, byPort map[int][]requestTiming, unattributed []requestTiming) {
+// timingOf builds one call's timing row from the provenance that call
+// reported, so every check records the same thing the same way instead of
+// each reaching into wb.Fetch itself.
+func timingOf(label string, fetches []wb.Fetch, elapsed time.Duration) requestTiming {
+	t := requestTiming{label: label, elapsed: elapsed}
+	for _, f := range fetches {
+		t.ports = append(t.ports, f.Port)
+		t.attempts += f.Cost.Attempts
+	}
+	return t
+}
+
+// singlePort reports the one port every request behind a call left through,
+// and whether there was exactly one. A call whose halves landed on two
+// different ports, or one of whose requests never landed at all, has no
+// single port to be filed under: elapsed covers all of them together, so
+// crediting that duration to either port would attribute one port's time to
+// another. Nothing to report is not a port either.
+func singlePort(ports []int) (int, bool) {
+	if len(ports) == 0 {
+		return 0, false
+	}
+	for _, p := range ports {
+		if p == 0 || p != ports[0] {
+			return 0, false
+		}
+	}
+	return ports[0], true
+}
+
+// groupTimingsByPort buckets timings that can be credited to one port,
+// keeping each port's own calls in service order. ungrouped carries every
+// timing that cannot — see singlePort — in the order they ran. order lists
+// the known ports in first-seen order, mirroring wbsearch's own
+// groupTimingsByPort.
+func groupTimingsByPort(timings []requestTiming) (order []int, byPort map[int][]requestTiming, ungrouped []requestTiming) {
 	byPort = map[int][]requestTiming{}
 	for _, t := range timings {
-		if t.port == 0 {
-			unattributed = append(unattributed, t)
+		port, ok := singlePort(t.ports)
+		if !ok {
+			ungrouped = append(ungrouped, t)
 			continue
 		}
-		if _, ok := byPort[t.port]; !ok {
-			order = append(order, t.port)
+		if _, seen := byPort[port]; !seen {
+			order = append(order, port)
 		}
-		byPort[t.port] = append(byPort[t.port], t)
+		byPort[port] = append(byPort[port], t)
 	}
-	return order, byPort, unattributed
+	return order, byPort, ungrouped
+}
+
+// portsLabel says what an ungrouped call's requests did use, so a row that
+// could not be filed under one port still names the ports it touched rather
+// than reading as "unknown".
+func portsLabel(ports []int) string {
+	if len(ports) == 0 {
+		return "no port reported for this call"
+	}
+	parts := make([]string, 0, len(ports))
+	for _, p := range ports {
+		if p == 0 {
+			parts = append(parts, "none (never landed)")
+			continue
+		}
+		parts = append(parts, strconv.Itoa(p))
+	}
+	if len(parts) == 1 {
+		return "port " + parts[0]
+	}
+	return "ports " + strings.Join(parts, ", ")
 }
 
 // median returns the median of a non-empty slice of durations, sorting a copy
@@ -66,31 +128,28 @@ func median(ds []time.Duration) time.Duration {
 	return (sorted[mid-1] + sorted[mid]) / 2
 }
 
-// printRequestTimings shows every fetch this run made, grouped by port where
-// the port is known and separately where it is not.
+// printRequestTimings shows every call this run made, grouped by port where
+// every request behind the call shared one, and separately where they did
+// not.
 //
 // The grouped half answers the same question wbsearch's own function of this
 // name exists to answer: whether a solved challenge on a port actually saved
 // time on a later request through that same port, or whether every request
-// paid the same cold cost regardless. Client.Reviews, Client.Questions,
-// Client.QuestionCount, Client.Duplicates and Client.SellerCatalogPage all
-// carry Port (and Cost) out now, so reviews, questions, duplicates and the
-// seller catalogue half of check 3 can all show a real, grouped table —
-// they did not when this program first shipped; see the task report for
-// what changed in wb to make that true.
+// paid the same cold cost regardless. Every wb.Client call this program makes
+// now reports the provenance of every request behind it (wb.Fetch), so every
+// check can show a real, grouped table — the card and the seller could not
+// when this program first shipped, and printed "port not reported by this
+// endpoint" instead.
 //
-// The unattributed half still exists for one call this program still makes:
-// Client.Card. Its live half decodes through decodeEnvelope internally, the
-// same function SearchPage and SellerCatalogPage use, but never carries the
-// port that answered it out onto the single Product it returns — Product has
-// no field to hold one, unlike Envelope. Card is shared with wbsearch, so
-// widening it is a larger, riskier change than the other five turned out to
-// be; see the task report for the proposal, left for the controller to
-// weigh. Every card #N and duplicates→card fetch, and every fetch inside
-// -what diff, therefore lands here rather than in a grouped port bucket —
-// elapsed time alone, without a port to group it by, is still worth
-// printing: a second fetch answering markedly faster than the first is
-// suggestive of a warm session even without proof of which port carried it.
+// The ungrouped half is no longer about an endpoint that says nothing. It is
+// about a call whose requests did not agree on a port: Client.Card and
+// Client.Seller each fetch from two sources, and on a pool with more than one
+// port free the two halves can leave through different ones. wb reports a
+// port per request but not a duration per request, so such a call has one
+// measured time covering two ports and cannot honestly be filed under either.
+// It is printed with the ports it did touch, which is still the fact the
+// operator wanted; only the per-port first-vs-later comparison is unavailable
+// for it.
 func printRequestTimings(w io.Writer, timings []requestTiming) {
 	fmt.Fprintln(w, "requests, in service order:")
 	if len(timings) == 0 {
@@ -98,7 +157,7 @@ func printRequestTimings(w io.Writer, timings []requestTiming) {
 		return
 	}
 
-	order, byPort, unattributed := groupTimingsByPort(timings)
+	order, byPort, ungrouped := groupTimingsByPort(timings)
 	for _, port := range order {
 		reqs := byPort[port]
 		fmt.Fprintf(w, "  port %d (%d request(s))", port, len(reqs))
@@ -124,12 +183,13 @@ func printRequestTimings(w io.Writer, timings []requestTiming) {
 		}
 	}
 
-	if len(unattributed) == 0 {
+	if len(ungrouped) == 0 {
 		return
 	}
-	fmt.Fprintf(w, "  port not reported by this endpoint (%d request(s)):\n", len(unattributed))
-	for _, r := range unattributed {
-		fmt.Fprintf(w, "      %-28s %-10s\n", r.label, r.elapsed.Round(time.Millisecond))
+	fmt.Fprintf(w, "  not grouped — one call's requests did not share a port (%d call(s)):\n", len(ungrouped))
+	for _, r := range ungrouped {
+		fmt.Fprintf(w, "      %-28s %-10s %s (%d attempt(s))\n",
+			r.label, r.elapsed.Round(time.Millisecond), portsLabel(r.ports), r.attempts)
 	}
 }
 
@@ -141,14 +201,9 @@ func printRequestTimings(w io.Writer, timings []requestTiming) {
 // pre-formatted strings rather than a struct, because the five checks share
 // nothing about their content, only the surrounding shape.
 //
-// What this still cannot print, unlike wbsearch's own printSummary: a fetch
-// cost (attempts, egress rotations, transport errors) for -what diff, or for
-// the card fetch inside -what duplicates, or for seller's own static/profile
-// halves. Reviews, Questions, QuestionCount and Duplicates now carry Port and
-// FetchCost out (see printRequestTimings's own doc comment); Client.Card and
-// Client.Seller's two independent fetches still do not — see the task report
-// for exactly why, and the smallest change that would close each remaining
-// gap.
+// Every fetch this program makes now reports its own port and cost, the card
+// and the seller included, so the timing table below covers the whole run
+// rather than the part of it that happened to have a port to name.
 func printCheckSummary(w io.Writer, what string, lines []string, stats blanktrail.Stats, egress egressSetup, timings []requestTiming) {
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "--- "+what+" summary ---")

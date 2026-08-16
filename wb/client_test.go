@@ -940,12 +940,18 @@ func TestClient_SearchPageCarriesWhatTheFetchCost(t *testing.T) {
 	if len(env.Products) != 2 {
 		t.Fatalf("got %d products, want 2", len(env.Products))
 	}
+	f := onlyFetch(t, env.Fetches)
 	want := FetchCost{Attempts: 4, Rotations: 1, TransportErrors: 1}
-	if env.Cost != want {
-		t.Errorf("Cost=%+v, want %+v — one dead connection, two challenges, then a new proxy got it", env.Cost, want)
+	if f.Cost != want {
+		t.Errorf("Cost=%+v, want %+v — one dead connection, two challenges, then a new proxy got it", f.Cost, want)
 	}
-	if env.Port != 20013 {
-		t.Errorf("Port=%d, want 20013 — the port that actually answered, for a per-port timing comparison", env.Port)
+	if f.Port != 20013 {
+		t.Errorf("Port=%d, want 20013 — the port that actually answered, for a per-port timing comparison", f.Port)
+	}
+	// Envelope comes back from two different endpoints. Without the source on
+	// the entry, a table of both cannot say which of them fetched this page.
+	if f.Source != SourceSearchPage {
+		t.Errorf("Source=%q, want %q", f.Source, SourceSearchPage)
 	}
 }
 
@@ -961,14 +967,15 @@ func TestClient_SearchPageReportsAFirstTryPageAsCostingOneAttempt(t *testing.T) 
 	if err != nil {
 		t.Fatalf("SearchPage: %v", err)
 	}
-	if want := (FetchCost{Attempts: 1}); env.Cost != want {
-		t.Errorf("Cost=%+v, want %+v", env.Cost, want)
+	f := onlyFetch(t, env.Fetches)
+	if want := (FetchCost{Attempts: 1}); f.Cost != want {
+		t.Errorf("Cost=%+v, want %+v", f.Cost, want)
 	}
-	if env.Cost.Retried() {
+	if f.Cost.Retried() {
 		t.Error("a first-try page reports itself as retried")
 	}
-	if env.Port != 1 {
-		t.Errorf("Port=%d, want 1", env.Port)
+	if f.Port != 1 {
+		t.Errorf("Port=%d, want 1", f.Port)
 	}
 }
 
@@ -1215,16 +1222,17 @@ func TestClient_SearchPageCarriesTheCostOfAPageThatFailed(t *testing.T) {
 	if err == nil {
 		t.Fatal("SearchPage returned no error with every port refusing connections")
 	}
+	f := onlyFetch(t, env.Fetches)
 	want := FetchCost{Attempts: 15, TransportErrors: 15, PortChanges: 14}
-	if env.Cost != want {
-		t.Errorf("Cost=%+v, want %+v — the envelope is empty but the cost is real", env.Cost, want)
+	if f.Cost != want {
+		t.Errorf("Cost=%+v, want %+v — the envelope is empty but the cost is real", f.Cost, want)
 	}
 	// No Result was ever produced — every attempt died at the transport level
 	// — so there is no single port to blame; the fetch tried 15 of them.
 	// Reporting any one of those as "the" port would misattribute a timing
 	// sample to a port that may have answered nothing at all.
-	if env.Port != 0 {
-		t.Errorf("Port=%d, want 0 (unattributable: no response ever came back)", env.Port)
+	if f.Port != 0 {
+		t.Errorf("Port=%d, want 0 (unattributable: no response ever came back)", f.Port)
 	}
 }
 
@@ -1239,14 +1247,15 @@ func TestClient_SearchPageCarriesTheCostOfAPageTheEdgeRefused(t *testing.T) {
 	if err == nil {
 		t.Fatal("SearchPage accepted a page of challenges")
 	}
-	if env.Cost.Attempts != 15 || env.Cost.Rotations != 12 {
-		t.Errorf("Cost=%+v, want 15 attempts and 12 rotations", env.Cost)
+	f := onlyFetch(t, env.Fetches)
+	if f.Cost.Attempts != 15 || f.Cost.Rotations != 12 {
+		t.Errorf("Cost=%+v, want 15 attempts and 12 rotations", f.Cost)
 	}
 	// Unlike the transport-error case above, every attempt here did get a
 	// response — there was always a Result, just never an OK one — so the port
 	// it last answered on is known and worth keeping.
-	if env.Port != 1 {
-		t.Errorf("Port=%d, want 1", env.Port)
+	if f.Port != 1 {
+		t.Errorf("Port=%d, want 1", f.Port)
 	}
 }
 

@@ -158,7 +158,7 @@ func TestRunDuplicates_ReportsThePortForTheDuplicatesFetchItself(t *testing.T) {
 	if !strings.Contains(summary.String(), "port 6 (1 request(s))") {
 		t.Errorf("summary does not group the duplicates fetch under port 6; got:\n%s", summary.String())
 	}
-	if !strings.Contains(summary.String(), "port not reported by this endpoint (1 request(s))") {
+	if !strings.Contains(summary.String(), "no port reported for this call") {
 		t.Errorf("summary should still show exactly the card fetch as unattributed (Client.Card reports no port); got:\n%s", summary.String())
 	}
 }

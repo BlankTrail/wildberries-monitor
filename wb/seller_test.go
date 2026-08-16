@@ -633,6 +633,32 @@ func TestClient_SellerCatalogPageDecodesThroughTheSameEnvelopeAndExtractProduct(
 // fixture's own products carry distinct __sort values that a mutant copying
 // SearchPage's own rank arithmetic wholesale would happily turn into a
 // non-zero Rank.
+// TestClient_SellerCatalogPageNamesItselfAsTheSourceOfItsEnvelope is the
+// reason a single-request call names its source at all. Envelope is the
+// return type of two different endpoints, so a caller merging both into one
+// table of what a run fetched — which is exactly what examples/wbsignals
+// does — has nothing but this field to tell a storefront page from a search
+// page. Without it, the two are the same value.
+func TestClient_SellerCatalogPageNamesItselfAsTheSourceOfItsEnvelope(t *testing.T) {
+	l := &fakeLease{port: 11, replies: []*http.Response{reply(200, string(sellerCatalogFixture(t)))}}
+	c := NewClient(&fakeLeaser{leases: []*fakeLease{l}}, NewSessions())
+
+	env, err := c.SellerCatalogPage(context.Background(), DefaultEndpoints(), 350748670, SearchQuery{Dest: "-1", Page: 1})
+	if err != nil {
+		t.Fatalf("SellerCatalogPage: %v", err)
+	}
+	f := onlyFetch(t, env.Fetches)
+	if f.Source != SourceSellerCatalog {
+		t.Errorf("Source=%q, want %q — a storefront page reported as a search page is a page attributed to the wrong endpoint", f.Source, SourceSellerCatalog)
+	}
+	if f.Port != 11 {
+		t.Errorf("Port=%d, want 11 (the fake lease's own port)", f.Port)
+	}
+	if f.Cost.Attempts != 1 {
+		t.Errorf("Cost.Attempts=%d, want 1 (a first-try success)", f.Cost.Attempts)
+	}
+}
+
 func TestClient_SellerCatalogPageNeverAssignsRank(t *testing.T) {
 	l := &fakeLease{port: 1, replies: []*http.Response{reply(200, string(sellerCatalogFixture(t)))}}
 	c := NewClient(&fakeLeaser{leases: []*fakeLease{l}}, NewSessions())

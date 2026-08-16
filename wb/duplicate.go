@@ -62,16 +62,14 @@ type Duplicates struct {
 	MatchID int64
 	Dest    string
 
-	// Port is the worker port this fetch was served through, mirroring
-	// Envelope.Port — see that field's own doc comment for why a caller
-	// needs it. Zero both when the fetch never produced a response at all,
-	// and when MatchID == 0 skipped the request entirely (see Client.
-	// Duplicates's own doc comment): neither case has a port to name.
-	Port int
-	// Cost is what this fetch took to obtain, mirroring Envelope.Cost. Zero
-	// (not just unset) when MatchID == 0, for the identical reason: nothing
-	// was spent fetching an answer already known.
-	Cost FetchCost
+	// Fetches is where the request behind this reading went and what it cost,
+	// mirroring Envelope.Fetches — see Fetch for why a caller needs the port.
+	// One entry normally; empty when MatchID == 0 short-circuited the call
+	// before any request was made (see Client.Duplicates's own doc comment),
+	// which is the one reading in this package that is real, complete and
+	// cost nothing, as opposed to a reading whose request never landed — that
+	// one still reports its entry, with no port and the budget it burned.
+	Fetches []Fetch
 }
 
 // rawDuplicatesMetadata mirrors the one block of the payload's metadata
@@ -215,20 +213,20 @@ func (c *Client) Duplicates(ctx context.Context, eps Endpoints, p Product, dest 
 	referer := eps.CardPageURL(p.ID)
 	res, err := c.Get(ctx, eps.DuplicatesURL(p.MatchID, p.ID, supplierID, dest), KindAPI, referer)
 	if err != nil {
-		asked.Cost = CostOf(err)
+		asked.Fetches = []Fetch{lostFetch(SourceDuplicates, err)}
 		return asked, err
 	}
 	if res.Class != ClassOK {
-		asked.Port, asked.Cost = res.Port, res.FetchCost
+		asked.Fetches = []Fetch{fetchOf(SourceDuplicates, res)}
 		return asked, fmt.Errorf("wb: duplicates %d: status %d (%s)", p.ID, res.Status, res.Class)
 	}
 
 	d, err := decodeDuplicates(res.Body)
 	if err != nil {
-		asked.Port, asked.Cost = res.Port, res.FetchCost
+		asked.Fetches = []Fetch{fetchOf(SourceDuplicates, res)}
 		return asked, fmt.Errorf("wb: duplicates %d: %w", p.ID, err)
 	}
 	d.MatchID, d.Dest = asked.MatchID, asked.Dest
-	d.Port, d.Cost = res.Port, res.FetchCost
+	d.Fetches = []Fetch{fetchOf(SourceDuplicates, res)}
 	return d, nil
 }

@@ -410,19 +410,18 @@ func (c *Client) SellerCatalogPage(ctx context.Context, eps Endpoints, id int64,
 
 	res, err := c.Get(ctx, eps.SellerCatalogURL(id, q), KindAPI, "")
 	if err != nil {
-		return Envelope{Cost: CostOf(err)}, err
+		return Envelope{Fetches: []Fetch{lostFetch(SourceSellerCatalog, err)}}, err
 	}
 	if res.Class != ClassOK {
-		return Envelope{Cost: res.FetchCost, Port: res.Port}, fmt.Errorf(
+		return Envelope{Fetches: []Fetch{fetchOf(SourceSellerCatalog, res)}}, fmt.Errorf(
 			"wb: seller catalog %d page %d: status %d (%s)", id, q.Page, res.Status, res.Class)
 	}
 
 	env, err := decodeEnvelope(res.Body)
 	if err != nil {
-		return Envelope{Cost: res.FetchCost, Port: res.Port}, fmt.Errorf("wb: seller catalog %d page %d: %w", id, q.Page, err)
+		return Envelope{Fetches: []Fetch{fetchOf(SourceSellerCatalog, res)}}, fmt.Errorf("wb: seller catalog %d page %d: %w", id, q.Page, err)
 	}
-	env.Cost = res.FetchCost
-	env.Port = res.Port
+	env.Fetches = []Fetch{fetchOf(SourceSellerCatalog, res)}
 
 	seen := c.now()
 	for i := range env.Products {

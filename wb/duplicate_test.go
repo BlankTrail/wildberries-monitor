@@ -236,7 +236,7 @@ func TestClient_DuplicatesSkipsTheRequestWhenMatchIDIsZero(t *testing.T) {
 	if l.calls != 0 {
 		t.Errorf("Acquire was called %d time(s); MatchID==0 must not issue a request", l.calls)
 	}
-	if got.Total != 0 || got.Items != nil || got.MinimalPrice != nil || got.MinPriceItem != nil || got.Port != 0 {
+	if got.Total != 0 || got.Items != nil || got.MinimalPrice != nil || got.MinPriceItem != nil || got.Fetches != nil {
 		t.Errorf("Duplicates=%+v, want the zero value — no duplicate group means nothing to report, and no request means no port to name", got)
 	}
 	// The identity fields are part of that zero value, not an exception to it:
@@ -308,11 +308,15 @@ func TestClient_DuplicatesReportsThePortAndCostOfTheFetch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Duplicates: %v", err)
 	}
-	if got.Port != 9 {
-		t.Errorf("Port=%d, want 9", got.Port)
+	f := onlyFetch(t, got.Fetches)
+	if f.Source != SourceDuplicates {
+		t.Errorf("Source=%q, want %q", f.Source, SourceDuplicates)
 	}
-	if got.Cost.Attempts != 1 {
-		t.Errorf("Cost.Attempts=%d, want 1", got.Cost.Attempts)
+	if f.Port != 9 {
+		t.Errorf("Port=%d, want 9", f.Port)
+	}
+	if f.Cost.Attempts != 1 {
+		t.Errorf("Cost.Attempts=%d, want 1", f.Cost.Attempts)
 	}
 }
 

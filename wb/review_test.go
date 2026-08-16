@@ -593,11 +593,16 @@ func TestClient_ReviewsReportsThePortAndCostOfTheFetch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Reviews: %v", err)
 	}
-	if got.Port != 7 {
-		t.Errorf("Port=%d, want 7 (the fake lease's own port)", got.Port)
+	f := onlyFetch(t, got.Fetches)
+	if f.Source != SourceReviews {
+		t.Errorf("Source=%q, want %q — a provenance entry that does not name its source cannot be read "+
+			"alongside another endpoint's in one table", f.Source, SourceReviews)
 	}
-	if got.Cost.Attempts != 1 {
-		t.Errorf("Cost.Attempts=%d, want 1 (a first-try success)", got.Cost.Attempts)
+	if f.Port != 7 {
+		t.Errorf("Port=%d, want 7 (the fake lease's own port)", f.Port)
+	}
+	if f.Cost.Attempts != 1 {
+		t.Errorf("Cost.Attempts=%d, want 1 (a first-try success)", f.Cost.Attempts)
 	}
 }
 
@@ -612,8 +617,16 @@ func TestClient_ReviewsReportsNoPortOnATotalTransportFailure(t *testing.T) {
 	if err == nil {
 		t.Fatal("a transport failure was accepted without error")
 	}
-	if got.Port != 0 {
-		t.Errorf("Port=%d, want 0 — nothing answered, so no port earned credit for it", got.Port)
+	f := onlyFetch(t, got.Fetches)
+	if f.Port != 0 {
+		t.Errorf("Port=%d, want 0 — nothing answered, so no port earned credit for it", f.Port)
+	}
+	// The request that never landed is still reported, and still carries what
+	// it burned: two attempts, both lost before a response, on the direct
+	// policy NewClient applies. A provenance that dropped the entry entirely
+	// would make the most expensive fetch of a run the invisible one.
+	if want := (FetchCost{Attempts: 2, TransportErrors: 2}); f.Cost != want {
+		t.Errorf("Cost=%+v, want %+v — a fetch that never landed still spent the budget it spent", f.Cost, want)
 	}
 }
 

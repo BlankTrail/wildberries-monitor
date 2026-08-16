@@ -4,6 +4,18 @@ package wb
 
 import "testing"
 
+// onlyFetch returns the single entry a one-request call must report. Every
+// caller of it is a call that makes exactly one request, so a provenance of
+// any other length is itself the failure — an entry silently dropped, or one
+// added for a request that was never made.
+func onlyFetch(t *testing.T, fetches []Fetch) Fetch {
+	t.Helper()
+	if len(fetches) != 1 {
+		t.Fatalf("provenance = %+v, want exactly one entry: this call makes exactly one request", fetches)
+	}
+	return fetches[0]
+}
+
 // TestTotalCost_SumsEveryRequestInAProvenance pins the one arithmetic this
 // file owns. Every field carries a different number on each side, so a sum
 // that dropped a field, or added the wrong one twice, cannot come out right

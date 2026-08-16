@@ -156,10 +156,7 @@ func runDuplicates(ctx context.Context, c *wb.Client, eps wb.Endpoints, basket *
 
 		dstart := time.Now()
 		dupl, duplErr := c.Duplicates(ctx, eps, product, dest)
-		t = append(t, requestTiming{
-			label: fmt.Sprintf("duplicates #%d", i), elapsed: time.Since(dstart),
-			port: dupl.Port, attempts: dupl.Cost.Attempts,
-		})
+		t = append(t, timingOf(fmt.Sprintf("duplicates #%d", i), dupl.Fetches, time.Since(dstart)))
 		if duplErr != nil {
 			note = []string{
 				fmt.Sprintf("nm id:              %d", nm),

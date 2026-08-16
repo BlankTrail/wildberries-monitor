@@ -599,15 +599,24 @@ type requestTiming struct {
 }
 
 // appendTiming records one page fetch's timing, keyed to the port it landed
-// on. A fetch that never produced a single response (env.Port == 0 — see
-// Envelope.Port's own doc comment) may have tried several ports on its way to
+// on. A request that never produced a single response (Port == 0 — see
+// wb.Fetch.Port's own doc comment) may have tried several ports on its way to
 // failing and cannot be credited to any one of them, so it is left out rather
 // than misattributed to a port that never answered.
+//
+// It walks env.Fetches rather than reading one port off the envelope, because
+// that is the shape wb reports provenance in everywhere now. A search page is
+// one request and the loop runs once; elapsed is the whole call's wall clock,
+// which is that one request's, and would have to be measured per request
+// before this could honestly be fed a multi-request call.
 func appendTiming(timings []requestTiming, page int, env wb.Envelope, elapsed time.Duration) []requestTiming {
-	if env.Port == 0 {
-		return timings
+	for _, f := range env.Fetches {
+		if f.Port == 0 {
+			continue
+		}
+		timings = append(timings, requestTiming{page: page, port: f.Port, attempts: f.Cost.Attempts, elapsed: elapsed})
 	}
-	return append(timings, requestTiming{page: page, port: env.Port, attempts: env.Cost.Attempts, elapsed: elapsed})
+	return timings
 }
 
 // sleepBetweenRequests pauses for d, or stops early when ctx is done — a run
@@ -672,7 +681,7 @@ func runSearch(ctx context.Context, c *wb.Client, eps wb.Endpoints, query, dest 
 			// usually more of each than any page that worked. SearchPage carries
 			// that out on the otherwise empty envelope precisely so the summary
 			// below is not left describing only the pages that succeeded.
-			cost.Add(env.Cost)
+			cost.Add(wb.TotalCost(env.Fetches))
 			printSummary(summary, pagesFetched, productCount, len(uniqueIDs), totalDropped, classCounts, cost, stats(), egress, timings)
 			return fmt.Errorf("page %d: %w", page, err)
 		}
@@ -686,7 +695,7 @@ func runSearch(ctx context.Context, c *wb.Client, eps wb.Endpoints, query, dest 
 		// The page landed, but not necessarily on the first ask. What it took
 		// is only visible here: SearchPage's Envelope carries it, and nothing
 		// downstream of this loop sees the fetch at all.
-		cost.Add(env.Cost)
+		cost.Add(wb.TotalCost(env.Fetches))
 
 		for _, p := range env.Products {
 			uniqueIDs[p.ID] = struct{}{}

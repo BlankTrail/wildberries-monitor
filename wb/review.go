@@ -169,15 +169,13 @@ type Reviews struct {
 	// decodeReviews.
 	ImtID int64
 
-	// Port is the worker port this fetch was served through, mirroring
-	// Envelope.Port — see that field's own doc comment for why a caller
-	// needs it: to tell whether a port's session survives across separate
-	// requests, rather than paying the same cold, challenge-solving cost
-	// every time. Zero when the fetch never produced a response at all.
-	Port int
-	// Cost is what this fetch took to obtain — attempts, egress changes and
-	// connections lost on the way — mirroring Envelope.Cost.
-	Cost FetchCost
+	// Fetches is where the request behind this reading went and what it cost:
+	// one entry, because one reading is one request. See Fetch for why a
+	// caller needs the port — to tell whether a port's session survives
+	// across separate requests, rather than paying the same cold,
+	// challenge-solving cost every time — and Envelope.Fetches for the
+	// identical field on the identical reasoning.
+	Fetches []Fetch
 }
 
 // rawReviewsDocument mirrors the top level of a reviews.json-shaped payload.
@@ -388,15 +386,15 @@ func (c *Client) Reviews(ctx context.Context, eps Endpoints, imtID int64) (Revie
 	referer := eps.CardPageURL(imtID)
 	res, err := c.Get(ctx, eps.ReviewsURL(imtID), KindPlain, referer)
 	if err != nil {
-		return Reviews{ImtID: imtID, Cost: CostOf(err)}, err
+		return Reviews{ImtID: imtID, Fetches: []Fetch{lostFetch(SourceReviews, err)}}, err
 	}
 	if res.Class != ClassOK {
-		return Reviews{ImtID: imtID, Port: res.Port, Cost: res.FetchCost}, fmt.Errorf("wb: reviews %d: status %d (%s)", imtID, res.Status, res.Class)
+		return Reviews{ImtID: imtID, Fetches: []Fetch{fetchOf(SourceReviews, res)}}, fmt.Errorf("wb: reviews %d: status %d (%s)", imtID, res.Status, res.Class)
 	}
 	revs, err := decodeReviews(res.Body)
 	if err != nil {
-		return Reviews{ImtID: imtID, Port: res.Port, Cost: res.FetchCost}, fmt.Errorf("wb: reviews %d: %w", imtID, err)
+		return Reviews{ImtID: imtID, Fetches: []Fetch{fetchOf(SourceReviews, res)}}, fmt.Errorf("wb: reviews %d: %w", imtID, err)
 	}
-	revs.ImtID, revs.Port, revs.Cost = imtID, res.Port, res.FetchCost
+	revs.ImtID, revs.Fetches = imtID, []Fetch{fetchOf(SourceReviews, res)}
 	return revs, nil
 }

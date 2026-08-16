@@ -134,10 +134,7 @@ func runReviews(ctx context.Context, c *wb.Client, eps wb.Endpoints, imt int64, 
 		start := time.Now()
 		revs, ferr := c.Reviews(ctx, eps, imt)
 		elapsed := time.Since(start)
-		t := []requestTiming{{
-			label: fmt.Sprintf("reviews #%d", i), elapsed: elapsed,
-			port: revs.Port, attempts: revs.Cost.Attempts,
-		}}
+		t := []requestTiming{timingOf(fmt.Sprintf("reviews #%d", i), revs.Fetches, elapsed)}
 		if ferr != nil {
 			return t, fmt.Errorf("reviews %d (attempt %d/%d): %w", imt, i, repeat, ferr)
 		}
