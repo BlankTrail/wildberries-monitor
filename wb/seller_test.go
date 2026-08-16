@@ -44,6 +44,27 @@ func sellerCatalogFixture(t *testing.T) []byte {
 	return raw
 }
 
+// brandFixture and brandEmptyFixture load the real captures: a populated
+// brand record (id 1320613) and the empty document the live site returns
+// for id 0 — every field present and empty, not a 404.
+func brandFixture(t *testing.T) []byte {
+	t.Helper()
+	raw, err := os.ReadFile("testdata/brand.json")
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	return raw
+}
+
+func brandEmptyFixture(t *testing.T) []byte {
+	t.Helper()
+	raw, err := os.ReadFile("testdata/brand-empty.json")
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	return raw
+}
+
 // --- decodeSellerStatic ---
 
 func TestDecodeSellerStatic_ReadsNameFullNameTypeAndID(t *testing.T) {
@@ -220,27 +241,52 @@ func TestDecodeSellerProfile_RejectsAnEmptyDocument(t *testing.T) {
 
 // --- decodeBrand ---
 //
-// Unlike every other decoder in this file, decodeBrand has no real captured
-// fixture behind it: wb/testdata carries no brands-by-id sample, only the
-// ground-truth note's one-line field summary (id, siteId, name, url,
-// letter). The tests below are built from that summary, not from a real
-// body, and this file says so rather than presenting them as equivalent to
-// the fixture-backed tests above — see the task report for the same
-// caveat spelled out for a human reader.
+// wb/testdata/brand.json and brand-empty.json are real captures — a
+// populated record and the empty document id 0 returns — so the tests
+// below no longer rest on a hand-built body the way an earlier draft of
+// this file did.
 
+// TestDecodeBrand_ReadsIDSiteIDNameAndURL pins every field against the real
+// fixture. id (1320613) and siteId (1330613) are one digit apart — a swap
+// between the two is exactly the mutation that would slip past a test using
+// values far enough apart to still "look right" on a quick read — so both
+// are asserted against their own literal, not against each other or a
+// derived comparison.
 func TestDecodeBrand_ReadsIDSiteIDNameAndURL(t *testing.T) {
-	const doc = `{"id": 15724, "siteId": 88, "name": "pierre cardin", "url": "/brands/pierre-cardin", "letter": "P"}`
-	got, err := decodeBrand([]byte(doc))
+	got, err := decodeBrand(brandFixture(t))
 	if err != nil {
 		t.Fatalf("decodeBrand: %v", err)
 	}
-	want := Brand{ID: 15724, SiteID: 88, Name: "pierre cardin", URL: "/brands/pierre-cardin"}
-	if got != want {
-		t.Errorf("decodeBrand=%+v, want %+v", got, want)
+	if got.ID != 1320613 {
+		t.Errorf("ID=%d, want 1320613", got.ID)
+	}
+	if got.SiteID != 1330613 {
+		t.Errorf("SiteID=%d, want 1330613 — one digit away from ID; a swap between the two must not hide here", got.SiteID)
+	}
+	if got.Name != "RUSSIA SPORTS" {
+		t.Errorf("Name=%q, want %q", got.Name, "RUSSIA SPORTS")
+	}
+	if got.URL != "russia-sports" {
+		t.Errorf("URL=%q, want %q", got.URL, "russia-sports")
 	}
 }
 
-func TestDecodeBrand_RejectsAnEmptyDocument(t *testing.T) {
+// TestDecodeBrand_RejectsTheEmptyRecordIDZeroReturns is the brief's own
+// precedent, applied here on real evidence rather than a hypothetical: the
+// live site answers id 0 with brand-empty.json, a document that decodes
+// without error (every field present and blank) but names no real brand —
+// the identical shape decodeCard already rejects for a card with no nm_id,
+// on the grounds that "no brand" and "the fetch produced nothing usable"
+// are different facts a caller needs to tell apart. Handing this document
+// back as if it were Brand{} — a legitimate zero value — would erase that
+// distinction.
+func TestDecodeBrand_RejectsTheEmptyRecordIDZeroReturns(t *testing.T) {
+	if _, err := decodeBrand(brandEmptyFixture(t)); err == nil {
+		t.Error("decodeBrand accepted the empty (id 0) record without error")
+	}
+}
+
+func TestDecodeBrand_RejectsAnEmptyOrRubbishDocument(t *testing.T) {
 	for _, raw := range []string{`{}`, `null`, `<html>not json</html>`} {
 		if _, err := decodeBrand([]byte(raw)); err == nil {
 			t.Errorf("decodeBrand(%s) succeeded, want an error", raw)
@@ -684,15 +730,14 @@ func TestClient_SellerCatalogPagePropagatesADecodeFailure(t *testing.T) {
 // --- Client.Brand ---
 
 func TestClient_BrandFetchesWithThePlainProfile(t *testing.T) {
-	const doc = `{"id": 15724, "siteId": 88, "name": "pierre cardin", "url": "/brands/pierre-cardin", "letter": "P"}`
-	l := &fakeLease{port: 1, replies: []*http.Response{reply(200, doc)}}
+	l := &fakeLease{port: 1, replies: []*http.Response{reply(200, string(brandFixture(t)))}}
 	c := NewClient(&fakeLeaser{leases: []*fakeLease{l}}, NewSessions())
 
-	got, err := c.Brand(context.Background(), DefaultEndpoints(), 15724)
+	got, err := c.Brand(context.Background(), DefaultEndpoints(), 1320613)
 	if err != nil {
 		t.Fatalf("Brand: %v", err)
 	}
-	want := Brand{ID: 15724, SiteID: 88, Name: "pierre cardin", URL: "/brands/pierre-cardin"}
+	want := Brand{ID: 1320613, SiteID: 1330613, Name: "RUSSIA SPORTS", URL: "russia-sports"}
 	if got != want {
 		t.Errorf("Brand=%+v, want %+v", got, want)
 	}
@@ -700,8 +745,8 @@ func TestClient_BrandFetchesWithThePlainProfile(t *testing.T) {
 	if len(l.sent) != 1 {
 		t.Fatalf("sent %d requests, want 1", len(l.sent))
 	}
-	if got := l.sent[0].URL.String(); got != brandStaticURL(15724) {
-		t.Errorf("URL=%q, want %q", got, brandStaticURL(15724))
+	if got := l.sent[0].URL.String(); got != brandStaticURL(1320613) {
+		t.Errorf("URL=%q, want %q", got, brandStaticURL(1320613))
 	}
 	h := l.sent[0].Header
 	for _, name := range []string{"deviceid", "x-queryid", "x-userid", "x-spa-version"} {
@@ -711,6 +756,24 @@ func TestClient_BrandFetchesWithThePlainProfile(t *testing.T) {
 	}
 	if got := h.Get("Origin"); got != "https://www.wildberries.ru" {
 		t.Errorf("Origin=%q, want %q — only the plain profile sets it", got, "https://www.wildberries.ru")
+	}
+}
+
+// TestClient_BrandRejectsTheEmptyRecordIDZeroReturns closes the loop at the
+// Client level: id 0 is already rejected by Client.Brand's own guard before
+// any request is built, but a caller who somehow reaches a brand whose
+// static record comes back as brand-empty.json's shape (rather than being
+// caught by the id<=0 guard first) must still see an error, not a
+// successful, silently-empty Brand.
+func TestClient_BrandRejectsTheEmptyRecordIDZeroReturns(t *testing.T) {
+	l := &fakeLease{port: 1, replies: []*http.Response{reply(200, string(brandEmptyFixture(t)))}}
+	c := NewClient(&fakeLeaser{leases: []*fakeLease{l}}, NewSessions())
+
+	// A positive id is required to reach the transport at all (Client.Brand's
+	// own guard), so this exercises decodeBrand's rejection of the empty
+	// shape via a response that happens to carry it, not the id<=0 guard.
+	if _, err := c.Brand(context.Background(), DefaultEndpoints(), 1); err == nil {
+		t.Fatal("a response shaped like the empty (id 0) brand record was accepted without error")
 	}
 }
 

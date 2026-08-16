@@ -173,15 +173,31 @@ func decodeSellerProfile(raw []byte) (sellerProfile, error) {
 // --- brand (brands-by-id/<id>.json) ---
 
 // decodeBrand reads a brands-by-id/<id>-shaped document: id, siteId, name,
-// url and letter. letter is decoded but not kept on Brand — the ground-truth
-// capture for this milestone records the field's name but assigns it no use
-// this package has, the same "decoded, not modelled" treatment
-// rawQuestionAnswer gives employeeId and rawProduct's neighbours give
-// several fields nobody reads yet.
+// url, letter and hash. letter and hash are decoded but not kept on Brand.
+//
+// letter carries no known consumer in this package, the same "decoded, not
+// modelled" treatment rawQuestionAnswer gives employeeId. hash gets the same
+// treatment for a different reason: it is not a one-off field this endpoint
+// alone carries — wb/testdata/card.json's own selling block repeats it as
+// brand_hash next to brand_name and supplier_id, so it is a real, stable
+// piece of WB's own brand identity, not capture noise. But nothing in this
+// package builds a URL or a cache key from it (unlike, say, a CDN path keyed
+// on a product id), so there is no consumer to hand it to yet. Recorded here
+// rather than silently modelled or silently dropped, so a later task that
+// does need it — a brand logo address, most plausibly, given where its
+// twin turns up — finds the reasoning already written down instead of
+// rediscovering the field from scratch.
 //
 // An id of zero is rejected the same way decodeCard rejects a card with no
 // nm_id: {} and a JSON null both "succeed" as far as encoding/json is
-// concerned, and neither names a real brand.
+// concerned, and neither names a real brand. This is not a hypothetical
+// shape here — wb/testdata/brand-empty.json is the real document the live
+// site returns for id 0: every field present and empty, not a 404. Task 1
+// settled the identical question for an empty card on the grounds that "no
+// brand" and "we could not fetch the brand" are different facts a caller
+// needs to tell apart, and the same reasoning applies unchanged here: a
+// document that decodes without error but names no real brand must not be
+// handed back as if it were one.
 func decodeBrand(raw []byte) (Brand, error) {
 	var r struct {
 		ID     int64  `json:"id"`
@@ -189,6 +205,7 @@ func decodeBrand(raw []byte) (Brand, error) {
 		Name   string `json:"name"`
 		URL    string `json:"url"`
 		Letter string `json:"letter"`
+		Hash   string `json:"hash"`
 	}
 	if err := json.Unmarshal(raw, &r); err != nil {
 		return Brand{}, fmt.Errorf("wb: decode brand: %w", err)
@@ -245,12 +262,18 @@ func sellerProfileURL(id int64) string {
 //
 // page is omitted from the query entirely on the first page and appended
 // from the second, mirroring SearchURL's own observed behaviour on the
-// identical www.wildberries.ru/__internal/* family. This one detail is
-// inferred, not independently captured for this specific endpoint — the
-// ground-truth note for it records only "page=" as a parameter name, not
-// whether a live first-page request carries the key at all — so treat the
-// no-parameter-on-page-1 behaviour as the reasoned default it is, not a
-// pinned-down fact the way SearchURL's own version is.
+// identical www.wildberries.ru/__internal/* family.
+//
+// This is an inference, not a captured fact, and it is written down
+// plainly as one: the ground-truth note for this endpoint records only
+// "page=" as a parameter name, not whether a live first-page request
+// carries the key at all, let alone with what value. Nothing in this
+// milestone's capture shows a real sellers/v4/catalog request on its own
+// first page. Treat the no-parameter-on-page-1 behaviour as a reasoned
+// default borrowed from a sibling endpoint, not as something this package
+// has verified for sellers/v4/catalog itself — unlike SearchURL's own
+// identical-looking behaviour, which is independently observed and may be
+// cited as fact.
 func (e Endpoints) SellerCatalogURL(supplierID int64, q SearchQuery) string {
 	page := q.Page
 	if page < 1 {
