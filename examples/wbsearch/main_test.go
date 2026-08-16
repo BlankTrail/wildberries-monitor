@@ -196,7 +196,7 @@ func TestValidateEgressFlags_AcceptsEveryLegitimateCombination(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if err := validateEgressFlags(c.scheme, c.rotateURL, c.rotateProxy, 300*time.Second, 30); err != nil {
+			if err := validateEgressFlags(c.scheme, c.rotateURL, c.rotateProxy, 300*time.Second, 30, 0, 3); err != nil {
 				t.Errorf("validateEgressFlags(%+v) = %v, want nil", c, err)
 			}
 		})
@@ -210,7 +210,7 @@ func TestValidateEgressFlags_AcceptsEveryLegitimateCombination(t *testing.T) {
 // building a rotating channel from a zero-value Upstream would open a pool
 // that egresses nowhere usable, so this must fail loudly instead.
 func TestValidateEgressFlags_RejectsRotateURLWithoutRotateProxy(t *testing.T) {
-	err := validateEgressFlags("http", "http://rotate.example/go", "", 300*time.Second, 30)
+	err := validateEgressFlags("http", "http://rotate.example/go", "", 300*time.Second, 30, 0, 3)
 	if err == nil {
 		t.Fatal("validateEgressFlags with -rotate-url but no -rotate-proxy = nil, want an error")
 	}
@@ -221,7 +221,7 @@ func TestValidateEgressFlags_RejectsRotateURLWithoutRotateProxy(t *testing.T) {
 // nothing, which is exactly the kind of typo this validation exists to catch
 // before any network call is made.
 func TestValidateEgressFlags_RejectsRotateProxyWithoutRotateURL(t *testing.T) {
-	err := validateEgressFlags("http", "", "1.2.3.4:1080", 300*time.Second, 30)
+	err := validateEgressFlags("http", "", "1.2.3.4:1080", 300*time.Second, 30, 0, 3)
 	if err == nil {
 		t.Fatal("validateEgressFlags with -rotate-proxy but no -rotate-url = nil, want an error")
 	}
@@ -231,12 +231,12 @@ func TestValidateEgressFlags_RejectsRotateProxyWithoutRotateURL(t *testing.T) {
 // validateFlags' own contract (see TestValidateFlags-style tests elsewhere in
 // this file): every problem is collected into one error, not just the first.
 func TestValidateEgressFlags_RejectsBadSchemeTimeoutsAndReportsAllAtOnce(t *testing.T) {
-	err := validateEgressFlags("ftp", "", "", 0, 0)
+	err := validateEgressFlags("ftp", "", "", 0, 0, -1, -1)
 	if err == nil {
 		t.Fatal("validateEgressFlags with a bad scheme and two non-positive timeouts = nil, want an error")
 	}
 	msg := err.Error()
-	for _, want := range []string{"proxy-scheme", "request-timeout", "port-timeout"} {
+	for _, want := range []string{"proxy-scheme", "request-timeout", "port-timeout", "challenge-attempts", "attempts-per-egress"} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("error %q does not mention %q", msg, want)
 		}
@@ -428,5 +428,70 @@ func TestPrintSummary_ReportsProxiesLoadedAndRemainingWhenAProxiesFileWasUsed(t 
 	}
 	if !strings.Contains(out, "proxies in rotor:   3") {
 		t.Errorf("summary output missing the proxies-in-rotor line; got:\n%s", out)
+	}
+}
+
+// --- challenge retry policy ---
+
+// TestRetryPolicy_ChoosesTheBudgetFromWhetherThereIsAnythingToSearch pins the
+// automatic choice, which is the whole reason this lives in a named function.
+// The numbers are spelled out rather than read from wb's constants: an
+// assertion written against those moves with them, and would let the budget be
+// changed to anything at all with this test still green.
+func TestRetryPolicy_ChoosesTheBudgetFromWhetherThereIsAnythingToSearch(t *testing.T) {
+	pooled := retryPolicy(0, wb.DefaultAttemptsPerEgress, true)
+	if pooled.Attempts != 15 {
+		t.Errorf("with an egress channel: Attempts=%d, want 15 — three tries on the port's own proxy, then a fresh one per attempt", pooled.Attempts)
+	}
+	direct := retryPolicy(0, wb.DefaultAttemptsPerEgress, false)
+	if direct.Attempts != 2 {
+		t.Errorf("on direct egress: Attempts=%d, want 2 — there is no second address to rotate to, so further attempts buy nothing", direct.Attempts)
+	}
+	if pooled.AttemptsPerEgress != 3 || direct.AttemptsPerEgress != 3 {
+		t.Errorf("AttemptsPerEgress=%d/%d, want 3 either way", pooled.AttemptsPerEgress, direct.AttemptsPerEgress)
+	}
+}
+
+// TestRetryPolicy_ExplicitFlagsWinOverTheAutomaticChoice is the other half:
+// the automatic choice is a default, not a rule. A user who sets either number
+// gets it, including a smaller one than the automatic choice would have picked
+// and including a pooled-sized budget on direct egress.
+func TestRetryPolicy_ExplicitFlagsWinOverTheAutomaticChoice(t *testing.T) {
+	for _, tc := range []struct {
+		name                 string
+		attempts, perEgress  int
+		hasEgress            bool
+		wantAttempts, wantPE int
+	}{
+		{"both set, with channels", 7, 2, true, 7, 2},
+		{"both set, direct", 7, 2, false, 7, 2},
+		{"total only, direct run given a pooled budget", 15, wb.DefaultAttemptsPerEgress, false, 15, 3},
+		{"threshold only, total still automatic", 0, 1, true, 15, 1},
+		{"smaller than the automatic choice", 1, 5, true, 1, 5},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := retryPolicy(tc.attempts, tc.perEgress, tc.hasEgress)
+			if got.Attempts != tc.wantAttempts || got.AttemptsPerEgress != tc.wantPE {
+				t.Errorf("retryPolicy(%d, %d, %v)=%+v, want %d attempts, %d per egress",
+					tc.attempts, tc.perEgress, tc.hasEgress, got, tc.wantAttempts, tc.wantPE)
+			}
+		})
+	}
+}
+
+// TestValidateEgressFlags_RejectsNegativeRetryNumbers guards the one input the
+// policy cannot make sense of. Zero is meaningful on both flags — "choose for
+// me" on the total, "leave wb's default" on the threshold — so only a negative
+// is a mistake, and normalising it silently would run a policy nobody asked
+// for.
+func TestValidateEgressFlags_RejectsNegativeRetryNumbers(t *testing.T) {
+	if err := validateEgressFlags("http", "", "", 300*time.Second, 30, -1, 3); err == nil {
+		t.Error("a negative -challenge-attempts was accepted")
+	}
+	if err := validateEgressFlags("http", "", "", 300*time.Second, 30, 0, -1); err == nil {
+		t.Error("a negative -attempts-per-egress was accepted")
+	}
+	if err := validateEgressFlags("http", "", "", 300*time.Second, 30, 0, 0); err != nil {
+		t.Errorf("zero on both = %v, want nil: zero is how a caller asks for the defaults", err)
 	}
 }

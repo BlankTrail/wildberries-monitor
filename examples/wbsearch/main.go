@@ -28,6 +28,14 @@
 //
 //	go run ./examples/wbsearch -query "кроссовки женские" -dest 1259570991 -proxies proxies.txt -proxy-scheme socks5 -threads 8 -ports-per-thread 20
 //
+// A request the edge answers with a challenge is retried, and once a few
+// attempts have gone out through one proxy the port's upstream is replaced
+// before every further one — a challenge that reaches this program means the
+// proxy behind that port did not get a solve finished, and the proxy is the
+// part worth changing. -challenge-attempts and -attempts-per-egress set the two
+// numbers; left alone they pick themselves from whether there is a pool of
+// proxies to search at all (15 attempts) or a single direct address (2).
+//
 // JSONL rows go to -out (or stdout when it is empty); preflight findings and
 // the closing summary always go to stderr, so a run can be piped straight
 // into a file without the summary landing in the middle of it.
@@ -101,6 +109,9 @@ func run() error {
 
 		requestTimeout = flag.Duration("request-timeout", 300*time.Second, "the caller's own budget per request, retries included (blanktrail.PoolConfig.RequestTimeout)")
 		portTimeout    = flag.Int("port-timeout", 30, "seconds the port itself waits for one request before giving up (blanktrail.PortSpec.TimeoutSeconds)")
+
+		challengeAttempts = flag.Int("challenge-attempts", 0, "total attempts for a request the edge answers with a challenge (0 = automatic: 15 when any egress channel is configured, 2 on direct egress)")
+		attemptsPerEgress = flag.Int("attempts-per-egress", wb.DefaultAttemptsPerEgress, "attempts through one proxy before the port's upstream is replaced; past this, every attempt takes a fresh proxy")
 	)
 	flag.Usage = usage
 	flag.Parse()
@@ -117,7 +128,8 @@ func run() error {
 	if err := validateFlags(*query, *dest, apiKey, *pages, *threads, *perThread, *cardID); err != nil {
 		return err
 	}
-	if err := validateEgressFlags(*proxyScheme, *rotateURLF, *rotateProxy, *requestTimeout, *portTimeout); err != nil {
+	if err := validateEgressFlags(*proxyScheme, *rotateURLF, *rotateProxy, *requestTimeout, *portTimeout,
+		*challengeAttempts, *attemptsPerEgress); err != nil {
 		return err
 	}
 
@@ -166,7 +178,8 @@ func run() error {
 	}
 	defer closeRows()
 
-	wbClient := wb.NewClient(wb.FromPool(pool), wb.NewSessions())
+	wbClient := wb.NewClientWithRetry(wb.FromPool(pool), wb.NewSessions(),
+		retryPolicy(*challengeAttempts, *attemptsPerEgress, len(egress.channels) > 0))
 
 	if *cardID != 0 {
 		return runCard(ctx, wbClient, eps, *cardID, *dest, mode, rows, pool, egress)
@@ -220,6 +233,34 @@ func poolConfig(client *blanktrail.Client, mode wb.Mode, threads, perThread int,
 	}
 }
 
+// retryPolicy is how hard this run tries when the edge answers with a challenge
+// instead of the data. It is a named function, like poolConfig, so a test can
+// asssert the automatic choice rather than leave it to inspection.
+//
+// The automatic total depends on whether there is anything to search: with an
+// egress channel configured, a challenge that survives the first few tries is
+// most likely the proxy behind that port, and the run should walk through
+// proxies until one gets through — fifteen attempts, three on the port's own
+// address and a fresh proxy for each of the rest. On direct egress there is one
+// address and no search to make, so the budget stops at two. Only wbsearch
+// knows which of the two this run is; wb sees one lease at a time and cannot
+// tell until it asks.
+//
+// Either number can be set explicitly, and an explicit value always wins. Zero
+// is what asks for the automatic choice; -attempts-per-egress has no automatic
+// case, so it defaults to wb's own constant instead of to zero, and prints that
+// number in -h.
+func retryPolicy(attempts, perEgress int, hasEgressChannel bool) wb.RetryPolicy {
+	p := wb.DefaultRetryPolicy(hasEgressChannel)
+	if attempts > 0 {
+		p.Attempts = attempts
+	}
+	if perEgress > 0 {
+		p.AttemptsPerEgress = perEgress
+	}
+	return p
+}
+
 // --- egress ---
 //
 // blanktrail offers four kinds of channel: a proxy list, a rotating proxy
@@ -267,15 +308,17 @@ func validProxyScheme(s string) bool {
 	}
 }
 
-// validateEgressFlags checks the flags that shape the pool's egress channels,
-// the same way validateFlags front-loads the core ones: every problem is
-// reported at once, before any file is read or any network call is made.
+// validateEgressFlags checks the flags that shape the pool's egress channels
+// and the retry policy that walks through them, the same way validateFlags
+// front-loads the core ones: every problem is reported at once, before any file
+// is read or any network call is made.
 //
 // rotateURL and rotateProxy are required together. blanktrail.NewRotatingChannel
 // needs a fixed entry-point address to route requests through — separate from
 // rotateURL, which only ever changes what real IP sits behind that address —
 // and nothing else supplies one.
-func validateEgressFlags(proxyScheme, rotateURL, rotateProxy string, requestTimeout time.Duration, portTimeout int) error {
+func validateEgressFlags(proxyScheme, rotateURL, rotateProxy string, requestTimeout time.Duration, portTimeout,
+	challengeAttempts, attemptsPerEgress int) error {
 	var problems []string
 	if !validProxyScheme(proxyScheme) {
 		problems = append(problems, fmt.Sprintf("-proxy-scheme %q is not one of: http, https, socks5, socks5h, socks4", proxyScheme))
@@ -291,6 +334,15 @@ func validateEgressFlags(proxyScheme, rotateURL, rotateProxy string, requestTime
 	}
 	if portTimeout <= 0 {
 		problems = append(problems, "-port-timeout must be positive")
+	}
+	// Zero means "choose for me" on the first and "leave wb's default" on the
+	// second; a negative number means neither, and silently normalising it would
+	// run a policy nobody asked for.
+	if challengeAttempts < 0 {
+		problems = append(problems, "-challenge-attempts must not be negative (0 asks for the automatic choice)")
+	}
+	if attemptsPerEgress < 0 {
+		problems = append(problems, "-attempts-per-egress must not be negative")
 	}
 	if len(problems) == 0 {
 		return nil
