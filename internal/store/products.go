@@ -1,0 +1,520 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+package store
+
+import (
+	"context"
+	"crypto/sha256"
+	"database/sql"
+	"encoding/binary"
+	"encoding/hex"
+	"fmt"
+	"hash"
+	"math"
+	"sort"
+	"strconv"
+
+	"github.com/BlankTrail/wildberries-monitor/wb"
+)
+
+// SaveStats is what one save wrote, so a job can show the volume rule in spec
+// section 5.2 working rather than claim it.
+//
+// Snapshots and Unchanged overlap on purpose. A reading whose volatile half
+// matched the previous one counts as Unchanged whether or not it also earned
+// the day's anchor; when it did, that same reading is counted in Snapshots and
+// in Anchors too. Making them exclusive would hide either the saving or the
+// anchor, and the two together are the whole claim this milestone makes.
+type SaveStats struct {
+	Products  int // rows created or updated in products
+	Snapshots int // snapshot rows written
+	Anchors   int // of those, written because a day passed rather than because something moved
+	Unchanged int // readings whose volatile half matched the previous one
+	Positions int // organic positions written
+}
+
+// Add sums two results, so a caller walking pages can report what the run did
+// rather than what its last page did.
+func (t SaveStats) Add(o SaveStats) SaveStats {
+	return SaveStats{
+		Products:  t.Products + o.Products,
+		Snapshots: t.Snapshots + o.Snapshots,
+		Anchors:   t.Anchors + o.Anchors,
+		Unchanged: t.Unchanged + o.Unchanged,
+		Positions: t.Positions + o.Positions,
+	}
+}
+
+// SaveSearchPage writes one page of results, all of it or none of it.
+//
+// One transaction per page, because a half-written page is worse than an
+// unwritten one: the products that did land read as the entire result set, and
+// every product missing from them reads as one that dropped out of the
+// results. An unwritten page is a gap an operator can see.
+//
+// query is a parameter because an Envelope carries neither the phrase nor the
+// region. The phrase is what the caller asked for; the region and the audience
+// ride on each Product, since one page can only ever have been fetched for one
+// of each (see spec section 4.5). An empty query means this page is not a
+// search — a seller's own storefront is the case in hand — and no organic
+// position is recorded for it.
+func (s *Store) SaveSearchPage(ctx context.Context, env wb.Envelope, query string) (SaveStats, error) {
+	var stats SaveStats
+	if len(env.Products) == 0 {
+		// The last page of a result set is regularly empty, and paging asks
+		// for one page past the end by design.
+		return stats, nil
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return SaveStats{}, fmt.Errorf("store: save search page: %w", err)
+	}
+	defer tx.Rollback()
+
+	// One reading of the clock for the whole page: these products were seen by
+	// one request, and timestamps a second apart would sort them as separate
+	// readings of the same moment.
+	now := s.now().UTC().Unix()
+
+	for _, p := range env.Products {
+		one, err := s.saveProductTx(ctx, tx, p, query, now)
+		if err != nil {
+			return SaveStats{}, err
+		}
+		stats = stats.Add(one)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return SaveStats{}, fmt.Errorf("store: save search page: %w", err)
+	}
+	return stats, nil
+}
+
+// SaveProduct writes one reading. It is the single-product form of
+// SaveSearchPage and takes the same transaction discipline.
+func (s *Store) SaveProduct(ctx context.Context, p wb.Product, query string) (SaveStats, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return SaveStats{}, fmt.Errorf("store: save product %d: %w", p.ID, err)
+	}
+	defer tx.Rollback()
+
+	stats, err := s.saveProductTx(ctx, tx, p, query, s.now().UTC().Unix())
+	if err != nil {
+		return SaveStats{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return SaveStats{}, fmt.Errorf("store: save product %d: %w", p.ID, err)
+	}
+	return stats, nil
+}
+
+// saveProductTx splits one reading across the three tables, and is the only
+// place that does.
+//
+// Everything that produces a wb.Product — a search page, a card's live half, a
+// shelf, a duplicate listing — comes through here, so "what one reading means"
+// is one decision rather than one per caller. The order matters: the products
+// row goes first because foreign keys are on and enforced immediately, so a
+// snapshot cannot reference a product that is not there yet.
+func (s *Store) saveProductTx(ctx context.Context, tx *sql.Tx, p wb.Product, query string, now int64) (SaveStats, error) {
+	var stats SaveStats
+	if p.ID == 0 {
+		// nmID is the identity of everything below. Without one, every
+		// identity-less reading would collect on rowid zero as one product.
+		return SaveStats{}, fmt.Errorf("store: save product: the reading carries no nmID")
+	}
+
+	if err := upsertProductRow(ctx, tx, p, now); err != nil {
+		return SaveStats{}, err
+	}
+	stats.Products++
+
+	// Every reading is written. Suppressing the ones that changed nothing is a
+	// rule of its own and it is applied at this point.
+	snapshotID, err := insertSnapshot(ctx, tx, p, fingerprintOf(p), now, false)
+	if err != nil {
+		return SaveStats{}, err
+	}
+	stats.Snapshots++
+	if err := insertSizes(ctx, tx, snapshotID, p); err != nil {
+		return SaveStats{}, err
+	}
+
+	// An organic position needs two things this reading may not have: a phrase
+	// it was ranked for, and a rank that was actually computed.
+	// Client.SellerCatalogPage leaves Rank at zero to mean the second was not,
+	// and a zero written here would compare against a real first place as its
+	// equal (see wb.Product.Rank).
+	if query != "" && p.Rank > 0 {
+		if err := insertPosition(ctx, tx, p, query, now); err != nil {
+			return SaveStats{}, err
+		}
+		stats.Positions++
+	}
+	return stats, nil
+}
+
+// upsertProductRow writes the stable half.
+//
+// first_seen_at is absent from the update list on purpose: it answers "since
+// when do we know this product", the one question about time this table can
+// answer, and rewriting it every pass turns it into a worse copy of
+// last_seen_at.
+//
+// The text columns keep what they had when the reading carries nothing, and
+// the nullable identifiers do the same through COALESCE. These columns have
+// several producers — a search row, a card, a shelf item — and they do not all
+// carry every field. Overwriting a known name with an empty string because
+// this particular producer does not send names would read, later, as a seller
+// who blanked the title.
+//
+// match_id is the exception and is written as it came. Zero there is the
+// site's own sentinel for "this listing belongs to no duplicate group", not an
+// absence, so preserving an older non-zero over it would keep a group
+// membership the site has just said is gone.
+func upsertProductRow(ctx context.Context, tx *sql.Tx, p wb.Product, now int64) error {
+	_, err := tx.ExecContext(ctx, `
+		INSERT INTO products (
+		    nm_id, match_id, root_id, name, brand, supplier_id, supplier_name,
+		    subject_id, subject_parent_id, first_seen_at, last_seen_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(nm_id) DO UPDATE SET
+		    match_id          = excluded.match_id,
+		    root_id           = COALESCE(excluded.root_id, products.root_id),
+		    name              = CASE WHEN excluded.name <> '' THEN excluded.name ELSE products.name END,
+		    brand             = CASE WHEN excluded.brand <> '' THEN excluded.brand ELSE products.brand END,
+		    supplier_id       = COALESCE(excluded.supplier_id, products.supplier_id),
+		    supplier_name     = CASE WHEN excluded.supplier_name <> '' THEN excluded.supplier_name ELSE products.supplier_name END,
+		    subject_id        = COALESCE(excluded.subject_id, products.subject_id),
+		    subject_parent_id = COALESCE(excluded.subject_parent_id, products.subject_parent_id),
+		    last_seen_at      = excluded.last_seen_at`,
+		p.ID, p.MatchID, p.Root, p.Name, p.Brand, p.SupplierID, p.SupplierName,
+		p.SubjectID, p.SubjectParentID, now, now)
+	if err != nil {
+		return fmt.Errorf("store: write the product row for %d: %w", p.ID, err)
+	}
+	return nil
+}
+
+// insertSnapshot writes the volatile half and returns the row's id, which the
+// sizes hang from.
+//
+// anchor says the row was written because a day passed with nothing changing,
+// not because something moved. Nothing sets it in this build — every reading
+// is written, so no row is owed to the passage of time alone.
+func insertSnapshot(ctx context.Context, tx *sql.Tx, p wb.Product, fingerprint string, ts int64, anchor bool) (int64, error) {
+	base, sale, discount, currency := snapshotPrices(p)
+
+	anchorFlag := 0
+	if anchor {
+		anchorFlag = 1
+	}
+
+	res, err := tx.ExecContext(ctx, `
+		INSERT INTO snapshots (
+		    nm_id, dest, app_type, ts, anchor, fingerprint,
+		    rating, rating_key, feedbacks, feedback_key, total_quantity,
+		    price_base, price_sale, discount_pct, currency,
+		    time1, time2, dist, warehouse_id
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		p.ID, p.Dest, p.AppType, ts, anchorFlag, fingerprint,
+		p.Rating, p.RatingKey, p.Feedbacks, p.FeedbackKey, snapshotStock(p),
+		base, sale, discount, currency,
+		p.Time1, p.Time2, p.Dist, p.WarehouseID)
+	if err != nil {
+		return 0, fmt.Errorf("store: write the snapshot of %d in %s: %w", p.ID, p.Dest, err)
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return 0, fmt.Errorf("store: write the snapshot of %d in %s: %w", p.ID, p.Dest, err)
+	}
+	return id, nil
+}
+
+// insertSizes writes the per-size prices and the warehouse breakdown under one
+// snapshot.
+//
+// A size with an empty stocks array is kept: the payload counted that size and
+// found nothing, which is a stockout, and dropping the row would leave nothing
+// to distinguish it from a size the payload never mentioned.
+func insertSizes(ctx context.Context, tx *sql.Tx, snapshotID int64, p wb.Product) error {
+	for _, sz := range p.Sizes {
+		res, err := tx.ExecContext(ctx, `
+			INSERT INTO snapshot_sizes (snapshot_id, name, orig_name, price_basic, price_product, price_total)
+			VALUES (?, ?, ?, ?, ?, ?)`,
+			snapshotID, sz.Name, sz.OrigName, sz.PriceBasic, sz.PriceProduct, sz.PriceTotal)
+		if err != nil {
+			return fmt.Errorf("store: write size %q of product %d: %w", sz.Name, p.ID, err)
+		}
+		sizeID, err := res.LastInsertId()
+		if err != nil {
+			return fmt.Errorf("store: write size %q of product %d: %w", sz.Name, p.ID, err)
+		}
+
+		for _, st := range sz.Stocks {
+			// The site has not been seen to list one warehouse twice inside a
+			// size, but a page that fails wholesale over one odd row loses
+			// ninety-nine good products with it. The later row wins; the
+			// snapshot's own total comes from the payload, not from this
+			// table, so it stays truthful either way.
+			if _, err := tx.ExecContext(ctx, `
+				INSERT INTO snapshot_stocks (snapshot_size_id, warehouse_id, qty, priority, delivery_type, time1, time2, dist)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+				ON CONFLICT(snapshot_size_id, warehouse_id) DO UPDATE SET
+				    qty           = excluded.qty,
+				    priority      = excluded.priority,
+				    delivery_type = excluded.delivery_type,
+				    time1         = excluded.time1,
+				    time2         = excluded.time2,
+				    dist          = excluded.dist`,
+				sizeID, st.WarehouseID, st.Qty, st.Priority, st.DeliveryType,
+				st.Time1, st.Time2, st.Dist); err != nil {
+				return fmt.Errorf("store: write warehouse %d of size %q of product %d: %w",
+					st.WarehouseID, sz.Name, p.ID, err)
+			}
+		}
+	}
+	return nil
+}
+
+// insertPosition records where this product stood in the organic results.
+//
+// Every reading is written, unlike a snapshot: a rank that has not moved is
+// still evidence the product held its place, and the row costs six integers.
+// The upsert covers a re-run inside one second, which collides on the key —
+// app_type is part of it for the same reason it is part of snapshots': a rank
+// measured for one audience is not comparable to one measured for another, and
+// folding the two into one row would silently overwrite one audience's rank
+// with the other's. A re-run inside one second is one reading repeated, so the
+// later answer wins rather than failing the page.
+func insertPosition(ctx context.Context, tx *sql.Tx, p wb.Product, query string, ts int64) error {
+	_, err := tx.ExecContext(ctx, `
+		INSERT INTO positions (nm_id, query, dest, app_type, ts, rank, page)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(nm_id, query, dest, app_type, ts) DO UPDATE SET
+		    rank = excluded.rank,
+		    page = excluded.page`,
+		p.ID, query, p.Dest, p.AppType, ts, p.Rank, p.Page)
+	if err != nil {
+		return fmt.Errorf("store: write the position of %d for %q in %s: %w", p.ID, query, p.Dest, err)
+	}
+	return nil
+}
+
+// snapshotPrices is the price triple a snapshot row carries, taken from the
+// product's own methods rather than derived a second time.
+//
+// wb pairs the base price with the size the sale price belongs to, so the
+// discount between them is one a buyer can actually get; a second
+// implementation here would quietly disagree about which size that is (see
+// wb.Product.BasePrice, which spells out the 74%-versus-68% case).
+//
+// One function for both the row and the digest below, so the two cannot drift:
+// a digest covering a price the row does not carry would suppress a snapshot
+// the row would have shown as changed, and the change would be gone with no
+// trace.
+func snapshotPrices(p wb.Product) (base, sale, discount *int64, currency string) {
+	if m, ok := p.SalePrice(); ok {
+		v := m.Minor
+		sale, currency = &v, m.Currency
+	}
+	if m, ok := p.BasePrice(); ok {
+		v := m.Minor
+		base = &v
+		if currency == "" {
+			currency = m.Currency
+		}
+	}
+	if d, ok := p.DiscountPercent(); ok {
+		v := int64(d)
+		discount = &v
+	}
+	return base, sale, discount, currency
+}
+
+// snapshotStock is the single stock figure a snapshot row carries.
+//
+// wb.Product.TotalStock prefers the per-size breakdown the card sends and
+// falls back to the flat total the search response sends, so one column means
+// one thing across both producers. nil only when neither source was present,
+// which is a different fact from a stock of zero.
+func snapshotStock(p wb.Product) *int64 {
+	q, ok := p.TotalStock()
+	if !ok {
+		return nil
+	}
+	return &q
+}
+
+// fingerprintVersion prefixes every digest.
+//
+// A later build that folds another field in produces different digests for the
+// same reading, and the prefix says so out loud instead of leaving two
+// incomparable strings looking alike. The cost of the change is one extra
+// snapshot per product per region, once — which is also the correct behaviour,
+// since the first row computed under the new rule is the first row that
+// records the newly covered field.
+const fingerprintVersion = "1"
+
+// fingerprintOf digests the volatile half of a reading.
+//
+// It is the handle the volume strategy in spec section 5.2 is built on: the
+// next pass compares one string against the last one instead of twenty columns
+// against twenty columns. Hourly tracking of a thousand products writing every
+// pass is tens of gigabytes a month and no more information than writing the
+// passes that differ.
+//
+// Two properties are load-bearing, and both fail silently rather than loudly.
+//
+// It is deterministic. There is no map in this function or the two below it,
+// and there must never be one: Go randomises map iteration order on purpose,
+// so a digest built by ranging over a map is a different string on nearly
+// every call. Nothing would crash — every reading would simply differ from the
+// previous one, every pass would write a snapshot, and the database would grow
+// at exactly the rate this digest exists to prevent, while looking like it
+// worked.
+//
+// It is independent of the order the site listed things in. sizes[] and
+// stocks[] arrive in whatever order the payload had, and nothing promises that
+// order is stable between two requests. Each size and each warehouse is
+// therefore digested on its own and the finished sub-digests are sorted, which
+// needs no tie-breaking rule between two identical sizes and — the reason it
+// is done this way rather than by sorting the slices — never touches the
+// caller's product. Sorting p.Sizes in place would reorder what saveProductTx
+// writes into snapshot_sizes a moment later, losing the site's own listing
+// order for every product.
+//
+// What is covered is exactly what a snapshot row carries, minus the columns
+// that identify it (nm_id, dest), date it (ts) or serve the change rule
+// (anchor, fingerprint). A field the row carries but the digest does not would
+// have its changes suppressed and lost with no record that they happened; a
+// field the digest covers but the row does not would write rows that say
+// nothing. dest is left out deliberately even though it is on the row: the
+// comparison is scoped to one region by the rule that uses this digest, and
+// hashing it as well would hide a lookup that forgot that scoping.
+func fingerprintOf(p wb.Product) string {
+	h := sha256.New()
+
+	// The audience the reading was made as. It is not part of the comparison
+	// key, so a job that switches appType must be able to tell that its prices
+	// now come from a different audience.
+	fpInt(h, "app_type", int64(p.AppType))
+
+	fpOptFloat(h, "rating", p.Rating)
+	fpText(h, "rating_key", p.RatingKey)
+	fpOptInt(h, "feedbacks", p.Feedbacks)
+	fpText(h, "feedback_key", p.FeedbackKey)
+	fpOptInt(h, "total_stock", snapshotStock(p))
+
+	base, sale, discount, currency := snapshotPrices(p)
+	fpOptInt(h, "price_base", base)
+	fpOptInt(h, "price_sale", sale)
+	fpOptInt(h, "discount_pct", discount)
+	fpText(h, "currency", currency)
+
+	fpOptInt(h, "time1", p.Time1)
+	fpOptInt(h, "time2", p.Time2)
+	fpOptInt(h, "dist", p.Dist)
+	fpOptInt(h, "warehouse_id", p.WarehouseID)
+
+	digests := make([]string, 0, len(p.Sizes))
+	for _, sz := range p.Sizes {
+		digests = append(digests, sizeFingerprint(sz))
+	}
+	sort.Strings(digests)
+	// The count as well as the members: two sizes that digest identically are
+	// two sizes, and a payload that started repeating one is a change.
+	fpInt(h, "sizes", int64(len(digests)))
+	for _, d := range digests {
+		fpText(h, "size", d)
+	}
+
+	return fingerprintVersion + ":" + hex.EncodeToString(h.Sum(nil))
+}
+
+// sizeFingerprint digests one size and its warehouses, in an order the site
+// cannot influence.
+func sizeFingerprint(sz wb.Size) string {
+	h := sha256.New()
+	fpText(h, "name", sz.Name)
+	fpText(h, "orig_name", sz.OrigName)
+	fpOptInt(h, "price_basic", sz.PriceBasic)
+	fpOptInt(h, "price_product", sz.PriceProduct)
+	fpOptInt(h, "price_total", sz.PriceTotal)
+
+	// A nil stocks array and a present empty one are different facts: the
+	// second says the payload counted this size and found nothing, which is a
+	// stockout. Both are zero-length, so only the marker carries that
+	// difference.
+	if sz.Stocks == nil {
+		fpText(h, "stocks", "-")
+	} else {
+		digests := make([]string, 0, len(sz.Stocks))
+		for _, st := range sz.Stocks {
+			digests = append(digests, stockFingerprint(st))
+		}
+		sort.Strings(digests)
+		fpInt(h, "stocks", int64(len(digests)))
+		for _, d := range digests {
+			fpText(h, "stock", d)
+		}
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// stockFingerprint digests one warehouse's holding of one size.
+func stockFingerprint(st wb.Stock) string {
+	h := sha256.New()
+	fpInt(h, "warehouse_id", st.WarehouseID)
+	fpInt(h, "qty", st.Qty)
+	fpInt(h, "priority", st.Priority)
+	fpInt(h, "delivery_type", st.DeliveryType)
+	fpOptInt(h, "time1", st.Time1)
+	fpOptInt(h, "time2", st.Time2)
+	fpOptInt(h, "dist", st.Dist)
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// fpText writes a tagged string, its length first.
+//
+// The length is not decoration. Without it a size named "a" beside one named
+// "b" hashes identically to a single size named "ab", and two different
+// readings share a digest — which the change rule reads as "nothing changed",
+// forever, with no symptom but a history that stopped moving.
+func fpText(h hash.Hash, tag, v string) {
+	fmt.Fprintf(h, "%s:%d:", tag, len(v))
+	h.Write([]byte(v))
+	h.Write([]byte{'\n'})
+}
+
+// fpInt writes a tagged integer.
+func fpInt(h hash.Hash, tag string, v int64) { fpText(h, tag, strconv.FormatInt(v, 10)) }
+
+// fpOptInt writes a tagged integer that may be absent.
+//
+// nil writes a marker no formatted number can produce, because absent and zero
+// are different facts throughout this package: a product that stopped
+// reporting stock and one whose stock fell to zero are different events, and
+// only one of them is worth waking somebody up for.
+func fpOptInt(h hash.Hash, tag string, v *int64) {
+	if v == nil {
+		fpText(h, tag, "-")
+		return
+	}
+	fpInt(h, tag, *v)
+}
+
+// fpOptFloat writes a tagged float that may be absent, by its bit pattern
+// rather than a formatted decimal: how a float is formatted is a decision two
+// builds can make differently, and its bits are not.
+func fpOptFloat(h hash.Hash, tag string, v *float64) {
+	if v == nil {
+		fpText(h, tag, "-")
+		return
+	}
+	var b [8]byte
+	binary.BigEndian.PutUint64(b[:], math.Float64bits(*v))
+	fpText(h, tag, hex.EncodeToString(b[:]))
+}
