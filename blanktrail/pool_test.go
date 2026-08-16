@@ -1079,3 +1079,154 @@ func TestPool_CountFailureDefaultsToCountingEveryNon2xx(t *testing.T) {
 		t.Errorf("upstream still %q after %d attempts with CountFailure unset; the default must count every non-2xx", after, cfg.RotateAfterFailures)
 	}
 }
+
+// The four tests below cover Lease.RotateEgress, the one way a lease holder can
+// act on knowledge the pool does not have: that this exit address, whatever the
+// status codes said, is not getting the caller through.
+
+func TestLease_RotateEgressReplacesTheUpstreamUnderTheSameLease(t *testing.T) {
+	fake := fakebt.New(t)
+	clock := newFakeClock()
+	ups, _ := Parse("1.1.1.1:1\n2.2.2.2:2\n3.3.3.3:3", "socks5")
+	cfg := testPoolConfig(t, fake, clock, 1, 1)
+	cfg.Channels = []Channel{NewListChannel("list", NewStaticRotor(ups))}
+
+	p, err := NewPool(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	defer p.Close()
+
+	l, err := p.Acquire(context.Background())
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	defer l.Release()
+
+	port := l.Port()
+	before := fake.UpstreamOf(port)
+	session := l.Session()
+
+	if err := l.RotateEgress(context.Background()); err != nil {
+		t.Fatalf("RotateEgress: %v", err)
+	}
+
+	if after := fake.UpstreamOf(port); after == before {
+		t.Errorf("upstream still %q; RotateEgress must replace the address the port exits from", after)
+	}
+	if l.Port() != port {
+		t.Errorf("port %d → %d; the lease keeps its port, only the egress moves", port, l.Port())
+	}
+	if l.Session() == session {
+		t.Errorf("session still %q; the proxy discards a solved challenge when the exit IP changes, so anything bound to it is stale", session)
+	}
+	if st := p.Stats(); st.EgressRotations != 1 {
+		t.Errorf("Stats.EgressRotations=%d, want 1 — a rotation asked for by the lease holder counts like any other", st.EgressRotations)
+	}
+}
+
+func TestLease_RotateEgressClearsTheFailureCountTheLadderWasKeeping(t *testing.T) {
+	// The pool rotates on its own schedule: RotateAfterFailures consecutive
+	// failed attempts. A rotation asked for by the lease holder has to cooperate
+	// with that count rather than land on top of it — otherwise the very next
+	// counted failure, the first one the fresh address ever sees, trips the
+	// pool's threshold and burns a second proxy after a single attempt.
+	fake := fakebt.New(t)
+	clock := newFakeClock()
+	ups, _ := Parse("1.1.1.1:1\n2.2.2.2:2\n3.3.3.3:3\n4.4.4.4:4", "socks5")
+	cfg := testPoolConfig(t, fake, clock, 1, 1)
+	cfg.Channels = []Channel{NewListChannel("list", NewStaticRotor(ups))}
+	cfg.RotateAfterFailures = 3
+
+	p, err := NewPool(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	defer p.Close()
+
+	l, err := p.Acquire(context.Background())
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	defer l.Release()
+	port := l.Port()
+
+	// Two counted failures: one short of the pool's own threshold.
+	for i := 0; i < cfg.RotateAfterFailures-1; i++ {
+		if p.attemptFailed(port) {
+			t.Fatalf("attemptFailed reported a rotation after %d failures, want it at %d", i+1, cfg.RotateAfterFailures)
+		}
+	}
+
+	if err := l.RotateEgress(context.Background()); err != nil {
+		t.Fatalf("RotateEgress: %v", err)
+	}
+	fresh := fake.UpstreamOf(port)
+
+	if p.attemptFailed(port) {
+		t.Error("the first failure on the fresh egress already asked for another rotation; " +
+			"the count belongs to the address that collected it and must not survive the change")
+	}
+	if after := fake.UpstreamOf(port); after != fresh {
+		t.Errorf("upstream moved on to %q after one failure on a fresh address", after)
+	}
+}
+
+func TestLease_RotateEgressSaysSoWhenThereIsNothingToRotateTo(t *testing.T) {
+	// Direct egress has one address by definition. A caller must be able to
+	// tell "the change did not help" from "there was no change to make", or it
+	// spends a whole retry budget re-sending through the same exit.
+	fake := fakebt.New(t)
+	clock := newFakeClock()
+	p, err := NewPool(context.Background(), testPoolConfig(t, fake, clock, 1, 1))
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	defer p.Close()
+
+	l, err := p.Acquire(context.Background())
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	defer l.Release()
+
+	err = l.RotateEgress(context.Background())
+	if !errors.Is(err, ErrRenewUnsupported) {
+		t.Errorf("RotateEgress on direct egress = %v, want ErrRenewUnsupported", err)
+	}
+	if st := p.Stats(); st.EgressRotations != 0 {
+		t.Errorf("Stats.EgressRotations=%d, want 0 — nothing was rotated", st.EgressRotations)
+	}
+}
+
+func TestLease_RotateEgressIsRefusedOnceTheLeaseIsReleased(t *testing.T) {
+	// A released port is back in the pool and may already be carrying somebody
+	// else's request. Changing its egress from a stale lease would swap the exit
+	// address underneath that request.
+	fake := fakebt.New(t)
+	clock := newFakeClock()
+	ups, _ := Parse("1.1.1.1:1\n2.2.2.2:2\n3.3.3.3:3", "socks5")
+	cfg := testPoolConfig(t, fake, clock, 1, 1)
+	cfg.Channels = []Channel{NewListChannel("list", NewStaticRotor(ups))}
+
+	p, err := NewPool(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	defer p.Close()
+
+	l, err := p.Acquire(context.Background())
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	port := l.Port()
+	before := fake.UpstreamOf(port)
+	l.Release()
+
+	if err := l.RotateEgress(context.Background()); err == nil {
+		t.Error("RotateEgress on a released lease succeeded")
+	}
+	if after := fake.UpstreamOf(port); after != before {
+		t.Errorf("upstream changed to %q through a released lease", after)
+	}
+}

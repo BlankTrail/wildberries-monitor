@@ -538,6 +538,47 @@ func (l *Lease) Session() string {
 	return strconv.Itoa(l.pt.num) + "#" + strconv.FormatUint(l.pt.session, 10)
 }
 
+// RotateEgress replaces the upstream proxy behind this lease's port, and
+// returns once the port sends through the new one. The port keeps its number
+// and stays leased; only the address it exits from changes.
+//
+// It exists because the pool judges an egress by what it can see — connection
+// failures and non-2xx statuses — while the caller that knows the target may
+// recognise a failure the pool cannot: a response that is technically fine and
+// still means "this exit address is not getting you through". Such a caller can
+// say so here instead of releasing the lease and hoping a fresh one lands on a
+// better port, which it may not: a new lease is a new port, not a new egress.
+//
+// Session changes with the address, because the proxy discards a solved
+// challenge whenever the exit IP does. Re-read it after this returns and mint
+// any per-session state again.
+//
+// ErrRenewUnsupported means this port's channel has one fixed address — direct
+// egress, or a gateway chosen at open time — so there is nothing to rotate to.
+// Stop asking rather than looping; nothing about the egress will change.
+//
+// A successful rotation also clears the port's consecutive-failure count, the
+// one the pool's own RotateAfterFailures schedule keeps. That count describes
+// the egress that collected it: carried across, it would let the first failure
+// on the fresh address trip a second rotation, spending a proxy after a single
+// attempt. Deliberately absent, on the same reasoning, is any penalty against
+// the outgoing address — MarkBad states a connection-level fact the ladder
+// observes, not a caller's suspicion, and a channel that stops handing out
+// every address a caller ever doubted empties itself.
+func (l *Lease) RotateEgress(ctx context.Context) error {
+	if l.released {
+		// The port is back in the pool and may already be serving another
+		// caller; swapping its egress now would change the address under a
+		// request that is in flight.
+		return errors.New("blanktrail: RotateEgress on a released lease")
+	}
+	if err := l.pool.rotateEgress(ctx, l.pt.num); err != nil {
+		return err
+	}
+	l.pool.resetFailures(l.pt.num)
+	return nil
+}
+
 // Release returns the port to the pool and starts its cooldown. Safe to call
 // more than once.
 func (l *Lease) Release() {
@@ -651,7 +692,13 @@ func (p *Pool) attemptFailedStatus(num, status int) bool {
 }
 
 // attemptSucceeded clears a port's consecutive-failure count.
-func (p *Pool) attemptSucceeded(num int) {
+func (p *Pool) attemptSucceeded(num int) { p.resetFailures(num) }
+
+// resetFailures clears a port's consecutive-failure count. Both things that
+// clear it — a successful attempt and a fresh egress — mean the same to the
+// count: whatever it had accumulated described a state the port is no longer
+// in, so counting on from there would rotate the next egress early.
+func (p *Pool) resetFailures(num int) {
 	pt := p.port(num)
 	if pt == nil {
 		return
