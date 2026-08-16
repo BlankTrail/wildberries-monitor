@@ -30,19 +30,26 @@ func stampOf(t time.Time) any {
 	return t.UTC().Unix()
 }
 
-// effectiveReviewCreatedAt is reviews.created_at's fallback when a review
-// carries no date of its own.
+// effectiveCreatedAt is the fallback for a NOT NULL created_at column when
+// the site sent no date at all — reviews.created_at and questions.created_at
+// both are (see 0002_signals.sql); every other site-supplied date in this
+// file goes through stampOf instead and lands in a nullable column.
 //
-// Every other site-supplied date in this file goes through stampOf and lands
-// in a nullable column, but 0002_signals.sql declares created_at NOT NULL —
-// no review in this package's own capture has ever come back without a
-// createdDate, so the schema treats an absent one as the exception rather than
-// a legal, storable shape. This mirrors effectiveTS in products.go, which
-// gives snapshots and positions the identical fallback for FetchedAt and for
-// the identical reason: the alternative is Unix() on the zero time, the year
-// 1754, which sorts before every real review and would make an undated one
-// look like the oldest row in the table forever.
-func effectiveReviewCreatedAt(createdAt time.Time, seenAt int64) int64 {
+// This mirrors effectiveTS in products.go, which gives snapshots and
+// positions the identical fallback for FetchedAt, and for the identical
+// reason: the alternative is Unix() on the zero time, the year 1754, which
+// sorts before every real row and would make an undated one look like the
+// oldest row in the table forever.
+//
+// It is only ever bound to the INSERT half of an upsert. The UPDATE half
+// binds stampOf(createdAt) instead, through a COALESCE against the existing
+// column — see saveReview and saveQuestion — so that a date pinned on first
+// sight by this fallback stays pinned: recomputing effectiveCreatedAt against
+// the current seenAt on every later pass would make an undated row's
+// created_at creep forward by however long the monitor has been polling it,
+// which is the exact "sorts as newest forever" failure in the opposite
+// direction from the year 1754 this function was written to avoid.
+func effectiveCreatedAt(createdAt time.Time, seenAt int64) int64 {
 	if createdAt.IsZero() {
 		return seenAt
 	}
@@ -153,6 +160,20 @@ func saveReviewSummary(ctx context.Context, tx *sql.Tx, imtID, ts int64, sum wb.
 // column the site cannot supply — WB says when a review was written, not when
 // this monitor first saw it — and "arrived while we were watching" is what a
 // notification rests on. Refreshing it on every pass would erase that.
+//
+// created_at gets the same "pin it, don't refresh it" treatment as
+// first_seen_at, for a related but distinct reason. The INSERT half binds
+// effectiveCreatedAt(r.CreatedAt, seenAt): a real date if the site sent one,
+// this first sighting's clock reading if it did not, because the column is
+// NOT NULL and something has to land there. The UPDATE half does not repeat
+// that computation — it binds stampOf(r.CreatedAt), NULL when this pass still
+// carries no date, through COALESCE(?, reviews.created_at) so a NULL leaves
+// the existing value alone. Binding excluded.created_at there instead would
+// silently recompute the fallback against the *current* seenAt on every save,
+// walking an undated review's created_at forward by however long the monitor
+// has been polling it and keeping it permanently first in
+// idx_reviews_imt_created — the same "looks newest forever" failure this
+// column's NOT NULL fallback exists to avoid, from the opposite direction.
 func saveReview(ctx context.Context, tx *sql.Tx, imtID, seenAt int64, r wb.Review) error {
 	// STRICT refuses anything but an integer in this column, and how a driver
 	// renders a Go bool is the driver's business rather than this schema's.
@@ -176,14 +197,14 @@ func saveReview(ctx context.Context, tx *sql.Tx, imtID, seenAt int64, r wb.Revie
 		    valuation = excluded.valuation,
 		    size = excluded.size,
 		    color = excluded.color,
-		    created_at = excluded.created_at,
+		    created_at = COALESCE(?, reviews.created_at),
 		    updated_at = excluded.updated_at,
 		    excluded_from_rating = excluded.excluded_from_rating,
 		    photo_count = excluded.photo_count,
 		    last_seen_at = excluded.last_seen_at`,
 		r.ID, imtID, r.NmID, r.Text, r.Pros, r.Cons, r.Valuation, r.Size, r.Color,
-		effectiveReviewCreatedAt(r.CreatedAt, seenAt), stampOf(r.UpdatedAt), excluded, r.PhotoCount,
-		seenAt, seenAt); err != nil {
+		effectiveCreatedAt(r.CreatedAt, seenAt), stampOf(r.UpdatedAt), excluded, r.PhotoCount,
+		seenAt, seenAt, stampOf(r.CreatedAt)); err != nil {
 		return fmt.Errorf("store: save review %s: %w", r.ID, err)
 	}
 
@@ -221,8 +242,18 @@ func saveReview(ctx context.Context, tx *sql.Tx, imtID, seenAt int64, r wb.Revie
 		{"reason-bad", r.Reasons.Bad},
 	} {
 		for _, id := range group.ids {
+			// ON CONFLICT DO NOTHING, not an error: the table's key is
+			// (review_id, kind, catalog_id), one row per distinct id under a
+			// kind, so a repeated id within one kind — the payload sending the
+			// same tag twice — is a no-op against that key, not a conflict
+			// with a different fact. Without this, one repeated id anywhere
+			// in the review's tags or reasons fails the INSERT, which rolls
+			// back the whole transaction and costs the entire window this
+			// review shares with every other review in it, over one
+			// duplicate that carries no new information.
 			if _, err := tx.ExecContext(ctx,
-				`INSERT INTO review_tags (review_id, kind, catalog_id) VALUES (?, ?, ?)`,
+				`INSERT INTO review_tags (review_id, kind, catalog_id) VALUES (?, ?, ?)
+				 ON CONFLICT (review_id, kind, catalog_id) DO NOTHING`,
 				r.ID, group.kind, id); err != nil {
 				return fmt.Errorf("store: save review %s %s tag: %w", r.ID, group.kind, err)
 			}
@@ -249,16 +280,22 @@ func saveReview(ctx context.Context, tx *sql.Tx, imtID, seenAt int64, r wb.Revie
 
 // SaveQuestions records one page of a card's buyer questions.
 //
-// q.Count — WB's own total for the card — is deliberately not stored. It
-// belongs to whichever card q.ImtID names, and Client.QuestionCount, the
-// cheap path that exists precisely to poll that total, returns no items at
-// all; a column filled only by the expensive path would report "no
-// questions" for every card polled the cheap way, which is worse than not
-// storing an aggregate that can be re-fetched for forty bytes.
+// q.Count — WB's own total for the card — is deliberately not stored, even
+// though q.ImtID now gives it somewhere to be filed: 0002_signals.sql's
+// questions table has no column for it, and adding one is a schema change
+// this task does not make. The count can be re-fetched for forty bytes
+// through Client.QuestionCount when it is actually needed.
 //
 // It returns how many questions were written, skipping those with no id for the
 // same reason SaveReviews skips them.
 func (s *Store) SaveQuestions(ctx context.Context, q wb.Questions) (int, error) {
+	if q.ImtID == 0 {
+		// The same guard SaveReviews applies to Reviews.ImtID, for the same
+		// reason: a page that does not say which card it is of would file
+		// under imt_id 0 and pool every unattributed card's questions into
+		// one series belonging to nobody.
+		return 0, fmt.Errorf("store: save questions: the reading does not say which card it is of")
+	}
 	seenAt := s.now().UTC().Unix()
 
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -272,7 +309,7 @@ func (s *Store) SaveQuestions(ctx context.Context, q wb.Questions) (int, error) 
 		if item.ID == "" {
 			continue
 		}
-		if err := saveQuestion(ctx, tx, seenAt, item); err != nil {
+		if err := saveQuestion(ctx, tx, q.ImtID, seenAt, item); err != nil {
 			return 0, err
 		}
 		written++
@@ -285,12 +322,30 @@ func (s *Store) SaveQuestions(ctx context.Context, q wb.Questions) (int, error) 
 
 // saveQuestion writes one question and its tags.
 //
+// imtID is the envelope's own Questions.ImtID — the card the request was
+// keyed on — not the item's Question.ImtID. wb keeps the two apart on
+// purpose (see Questions.ImtID's doc comment): the envelope names the card
+// this fetch asked about, the item names whichever card the site happened to
+// file that one question under, and in principle they can disagree. This
+// schema has one imt_id column on questions, so it has to pick one of the two
+// claims, and it picks the same one SaveReviews already picks for its own
+// single imt_id column — the request's own target, because that is what a
+// caller holding this page actually knows without re-deriving it from the
+// items. A column for the item's own, possibly-disagreeing claim would be a
+// real schema change and is out of this task's scope.
+//
 // The reply lives in nullable columns on the question rather than in a table of
 // its own, unlike a review's: a question carries at most one, and NULL says
 // "nobody replied" where an empty string says "somebody replied with nothing".
 // QuestionUnanswered fires on exactly that distinction, so collapsing the two
 // would make it fire forever on every question a seller answered with a blank.
-func saveQuestion(ctx context.Context, tx *sql.Tx, seenAt int64, q wb.Question) error {
+//
+// created_at is pinned the same way saveReview pins reviews.created_at — see
+// its doc comment for why the INSERT and UPDATE halves bind two different
+// values. questions.created_at is NOT NULL in 0002_signals.sql exactly like
+// reviews.created_at, so the identical fallback and the identical
+// don't-refresh-it-on-every-pass discipline apply here.
+func saveQuestion(ctx context.Context, tx *sql.Tx, imtID, seenAt int64, q wb.Question) error {
 	var answerText, answerCreated, answerSupplier any
 	if q.Answer != nil {
 		answerText = q.Answer.Text
@@ -308,14 +363,14 @@ func saveQuestion(ctx context.Context, tx *sql.Tx, seenAt int64, q wb.Question) 
 		    imt_id = excluded.imt_id,
 		    nm_id = excluded.nm_id,
 		    text = excluded.text,
-		    created_at = excluded.created_at,
+		    created_at = COALESCE(?, questions.created_at),
 		    supplier_article = excluded.supplier_article,
 		    answer_text = excluded.answer_text,
 		    answer_created_at = excluded.answer_created_at,
 		    answer_supplier_id = excluded.answer_supplier_id,
 		    last_seen_at = excluded.last_seen_at`,
-		q.ID, q.ImtID, q.NmID, q.Text, stampOf(q.CreatedAt), q.SupplierArticle,
-		answerText, answerCreated, answerSupplier, seenAt, seenAt); err != nil {
+		q.ID, imtID, q.NmID, q.Text, effectiveCreatedAt(q.CreatedAt, seenAt), q.SupplierArticle,
+		answerText, answerCreated, answerSupplier, seenAt, seenAt, stampOf(q.CreatedAt)); err != nil {
 		return fmt.Errorf("store: save question %s: %w", q.ID, err)
 	}
 
@@ -357,9 +412,15 @@ func (s *Store) SaveSeller(ctx context.Context, sl wb.Seller) error {
 	}
 	seenAt := s.now().UTC().Unix()
 
+	// stampOf, not a bare Unix() call: decodeSellerProfile (wb/seller.go)
+	// always sets RegisteredAt to a non-nil pointer once the profile fetch
+	// succeeds, even when the document carried no registrationDate — the
+	// pointer is never nil, but the time.Time it points to can be zero. A
+	// bare *sl.RegisteredAt.UTC().Unix() would store the year 1754 for
+	// exactly that case; stampOf's IsZero guard is what turns it into NULL.
 	var registeredAt any
 	if sl.RegisteredAt != nil {
-		registeredAt = sl.RegisteredAt.UTC().Unix()
+		registeredAt = stampOf(*sl.RegisteredAt)
 	}
 	premium := 0
 	if sl.IsPremium {

@@ -305,6 +305,29 @@ func TestSaveReviews_TagsAndReasonsAreCatalogueIdentifiers(t *testing.T) {
 	}
 }
 
+func TestSaveReviews_ADuplicateCatalogueIDDoesNotLoseTheWindow(t *testing.T) {
+	// review_tags is keyed (review_id, kind, catalog_id): one row per distinct
+	// id under a kind, so a repeated id within one kind is a no-op against
+	// that key, not a conflicting fact. Without ON CONFLICT DO NOTHING on the
+	// insert, a repeated tag id fails the whole transaction — one duplicated
+	// id anywhere in one review's tags then costs the entire window that
+	// review shares with every other review in it.
+	s := openTestStore(t)
+	window := oneReviewWindow()
+	window.Items[0].Tags = []int64{501, 501}
+
+	written, err := s.SaveReviews(context.Background(), window)
+	if err != nil {
+		t.Fatalf("SaveReviews: %v", err)
+	}
+	if written != 2 {
+		t.Errorf("SaveReviews returned %d, want 2 — a duplicate tag id must not cost the rest of the window", written)
+	}
+	if got := countRows(t, s, "reviews"); got != 2 {
+		t.Errorf("reviews holds %d rows, want 2", got)
+	}
+}
+
 func TestSaveReviews_ADeletedAnswerDoesNotSurvive(t *testing.T) {
 	// A seller can delete a reply. An upsert that only ever wrote answers would
 	// leave the old text attached to a review that no longer carries one, and
@@ -367,6 +390,159 @@ func TestSaveReviews_AReviewWithNoDateIsNotDatedToTheYear1754(t *testing.T) {
 	}
 	if created != seenAt.Unix() {
 		t.Errorf("created_at = %d for a review with no date, want the moment it was seen (%d), not the year 1754", created, seenAt.Unix())
+	}
+}
+
+func TestSaveReviews_AnUndatedReviewsCreatedAtDoesNotDriftOnEverySave(t *testing.T) {
+	// The other half of the previous test. An undated review is dated to the
+	// moment it was first seen, and that value then has to hold: an hourly
+	// monitor calls SaveReviews every hour, and if created_at moved forward on
+	// every pass, an undated review would sit at the top of
+	// idx_reviews_imt_created forever and "what arrived since yesterday" would
+	// return it every single day — the same failure the fallback exists to
+	// prevent, approached from the other end.
+	s := openTestStore(t)
+	ctx := context.Background()
+	firstPass := time.Date(2026, 8, 16, 10, 0, 0, 0, time.UTC)
+	secondPass := firstPass.Add(3 * time.Hour)
+	window := oneReviewWindow()
+	window.Items[1].CreatedAt = time.Time{}
+
+	s.SetClock(func() time.Time { return firstPass })
+	if _, err := s.SaveReviews(ctx, window); err != nil {
+		t.Fatalf("first SaveReviews: %v", err)
+	}
+	s.SetClock(func() time.Time { return secondPass })
+	if _, err := s.SaveReviews(ctx, window); err != nil {
+		t.Fatalf("second SaveReviews: %v", err)
+	}
+
+	var created int64
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT created_at FROM reviews WHERE id = 'rv-2'`).Scan(&created); err != nil {
+		t.Fatalf("read rv-2: %v", err)
+	}
+	if created != firstPass.Unix() {
+		t.Errorf("created_at = %d after a second save, want the first sighting %d — an undated review must not drift forward on every pass", created, firstPass.Unix())
+	}
+}
+
+func TestSaveReviews_AnUnsentUpdateDateIsNull(t *testing.T) {
+	// updated_at is nullable, unlike created_at: rv-2 in oneReviewWindow sends
+	// no updatedDate at all, and stampOf's own IsZero guard is what keeps that
+	// NULL instead of the year 1754. Unlike created_at, this column carries no
+	// separate pin-on-first-sight machinery, so this is the direct test of
+	// stampOf's zero branch that reviews.created_at no longer exercises.
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	if _, err := s.SaveReviews(ctx, oneReviewWindow()); err != nil {
+		t.Fatalf("SaveReviews: %v", err)
+	}
+	var updated sql.NullInt64
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT updated_at FROM reviews WHERE id = 'rv-2'`).Scan(&updated); err != nil {
+		t.Fatalf("read rv-2: %v", err)
+	}
+	if updated.Valid {
+		t.Errorf("updated_at = %d for a review with no edit date, want NULL", updated.Int64)
+	}
+}
+
+func TestSaveReviews_AnAnswerWithNoDateIsNull(t *testing.T) {
+	// review_answers.created_at is null, not zero, when the answer object
+	// carried no createDate (see 0002_signals.sql) — a second, independent
+	// exercise of stampOf's zero branch.
+	s := openTestStore(t)
+	ctx := context.Background()
+	window := oneReviewWindow()
+	window.Items[1].Answer = &wb.ReviewAnswer{Text: "скоро ответим"}
+
+	if _, err := s.SaveReviews(ctx, window); err != nil {
+		t.Fatalf("SaveReviews: %v", err)
+	}
+	var created sql.NullInt64
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT created_at FROM review_answers WHERE review_id = 'rv-2'`).Scan(&created); err != nil {
+		t.Fatalf("read rv-2 answer: %v", err)
+	}
+	if created.Valid {
+		t.Errorf("created_at = %d for an answer with no date, want NULL", created.Int64)
+	}
+}
+
+func TestSaveReviews_MapsEveryReviewColumnToItsOwnField(t *testing.T) {
+	// Pros/Cons and Size/Color are both same-typed, adjacently-declared string
+	// fields on wb.Review and adjacent columns in the INSERT's column list —
+	// exactly the shape a copy-paste argument swap compiles clean and reads
+	// back wrong forever.
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	if _, err := s.SaveReviews(ctx, oneReviewWindow()); err != nil {
+		t.Fatalf("SaveReviews: %v", err)
+	}
+	var nmID int64
+	var pros, cons, size, color string
+	var photoCount, excludedFromRating int
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT nm_id, pros, cons, size, color, photo_count, excluded_from_rating
+		FROM reviews WHERE id = 'rv-1'`).
+		Scan(&nmID, &pros, &cons, &size, &color, &photoCount, &excludedFromRating); err != nil {
+		t.Fatalf("read rv-1: %v", err)
+	}
+	if nmID != 111 {
+		t.Errorf("nm_id = %d, want 111", nmID)
+	}
+	if pros != "цвет" {
+		t.Errorf("pros = %q, want %q — not swapped with cons", pros, "цвет")
+	}
+	if cons != "колодка" {
+		t.Errorf("cons = %q, want %q — not swapped with pros", cons, "колодка")
+	}
+	if size != "39" {
+		t.Errorf("size = %q, want %q — not swapped with color", size, "39")
+	}
+	if color != "чёрный" {
+		t.Errorf("color = %q, want %q — not swapped with size", color, "чёрный")
+	}
+	if photoCount != 2 {
+		t.Errorf("photo_count = %d, want 2", photoCount)
+	}
+	if excludedFromRating != 1 {
+		t.Errorf("excluded_from_rating = %d, want 1", excludedFromRating)
+	}
+}
+
+func TestSaveReviews_SummaryMapsEveryColumnToItsOwnField(t *testing.T) {
+	// WithPhoto and WithVideo are both int64 counts sitting next to each other
+	// in ReviewSummary and in the argument list, and size_matching is the one
+	// field a wrong argument position can drop to NULL without any error.
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	if _, err := s.SaveReviews(ctx, oneReviewWindow()); err != nil {
+		t.Fatalf("SaveReviews: %v", err)
+	}
+	var withPhoto, withText, withVideo int64
+	var sizeMatching sql.NullFloat64
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT with_photo, with_text, with_video, size_matching
+		FROM review_summaries WHERE imt_id = 4567`).
+		Scan(&withPhoto, &withText, &withVideo, &sizeMatching); err != nil {
+		t.Fatalf("read summary: %v", err)
+	}
+	if withPhoto != 120 {
+		t.Errorf("with_photo = %d, want 120 — not swapped with with_video", withPhoto)
+	}
+	if withText != 500 {
+		t.Errorf("with_text = %d, want 500", withText)
+	}
+	if withVideo != 3 {
+		t.Errorf("with_video = %d, want 3 — not swapped with with_photo", withVideo)
+	}
+	if !sizeMatching.Valid || sizeMatching.Float64 != 87.5 {
+		t.Errorf("size_matching = %v, want a present 87.5", sizeMatching)
 	}
 }
 
@@ -517,6 +693,99 @@ func TestSaveQuestions_ACountWithNoBodiesWritesNothing(t *testing.T) {
 	}
 }
 
+func TestSaveQuestions_RefusesAPageThatNamesNoCard(t *testing.T) {
+	// Symmetric to SaveReviews's own guard on Reviews.ImtID: a Questions with
+	// ImtID zero names no card, and Client.QuestionCount's cheap path exists
+	// precisely so this value carries a card id even when Items is empty (see
+	// Questions.ImtID).
+	s := openTestStore(t)
+	page := onePageOfQuestions()
+	page.ImtID = 0
+
+	if _, err := s.SaveQuestions(context.Background(), page); err == nil {
+		t.Error("SaveQuestions accepted a page that names no card; want an error saying so")
+	}
+	if got := countRows(t, s, "questions"); got != 0 {
+		t.Errorf("questions holds %d rows after a refused save, want 0", got)
+	}
+}
+
+func TestSaveQuestions_KeysOnTheEnvelopesCardNotTheItems(t *testing.T) {
+	// Questions.ImtID is the card the request was made for; Question.ImtID is
+	// whichever card the site happened to file that one question under, and
+	// wb keeps the two apart on purpose rather than deriving one from the
+	// other (see Questions.ImtID's doc comment). This schema has one imt_id
+	// column on questions, and it names the card the fetch was keyed on — the
+	// same choice SaveReviews already makes for its own single imt_id column.
+	s := openTestStore(t)
+	ctx := context.Background()
+	page := onePageOfQuestions()
+	page.Items[0].ImtID = 9999 // disagrees with the envelope on purpose
+
+	if _, err := s.SaveQuestions(ctx, page); err != nil {
+		t.Fatalf("SaveQuestions: %v", err)
+	}
+	var imtID int64
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT imt_id FROM questions WHERE id = 'q-1'`).Scan(&imtID); err != nil {
+		t.Fatalf("read q-1: %v", err)
+	}
+	if imtID != 4567 {
+		t.Errorf("imt_id = %d, want the envelope's card 4567, not the item's disagreeing 9999", imtID)
+	}
+}
+
+func TestSaveQuestions_AnAnswerWithNoDateIsNull(t *testing.T) {
+	// questions.answer_created_at is nullable, and stampOf's zero branch is
+	// what keeps a dateless reply from reading back as the year 1754 there.
+	s := openTestStore(t)
+	ctx := context.Background()
+	page := onePageOfQuestions()
+	page.Items[1].Answer.CreatedAt = time.Time{}
+
+	if _, err := s.SaveQuestions(ctx, page); err != nil {
+		t.Fatalf("SaveQuestions: %v", err)
+	}
+	var created sql.NullInt64
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT answer_created_at FROM questions WHERE id = 'q-2'`).Scan(&created); err != nil {
+		t.Fatalf("read q-2: %v", err)
+	}
+	if created.Valid {
+		t.Errorf("answer_created_at = %d for a reply with no date, want NULL", created.Int64)
+	}
+}
+
+func TestSaveQuestions_MapsEveryColumnToItsOwnField(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	if _, err := s.SaveQuestions(ctx, onePageOfQuestions()); err != nil {
+		t.Fatalf("SaveQuestions: %v", err)
+	}
+	var nmID int64
+	var article string
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT nm_id, supplier_article FROM questions WHERE id = 'q-1'`).Scan(&nmID, &article); err != nil {
+		t.Fatalf("read q-1: %v", err)
+	}
+	if nmID != 111 {
+		t.Errorf("nm_id = %d, want 111", nmID)
+	}
+	if article != "ART-77" {
+		t.Errorf("supplier_article = %q, want %q", article, "ART-77")
+	}
+
+	var supplierID int64
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT answer_supplier_id FROM questions WHERE id = 'q-2'`).Scan(&supplierID); err != nil {
+		t.Fatalf("read q-2: %v", err)
+	}
+	if supplierID != 900 {
+		t.Errorf("answer_supplier_id = %d, want 900", supplierID)
+	}
+}
+
 func fullSeller() wb.Seller {
 	valuation := 4.9
 	feedbacks := int64(1200)
@@ -615,6 +884,64 @@ func TestSaveSeller_StoresRegistrationAsUnixSeconds(t *testing.T) {
 	}
 }
 
+func TestSaveSeller_AnUnsentRegistrationDateIsNullNotTheYear1754(t *testing.T) {
+	// decodeSellerProfile (wb/seller.go) always sets Seller.RegisteredAt to a
+	// non-nil pointer once the profile fetch succeeds — the pointer being nil
+	// means only "the profile fetch did not happen at all" — but the
+	// time.Time it points to is zero whenever the document itself carried no
+	// registrationDate. That shape is reachable in practice, not merely
+	// theoretical, and a store that read straight through Unix() without
+	// stampOf's guard would file such a seller as registered in 1754 — the
+	// oldest, and therefore most established-looking, seller on the site.
+	s := openTestStore(t)
+	ctx := context.Background()
+	var noRegistrationDate time.Time
+
+	if err := s.SaveSeller(ctx, wb.Seller{
+		ID: 902, Name: "Без даты регистрации", Type: "C2C", RegisteredAt: &noRegistrationDate,
+	}); err != nil {
+		t.Fatalf("SaveSeller: %v", err)
+	}
+
+	var registered sql.NullInt64
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT registered_at FROM sellers WHERE id = 902`).Scan(&registered); err != nil {
+		t.Fatalf("read seller: %v", err)
+	}
+	if registered.Valid {
+		t.Errorf("registered_at = %d for a profile with no registration date, want NULL", registered.Int64)
+	}
+}
+
+func TestSaveSeller_MapsEveryColumnToItsOwnField(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	if err := s.SaveSeller(ctx, fullSeller()); err != nil {
+		t.Fatalf("SaveSeller: %v", err)
+	}
+	var fullName, sellerType string
+	var itemCount, deliveryDuration int64
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT full_name, type, item_count, delivery_duration
+		FROM sellers WHERE id = 900`).
+		Scan(&fullName, &sellerType, &itemCount, &deliveryDuration); err != nil {
+		t.Fatalf("read seller: %v", err)
+	}
+	if fullName != "ООО «Обувь-Плюс»" {
+		t.Errorf("full_name = %q, want %q", fullName, "ООО «Обувь-Плюс»")
+	}
+	if sellerType != "COMPANY" {
+		t.Errorf("type = %q, want %q", sellerType, "COMPANY")
+	}
+	if itemCount != 340 {
+		t.Errorf("item_count = %d, want 340", itemCount)
+	}
+	if deliveryDuration != 48 {
+		t.Errorf("delivery_duration = %d, want 48", deliveryDuration)
+	}
+}
+
 func TestSaveSeller_RefusesASellerWithNoIdentity(t *testing.T) {
 	s := openTestStore(t)
 	if err := s.SaveSeller(context.Background(), wb.Seller{Name: "никто"}); err == nil {
@@ -644,14 +971,18 @@ func TestSaveBrand_KeepsTheFirstSightingAndRefreshesTheRest(t *testing.T) {
 		t.Errorf("brands holds %d rows, want 1", got)
 	}
 	var name string
+	var siteID int64
 	var firstSeen, lastSeen int64
 	if err := s.db.QueryRowContext(ctx,
-		`SELECT name, first_seen_at, last_seen_at FROM brands WHERE id = 55`).
-		Scan(&name, &firstSeen, &lastSeen); err != nil {
+		`SELECT name, site_id, first_seen_at, last_seen_at FROM brands WHERE id = 55`).
+		Scan(&name, &siteID, &firstSeen, &lastSeen); err != nil {
 		t.Fatalf("read brand: %v", err)
 	}
 	if name != "Salomon Sport" {
 		t.Errorf("name = %q, want the renamed %q", name, "Salomon Sport")
+	}
+	if siteID != 7 {
+		t.Errorf("site_id = %d, want 7", siteID)
 	}
 	if firstSeen != first.Unix() || lastSeen != second.Unix() {
 		t.Errorf("first_seen_at/last_seen_at = %d/%d, want %d/%d", firstSeen, lastSeen, first.Unix(), second.Unix())
