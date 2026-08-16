@@ -1,0 +1,43 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+      - run: go build ./...
+      - run: go vet ./...
+      - run: go test -race ./...
+      # v7 is the first release line that installs golangci-lint v2, which is
+      # the schema .golangci.yml is written in. v6 installs v1.x and rejects the
+      # config outright, before it ever looks at the code.
+      - uses: golangci/golangci-lint-action@v7
+        with:
+          version: v2.0.2
+
+  build-matrix:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        goos: [windows, linux, darwin]
+        goarch: [amd64, arm64]
+    env:
+      CGO_ENABLED: '0'
+      GOOS: ${{ matrix.goos }}
+      GOARCH: ${{ matrix.goarch }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+      - run: go build ./...

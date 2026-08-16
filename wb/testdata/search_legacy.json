@@ -1,0 +1,9 @@
+{
+  "data": {
+    "products": [
+      {"id": 42, "name": "Старый конверт", "brand": "B",
+       "salePriceU": 55000, "priceU": 99000,
+       "nmReviewRating": 4.1, "nmFeedbacks": 7}
+    ]
+  }
+}

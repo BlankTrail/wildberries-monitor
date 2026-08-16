@@ -1,0 +1,240 @@
+{
+ "questions": [
+  {
+   "id": "IqTndZwBWgxW4OcHnUpO",
+   "wbUserId": 0,
+   "globalUserId": "anon-31a592debc49e956",
+   "wbUserDetails": {
+    "name": "",
+    "country": "ru",
+    "hasPhoto": false
+   },
+   "imtId": 996564353,
+   "nmId": 211723794,
+   "text": "Здравствуйте.Товар был возвращён 11.02.Денежные средства так и не возвращены!",
+   "createdDate": "2026-02-19T12:37:19.288666711Z",
+   "productDetails": {
+    "imtId": 996564353,
+    "nmId": 211723794,
+    "productName": "Сумка спортивная, дорожная, для бассейна и фитнеса",
+    "supplierArticle": "ССоЧ/Чер_L",
+    "supplierId": 173710,
+    "supplierName": "",
+    "brandId": 0,
+    "brandName": "RUSSIA SPORTS"
+   },
+   "answer": {
+    "text": "Добрый день, Елена!\nВы написали производителю спортивных сумок. Мы не влияем на формление возвратов и на их сроки никак. Вам лучше написать в поддержку ВБ. Уверены средства вернутся на ваш счет. \nС уважением, команда \"ЦЕНТР\"!",
+    "supplierId": 173710,
+    "employeeId": 0,
+    "metadata": null,
+    "editable": false,
+    "lastUpdate": "0001-01-01T00:00:00Z",
+    "createDate": "2026-02-19T14:39:10.10344292Z",
+    "plusesCount": 0,
+    "minusesCount": 0
+   },
+   "answerValuation": null,
+   "tags": [
+    "PLATFORM_QUERY"
+   ],
+   "rank": 3
+  },
+  {
+   "id": "71H6h5sBfEYrrd0AJQqq",
+   "wbUserId": 0,
+   "globalUserId": "anon-96986fd73971cbd9",
+   "wbUserDetails": {
+    "name": "",
+    "country": "ru",
+    "hasPhoto": false
+   },
+   "imtId": 996564353,
+   "nmId": 211723794,
+   "text": "Добрый день!Вместятся ли в сумку коньки?",
+   "createdDate": "2026-01-04T07:47:56.436104692Z",
+   "productDetails": {
+    "imtId": 996564353,
+    "nmId": 211723794,
+    "productName": "Сумка спортивная, дорожная, для бассейна и фитнеса",
+    "supplierArticle": "ССоЧ/Чер_L",
+    "supplierId": 173710,
+    "supplierName": "",
+    "brandId": 0,
+    "brandName": "RUSSIA SPORTS"
+   },
+   "answer": {
+    "text": "Добрый день. Да поместятся , размеры сумки указаны в описание .",
+    "supplierId": 173710,
+    "employeeId": 0,
+    "metadata": null,
+    "editable": false,
+    "lastUpdate": "0001-01-01T00:00:00Z",
+    "createDate": "2026-01-04T17:07:32.362717991Z",
+    "plusesCount": 0,
+    "minusesCount": 0
+   },
+   "answerValuation": null,
+   "tags": [
+    "PRODUCT_SPECS"
+   ],
+   "rank": 5
+  },
+  {
+   "id": "NZtcDZsBotwwT1EYoYXJ",
+   "wbUserId": 0,
+   "globalUserId": "anon-7d4beda0d26317f4",
+   "wbUserDetails": {
+    "name": "",
+    "country": "ru",
+    "hasPhoto": false
+   },
+   "imtId": 996564353,
+   "nmId": 211723794,
+   "text": "почему есть 15 ненужных фоток с этой теткой, а фото нормального открытой сумки нет? вот где там гантели лежат,с боку отдел какой или ее ремень от трусов?",
+   "createdDate": "2025-12-11T12:22:13.168021932Z",
+   "productDetails": {
+    "imtId": 996564353,
+    "nmId": 211723794,
+    "productName": "Сумка спортивная, дорожная, для бассейна и фитнеса",
+    "supplierArticle": "ССоЧ/Чер_L",
+    "supplierId": 173710,
+    "supplierName": "",
+    "brandId": 0,
+    "brandName": "RUSSIA SPORTS"
+   },
+   "answer": {
+    "text": "Добрый день, Вячеслав!\nВ основном отделе сумки есть отрытый карман (перегородка). \nС уважением, AURUM!",
+    "supplierId": 173710,
+    "employeeId": 0,
+    "metadata": null,
+    "editable": false,
+    "lastUpdate": "0001-01-01T00:00:00Z",
+    "createDate": "2025-12-11T17:53:49.130406952Z",
+    "plusesCount": 0,
+    "minusesCount": 0
+   },
+   "answerValuation": null,
+   "tags": [
+    "COMPLAINT"
+   ],
+   "rank": 1
+  },
+  {
+   "id": "M9_fQ5IBtm_3_oXdLZbT",
+   "wbUserId": 0,
+   "globalUserId": "anon-84ca5caf5dbd869d",
+   "wbUserDetails": {
+    "name": "",
+    "country": "",
+    "hasPhoto": false
+   },
+   "imtId": 996564353,
+   "nmId": 211723794,
+   "text": "Здравствуйте ,не положили длинную ручку, что делать",
+   "createdDate": "2024-09-30T16:59:12.709011613Z",
+   "productDetails": {
+    "imtId": 996564353,
+    "nmId": 211723794,
+    "productName": "Сумка спортивная, дорожная, для бассейна и фитнеса",
+    "supplierArticle": "ССоЧ/Чер_L",
+    "supplierId": 173710,
+    "supplierName": "",
+    "brandId": 0,
+    "brandName": "RUSSIA SPORTS"
+   },
+   "answer": {
+    "text": "Добрый день! Сожалеем, что так получилось. Рекомендуем Вам связаться с нашей поддержкой: centr_64@mail.ru С уважением, команда \"ЦЕНТР\"!",
+    "supplierId": 173710,
+    "employeeId": 0,
+    "metadata": null,
+    "editable": false,
+    "lastUpdate": "0001-01-01T00:00:00Z",
+    "createDate": "2024-09-30T21:25:41Z",
+    "plusesCount": 0,
+    "minusesCount": 1
+   },
+   "answerValuation": null,
+   "tags": null,
+   "rank": null
+  },
+  {
+   "id": "96gvMZIBYsi65v2dUFG3",
+   "wbUserId": 0,
+   "globalUserId": "anon-323beebe61cf851c",
+   "wbUserDetails": {
+    "name": "",
+    "country": "",
+    "hasPhoto": false
+   },
+   "imtId": 996564353,
+   "nmId": 211723794,
+   "text": "здравствуйте, забрали сумку, а в ней не было ручки длинной, что делать",
+   "createdDate": "2024-09-27T01:53:57.385213475Z",
+   "productDetails": {
+    "imtId": 996564353,
+    "nmId": 211723794,
+    "productName": "Сумка спортивная, дорожная, для бассейна и фитнеса",
+    "supplierArticle": "ССоЧ/Чер_L",
+    "supplierId": 173710,
+    "supplierName": "",
+    "brandId": 0,
+    "brandName": "RUSSIA SPORTS"
+   },
+   "answer": {
+    "text": "Добрый день!\nСожалеем, что так получилось. Рекомендуем Вам связаться с нашей поддержкой: centr_64@mail.ru\nС уважением, команда \"ЦЕНТР\"!",
+    "supplierId": 173710,
+    "employeeId": 0,
+    "metadata": null,
+    "editable": false,
+    "lastUpdate": "0001-01-01T00:00:00Z",
+    "createDate": "2024-09-27T14:05:21Z",
+    "plusesCount": 0,
+    "minusesCount": 0
+   },
+   "answerValuation": null,
+   "tags": null,
+   "rank": null
+  },
+  {
+   "id": "xEwOwZEB2ToFBE2l3a76",
+   "wbUserId": 0,
+   "globalUserId": "anon-ace17b39325aca9c",
+   "wbUserDetails": {
+    "name": "",
+    "country": "",
+    "hasPhoto": false
+   },
+   "imtId": 996564353,
+   "nmId": 211723794,
+   "text": "Добрый день. У сумки жёсткое дно?",
+   "createdDate": "2024-09-05T07:21:02.652376891Z",
+   "productDetails": {
+    "imtId": 996564353,
+    "nmId": 211723794,
+    "productName": "Сумка спортивная, дорожная, для бассейна и фитнеса",
+    "supplierArticle": "ССоЧ/Чер_L",
+    "supplierId": 173710,
+    "supplierName": "",
+    "brandId": 0,
+    "brandName": "RUSSIA SPORTS"
+   },
+   "answer": {
+    "text": "Здравствуйте!\nУ данной модели сумки на дне нету картонной (или иной подобной вставки), поэтому дно не жесткое, но благодаря 3-х слойной структуре (Износостойкий Оксфорд, Обеспечивающий сохранность слой специальной Пены, Премиальная подкладочная ткань) сумка поддерживает свою форму.\nС уважением, команда \"ЦЕНТР\"!",
+    "supplierId": 173710,
+    "employeeId": 0,
+    "metadata": null,
+    "editable": false,
+    "lastUpdate": "0001-01-01T00:00:00Z",
+    "createDate": "2024-09-05T10:57:03Z",
+    "plusesCount": 0,
+    "minusesCount": 1
+   },
+   "answerValuation": null,
+   "tags": null,
+   "rank": null
+  }
+ ],
+ "count": 6,
+ "err": null
+}

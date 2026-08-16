@@ -1,0 +1,59 @@
+{
+ "summary": [
+  {
+   "minus_count": 10,
+   "plus_count": 26,
+   "name": "Качество",
+   "tag_id": 8
+  },
+  {
+   "minus_count": 0,
+   "plus_count": 3,
+   "name": "Внешний вид",
+   "tag_id": 3
+  },
+  {
+   "minus_count": 0,
+   "plus_count": 34,
+   "name": "Размер",
+   "tag_id": 19
+  },
+  {
+   "minus_count": 0,
+   "plus_count": 14,
+   "name": "Удобство использования",
+   "tag_id": 25
+  }
+ ],
+ "items": [
+  {
+   "nm_id": 211723794,
+   "summary": [
+    {
+     "minus_count": 0,
+     "plus_count": 3,
+     "name": "Внешний вид",
+     "tag_id": 3
+    },
+    {
+     "minus_count": 0,
+     "plus_count": 14,
+     "name": "Удобство использования",
+     "tag_id": 25
+    },
+    {
+     "minus_count": 10,
+     "plus_count": 26,
+     "name": "Качество",
+     "tag_id": 8
+    },
+    {
+     "minus_count": 0,
+     "plus_count": 34,
+     "name": "Размер",
+     "tag_id": 19
+    }
+   ]
+  }
+ ]
+}

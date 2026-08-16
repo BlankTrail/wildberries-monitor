@@ -1,0 +1,17 @@
+wildberries-monitor
+Copyright (C) 2026 BlankTrail
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU Affero General Public License as published by the Free
+Software Foundation, either version 3 of the License, or (at your option) any
+later version. See LICENSE for the full text.
+
+--------------------------------------------------------------------------------
+Third-party and vendored material
+--------------------------------------------------------------------------------
+
+internal/web/static/blanktrail.css (added in milestone M3)
+    Derived from the BlankTrail design system, Copyright (C) 2026 BlankTrail.
+    Distributed here under AGPL-3.0-or-later by the copyright holder. The
+    upstream design-system repository is separate and is NOT covered by this
+    licence; only this vendored copy is.

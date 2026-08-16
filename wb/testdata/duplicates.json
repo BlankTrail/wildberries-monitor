@@ -1,0 +1,239 @@
+{
+ "metadata": {
+  "SearchResult": {
+   "ShardKey": "presets/bucket_11256",
+   "ShardQuery": "preset=19484250",
+   "ResponseType": "direct"
+  },
+  "minimal_price": 268100,
+  "min_price_item": {
+   "id": 307531200,
+   "__sort": 9465,
+   "ksort": 0,
+   "root": 262802379,
+   "kindId": 2,
+   "brand": "RUSSIA SPORTS",
+   "brandId": 1320613,
+   "siteBrandId": 0,
+   "colors": [
+    {
+     "name": "черный",
+     "id": 0
+    }
+   ],
+   "subjectId": 7640,
+   "subjectParentId": 1605,
+   "semanticId": [
+    121,
+    2,
+    1,
+    3,
+    19,
+    6,
+    1
+   ],
+   "name": "Сумка спортивная, дорожная, для бассейна и фитнеса",
+   "entity": "сумки спортивные",
+   "matchId": 10176246,
+   "supplier": "MANID",
+   "supplierId": 3935918,
+   "supplierRating": 4.7,
+   "supplierFlags": 12224,
+   "pics": 7,
+   "picsUpdate": 0,
+   "rating": 0,
+   "reviewRating": 0,
+   "feedbacks": 0,
+   "volume": 45,
+   "weight": 0.609,
+   "viewFlags": 1581184,
+   "sizes": [
+    {
+     "name": "",
+     "origName": "0",
+     "rank": 0,
+     "optionId": 466149891,
+     "wh": 507,
+     "time1": 3,
+     "time2": 49,
+     "dtype": 6614249635848,
+     "ndtype": 197124,
+     "price": {
+      "basic": 599900,
+      "product": 268100,
+      "logistics": 0,
+      "return": 0,
+      "cashback": 0
+     },
+     "saleConditions": 134217728,
+     "payload": "AwCRXtYLHPujbrp9yw+UFF+usheg5J5ooGw76YUuRCTvX9GNsx0Xno6Mt/u3p3/BpLPaZeHaFHtg1nlzG60jVnKJGG38vqGFUJtzZqGABIOAJSqBA7U4cd542YEgB08paL3PFUzEEeeavEqOlyFfjyXHyVJVHttyw0DXWKMu1IYI70lrmjnKX/Axlm2WfiIQhXEko3eByBp5WLTevw1bcZJbIWI9M4AcdwUxaLhDb1VTqzjd4dByenFiA5C7mUU9XYzTvjDp/c/FrL4t/x+0ZqBCT6A4kMGhmHnrbMjXNxmLeXIFOFOXUSQ"
+    }
+   ],
+   "totalQuantity": 10,
+   "time1": 3,
+   "time2": 49,
+   "wh": 507,
+   "dtype": 6614249635848,
+   "ndtype": 197124,
+   "dist": 667,
+   "meta": {
+    "tokens": [],
+    "presetId": 19484250
+   }
+  }
+ },
+ "products": [
+  {
+   "id": 307531200,
+   "__sort": 9465,
+   "ksort": 0,
+   "root": 262802379,
+   "kindId": 2,
+   "brand": "RUSSIA SPORTS",
+   "brandId": 1320613,
+   "siteBrandId": 0,
+   "colors": [
+    {
+     "name": "черный",
+     "id": 0
+    }
+   ],
+   "subjectId": 7640,
+   "subjectParentId": 1605,
+   "semanticId": [
+    121,
+    2,
+    1,
+    3,
+    19,
+    6,
+    1
+   ],
+   "name": "Сумка спортивная, дорожная, для бассейна и фитнеса",
+   "entity": "сумки спортивные",
+   "matchId": 10176246,
+   "supplier": "MANID",
+   "supplierId": 3935918,
+   "supplierRating": 4.7,
+   "supplierFlags": 12224,
+   "pics": 7,
+   "picsUpdate": 0,
+   "rating": 0,
+   "reviewRating": 0,
+   "feedbacks": 0,
+   "volume": 45,
+   "weight": 0.609,
+   "viewFlags": 1581184,
+   "sizes": [
+    {
+     "name": "",
+     "origName": "0",
+     "rank": 0,
+     "optionId": 466149891,
+     "wh": 507,
+     "time1": 3,
+     "time2": 49,
+     "dtype": 6614249635848,
+     "ndtype": 197124,
+     "price": {
+      "basic": 599900,
+      "product": 268100,
+      "logistics": 0,
+      "return": 0,
+      "cashback": 0
+     },
+     "saleConditions": 134217728,
+     "payload": "AwCRXtYLHPujbrp9yw+UFF+usheg5J5ooGw76YUuRCTvX9GNsx0Xno6Mt/u3p3/BpLPaZeHaFHtg1nlzG60jVnKJGG38vqGFUJtzZqGABIOAJSqBA7U4cd542YEgB08paL3PFUzEEeeavEqOlyFfjyXHyVJVHttyw0DXWKMu1IYI70lrmjnKX/Axlm2WfiIQhXEko3eByBp5WLTevw1bcZJbIWI9M4AcdwUxaLhDb1VTqzjd4dByenFiA5C7mUU9XYzTvjDp/c/FrL4t/x+0ZqBCT6A4kMGhmHnrbMjXNxmLeXIFOFOXUSQ"
+    }
+   ],
+   "totalQuantity": 10,
+   "time1": 3,
+   "time2": 49,
+   "wh": 507,
+   "dtype": 6614249635848,
+   "ndtype": 197124,
+   "dist": 667,
+   "meta": {
+    "tokens": [],
+    "presetId": 19484250
+   }
+  },
+  {
+   "id": 1172335992,
+   "__sort": 6715,
+   "ksort": 0,
+   "root": 2577558131,
+   "kindId": 2,
+   "brand": "",
+   "brandId": 0,
+   "siteBrandId": 0,
+   "colors": [
+    {
+     "name": "черный",
+     "id": 0
+    }
+   ],
+   "subjectId": 7640,
+   "subjectParentId": 1605,
+   "semanticId": [
+    121,
+    2,
+    1,
+    3,
+    19,
+    1,
+    41
+   ],
+   "name": "Сумка спортивная,дорожная",
+   "entity": "",
+   "matchId": 10176246,
+   "supplier": "BLSREMунивермаг",
+   "supplierId": 250152228,
+   "supplierRating": 4.7,
+   "supplierFlags": 3072,
+   "pics": 7,
+   "picsUpdate": 0,
+   "rating": 0,
+   "reviewRating": 0,
+   "feedbacks": 0,
+   "panelPromoId": 1050336,
+   "volume": 82,
+   "weight": 0.95,
+   "viewFlags": 1572992,
+   "sizes": [
+    {
+     "name": "",
+     "origName": "0",
+     "rank": 0,
+     "optionId": 1727737957,
+     "wh": 302065,
+     "time1": 60,
+     "time2": 49,
+     "dtype": 6614249635841,
+     "ndtype": 197121,
+     "price": {
+      "basic": 863500,
+      "product": 362600,
+      "logistics": 0,
+      "return": 0,
+      "cashback": 0
+     },
+     "saleConditions": 134217730,
+     "payload": "A065vgZsufffBuGlYsF4XTs07GDiSCuVVJNqS0aNzKGn6cXrhVxpNvr8dQVTGL/6MF6Dn6tL2dnAXG8LI9a3ppuS+2Gq8M7KaocDNXxEboZxr68y3MAjrKFNskeyYLSoHj0ENPwvPZzIEjopyn2jpreEnRUCyIiVrG/39+L6sxhjidiDRX2JZZUwd/YvLtz5O6414UZa5mpV/9sYBKApk47lqvvrOcAr71hrTKupSIGzjTrXCa5JRMo7UGMkvpkgTeN5i7QcGvQuHxZCpz5QT/yBJpzhYphpe9r61PAmw5Dh6v3rPURmI2zS"
+    }
+   ],
+   "totalQuantity": 10,
+   "time1": 60,
+   "time2": 49,
+   "wh": 302065,
+   "dtype": 6614249635841,
+   "ndtype": 197121,
+   "dist": 667,
+   "meta": {
+    "tokens": [],
+    "presetId": 19484250
+   }
+  }
+ ],
+ "total": 2
+}

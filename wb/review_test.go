@@ -1,0 +1,562 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+package wb
+
+import (
+	"context"
+	"net/http"
+	"os"
+	"strings"
+	"testing"
+	"time"
+)
+
+// reviewsFixture loads the real capture once per call. It is 190 reviews
+// against a feedbackCount of 637 — see decodeReviews's own doc comment for
+// why that gap is not a bug to fix but the whole shape of the endpoint.
+func reviewsFixture(t *testing.T) []byte {
+	t.Helper()
+	raw, err := os.ReadFile("testdata/reviews.json")
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	return raw
+}
+
+// TestDecodeReviews_SummaryReadsAggregatesNotComputedFromItems is the test
+// the brief calls out by name: Valuation, Count and the star distribution
+// must come from the payload's own aggregate fields, never be computed from
+// the 190-item window. Every field asserted below has a value distinct from
+// every other (637, 12, 187, 1, and the five distribution counts 7/5/9/42/573
+// are all different from one another and from len(Items)=190), so a mutant
+// that reads the wrong source field, or swaps two of these, changes the
+// specific value this test pins rather than hiding behind a coincidence.
+func TestDecodeReviews_SummaryReadsAggregatesNotComputedFromItems(t *testing.T) {
+	got, err := decodeReviews(reviewsFixture(t))
+	if err != nil {
+		t.Fatalf("decodeReviews: %v", err)
+	}
+
+	if len(got.Items) != 190 {
+		t.Fatalf("len(Items)=%d, want 190", len(got.Items))
+	}
+
+	s := got.Summary
+	if s.Count != 637 {
+		t.Errorf("Count=%d, want 637 (feedbackCount) — not len(Items)=%d, which the payload itself says is a partial window", s.Count, len(got.Items))
+	}
+	const wantValuation = 4.8
+	if diff := s.Valuation - wantValuation; diff > 1e-9 || diff < -1e-9 {
+		t.Errorf("Valuation=%v, want %v", s.Valuation, wantValuation)
+	}
+	if s.WithPhoto != 12 {
+		t.Errorf("WithPhoto=%d, want 12", s.WithPhoto)
+	}
+	if s.WithText != 187 {
+		t.Errorf("WithText=%d, want 187", s.WithText)
+	}
+	if s.WithVideo != 1 {
+		t.Errorf("WithVideo=%d, want 1", s.WithVideo)
+	}
+
+	wantDist := map[int]int64{1: 7, 2: 5, 3: 9, 4: 42, 5: 573}
+	if len(s.Distribution) != len(wantDist) {
+		t.Fatalf("Distribution has %d keys, want %d: %v", len(s.Distribution), len(wantDist), s.Distribution)
+	}
+	for star, want := range wantDist {
+		if got := s.Distribution[star]; got != want {
+			t.Errorf("Distribution[%d]=%d, want %d", star, got, want)
+		}
+	}
+
+	// The capture this package was built against is shoes and bags, where the
+	// payload sends JSON null for matchingSizePercentages.
+	if s.SizeMatching != nil {
+		t.Errorf("SizeMatching=%v, want nil — the fixture's own matchingSizePercentages is JSON null", *s.SizeMatching)
+	}
+}
+
+// TestDecodeReviews_KeepsSizeAndColorPerReview pins the brief's own example:
+// the size that is dragging the rating down is only findable if Size
+// survives on the individual review, not just the product.
+func TestDecodeReviews_KeepsSizeAndColorPerReview(t *testing.T) {
+	got, err := decodeReviews(reviewsFixture(t))
+	if err != nil {
+		t.Fatalf("decodeReviews: %v", err)
+	}
+	r := findReview(t, got, "Y33uqc9HV3fzye1oQsjf")
+	if r.Size != "0" {
+		t.Errorf("Size=%q, want %q", r.Size, "0")
+	}
+	if r.Color != "Черный" {
+		t.Errorf("Color=%q, want %q", r.Color, "Черный")
+	}
+}
+
+// TestDecodeReviews_DatesParseWithAndWithoutFractionalSeconds pins the
+// brief's own example: createdDate in the capture has no fractional seconds,
+// updatedDate does (nanosecond precision), and both must parse into the same
+// field type.
+func TestDecodeReviews_DatesParseWithAndWithoutFractionalSeconds(t *testing.T) {
+	got, err := decodeReviews(reviewsFixture(t))
+	if err != nil {
+		t.Fatalf("decodeReviews: %v", err)
+	}
+	r := findReview(t, got, "Y33uqc9HV3fzye1oQsjf")
+
+	wantCreated := time.Date(2026, 8, 8, 1, 32, 33, 0, time.UTC)
+	if !r.CreatedAt.Equal(wantCreated) {
+		t.Errorf("CreatedAt=%v, want %v", r.CreatedAt, wantCreated)
+	}
+	wantUpdated := time.Date(2026, 8, 8, 1, 53, 58, 838312995, time.UTC)
+	if !r.UpdatedAt.Equal(wantUpdated) {
+		t.Errorf("UpdatedAt=%v, want %v", r.UpdatedAt, wantUpdated)
+	}
+	if r.UpdatedAt.Nanosecond() != 838312995 {
+		t.Errorf("UpdatedAt.Nanosecond()=%d, want 838312995 — the fractional part must not be silently dropped", r.UpdatedAt.Nanosecond())
+	}
+}
+
+// TestDecodeReviews_AnswerIsNeverNilInThisWindow closes the door the brief's
+// own mutation ("make Answer a value instead of a pointer") is aimed at: in
+// this specific capture every one of the 190 reviews already has a seller
+// reply, so Answer is asserted non-nil for every item, and the assertion
+// itself (comparing a struct field against nil) does not even compile if
+// Answer stops being a pointer.
+func TestDecodeReviews_AnswerIsNeverNilInThisWindow(t *testing.T) {
+	got, err := decodeReviews(reviewsFixture(t))
+	if err != nil {
+		t.Fatalf("decodeReviews: %v", err)
+	}
+	for i, r := range got.Items {
+		if r.Answer == nil {
+			t.Fatalf("Items[%d] (id %s): Answer is nil, want non-nil — every review in this capture has a seller reply", i, r.ID)
+		}
+	}
+
+	r := findReview(t, got, "Y33uqc9HV3fzye1oQsjf")
+	if r.Answer.Text == "" {
+		t.Error("Answer.Text is empty, want the seller's reply text")
+	}
+	wantAnswerCreated := time.Date(2026, 8, 8, 1, 52, 54, 0, time.UTC)
+	if !r.Answer.CreatedAt.Equal(wantAnswerCreated) {
+		t.Errorf("Answer.CreatedAt=%v, want %v — the payload's answer object spells its date key createDate, not createdDate", r.Answer.CreatedAt, wantAnswerCreated)
+	}
+}
+
+// TestDecodeReviews_NullAnswerDecodesToNilPointer covers the branch the real
+// capture cannot: every review in the 190-item window happens to have a
+// seller reply, so no fixture-derived test can show a nil Answer. This
+// constructs a minimal, schema-accurate single-review document — field names
+// verified against wb/testdata/reviews.json, not invented — with "answer":
+// null, which is the shape the brief says must decode differently from a
+// present-but-empty reply.
+func TestDecodeReviews_NullAnswerDecodesToNilPointer(t *testing.T) {
+	const doc = `{
+		"valuation": "5.0",
+		"valuationDistribution": {"1":0,"2":0,"3":0,"4":0,"5":1},
+		"feedbackCount": 1,
+		"feedbackCountWithPhoto": 0,
+		"feedbackCountWithText": 1,
+		"feedbackCountWithVideo": 0,
+		"matchingSizePercentages": null,
+		"feedbacks": [{
+			"id": "synthetic1",
+			"nmId": 1,
+			"text": "fine",
+			"pros": "",
+			"cons": "",
+			"productValuation": 5,
+			"color": "red",
+			"size": "M",
+			"createdDate": "2026-01-01T00:00:00Z",
+			"updatedDate": "2026-01-01T00:00:00Z",
+			"answer": null,
+			"excludedFromRating": {"isExcluded": false, "reasons": []}
+		}]
+	}`
+	got, err := decodeReviews([]byte(doc))
+	if err != nil {
+		t.Fatalf("decodeReviews: %v", err)
+	}
+	if len(got.Items) != 1 {
+		t.Fatalf("len(Items)=%d, want 1", len(got.Items))
+	}
+	if got.Items[0].Answer != nil {
+		t.Errorf("Answer=%+v, want nil for a JSON null answer", got.Items[0].Answer)
+	}
+}
+
+// TestDecodeReviews_SizeMatchingReadsAPopulatedNumber covers the other
+// branch the real capture cannot: it never populates matchingSizePercentages
+// (shoes and bags, see ReviewSummary.SizeMatching's doc comment), so this
+// constructs a document — same schema, only this one field changed — with a
+// bare JSON number in that slot, which is the shape the ReviewSummary type
+// (*float64) is built to hold if WB ever does populate it.
+func TestDecodeReviews_SizeMatchingReadsAPopulatedNumber(t *testing.T) {
+	const doc = `{
+		"valuation": "5.0",
+		"valuationDistribution": {"1":0,"2":0,"3":0,"4":0,"5":1},
+		"feedbackCount": 1,
+		"feedbackCountWithPhoto": 0,
+		"feedbackCountWithText": 1,
+		"feedbackCountWithVideo": 0,
+		"matchingSizePercentages": 87.5,
+		"feedbacks": []
+	}`
+	got, err := decodeReviews([]byte(doc))
+	if err != nil {
+		t.Fatalf("decodeReviews: %v", err)
+	}
+	if got.Summary.SizeMatching == nil {
+		t.Fatal("SizeMatching is nil, want 87.5")
+	}
+	if *got.Summary.SizeMatching != 87.5 {
+		t.Errorf("SizeMatching=%v, want 87.5", *got.Summary.SizeMatching)
+	}
+}
+
+// TestDecodeReviews_AcceptsAReviewMissingStatusIDReasonsAndTags pins the
+// brief's own legality claim: 20 of 190 reviews in the capture have no
+// statusId, 64 have no reasons, 118 have no tags, and none of that is an
+// error. Index 119 (id g55DGSYIWPiNAaktoqCa) is chosen because it is missing
+// reasons while carrying tags, so it exercises "some optional fields absent,
+// others present on the same review" rather than only the all-or-nothing
+// case.
+func TestDecodeReviews_AcceptsAReviewMissingStatusIDReasonsAndTags(t *testing.T) {
+	got, err := decodeReviews(reviewsFixture(t))
+	if err != nil {
+		t.Fatalf("decodeReviews: %v", err)
+	}
+	r := findReview(t, got, "g55DGSYIWPiNAaktoqCa")
+	if r.Reasons.Good != nil || r.Reasons.Bad != nil {
+		t.Errorf("Reasons=%+v, want the zero value — this review's payload carries no reasons key", r.Reasons)
+	}
+	if len(r.Tags) != 2 {
+		t.Errorf("Tags=%v, want 2 entries — this review's payload does carry tags despite missing reasons", r.Tags)
+	}
+}
+
+// TestDecodeReviews_ExcludedFromRatingReadsIsExcludedAndReasons is the
+// brief's own field: excludedFromRating.isExcluded and .reasons, pinned in
+// both directions (a true and a false case) so the brief's own mutation
+// ("invert ExcludedFromRating") fails on whichever review it is applied to.
+func TestDecodeReviews_ExcludedFromRatingReadsIsExcludedAndReasons(t *testing.T) {
+	got, err := decodeReviews(reviewsFixture(t))
+	if err != nil {
+		t.Fatalf("decodeReviews: %v", err)
+	}
+
+	excluded := findReview(t, got, "4m3XGKwTdwezpO03XgSC")
+	if !excluded.ExcludedFromRating {
+		t.Error("ExcludedFromRating=false, want true")
+	}
+	if want := []string{"hasIncludedChild"}; len(excluded.ExclusionReasons) != 1 || excluded.ExclusionReasons[0] != want[0] {
+		t.Errorf("ExclusionReasons=%v, want %v", excluded.ExclusionReasons, want)
+	}
+
+	included := findReview(t, got, "Y33uqc9HV3fzye1oQsjf")
+	if included.ExcludedFromRating {
+		t.Error("ExcludedFromRating=true, want false")
+	}
+}
+
+// TestDecodeReviews_KeepsProsAndConsSeparate is the brief's own mutation
+// target ("swap Pros and Cons"). Rather than pinning exact Cyrillic text,
+// this uses two reviews the capture happens to carry with asymmetric
+// presence — one with Pros set and Cons empty, another the reverse — so a
+// swap flips a non-empty field to empty and is caught without needing to
+// hardcode the review text itself.
+func TestDecodeReviews_KeepsProsAndConsSeparate(t *testing.T) {
+	got, err := decodeReviews(reviewsFixture(t))
+	if err != nil {
+		t.Fatalf("decodeReviews: %v", err)
+	}
+
+	prosOnly := findReview(t, got, "yqet3XuD2FczDMwbSXNs")
+	if prosOnly.Pros == "" {
+		t.Error("Pros is empty, want the review's pros text")
+	}
+	if prosOnly.Cons != "" {
+		t.Errorf("Cons=%q, want empty — this review's payload carries no cons text", prosOnly.Cons)
+	}
+
+	consOnly := findReview(t, got, "rbVQMG0cPYm64Duzht4W")
+	if consOnly.Cons == "" {
+		t.Error("Cons is empty, want the review's cons text")
+	}
+	if consOnly.Pros != "" {
+		t.Errorf("Pros=%q, want empty — this review's payload carries no pros text", consOnly.Pros)
+	}
+}
+
+// TestDecodeReviews_TagsHoldTagIDsInOrder pins Review.Tags against a review
+// carrying two tags, in the payload's own order, and against one carrying
+// none.
+func TestDecodeReviews_TagsHoldTagIDsInOrder(t *testing.T) {
+	got, err := decodeReviews(reviewsFixture(t))
+	if err != nil {
+		t.Fatalf("decodeReviews: %v", err)
+	}
+
+	tagged := findReview(t, got, "BuZnt8od3d3OofYfNX7L")
+	want := []string{"19", "8"}
+	if len(tagged.Tags) != len(want) {
+		t.Fatalf("Tags=%v, want %v", tagged.Tags, want)
+	}
+	for i, w := range want {
+		if tagged.Tags[i] != w {
+			t.Errorf("Tags[%d]=%q, want %q", i, tagged.Tags[i], w)
+		}
+	}
+
+	untagged := findReview(t, got, "Y33uqc9HV3fzye1oQsjf")
+	if len(untagged.Tags) != 0 {
+		t.Errorf("Tags=%v, want none — this review's payload carries no tags key", untagged.Tags)
+	}
+}
+
+// TestDecodeReviews_ReasonsConvertsIntegerIDsToStrings closes a gap this
+// package's own implementation report flags: the brief types
+// ReviewReasons.Good/Bad as []string, but the payload's good/bad arrays
+// carry integer reason-catalogue ids (10065, 10074, …), not text. This pins
+// the conversion this package settled on — each id as its decimal string —
+// against a real review that carries populated reasons.
+func TestDecodeReviews_ReasonsConvertsIntegerIDsToStrings(t *testing.T) {
+	got, err := decodeReviews(reviewsFixture(t))
+	if err != nil {
+		t.Fatalf("decodeReviews: %v", err)
+	}
+	r := findReview(t, got, "4m3XGKwTdwezpO03XgSC")
+	want := []string{"10065", "10066", "10074"}
+	if len(r.Reasons.Good) != len(want) {
+		t.Fatalf("Reasons.Good=%v, want %v", r.Reasons.Good, want)
+	}
+	for i, w := range want {
+		if r.Reasons.Good[i] != w {
+			t.Errorf("Reasons.Good[%d]=%q, want %q", i, r.Reasons.Good[i], w)
+		}
+	}
+	if len(r.Reasons.Bad) != 0 {
+		t.Errorf("Reasons.Bad=%v, want none", r.Reasons.Bad)
+	}
+}
+
+// TestDecodeReviews_PhotoCountFromPhotoArray pins PhotoCount against three
+// cases: none, one, and several — 178 of 190 reviews in the capture carry no
+// photo at all.
+func TestDecodeReviews_PhotoCountFromPhotoArray(t *testing.T) {
+	got, err := decodeReviews(reviewsFixture(t))
+	if err != nil {
+		t.Fatalf("decodeReviews: %v", err)
+	}
+
+	if r := findReview(t, got, "Y33uqc9HV3fzye1oQsjf"); r.PhotoCount != 0 {
+		t.Errorf("PhotoCount=%d, want 0", r.PhotoCount)
+	}
+	if r := findReview(t, got, "ZE3u68buvk5avh1KC6DA"); r.PhotoCount != 1 {
+		t.Errorf("PhotoCount=%d, want 1", r.PhotoCount)
+	}
+	if r := findReview(t, got, "zZPGJBnBiQQgLdlznuxB"); r.PhotoCount != 3 {
+		t.Errorf("PhotoCount=%d, want 3", r.PhotoCount)
+	}
+}
+
+// TestDecodeReviews_PhotoCountReadsPhotoNotPhotos closes a gap self-review
+// found: every review in the real capture that carries a photo at all
+// carries "photo" and "photos" at the identical length, so
+// TestDecodeReviews_PhotoCountFromPhotoArray alone does not notice PhotoCount
+// reading len(photos) instead of len(photo) — both produce the same answer
+// against every review in wb/testdata/reviews.json. This constructs a
+// document where the two arrays deliberately disagree in length to pin which
+// one PhotoCount actually reads.
+func TestDecodeReviews_PhotoCountReadsPhotoNotPhotos(t *testing.T) {
+	const doc = `{
+		"valuation": "5.0",
+		"valuationDistribution": {"1":0,"2":0,"3":0,"4":0,"5":1},
+		"feedbackCount": 1,
+		"feedbackCountWithPhoto": 1,
+		"feedbackCountWithText": 0,
+		"feedbackCountWithVideo": 0,
+		"matchingSizePercentages": null,
+		"feedbacks": [{
+			"id": "synthetic1",
+			"nmId": 1,
+			"text": "",
+			"pros": "",
+			"cons": "",
+			"productValuation": 5,
+			"color": "red",
+			"size": "M",
+			"createdDate": "2026-01-01T00:00:00Z",
+			"updatedDate": "2026-01-01T00:00:00Z",
+			"answer": null,
+			"photo": [111, 222],
+			"photos": [{"id": 111, "key": "a", "isBlurred": false, "isReady": true}],
+			"excludedFromRating": {"isExcluded": false, "reasons": []}
+		}]
+	}`
+	got, err := decodeReviews([]byte(doc))
+	if err != nil {
+		t.Fatalf("decodeReviews: %v", err)
+	}
+	if len(got.Items) != 1 {
+		t.Fatalf("len(Items)=%d, want 1", len(got.Items))
+	}
+	if got.Items[0].PhotoCount != 2 {
+		t.Errorf("PhotoCount=%d, want 2 (len(photo), not len(photos)=1)", got.Items[0].PhotoCount)
+	}
+}
+
+// TestDecodeReviews_NmIDPerReview pins the variant id, distinct from the
+// imtId a fetch is keyed on.
+func TestDecodeReviews_NmIDPerReview(t *testing.T) {
+	got, err := decodeReviews(reviewsFixture(t))
+	if err != nil {
+		t.Fatalf("decodeReviews: %v", err)
+	}
+	r := findReview(t, got, "Y33uqc9HV3fzye1oQsjf")
+	if r.NmID != 211723794 {
+		t.Errorf("NmID=%d, want 211723794", r.NmID)
+	}
+}
+
+// TestDecodeReviews_PreservesFeedbackOrder pins the array order end to end:
+// the capture's own feedbacks array is ordered by rank descending (190 down
+// to 1), and decodeReviews must not reorder it.
+func TestDecodeReviews_PreservesFeedbackOrder(t *testing.T) {
+	got, err := decodeReviews(reviewsFixture(t))
+	if err != nil {
+		t.Fatalf("decodeReviews: %v", err)
+	}
+	if len(got.Items) != 190 {
+		t.Fatalf("len(Items)=%d, want 190", len(got.Items))
+	}
+	if got.Items[0].ID != "Y33uqc9HV3fzye1oQsjf" {
+		t.Errorf("Items[0].ID=%q, want %q — the capture's own first (highest-rank) review", got.Items[0].ID, "Y33uqc9HV3fzye1oQsjf")
+	}
+	if got.Items[189].ID != "KSiPHDXp1lppClpZ39AK" {
+		t.Errorf("Items[189].ID=%q, want %q — the capture's own last (rank 1) review", got.Items[189].ID, "KSiPHDXp1lppClpZ39AK")
+	}
+}
+
+// TestDecodeReviews_RejectsAnEmptyOrRubbishDocument mirrors this package's
+// existing decodeCard/decodeUpstreams precedent: {} and JSON null both
+// "succeed" as far as encoding/json is concerned (every field simply absent)
+// but name no real reviews document, and HTML is not JSON at all.
+func TestDecodeReviews_RejectsAnEmptyOrRubbishDocument(t *testing.T) {
+	for _, raw := range []string{`{}`, `null`, `<html>not json</html>`} {
+		if _, err := decodeReviews([]byte(raw)); err == nil {
+			t.Errorf("decodeReviews(%s) succeeded, want an error", raw)
+		}
+	}
+}
+
+// findReview locates a review by id, failing the test if it is not present —
+// a small helper so the tests above read by the fixture's own stable ids
+// rather than by array index, which would silently break if decodeReviews
+// ever reordered or filtered its output.
+func findReview(t *testing.T, revs Reviews, id string) Review {
+	t.Helper()
+	for _, r := range revs.Items {
+		if r.ID == id {
+			return r
+		}
+	}
+	t.Fatalf("no review with id %q in the decoded set", id)
+	return Review{}
+}
+
+// --- Client.Reviews ---
+
+func TestClient_ReviewsFetchesWithThePlainProfile(t *testing.T) {
+	fixture := reviewsFixture(t)
+	l := &fakeLease{port: 1, replies: []*http.Response{reply(200, string(fixture))}}
+	c := NewClient(&fakeLeaser{leases: []*fakeLease{l}}, NewSessions())
+
+	got, err := c.Reviews(context.Background(), DefaultEndpoints(), 3337911982)
+	if err != nil {
+		t.Fatalf("Reviews: %v", err)
+	}
+	if got.Summary.Count != 637 {
+		t.Errorf("Summary.Count=%d, want 637 — the decode did not run, or ran on the wrong body", got.Summary.Count)
+	}
+
+	if len(l.sent) != 1 {
+		t.Fatalf("sent %d requests, want 1", len(l.sent))
+	}
+	wantURL := DefaultEndpoints().ReviewsURL(3337911982)
+	if got := l.sent[0].URL.String(); got != wantURL {
+		t.Errorf("URL=%q, want %q", got, wantURL)
+	}
+
+	h := l.sent[0].Header
+	for _, name := range []string{"deviceid", "x-queryid", "x-userid", "x-spa-version"} {
+		if len(h[name]) != 0 {
+			t.Errorf("request carries %q — the reviews endpoint has no gate and never asked for it; this is the gated profile sent to a plain endpoint", name)
+		}
+	}
+	// Presence-only would also pass under documentHeaders (KindDocument) — see
+	// the identical reasoning in card_test.go. Of the four profiles, only
+	// plainHeaders sets Origin, so this is what actually pins KindPlain.
+	if got := h.Get("Origin"); got != "https://www.wildberries.ru" {
+		t.Errorf("Origin=%q, want %q — only the plain profile sets it", got, "https://www.wildberries.ru")
+	}
+	wantReferer := DefaultEndpoints().CardPageURL(3337911982)
+	if got := h.Get("Referer"); got != wantReferer {
+		t.Errorf("Referer=%q, want %q", got, wantReferer)
+	}
+}
+
+func TestClient_ReviewsRefusesANonOKStatus(t *testing.T) {
+	l := &fakeLease{port: 1, replies: []*http.Response{reply(500, "")}}
+	c := NewClient(&fakeLeaser{leases: []*fakeLease{l}}, NewSessions())
+
+	if _, err := c.Reviews(context.Background(), DefaultEndpoints(), 1); err == nil {
+		t.Fatal("a 500 was accepted without error")
+	}
+}
+
+func TestClient_ReviewsPropagatesADecodeFailure(t *testing.T) {
+	l := &fakeLease{port: 1, replies: []*http.Response{reply(200, "{not valid json")}}
+	c := NewClient(&fakeLeaser{leases: []*fakeLease{l}}, NewSessions())
+
+	if _, err := c.Reviews(context.Background(), DefaultEndpoints(), 1); err == nil {
+		t.Fatal("a malformed body was accepted without error")
+	}
+}
+
+// --- Endpoints.ReviewsURL / Validate ---
+
+func TestReviewsURL_SubstitutesImtID(t *testing.T) {
+	got := DefaultEndpoints().ReviewsURL(3337911982)
+	want := "https://feedback-view-01.wb.ru/feedbacks/v2/3337911982"
+	if got != want {
+		t.Errorf("ReviewsURL=%q, want %q", got, want)
+	}
+}
+
+// TestReviewsURL_ReachesThroughTheConfiguredEndpoints mirrors
+// TestCardURLs_ReachThroughTheConfiguredEndpoints in card_test.go: it exists
+// so ReviewsURL cannot silently ignore its receiver and use a hardcoded
+// default instead, which is the one reason Endpoints (and its YAML override)
+// exists at all.
+func TestReviewsURL_ReachesThroughTheConfiguredEndpoints(t *testing.T) {
+	eps := Endpoints{Reviews: "https://override.test/feedbacks/{imtId}"}
+	want := "https://override.test/feedbacks/42"
+	if got := eps.ReviewsURL(42); got != want {
+		t.Errorf("ReviewsURL=%q, want %q — built from the overridden Reviews template, not the default", got, want)
+	}
+}
+
+func TestEndpoints_ValidateCatchesAReviewsTemplateMissingThePlaceholder(t *testing.T) {
+	e := DefaultEndpoints()
+	e.Reviews = "https://example.test/feedbacks/v2"
+	err := e.Validate()
+	if err == nil {
+		t.Fatal("Validate accepted a reviews template with no {imtId} placeholder")
+	}
+	if !strings.Contains(err.Error(), "{imtId}") {
+		t.Errorf("error %q does not name the missing placeholder", err)
+	}
+}

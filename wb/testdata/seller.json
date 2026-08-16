@@ -1,0 +1,36 @@
+{
+ "id": 350748670,
+ "rating": 0,
+ "valuation": "0.0",
+ "valuationToHundredths": "0.00",
+ "feedbacksCount": 0,
+ "updateDate": "2026-07-30T23:14:55Z",
+ "ratingIsInvisible": false,
+ "registrationDate": "2026-07-30T14:04:40Z",
+ "saleItemQuantity": 0,
+ "hasLogo": false,
+ "hasBanner": false,
+ "deliveryDuration": 0,
+ "suppRatio": 0,
+ "ratioMarkSupp": 0,
+ "isPremium": false,
+ "supplierLoyaltyProgramLevel": 0,
+ "banner": {
+  "hasSiteBanner": false,
+  "hasMobileBanner": false,
+  "orderNum": 0
+ },
+ "selection": {
+  "name": "",
+  "nmIDs": null,
+  "orderNum": 0
+ },
+ "hideSimilarProducts": false,
+ "chatBetweenSellerAndClient": false,
+ "disablingPriceChartProductCard": false,
+ "imtRatingAllTabDisabled": true,
+ "isDeleted": false,
+ "deactivated": false,
+ "loyaltyCard": null,
+ "activityTypes": []
+}

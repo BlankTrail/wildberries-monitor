@@ -1,0 +1,22 @@
+{
+  "metadata": {"name": "носки", "catalog_type": "presets"},
+  "total": 4213,
+  "products": [
+    {
+      "id": 181778459,
+      "root": 165673449,
+      "name": "Носки хлопковые",
+      "brand": "A&A FASHION SHOP",
+      "supplier": "ИП Иванов",
+      "supplierId": 987654,
+      "subjectId": 4377,
+      "subjectParentId": 1,
+      "reviewRating": 4.8,
+      "feedbacks": 1234,
+      "sizes": [
+        {"name": "41-45", "origName": "41-45",
+         "price": {"basic": 200000, "product": 100000}}
+      ]
+    }
+  ]
+}

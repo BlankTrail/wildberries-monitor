@@ -1,0 +1,33 @@
+# build output
+/bin/
+/dist/
+*.exe
+*.syso
+
+# runtime data
+/data/
+*.db
+*.db-wal
+*.db-shm
+
+# local config and secrets
+/config.yaml
+/endpoints.yaml
+*.local.yaml
+
+# exports
+/out/
+*.xlsx
+*.csv
+*.jsonl
+
+# editors
+/.idea/
+/.vscode/
+*.swp
+
+# Working artefacts that must never reach a public repository.
+.superpowers/
+docs/superpowers/
+*.har
+*.html

@@ -1,0 +1,31 @@
+version: "2"
+linters:
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - revive
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters:
+          - errcheck
+      # SA1008 objects to non-canonical http.Header keys. Throughout wb they are
+      # the requirement, not a slip: the site's gate headers travel lowercase on
+      # the wire, and net/http's canonicalisation into Deviceid and X-Queryid is
+      # precisely what wb/headers.go exists to avoid. Anything asserting on those
+      # headers has to name them the same way, which is the only way to prove the
+      # canonicalisation did not happen — so the exclusion covers the package
+      # rather than the one file that first needed it.
+      - path: wb/.*\.go
+        linters:
+          - staticcheck
+        text: SA1008
+formatters:
+  enable:
+    - gofmt
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

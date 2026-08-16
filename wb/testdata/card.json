@@ -1,0 +1,243 @@
+{
+ "imt_id": 3337911982,
+ "nm_id": 1309449623,
+ "imt_name": "Кроссовки",
+ "slug": "krossovki",
+ "subj_name": "Кроссовки",
+ "subj_root_name": "Обувь",
+ "vendor_code": "01KYSNNYWWVE0XB9QQPYZ5V678",
+ "description": "Оказались велики, лежали в пыльниках в коробке. Абсолютно новая пара кроссовок проверенной фирмы",
+ "options": [
+  {
+   "name": "Состояние товара",
+   "value": "Новое",
+   "charc_type": 1
+  },
+  {
+   "name": "Цвет",
+   "value": "белый; темно-синий",
+   "charc_type": 1
+  },
+  {
+   "name": "Пол",
+   "value": "Женский",
+   "charc_type": 1
+  },
+  {
+   "name": "Материал верха обуви",
+   "value": "экокожа",
+   "charc_type": 1
+  },
+  {
+   "name": "Состав",
+   "value": "экокожа",
+   "charc_type": 1
+  },
+  {
+   "name": "Сезон",
+   "value": "Круглогодичный",
+   "charc_type": 1
+  },
+  {
+   "name": "Материал стельки",
+   "value": "текстиль",
+   "charc_type": 1
+  },
+  {
+   "name": "Материал подкладки обуви",
+   "value": "текстиль",
+   "charc_type": 1
+  },
+  {
+   "name": "Материал подошвы обуви",
+   "value": "ТПР; ПВХ",
+   "charc_type": 1
+  },
+  {
+   "name": "Полнота обуви (EUR)",
+   "value": "G (7)",
+   "charc_type": 1
+  },
+  {
+   "name": "Тип пронации",
+   "value": "нейтральная",
+   "charc_type": 1
+  },
+  {
+   "name": "Высота подошвы",
+   "value": "2 см",
+   "charc_type": 4
+  },
+  {
+   "name": "Вид застежки",
+   "value": "шнуровка",
+   "charc_type": 1
+  },
+  {
+   "name": "Особенности обуви",
+   "value": "повседневные; Удобные; на платформе",
+   "charc_type": 1
+  },
+  {
+   "name": "Уход за обувью",
+   "value": "Чистить мягкой щеткой; Протирать влажной губкой; Сушить вдали от нагревателей",
+   "charc_type": 1
+  },
+  {
+   "name": "Комплектация",
+   "value": "Кроссовки женские Pierre Cardin - 1 пара",
+   "charc_type": 1
+  },
+  {
+   "name": "Страна производства",
+   "value": "Китай",
+   "charc_type": 1
+  }
+ ],
+ "compositions": [
+  {
+   "name": "экокожа"
+  }
+ ],
+ "certificate": {},
+ "nm_colors_names": "белый, темно-синий",
+ "colors": [
+  1309449623
+ ],
+ "contents": "Кроссовки женские Pierre Cardin - 1 пара",
+ "kinds": [
+  "Женский"
+ ],
+ "kinds_id": [
+  15001349
+ ],
+ "season": "Круглогодичный",
+ "full_colors": [
+  {
+   "nm_id": 1309449623
+  }
+ ],
+ "selling": {
+  "brand_name": "pierre cardin",
+  "brand_hash": "1475C51A3795CBA6",
+  "supplier_id": 350748670
+ },
+ "media": {
+  "photo_count": 4
+ },
+ "data": {
+  "subject_id": 105,
+  "subject_root_id": 2,
+  "chrt_ids": [
+   1935945459
+  ],
+  "tech_size": "40"
+ },
+ "grouped_options": [
+  {
+   "group_name": "Основная информация",
+   "options": [
+    {
+     "name": "Состояние товара",
+     "value": "Новое",
+     "charc_type": 1
+    },
+    {
+     "name": "Цвет",
+     "value": "белый; темно-синий",
+     "charc_type": 1
+    },
+    {
+     "name": "Пол",
+     "value": "Женский",
+     "charc_type": 1
+    },
+    {
+     "name": "Состав",
+     "value": "экокожа",
+     "charc_type": 1
+    },
+    {
+     "name": "Материал верха обуви",
+     "value": "экокожа",
+     "charc_type": 1
+    }
+   ]
+  },
+  {
+   "group_name": "Дополнительная информация",
+   "options": [
+    {
+     "name": "Сезон",
+     "value": "Круглогодичный",
+     "charc_type": 1
+    },
+    {
+     "name": "Материал стельки",
+     "value": "текстиль",
+     "charc_type": 1
+    },
+    {
+     "name": "Материал подкладки обуви",
+     "value": "текстиль",
+     "charc_type": 1
+    },
+    {
+     "name": "Материал подошвы обуви",
+     "value": "ТПР; ПВХ",
+     "charc_type": 1
+    },
+    {
+     "name": "Полнота обуви (EUR)",
+     "value": "G (7)",
+     "charc_type": 1
+    },
+    {
+     "name": "Тип пронации",
+     "value": "нейтральная",
+     "charc_type": 1
+    },
+    {
+     "name": "Высота подошвы",
+     "value": "2 см",
+     "charc_type": 4
+    },
+    {
+     "name": "Вид застежки",
+     "value": "шнуровка",
+     "charc_type": 1
+    },
+    {
+     "name": "Особенности обуви",
+     "value": "повседневные; Удобные; на платформе",
+     "charc_type": 1
+    },
+    {
+     "name": "Уход за обувью",
+     "value": "Чистить мягкой щеткой; Протирать влажной губкой; Сушить вдали от нагревателей",
+     "charc_type": 1
+    },
+    {
+     "name": "Комплектация",
+     "value": "Кроссовки женские Pierre Cardin - 1 пара",
+     "charc_type": 1
+    },
+    {
+     "name": "Страна производства",
+     "value": "Китай",
+     "charc_type": 1
+    }
+   ]
+  }
+ ],
+ "card_source": 2,
+ "need_kiz": true,
+ "user_flags": 0,
+ "update_date": "2026-07-31T06:21:51.08597Z",
+ "create_date": "2026-07-30T14:08:39.823381Z",
+ "origin_nm": {
+  "id": 141504066,
+  "price": 76500
+ },
+ "is_price_negotiable": true
+}

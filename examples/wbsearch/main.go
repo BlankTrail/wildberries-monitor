@@ -1,0 +1,530 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+// Command wbsearch is the live verification instrument for the wb package.
+//
+// It is not a demonstration: it has to be able to walk the whole path — a
+// real BlankTrail pool, a real search or card fetch — and say precisely what
+// broke when something breaks, rather than requiring anyone to diagnose a
+// wall of failed requests by symptom.
+//
+// It walks a search page by page, stopping when a page comes back shorter
+// than a full page (the only reliable end-of-results signal; -pages is our
+// own budget, not a discovered limit) or when -pages runs out, writing one
+// JSONL row per product. With -card it fetches one product card instead and
+// exits. Every run starts with blanktrail.Preflight: without BlankTrail's
+// Challenge Breaker (js_solver) the target refuses nearly every request, and
+// preflight already knows how to say so — this program stops there rather
+// than discovering it from the shape of later failures.
+//
+//	go run ./examples/wbsearch -query "кроссовки женские" -dest 1259570991 -pages 3 -threads 2 -ports-per-thread 5
+//	go run ./examples/wbsearch -card 1309449623 -dest -5892277
+//
+// JSONL rows go to -out (or stdout when it is empty); preflight findings and
+// the closing summary always go to stderr, so a run can be piped straight
+// into a file without the summary landing in the middle of it.
+package main
+
+import (
+	"context"
+	"crypto/x509"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"net/url"
+	"os"
+	"os/signal"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/BlankTrail/wildberries-monitor/blanktrail"
+	"github.com/BlankTrail/wildberries-monitor/wb"
+)
+
+// observedPageSize mirrors wb's own unexported pageSize (wb/search.go): the
+// site has been observed to fill a page to 100 items, and a page shorter than
+// that is the real end-of-results signal, not the sitewide total the payload
+// reports. It is duplicated here rather than exported from wb because
+// pageSize is deliberately an observation about the target, not a contract
+// the package promises to keep — see that constant's own doc comment. If the
+// site's page size ever changes, this is the one other place that assumption
+// lives.
+const observedPageSize = 100
+
+// Environment variables -api-key falls back to when the flag is empty, so the
+// key never has to appear on the command line, where it would land in shell
+// history and in any process listing. envKeyPrimary is this program's own
+// name; envKeyPoolExample matches examples/pool's existing convention, kept
+// as a fallback so one exported key works for both examples.
+const (
+	envKeyPrimary      = "WB_BLANKTRAIL_KEY"
+	envKeyPoolExample  = "BLANKTRAIL_API_KEY"
+	cdnUpstreamsDomain = "cdn.wbbasket.ru"
+)
+
+func main() {
+	if err := run(); err != nil {
+		fmt.Fprintln(os.Stderr, "wbsearch: "+err.Error())
+		os.Exit(1)
+	}
+}
+
+func run() error {
+	var (
+		control   = flag.String("control", "http://127.0.0.1:8891", "BlankTrail control API base URL")
+		apiKeyF   = flag.String("api-key", "", "BlankTrail API key (falls back to $"+envKeyPrimary+" or $"+envKeyPoolExample+" when empty — prefer the environment over this flag, which lands in shell history)")
+		query     = flag.String("query", "", "search phrase (required unless -card is set)")
+		dest      = flag.String("dest", "", "destination code the site expects as ?dest= (required)")
+		pages     = flag.Int("pages", 1, "page budget: stop after this many pages even if the site has more; our own budget, not a discovered limit")
+		modeFlag  = flag.String("mode", "desktop", "surface to imitate: desktop or mobile")
+		threads   = flag.Int("threads", 1, "parsing threads (blanktrail.PoolConfig.Threads)")
+		perThread = flag.Int("ports-per-thread", 1, "BlankTrail ports per thread (blanktrail.PoolConfig.PortsPerThread)")
+		out       = flag.String("out", "", "JSONL output path (empty = stdout)")
+		cardID    = flag.Int64("card", 0, "fetch one product card by nm id instead of searching, and exit")
+	)
+	flag.Usage = usage
+	flag.Parse()
+
+	apiKey := *apiKeyF
+	if apiKey == "" {
+		apiKey = apiKeyFromEnv()
+	}
+
+	mode, err := parseMode(*modeFlag)
+	if err != nil {
+		return err
+	}
+	if err := validateFlags(*query, *dest, apiKey, *pages, *threads, *perThread, *cardID); err != nil {
+		return err
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
+	client, err := blanktrail.NewClient(*control, apiKey)
+	if err != nil {
+		return fmt.Errorf("control client: %w", err)
+	}
+
+	eps := wb.DefaultEndpoints()
+	rep := blanktrail.Preflight(ctx, client, blanktrail.PreflightInput{
+		Domains: []string{hostOf(eps.Home)},
+		// The card CDN's shard map lives on a separate host, only touched by
+		// -card, and never blocking a search-only run on its own.
+		OptionalDomains: []string{cdnUpstreamsDomain},
+		Ports:           *threads * *perThread,
+	})
+	for _, f := range rep.Findings {
+		fmt.Fprintf(os.Stderr, "[%s] %s\n      %s\n      → %s\n", f.Severity, f.Title, f.Detail, f.Action)
+	}
+	if !rep.OK() {
+		return errors.New("preflight failed; see the findings above (Challenge Breaker is usually the one that matters)")
+	}
+
+	pool, err := blanktrail.NewPool(ctx, poolConfig(client, mode, *threads, *perThread, rep.CA))
+	if err != nil {
+		return fmt.Errorf("open pool: %w", err)
+	}
+	defer func() { _ = pool.Close() }()
+
+	// -out is opened last, and deliberately so. os.Create truncates, so opening
+	// it up front destroyed the previous run's results on every failed start —
+	// and "preflight fails and tells you why" is the failure this program is
+	// most expected to hit, routinely, while the proxy is being configured. By
+	// here everything that can fail without writing a byte already has.
+	rows, closeRows, err := openOutput(*out)
+	if err != nil {
+		return err
+	}
+	defer closeRows()
+
+	wbClient := wb.NewClient(wb.FromPool(pool), wb.NewSessions())
+
+	if *cardID != 0 {
+		return runCard(ctx, wbClient, eps, *cardID, *dest, mode, rows, pool)
+	}
+	return runSearch(ctx, wbClient, eps, *query, *dest, mode, *pages, rows, pool)
+}
+
+// poolConfig builds the pool this run drives. It is a named function rather
+// than a literal inline so a test can assert what it carries — specifically
+// CountFailure, which is the whole point of the wb↔blanktrail seam and is
+// invisible by inspection once it is missing.
+//
+// CountFailure is what stops the pool burning a proxy on our own mistake. The
+// pool deliberately knows nothing about this target, so left nil it applies the
+// generic rule: every non-2xx counts towards the consecutive-failure count that
+// replaces a port's egress. On this target that is wrong twice over. A 498 is a
+// challenge the port's own solver clears, and a 403 means our headers were
+// wrong — a fault that travels with the request, so a new address changes
+// nothing. Worse, every egress rotation also discards a solved challenge, which
+// costs far more than the request that triggered it. wb.CountFailure is the
+// package that knows the target answering the question the pool cannot.
+func poolConfig(client *blanktrail.Client, mode wb.Mode, threads, perThread int, ca *x509.CertPool) blanktrail.PoolConfig {
+	return blanktrail.PoolConfig{
+		Client:         client,
+		Threads:        threads,
+		PortsPerThread: perThread,
+		Spec:           mode.Spec(blanktrail.DefaultPortSpec()),
+		Channels:       []blanktrail.Channel{blanktrail.NewDirectChannel("direct")},
+		CA:             ca,
+		RequestTimeout: 60 * time.Second,
+		CountFailure:   wb.CountFailure,
+	}
+}
+
+// apiKeyFromEnv reads the API key from the environment, trying this program's
+// own name first and examples/pool's name second.
+func apiKeyFromEnv() string {
+	if v := os.Getenv(envKeyPrimary); v != "" {
+		return v
+	}
+	return os.Getenv(envKeyPoolExample)
+}
+
+// parseMode turns -mode into a wb.Mode, rejecting anything that is not one of
+// the two surfaces wb.Mode models — wb.Mode itself falls back silently to
+// desktop for an out-of-range value (see its own doc comment), which is right
+// for a value that arrives as a Go int but wrong for a flag a person typed,
+// where a typo should be reported, not swallowed.
+func parseMode(s string) (wb.Mode, error) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "", "desktop":
+		return wb.ModeDesktop, nil
+	case "mobile":
+		return wb.ModeMobile, nil
+	default:
+		return wb.ModeDesktop, fmt.Errorf("-mode %q is not one of: desktop, mobile", s)
+	}
+}
+
+// validateFlags reports every problem at once rather than one flag.Fatal at a
+// time, so a run with no arguments at all — the case this program must fail
+// cleanly on — explains itself in a single message instead of a game of
+// whack-a-mole across repeated invocations.
+func validateFlags(query, dest, apiKey string, pages, threads, perThread int, cardID int64) error {
+	var problems []string
+	if cardID == 0 && strings.TrimSpace(query) == "" {
+		problems = append(problems, "-query is required unless -card is set")
+	}
+	if cardID < 0 {
+		problems = append(problems, "-card must not be negative")
+	}
+	if strings.TrimSpace(dest) == "" {
+		problems = append(problems, "-dest is required")
+	}
+	if strings.TrimSpace(apiKey) == "" {
+		problems = append(problems, "-api-key is required (flag, $"+envKeyPrimary+", or $"+envKeyPoolExample+")")
+	}
+	if pages < 1 {
+		problems = append(problems, "-pages must be at least 1")
+	}
+	if threads < 1 {
+		problems = append(problems, "-threads must be at least 1")
+	}
+	if perThread < 1 {
+		problems = append(problems, "-ports-per-thread must be at least 1")
+	}
+	if len(problems) == 0 {
+		return nil
+	}
+	return fmt.Errorf("invalid flags:\n  - %s", strings.Join(problems, "\n  - "))
+}
+
+// openOutput returns the JSONL sink and a cleanup func to defer. An empty
+// path means stdout, which must not be closed.
+func openOutput(path string) (io.Writer, func(), error) {
+	if path == "" {
+		return os.Stdout, func() {}, nil
+	}
+	f, err := os.Create(path)
+	if err != nil {
+		return nil, nil, fmt.Errorf("open -out %q: %w", path, err)
+	}
+	return f, func() { _ = f.Close() }, nil
+}
+
+// hostOf returns rawURL's hostname, or rawURL itself if it does not parse —
+// good enough for a preflight domain check, which only needs something to
+// show the licence allowlist, not a correct request.
+func hostOf(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Hostname() == "" {
+		return rawURL
+	}
+	return u.Hostname()
+}
+
+// usage replaces flag's default banner with one that explains what this
+// program is for, not just how to spell its flags.
+func usage() {
+	fmt.Fprint(os.Stderr, `wbsearch is the live verification instrument for the wb package: it walks a
+Wildberries search or fetches one product card through a real BlankTrail
+pool, and reports exactly what broke if something did.
+
+Every run starts with blanktrail.Preflight. Without BlankTrail's Challenge
+Breaker the target refuses nearly every request, and preflight says so before
+any page is fetched rather than leaving it to be diagnosed from a wall of
+failed requests.
+
+Usage:
+  go run ./examples/wbsearch -query "кроссовки женские" -dest 1259570991 -pages 3
+  go run ./examples/wbsearch -card 1309449623 -dest -5892277
+
+Flags:
+`)
+	flag.PrintDefaults()
+}
+
+// --- search ---
+
+// searchRow is what one product becomes in the JSONL output. wb.Product tags
+// nearly every field json:"-" deliberately (see model.go): the package
+// refuses to let its internal field names double as a wire format, so a
+// caller writes its own output shape instead of one that silently changes
+// whenever Product's internals do. SalePrice, BasePrice, DiscountPercent and
+// TotalStock are the methods Product exports for exactly this: deriving a
+// presentation-ready value without reaching into cheapestSize or the sizes
+// array directly.
+type searchRow struct {
+	ID              int64     `json:"id"`
+	Name            string    `json:"name,omitempty"`
+	Brand           string    `json:"brand,omitempty"`
+	SupplierID      *int64    `json:"supplier_id,omitempty"`
+	SupplierName    string    `json:"supplier_name,omitempty"`
+	Rank            int       `json:"rank"`
+	Page            int       `json:"page"`
+	SalePrice       string    `json:"sale_price,omitempty"`
+	BasePrice       string    `json:"base_price,omitempty"`
+	DiscountPercent int       `json:"discount_percent,omitempty"`
+	TotalStock      *int64    `json:"total_stock,omitempty"`
+	Rating          *float64  `json:"rating,omitempty"`
+	Feedbacks       *int64    `json:"feedbacks,omitempty"`
+	Time1           *int64    `json:"time1,omitempty"`
+	Time2           *int64    `json:"time2,omitempty"`
+	WarehouseID     *int64    `json:"warehouse_id,omitempty"`
+	Dest            string    `json:"dest"`
+	AppType         int       `json:"app_type"`
+	FetchedAt       time.Time `json:"fetched_at"`
+}
+
+func toSearchRow(p wb.Product) searchRow {
+	row := searchRow{
+		ID:           p.ID,
+		Name:         p.Name,
+		Brand:        p.Brand,
+		SupplierID:   p.SupplierID,
+		SupplierName: p.SupplierName,
+		Rank:         p.Rank,
+		Page:         p.Page,
+		Rating:       p.Rating,
+		Feedbacks:    p.Feedbacks,
+		Time1:        p.Time1,
+		Time2:        p.Time2,
+		WarehouseID:  p.WarehouseID,
+		Dest:         p.Dest,
+		AppType:      p.AppType,
+		FetchedAt:    p.FetchedAt,
+	}
+	if sale, ok := p.SalePrice(); ok {
+		row.SalePrice = sale.String()
+	}
+	if base, ok := p.BasePrice(); ok {
+		row.BasePrice = base.String()
+	}
+	if pct, ok := p.DiscountPercent(); ok {
+		row.DiscountPercent = pct
+	}
+	if total, ok := p.TotalStock(); ok {
+		row.TotalStock = &total
+	}
+	return row
+}
+
+// runSearch walks the search from page one, writing a JSONL row per product,
+// until a page comes back shorter than a full page or pageBudget is spent.
+func runSearch(ctx context.Context, c *wb.Client, eps wb.Endpoints, query, dest string, mode wb.Mode, pageBudget int, rows io.Writer, pool *blanktrail.Pool) error {
+	enc := json.NewEncoder(rows)
+
+	var (
+		pagesFetched int
+		productCount int
+		totalDropped int
+		classCounts  = map[wb.Class]int{}
+		uniqueIDs    = map[int64]struct{}{}
+	)
+
+	for page := 1; page <= pageBudget; page++ {
+		env, err := c.SearchPage(ctx, eps, wb.SearchQuery{
+			Query:   query,
+			Dest:    dest,
+			AppType: mode.AppType(),
+			Page:    page,
+		})
+		if err != nil {
+			printSummary(pagesFetched, productCount, len(uniqueIDs), totalDropped, classCounts, pool.Stats())
+			return fmt.Errorf("page %d: %w", page, err)
+		}
+		// SearchPage only ever returns successfully when the fetch classified
+		// as ClassOK (see its own doc comment on the status check it makes) —
+		// any other class comes back as the error handled above instead, so
+		// this is the only class a successful iteration can record.
+		classCounts[wb.ClassOK]++
+		pagesFetched++
+		totalDropped += env.Dropped
+
+		for _, p := range env.Products {
+			uniqueIDs[p.ID] = struct{}{}
+			productCount++
+			if err := enc.Encode(toSearchRow(p)); err != nil {
+				printSummary(pagesFetched, productCount, len(uniqueIDs), totalDropped, classCounts, pool.Stats())
+				return fmt.Errorf("write row for product %d: %w", p.ID, err)
+			}
+		}
+
+		// The raw count the site actually sent, before extraction dropped
+		// anything — a page with a few malformed items is not itself a short
+		// page, and must not be read as the end of the result set.
+		raw := len(env.Products) + env.Dropped
+		if raw < observedPageSize {
+			break
+		}
+	}
+
+	printSummary(pagesFetched, productCount, len(uniqueIDs), totalDropped, classCounts, pool.Stats())
+	return nil
+}
+
+// --- card ---
+
+// cardRow pairs both halves of a product: the seller's own description
+// (fetched from the CDN) and the region's live price and stock (fetched from
+// the site). Like searchRow, it exists because wb.Card and wb.Product both
+// tag most fields json:"-" on purpose, and because Card.BrandName and
+// Card.SupplierID specifically are populated outside Card's own json tags
+// (decodeCard reads them from a second, nested view of the same document —
+// see card.go) and would silently vanish from a bare json.Marshal(card).
+type cardRow struct {
+	NmID            int64       `json:"nm_id"`
+	ImtID           int64       `json:"imt_id"`
+	Name            string      `json:"name,omitempty"`
+	Slug            string      `json:"slug,omitempty"`
+	BrandName       string      `json:"brand_name,omitempty"`
+	SupplierID      int64       `json:"supplier_id,omitempty"`
+	SubjectName     string      `json:"subject_name,omitempty"`
+	SubjectRootName string      `json:"subject_root_name,omitempty"`
+	VendorCode      string      `json:"vendor_code,omitempty"`
+	Description     string      `json:"description,omitempty"`
+	Season          string      `json:"season,omitempty"`
+	ColorNames      string      `json:"color_names,omitempty"`
+	Options         []wb.Option `json:"options,omitempty"`
+
+	SalePrice       string `json:"sale_price,omitempty"`
+	BasePrice       string `json:"base_price,omitempty"`
+	DiscountPercent int    `json:"discount_percent,omitempty"`
+	TotalStock      *int64 `json:"total_stock,omitempty"`
+
+	Dest      string    `json:"dest"`
+	AppType   int       `json:"app_type"`
+	FetchedAt time.Time `json:"fetched_at"`
+}
+
+// dest, appType and fetchedAt come from the call, not from product: when the
+// live half failed, product is the zero Product (Client.Card returns it
+// alongside the error — see runCard), and reading context off a zero value
+// would print an empty dest and a zero time for a request that plainly did
+// carry both. The static half's own fields never depend on region or time,
+// so this is the only context worth stamping regardless of which half
+// succeeded.
+func toCardRow(card wb.Card, product wb.Product, dest string, appType int, fetchedAt time.Time) cardRow {
+	row := cardRow{
+		NmID:            card.NmID,
+		ImtID:           card.ImtID,
+		Name:            card.Name,
+		Slug:            card.Slug,
+		BrandName:       card.BrandName,
+		SupplierID:      card.SupplierID,
+		SubjectName:     card.SubjectName,
+		SubjectRootName: card.SubjectRootName,
+		VendorCode:      card.VendorCode,
+		Description:     card.Description,
+		Season:          card.Season,
+		ColorNames:      card.ColorNames,
+		Options:         card.Options,
+		Dest:            dest,
+		AppType:         appType,
+		FetchedAt:       fetchedAt,
+	}
+	if sale, ok := product.SalePrice(); ok {
+		row.SalePrice = sale.String()
+	}
+	if base, ok := product.BasePrice(); ok {
+		row.BasePrice = base.String()
+	}
+	if pct, ok := product.DiscountPercent(); ok {
+		row.DiscountPercent = pct
+	}
+	if total, ok := product.TotalStock(); ok {
+		row.TotalStock = &total
+	}
+	return row
+}
+
+// runCard fetches one product card and writes it as a single JSONL row.
+//
+// Client.Card can fail on just its live half (price, stock) while the static
+// half (description, characteristics) was fetched successfully; when that
+// happens the static half is still real, useful data, and this writes it out
+// rather than discarding it just because the second request failed — see
+// Client.Card's own doc comment on why it returns the partial Card alongside
+// the error in that case.
+func runCard(ctx context.Context, c *wb.Client, eps wb.Endpoints, nm int64, dest string, mode wb.Mode, rows io.Writer, pool *blanktrail.Pool) error {
+	basket := wb.NewBasket(c)
+	appType := mode.AppType()
+	fetchedAt := time.Now()
+	card, product, err := c.Card(ctx, basket, eps, nm, dest, appType)
+	if err != nil && card.NmID == 0 {
+		// Nothing was fetched at all: the static half itself failed, so there
+		// is no partial row worth writing.
+		printSummary(0, 0, 0, 0, nil, pool.Stats())
+		return fmt.Errorf("card %d: %w", nm, err)
+	}
+
+	enc := json.NewEncoder(rows)
+	if encErr := enc.Encode(toCardRow(card, product, dest, appType, fetchedAt)); encErr != nil {
+		printSummary(0, 0, 0, 0, nil, pool.Stats())
+		return fmt.Errorf("write card %d: %w", nm, encErr)
+	}
+
+	printSummary(1, 1, 1, 0, map[wb.Class]int{wb.ClassOK: 1}, pool.Stats())
+	if err != nil {
+		return fmt.Errorf("card %d: static half only, the live half (price, stock) failed: %w", nm, err)
+	}
+	return nil
+}
+
+// --- summary ---
+
+func printSummary(pages, products, uniqueIDs, dropped int, classes map[wb.Class]int, stats blanktrail.Stats) {
+	fmt.Fprintln(os.Stderr)
+	fmt.Fprintln(os.Stderr, "--- summary ---")
+	fmt.Fprintf(os.Stderr, "pages fetched:  %d\n", pages)
+	fmt.Fprintf(os.Stderr, "products seen:  %d\n", products)
+	fmt.Fprintf(os.Stderr, "unique ids:     %d\n", uniqueIDs)
+	fmt.Fprintf(os.Stderr, "dropped items:  %d\n", dropped)
+	fmt.Fprintln(os.Stderr, "class distribution:")
+	if len(classes) == 0 {
+		fmt.Fprintln(os.Stderr, "  (none)")
+	}
+	keys := make([]wb.Class, 0, len(classes))
+	for c := range classes {
+		keys = append(keys, c)
+	}
+	sort.Slice(keys, func(i, j int) bool { return keys[i].String() < keys[j].String() })
+	for _, c := range keys {
+		fmt.Fprintf(os.Stderr, "  %s: %d\n", c, classes[c])
+	}
+	fmt.Fprintf(os.Stderr, "pool stats:     %+v\n", stats)
+}
