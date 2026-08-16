@@ -536,3 +536,104 @@ func TestSaveCard_WritesBothHalvesInOneTransaction(t *testing.T) {
 		}
 	}
 }
+
+func TestSaveCard_BackfillsTheCardColumnsOfARowASearchReadingCreated(t *testing.T) {
+	// The ordinary production order is search first, card second: a product
+	// turns up in a result page long before anyone fetches its card. Every
+	// other card test in this file either starts from an empty database or
+	// runs the card first, so none of them drives upsertCardRow's ON CONFLICT
+	// branch against a products row that already exists with no card data in
+	// it — description, imt_id and vendor_code all NULL, the shape
+	// SaveProduct alone leaves behind. Reviews are keyed on imt_id, so a
+	// DO UPDATE that failed to fill these in on a pre-existing row would
+	// leave most products — the ones a search found first — without it
+	// forever.
+	s := openTestStore(t)
+	ctx := context.Background()
+	start := time.Date(2026, 8, 16, 9, 0, 0, 0, time.UTC)
+	at := freezeClock(s, start)
+
+	if _, err := s.SaveProduct(ctx, sampleProduct(), "winter jacket"); err != nil {
+		t.Fatalf("SaveProduct: %v", err)
+	}
+
+	var descriptionBefore sql.NullString
+	if err := s.db.QueryRowContext(ctx, `SELECT description FROM products`).Scan(&descriptionBefore); err != nil {
+		t.Fatalf("read products before the card: %v", err)
+	}
+	if descriptionBefore.Valid {
+		t.Fatalf("description = %q before any card was fetched; want NULL — this test needs a row the card upsert has to fill in, not one already filled", descriptionBefore.String)
+	}
+
+	*at = start.Add(time.Hour)
+	if _, err := s.SaveCard(ctx, sampleCardFetch()); err != nil {
+		t.Fatalf("SaveCard: %v", err)
+	}
+
+	var description, vendor sql.NullString
+	var imtID sql.NullInt64
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT description, vendor_code, imt_id FROM products`).
+		Scan(&description, &vendor, &imtID); err != nil {
+		t.Fatalf("read products after the card: %v", err)
+	}
+	if description.String != "Water repellent, insulated." {
+		t.Errorf("description = %q after the card that followed a search reading; want the card's own", description.String)
+	}
+	if vendor.String != "WJ-46-BLK" {
+		t.Errorf("vendor_code = %q after the card that followed a search reading; want the card's own", vendor.String)
+	}
+	if !imtID.Valid || imtID.Int64 != 7788 {
+		t.Errorf("imt_id = %v after the card that followed a search reading; want 7788 — reviews are keyed on it", imtID)
+	}
+	if n := countRows(t, s, "products"); n != 1 {
+		t.Errorf("products has %d row(s); want 1 — the card updates the search's row, it does not add a second one", n)
+	}
+}
+
+func TestSaveCard_DatesBothHalvesByWhenTheLiveHalfWasFetched(t *testing.T) {
+	// upsertCardRow stamps the static half's first/last_seen_at with the
+	// store's own clock, while saveProductTx dates the live half's copy of
+	// the same row through effectiveTS — the reading's own FetchedAt, not
+	// write time (see products.go's own doc comment on why: a retry, a
+	// queued write or a backfill must date a row to when the site was read).
+	// Both halves land in one products row from one SaveCard call, so a call
+	// that dates them differently can write a row whose last_seen_at is
+	// earlier than the first_seen_at it just set, in the very transaction
+	// that created both.
+	s := openTestStore(t)
+	ctx := context.Background()
+	writeTime := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
+	freezeClock(s, writeTime)
+
+	// Stands in for a write that runs some time after the fetch it is
+	// writing — the same delayed scenario effectiveTS exists for.
+	fetchedAt := writeTime.Add(-3 * time.Hour)
+	cf := sampleCardFetch()
+	cf.Product.FetchedAt = fetchedAt
+
+	if _, err := s.SaveCard(ctx, cf); err != nil {
+		t.Fatalf("SaveCard: %v", err)
+	}
+
+	var first, last int64
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT first_seen_at, last_seen_at FROM products`).Scan(&first, &last); err != nil {
+		t.Fatalf("read products: %v", err)
+	}
+	if last < first {
+		t.Errorf("last_seen_at (%d) is before first_seen_at (%d) in a row one SaveCard call just wrote", last, first)
+	}
+	if first != fetchedAt.Unix() || last != fetchedAt.Unix() {
+		t.Errorf("first_seen_at/last_seen_at = (%d, %d), want both %d — the live half's own FetchedAt, not the store's clock",
+			first, last, fetchedAt.Unix())
+	}
+
+	var snapshotTS int64
+	if err := s.db.QueryRowContext(ctx, `SELECT ts FROM snapshots`).Scan(&snapshotTS); err != nil {
+		t.Fatalf("read snapshots: %v", err)
+	}
+	if snapshotTS != fetchedAt.Unix() {
+		t.Errorf("snapshots.ts = %d, want %d", snapshotTS, fetchedAt.Unix())
+	}
+}

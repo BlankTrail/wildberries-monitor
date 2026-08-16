@@ -71,13 +71,37 @@ func (s *Store) SaveCard(ctx context.Context, cf wb.CardFetch) (SaveStats, error
 			cf.Card.NmID, cf.Product.ID)
 	}
 
+	// id names the product in every error below. cf.Card.NmID is 0 whenever
+	// the static half did not arrive, and in that case cf.Product.ID is the
+	// only identifier this call actually has — an error built from NmID alone
+	// would print "product 0" for exactly the requests that carried a real
+	// id.
+	id := cf.Card.NmID
+	if id == 0 {
+		id = cf.Product.ID
+	}
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return SaveStats{}, fmt.Errorf("store: save card %d: %w", cf.Card.NmID, err)
+		return SaveStats{}, fmt.Errorf("store: save card %d: %w", id, err)
 	}
 	defer tx.Rollback()
 
 	now := s.now().UTC().Unix()
+	if hasLive {
+		// Both halves of one SaveCard call land in one products row, so they
+		// must agree on when that row was seen. saveProductTx (through
+		// effectiveTS) dates the live half's copy of first/last_seen_at to
+		// cf.Product.FetchedAt rather than to write time; upsertCardRow has
+		// to be told the same instant, or a write delayed by a retry or a
+		// backfill — FetchedAt earlier than the store's clock — leaves the
+		// static half's insert stamping "now" and the live half's update
+		// stamping the earlier FetchedAt a moment later in the same
+		// transaction, so last_seen_at ends up before the first_seen_at this
+		// very call just set. See effectiveTS's own doc comment for why write
+		// time is the wrong answer here.
+		now = effectiveTS(cf.Product, now)
+	}
 	var stats SaveStats
 
 	if hasStatic {
@@ -115,7 +139,7 @@ func (s *Store) SaveCard(ctx context.Context, cf wb.CardFetch) (SaveStats, error
 	}
 
 	if err := tx.Commit(); err != nil {
-		return SaveStats{}, fmt.Errorf("store: save card %d: %w", cf.Card.NmID, err)
+		return SaveStats{}, fmt.Errorf("store: save card %d: %w", id, err)
 	}
 	return stats, nil
 }
