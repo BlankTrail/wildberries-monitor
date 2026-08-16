@@ -106,6 +106,37 @@ func TestRunSeller_ReportsWhichHalfFailedOnAPartialResult(t *testing.T) {
 	}
 }
 
+// TestRunSeller_ReportsTheSellerCallAsTwoRequestsThroughItsPort is the gap
+// this task closed for check 3: the seller profile line used to print an
+// elapsed time and nothing else — no port, because wb.Client.Seller reported
+// none — and landed outside every port group. It is two requests, and on a
+// single-port lease both belong to that port alongside the catalogue page.
+func TestRunSeller_ReportsTheSellerCallAsTwoRequestsThroughItsPort(t *testing.T) {
+	lease := &scriptedLease{port: 4, replies: []*http.Response{
+		jsonReply(200, sellerStaticFixture(118143)),
+		jsonReply(200, sellerProfileFixture(118143)),
+		jsonReply(200, sellerCatalogFixture(118143, 555)),
+	}}
+	c := newTestClient(lease)
+
+	var rows, summary bytes.Buffer
+	err := runSeller(context.Background(), c, wb.DefaultEndpoints(), 118143, "1259570991", wb.ModeDesktop, 1, 0,
+		&rows, &summary, func() blanktrail.Stats { return blanktrail.Stats{} }, egressSetup{})
+	if err != nil {
+		t.Fatalf("runSeller: %v", err)
+	}
+	out := summary.String()
+	if !strings.Contains(out, "port 4 (2 call(s), 3 request(s))") {
+		t.Errorf("summary does not file both calls — three requests — under port 4; got:\n%s", out)
+	}
+	if !strings.Contains(out, "seller profile #1            0s         (2 request(s), 2 attempt(s))") {
+		t.Errorf("summary does not show the seller call as the two requests it is; got:\n%s", out)
+	}
+	if strings.Contains(out, "no port reported") {
+		t.Errorf("summary still has a call with no port to name; got:\n%s", out)
+	}
+}
+
 // TestRunSeller_NamesAnEmptySellerTypeRatherThanPrintingABareColon is the
 // live-run finding: a seller whose static record carries no sellerType must
 // read as an observed fact, not as a value that silently failed to render

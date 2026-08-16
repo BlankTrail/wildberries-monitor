@@ -71,7 +71,7 @@ func TestRunQuestions_SucceedsWhenCheapAndDeclaredCountsAgree(t *testing.T) {
 	if strings.Contains(summary.String(), "port not reported by this endpoint") {
 		t.Errorf("summary fell back to the unattributed bucket for questions, which now reports its own port; got:\n%s", summary.String())
 	}
-	if !strings.Contains(summary.String(), "port 1 (2 request(s))") {
+	if !strings.Contains(summary.String(), "port 1 (2 call(s), 2 request(s))") {
 		t.Errorf("summary does not group the cheap count and the page fetch under port 1; got:\n%s", summary.String())
 	}
 }

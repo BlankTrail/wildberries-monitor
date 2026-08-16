@@ -92,7 +92,7 @@ func TestRunReviews_SucceedsWhenEveryReviewCarriesSizeAndColor(t *testing.T) {
 	if strings.Contains(summary.String(), "port not reported by this endpoint") {
 		t.Errorf("summary fell back to the unattributed bucket for a reviews fetch, which now reports its own port; got:\n%s", summary.String())
 	}
-	if !strings.Contains(summary.String(), "port 1 (1 request(s))") {
+	if !strings.Contains(summary.String(), "port 1 (1 call(s), 1 request(s))") {
 		t.Errorf("summary does not group the fetch under its own port; got:\n%s", summary.String())
 	}
 }
@@ -114,7 +114,7 @@ func TestRunReviews_GroupsRepeatedFetchesUnderTheirSharedPort(t *testing.T) {
 	if err != nil {
 		t.Fatalf("runReviews: %v", err)
 	}
-	if !strings.Contains(summary.String(), "port 4 (2 request(s))") {
+	if !strings.Contains(summary.String(), "port 4 (2 call(s), 2 request(s))") {
 		t.Errorf("summary does not group both fetches under port 4; got:\n%s", summary.String())
 	}
 	if !strings.Contains(summary.String(), "later median") {

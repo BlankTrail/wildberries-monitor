@@ -4,9 +4,11 @@ package wb
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/url"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -534,9 +536,110 @@ func TestClient_SellerFailsWhenBothSourcesFail(t *testing.T) {
 	if err == nil {
 		t.Fatal("two failed sources were accepted without error")
 	}
-	want := Seller{ID: 350748670}
-	if got != want {
-		t.Errorf("Seller=%+v, want only the id (%+v) when both sources fail", got, want)
+	// Compared field by field rather than with ==: Seller carries the
+	// provenance of both requests, which makes it uncomparable, and that
+	// provenance is exactly what must NOT be zeroed here — see the
+	// provenance test below.
+	want := Seller{ID: 350748670, Fetches: got.Fetches}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Seller=%+v, want only the id and the provenance (%+v) when both sources fail", got, want)
+	}
+}
+
+// TestClient_SellerReportsBothSourcesSeparately is why a seller's provenance
+// is a list. Its two documents live on two different hosts and leave through
+// two different ports at two different costs; one port and one cost would be
+// a statement untrue of half of it.
+func TestClient_SellerReportsBothSourcesSeparately(t *testing.T) {
+	// The profile is scripted to need three attempts and the static record
+	// one, so neither entry can stand in for the other without a number here
+	// going wrong.
+	staticLease := &fakeLease{port: 1, replies: []*http.Response{reply(200, string(sellerStaticFixture(t)))}}
+	profileLease := &fakeLease{port: 2, replies: []*http.Response{
+		reply(498, "<html>challenge</html>"),
+		reply(498, "<html>challenge</html>"),
+		reply(200, string(sellerProfileFixture(t))),
+	}}
+	c := NewClientWithRetry(&fakeLeaser{leases: []*fakeLease{staticLease, profileLease}}, NewSessions(),
+		RetryPolicy{Attempts: 15, AttemptsPerEgress: 3})
+
+	got, err := c.Seller(context.Background(), DefaultEndpoints(), 350748670)
+	if err != nil {
+		t.Fatalf("Seller: %v", err)
+	}
+	if len(got.Fetches) != 2 {
+		t.Fatalf("provenance = %+v, want two entries: this call always makes both requests", got.Fetches)
+	}
+	rec, profile := got.Fetches[0], got.Fetches[1]
+	if rec.Source != SourceSellerStatic || profile.Source != SourceSellerProfile {
+		t.Errorf("sources = %q, %q; want %q then %q — in the order the requests were made",
+			rec.Source, profile.Source, SourceSellerStatic, SourceSellerProfile)
+	}
+	if rec.Port != 1 || profile.Port != 2 {
+		t.Errorf("ports = %d, %d; want 1 then 2 — the two documents left through different ports", rec.Port, profile.Port)
+	}
+	if want := (FetchCost{Attempts: 1}); rec.Cost != want {
+		t.Errorf("static record cost=%+v, want %+v", rec.Cost, want)
+	}
+	if want := (FetchCost{Attempts: 3}); profile.Cost != want {
+		t.Errorf("profile cost=%+v, want %+v — the 103-byte record and the gated profile do not cost the same, and one figure for both hides that",
+			profile.Cost, want)
+	}
+}
+
+// TestClient_SellerReportsTheSourceThatFailedAlongsideTheOneThatDidNot is the
+// partial-failure case this endpoint is built around (see Client.Seller): the
+// surviving half is kept, and so is the failed half's own provenance — the
+// port that refused and what the attempt cost. A caller that can see only the
+// half that worked cannot tell a seller with no profile from a proxy that
+// would not carry the profile request.
+func TestClient_SellerReportsTheSourceThatFailedAlongsideTheOneThatDidNot(t *testing.T) {
+	staticLease := &fakeLease{port: 1, replies: []*http.Response{reply(500, "")}}
+	profileLease := &fakeLease{port: 2, replies: []*http.Response{reply(200, string(sellerProfileFixture(t)))}}
+	c := NewClient(&fakeLeaser{leases: []*fakeLease{staticLease, profileLease}}, NewSessions())
+
+	got, err := c.Seller(context.Background(), DefaultEndpoints(), 350748670)
+	if err == nil {
+		t.Fatal("a 500 on the static record was accepted without error")
+	}
+	if len(got.Fetches) != 2 {
+		t.Fatalf("provenance = %+v, want both requests: the one that failed and the one that did not", got.Fetches)
+	}
+	if got.Fetches[0].Source != SourceSellerStatic || got.Fetches[0].Port != 1 {
+		t.Errorf("failed source = %+v, want the static record on port 1", got.Fetches[0])
+	}
+	if got.Fetches[1].Source != SourceSellerProfile || got.Fetches[1].Port != 2 {
+		t.Errorf("surviving source = %+v, want the profile on port 2", got.Fetches[1])
+	}
+}
+
+// TestClient_SellerReportsBothSourcesWhenNeitherLanded is the third shape the
+// brief asks for, and the one where the provenance is the only thing left to
+// report: neither request produced a response, so there is no port to name
+// for either — only what each of them burned trying.
+func TestClient_SellerReportsBothSourcesWhenNeitherLanded(t *testing.T) {
+	staticLease := &fakeLease{port: 1, err: errors.New("boom")}
+	profileLease := &fakeLease{port: 2, err: errors.New("boom")}
+	c := NewClient(&fakeLeaser{leases: []*fakeLease{staticLease, profileLease}}, NewSessions())
+
+	got, err := c.Seller(context.Background(), DefaultEndpoints(), 350748670)
+	if err == nil {
+		t.Fatal("two dead sources were accepted without error")
+	}
+	if len(got.Fetches) != 2 {
+		t.Fatalf("provenance = %+v, want an entry for each request that was attempted", got.Fetches)
+	}
+	for i, want := range []Source{SourceSellerStatic, SourceSellerProfile} {
+		f := got.Fetches[i]
+		if f.Source != want {
+			t.Errorf("Fetches[%d].Source=%q, want %q", i, f.Source, want)
+		}
+		if f.Port != 0 {
+			t.Errorf("Fetches[%d].Port=%d, want 0 — nothing answered", i, f.Port)
+		}
+		if cost := (FetchCost{Attempts: 2, TransportErrors: 2}); f.Cost != cost {
+			t.Errorf("Fetches[%d].Cost=%+v, want %+v", i, f.Cost, cost)
+		}
 	}
 }
 

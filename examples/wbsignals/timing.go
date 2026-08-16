@@ -159,27 +159,40 @@ func printRequestTimings(w io.Writer, timings []requestTiming) {
 
 	order, byPort, ungrouped := groupTimingsByPort(timings)
 	for _, port := range order {
-		reqs := byPort[port]
-		fmt.Fprintf(w, "  port %d (%d request(s))", port, len(reqs))
-		if len(reqs) > 1 {
-			later := make([]time.Duration, 0, len(reqs)-1)
+		calls := byPort[port]
+		// Calls and requests are counted separately because they stopped
+		// being the same number: one Client.Card or Client.Seller call is two
+		// requests through this port, and a header calling two such calls
+		// "2 request(s)" would be wrong by half.
+		requests := 0
+		for _, r := range calls {
+			requests += len(r.ports)
+		}
+		fmt.Fprintf(w, "  port %d (%d call(s), %d request(s))", port, len(calls), requests)
+		if len(calls) > 1 {
+			later := make([]time.Duration, 0, len(calls)-1)
 			retried := 0
-			for _, r := range reqs[1:] {
+			for _, r := range calls[1:] {
 				later = append(later, r.elapsed)
-				if r.attempts > 1 {
+				// Against the number of requests the call made, not against
+				// 1: a two-request call spends two attempts when both land
+				// first try, and calling that a retry would report every
+				// healthy card fetch as having been retried.
+				if r.attempts > len(r.ports) {
 					retried++
 				}
 			}
 			fmt.Fprintf(w, " — first %s (%d attempt(s)), later median %s (%d later, %d retried)",
-				reqs[0].elapsed.Round(time.Millisecond), reqs[0].attempts,
+				calls[0].elapsed.Round(time.Millisecond), calls[0].attempts,
 				median(later).Round(time.Millisecond), len(later), retried)
 		} else {
-			fmt.Fprintf(w, " — first %s (%d attempt(s)), no later request on this port to compare",
-				reqs[0].elapsed.Round(time.Millisecond), reqs[0].attempts)
+			fmt.Fprintf(w, " — first %s (%d attempt(s)), no later call on this port to compare",
+				calls[0].elapsed.Round(time.Millisecond), calls[0].attempts)
 		}
 		fmt.Fprintln(w)
-		for _, r := range reqs {
-			fmt.Fprintf(w, "      %-28s %-10s (%d attempt(s))\n", r.label, r.elapsed.Round(time.Millisecond), r.attempts)
+		for _, r := range calls {
+			fmt.Fprintf(w, "      %-28s %-10s (%d request(s), %d attempt(s))\n",
+				r.label, r.elapsed.Round(time.Millisecond), len(r.ports), r.attempts)
 		}
 	}
 

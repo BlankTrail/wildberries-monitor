@@ -144,6 +144,35 @@ func TestTimingOf_OfACallThatMadeNoRequest(t *testing.T) {
 	}
 }
 
+// TestPrintRequestTimings_JudgesARetryAgainstTheCallsOwnRequestCount is the
+// arithmetic a two-request call broke. "Retried" used to mean more than one
+// attempt, which is exactly what a healthy Client.Card call spends: one
+// attempt per half. Judged that way, every card fetch in a run would be
+// reported as retried and the retry count would stop meaning anything.
+func TestPrintRequestTimings_JudgesARetryAgainstTheCallsOwnRequestCount(t *testing.T) {
+	quiet := []requestTiming{
+		{label: "reviews #1", ports: []int{9}, attempts: 1, elapsed: 10 * time.Second},
+		{label: "card #1", ports: []int{9, 9}, attempts: 2, elapsed: 3 * time.Second},
+	}
+	var buf bytes.Buffer
+	printRequestTimings(&buf, quiet)
+	if !strings.Contains(buf.String(), "0 retried") {
+		t.Errorf("two requests landing first try each were counted as a retry; got:\n%s", buf.String())
+	}
+
+	// The other direction, so the counter is not simply dead: the same
+	// two-request call, one of whose halves took a second attempt.
+	retried := []requestTiming{
+		{label: "reviews #1", ports: []int{9}, attempts: 1, elapsed: 10 * time.Second},
+		{label: "card #1", ports: []int{9, 9}, attempts: 3, elapsed: 3 * time.Second},
+	}
+	buf.Reset()
+	printRequestTimings(&buf, retried)
+	if !strings.Contains(buf.String(), "1 retried") {
+		t.Errorf("a call that really did spend an extra attempt was not counted as retried; got:\n%s", buf.String())
+	}
+}
+
 func TestMedian_OddAndEvenCounts(t *testing.T) {
 	odd := []time.Duration{3 * time.Second, 1 * time.Second, 2 * time.Second}
 	if got := median(odd); got != 2*time.Second {
@@ -201,7 +230,7 @@ func TestPrintRequestTimings_GroupsAKnownPortsRepeatsTogether(t *testing.T) {
 		{label: "catalog page1 #2", ports: []int{3}, attempts: 1, elapsed: 5 * time.Millisecond},
 	})
 	out := buf.String()
-	if !strings.Contains(out, "port 3 (2 request(s))") {
+	if !strings.Contains(out, "port 3 (2 call(s), 2 request(s))") {
 		t.Errorf("output missing the grouped port-3 header; got:\n%s", out)
 	}
 	if !strings.Contains(out, "later median") {

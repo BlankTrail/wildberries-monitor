@@ -114,7 +114,7 @@ func runSeller(ctx context.Context, c *wb.Client, eps wb.Endpoints, supplier int
 
 		start := time.Now()
 		s, sellerErr := c.Seller(ctx, eps, supplier)
-		t = append(t, requestTiming{label: fmt.Sprintf("seller profile #%d", i), elapsed: time.Since(start)})
+		t = append(t, timingOf(fmt.Sprintf("seller profile #%d", i), s.Fetches, time.Since(start)))
 
 		cstart := time.Now()
 		q := wb.SearchQuery{Dest: dest, AppType: mode.AppType(), Page: 1}

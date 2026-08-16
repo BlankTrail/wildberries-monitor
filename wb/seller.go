@@ -50,6 +50,21 @@ type Seller struct {
 	ItemCount        *int64
 	DeliveryDuration *int64
 
+	// Fetches is where each of the two requests behind this Seller went and
+	// what it cost — the static record first, then the profile, both always
+	// present because both are always attempted (see Client.Seller). The
+	// entry for a source that failed is the interesting one and is kept for
+	// that reason: it names the port that refused and the budget it burned,
+	// which is precisely what the surviving half's entry cannot tell anyone.
+	//
+	// Unlike Client.Card, this rides on the domain value itself rather than
+	// on a wrapper. Seller is assembled by this package out of two documents
+	// of its own choosing — it has no JSON tags, mirrors no single response,
+	// and nothing re-encodes it as if it were something the site sent. Card
+	// is the opposite on every count, which is why that one is wrapped. See
+	// Fetch.
+	Fetches []Fetch
+
 	// IsPremium and LoyaltyLevel also come from the profile, but are plain
 	// value types rather than pointers, matching the brief's own field list
 	// for this struct. A caller that needs to tell "not premium" apart from
@@ -329,44 +344,79 @@ func (c *Client) Seller(ctx context.Context, _ Endpoints, id int64) (Seller, err
 	}
 
 	s := Seller{ID: id}
-
-	var staticErr error
-	if staticRes, err := c.Get(ctx, supplierStaticURL(id), KindPlain, ""); err != nil {
-		staticErr = err
-	} else if staticRes.Class != ClassOK {
-		staticErr = fmt.Errorf("static record: status %d (%s)", staticRes.Status, staticRes.Class)
-	} else if rec, err := decodeSellerStatic(staticRes.Body); err != nil {
-		staticErr = err
-	} else if rec.SupplierID != id {
-		staticErr = fmt.Errorf("static record: response names supplier %d, not the requested %d", rec.SupplierID, id)
-	} else {
-		s.Name, s.FullName, s.Type = rec.Name, rec.FullName, rec.Type
-	}
-
-	var profileErr error
-	if profileRes, err := c.Get(ctx, sellerProfileURL(id), KindPlain, ""); err != nil {
-		profileErr = err
-	} else if profileRes.Class != ClassOK {
-		profileErr = fmt.Errorf("profile: status %d (%s)", profileRes.Status, profileRes.Class)
-	} else if pr, err := decodeSellerProfile(profileRes.Body); err != nil {
-		profileErr = err
-	} else if pr.ID != id {
-		profileErr = fmt.Errorf("profile: response names supplier %d, not the requested %d", pr.ID, id)
-	} else {
-		s.Valuation, s.FeedbackCount, s.RegisteredAt = pr.Valuation, pr.FeedbackCount, pr.RegisteredAt
-		s.ItemCount, s.DeliveryDuration = pr.ItemCount, pr.DeliveryDuration
-		s.IsPremium, s.LoyaltyLevel = pr.IsPremium, pr.LoyaltyLevel
-	}
+	staticErr := c.fillSellerStatic(ctx, &s, id)
+	profileErr := c.fillSellerProfile(ctx, &s, id)
 
 	switch {
 	case staticErr != nil && profileErr != nil:
-		return Seller{ID: id}, fmt.Errorf("wb: seller %d: both sources failed: static record: %v; profile: %v", id, staticErr, profileErr)
+		// The identity survives, and so does the provenance: a caller holding
+		// a Seller that carries nothing but its id still needs to know that
+		// two requests were made for it, through which ports, at what cost.
+		// Dropping the provenance here would make the most expensive outcome
+		// the one that reports having spent nothing.
+		return Seller{ID: id, Fetches: s.Fetches}, fmt.Errorf("wb: seller %d: both sources failed: static record: %v; profile: %v", id, staticErr, profileErr)
 	case staticErr != nil:
 		return s, fmt.Errorf("wb: seller %d: static record unavailable, profile only: %w", id, staticErr)
 	case profileErr != nil:
 		return s, fmt.Errorf("wb: seller %d: profile unavailable, static record only: %w", id, profileErr)
 	}
 	return s, nil
+}
+
+// fillSellerStatic makes the static-record request, writes what it yielded
+// onto s, and reports what went wrong if anything did. It records the
+// request on s.Fetches before deciding whether the response was any good, so
+// a refused or unreadable answer is reported with the port that produced it
+// rather than vanishing behind the error.
+//
+// It fills s in place rather than returning a value because both halves
+// write into one Seller and either may be the only one that succeeds — see
+// Client.Seller. Split out of that function rather than left inline so each
+// half's own failure path stays readable next to the provenance it records.
+func (c *Client) fillSellerStatic(ctx context.Context, s *Seller, id int64) error {
+	res, err := c.Get(ctx, supplierStaticURL(id), KindPlain, "")
+	if err != nil {
+		s.Fetches = append(s.Fetches, lostFetch(SourceSellerStatic, err))
+		return err
+	}
+	s.Fetches = append(s.Fetches, fetchOf(SourceSellerStatic, res))
+	if res.Class != ClassOK {
+		return fmt.Errorf("static record: status %d (%s)", res.Status, res.Class)
+	}
+	rec, err := decodeSellerStatic(res.Body)
+	if err != nil {
+		return err
+	}
+	if rec.SupplierID != id {
+		return fmt.Errorf("static record: response names supplier %d, not the requested %d", rec.SupplierID, id)
+	}
+	s.Name, s.FullName, s.Type = rec.Name, rec.FullName, rec.Type
+	return nil
+}
+
+// fillSellerProfile is fillSellerStatic's twin for the profile document, on
+// the identical contract.
+func (c *Client) fillSellerProfile(ctx context.Context, s *Seller, id int64) error {
+	res, err := c.Get(ctx, sellerProfileURL(id), KindPlain, "")
+	if err != nil {
+		s.Fetches = append(s.Fetches, lostFetch(SourceSellerProfile, err))
+		return err
+	}
+	s.Fetches = append(s.Fetches, fetchOf(SourceSellerProfile, res))
+	if res.Class != ClassOK {
+		return fmt.Errorf("profile: status %d (%s)", res.Status, res.Class)
+	}
+	pr, err := decodeSellerProfile(res.Body)
+	if err != nil {
+		return err
+	}
+	if pr.ID != id {
+		return fmt.Errorf("profile: response names supplier %d, not the requested %d", pr.ID, id)
+	}
+	s.Valuation, s.FeedbackCount, s.RegisteredAt = pr.Valuation, pr.FeedbackCount, pr.RegisteredAt
+	s.ItemCount, s.DeliveryDuration = pr.ItemCount, pr.DeliveryDuration
+	s.IsPremium, s.LoyaltyLevel = pr.IsPremium, pr.LoyaltyLevel
+	return nil
 }
 
 // SellerCatalogPage fetches one page of a seller's own assortment and

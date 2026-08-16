@@ -135,11 +135,13 @@ func TestRunDuplicates_MatchIDZeroSkipsTheDuplicatesRequestEntirely(t *testing.T
 	}
 }
 
-// TestRunDuplicates_ReportsThePortForTheDuplicatesFetchItself is the port
-// gap this task closed for wb.Client.Duplicates: the card fetch (which
-// stays unattributed — Client.Card does not report a port, see the task
-// report) is distinct from the duplicates fetch, which now does.
-func TestRunDuplicates_ReportsThePortForTheDuplicatesFetchItself(t *testing.T) {
+// TestRunDuplicates_ReportsThePortOfEveryFetchIncludingTheCard is the gap
+// this task closed. The duplicates fetch already named its port; the card
+// fetch did not, and landed in a separate "port not reported by this
+// endpoint" bucket despite having cost two real requests. Both are now filed
+// under the port that served them — which, on a single-port scripted lease,
+// means all three requests appear in one group.
+func TestRunDuplicates_ReportsThePortOfEveryFetchIncludingTheCard(t *testing.T) {
 	lease := &scriptedLease{port: 6, replies: append(
 		cardTripleWithMatch(141504066, 100000, 555),
 		jsonReply(200, duplicatesFixture(999, 60000)),
@@ -155,12 +157,12 @@ func TestRunDuplicates_ReportsThePortForTheDuplicatesFetchItself(t *testing.T) {
 	if !strings.Contains(summary.String(), "minimal price:      600.00 RUB (held by 999)") {
 		t.Errorf("summary missing the minimal price line; got:\n%s", summary.String())
 	}
-	if !strings.Contains(summary.String(), "port 6 (2 request(s))") {
+	if !strings.Contains(summary.String(), "port 6 (2 call(s), 3 request(s))") {
 		t.Errorf("summary does not group both the card and the duplicates fetch under port 6; got:\n%s", summary.String())
 	}
 	// The card's own row must carry the attempts of both its halves — the
 	// static one and the live one — not of one of them.
-	if !strings.Contains(summary.String(), "card #1                      0s         (2 attempt(s))") {
+	if !strings.Contains(summary.String(), "card #1                      0s         (2 request(s), 2 attempt(s))") {
 		t.Errorf("summary does not show the card as two requests through that port; got:\n%s", summary.String())
 	}
 	if strings.Contains(summary.String(), "did not share a port") {
