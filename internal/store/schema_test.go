@@ -30,6 +30,33 @@ var wantPrimaryKeys = map[string][]string{
 	// property but one.
 	"product_options":      {"nm_id", "position"},
 	"product_compositions": {"nm_id", "position"},
+
+	// Task 3: the signal half of spec section 5.1. Every table below is
+	// listed here, single-column keys included, so a later mutation to any
+	// of them -- not only the composite ones with an order to lose -- is
+	// caught by this one structural test rather than relying on each
+	// table's own dedicated test to still exist and still be run.
+	"reviews":        {"id"},
+	"review_answers": {"review_id"},
+	// The three columns are the catalogue this row belongs to (kind), the id
+	// within it (catalog_id) and the review it was read on -- there is no
+	// "position" column here, unlike the tables below, because the site
+	// gives these ids no order of their own.
+	"review_tags":              {"review_id", "kind", "catalog_id"},
+	"review_exclusion_reasons": {"review_id", "position"},
+	"review_summaries":         {"id"},
+	"review_distribution":      {"summary_id", "stars"},
+	"questions":                {"id"},
+	"question_tags":            {"question_id", "position"},
+	"sellers":                  {"id"},
+	"brands":                   {"id"},
+	"shelves":                  {"id"},
+	"shelf_items":              {"shelf_id", "position"},
+	"duplicates":               {"id"},
+	"duplicate_items":          {"duplicate_id", "position"},
+	"observations":             {"id"},
+	"events":                   {"id"},
+	"event_changes":            {"event_id", "position"},
 }
 
 // wantIndexes names, for every index this schema declares, its columns in
@@ -44,6 +71,26 @@ var wantIndexes = map[string][]string{
 	"idx_snapshot_sizes_snapshot": {"snapshot_id"},
 	// The second index spec section 5.2 names.
 	"idx_positions_query_dest_ts": {"query", "dest", "ts"},
+
+	// Task 3: the signal half of spec section 5.1.
+	//
+	// A card's reviews are read two ways -- newest for this card, newest for
+	// this variant -- and both are indexed rather than one being a scan
+	// filtered from the other.
+	"idx_reviews_imt_created":   {"imt_id", "created_at"},
+	"idx_reviews_nm_created":    {"nm_id", "created_at"},
+	"idx_questions_imt_created": {"imt_id", "created_at"},
+	// UNIQUE, not just an index: this is also the key -- see
+	// TestReviewSummaries_AreKeyedOnTheCardAndTheReading.
+	"idx_review_summaries_imt_ts":  {"imt_id", "ts"},
+	"idx_shelves_source_ts":        {"source", "source_key", "ts"},
+	"idx_duplicates_match_dest_ts": {"match_id", "dest", "ts"},
+	"idx_observations_kind_at":     {"kind", "observed_at"},
+	// Every question asked of events is either "what happened to this
+	// product" or "how often has this kind of thing happened"; both are
+	// indexed for the same reason snapshots and positions are.
+	"idx_events_nm_observed_at":   {"nm_id", "observed_at"},
+	"idx_events_kind_observed_at": {"kind", "observed_at"},
 }
 
 // pkColumns reports table's primary key columns, in key order.
