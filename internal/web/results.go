@@ -231,7 +231,7 @@ func (s *Server) exportHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", mime)
 	w.Header().Set("Content-Disposition", `attachment; filename="`+name+"."+ext+`"`)
 
-	writer, err := newWriter(format, w, optionsFromQuery(q))
+	writer, err := export.NewWriter(format, w, optionsFromQuery(q))
 	if err != nil {
 		http.Error(w, "export: "+err.Error(), http.StatusBadRequest)
 		return
@@ -295,32 +295,27 @@ func (s *Server) exportSQLite(w http.ResponseWriter, r *http.Request, name strin
 	http.ServeContent(w, r, name+".sqlite", time.Time{}, f)
 }
 
-func newWriter(format string, w interface{ Write([]byte) (int, error) }, o export.Options) (export.Writer, error) {
-	switch format {
-	case "csv", "":
-		return export.NewCSV(w, o)
-	case "json":
-		return export.NewJSON(w, o)
-	case "jsonl":
-		return export.NewJSONL(w, o)
-	case "xlsx":
-		return export.NewXLSX(w, o)
-	}
-	return nil, fmt.Errorf("формат %q этой сборке неизвестен", format)
-}
-
+// formatMeta is what an HTTP response has to say about a format that a file on
+// disk does not: the media type. The suffix comes from export, which is where
+// the format names live now that the bot writes exports too.
 func formatMeta(format string) (mime, ext string, err error) {
+	ext, err = export.Extension(format)
+	if err != nil {
+		return "", "", err
+	}
 	switch format {
 	case "csv", "":
-		return "text/csv; charset=utf-8", "csv", nil
+		mime = "text/csv; charset=utf-8"
 	case "json":
-		return "application/json", "json", nil
+		mime = "application/json"
 	case "jsonl":
-		return "application/x-ndjson", "jsonl", nil
+		mime = "application/x-ndjson"
 	case "xlsx":
-		return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "xlsx", nil
+		mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+	case "sqlite":
+		mime = "application/vnd.sqlite3"
 	}
-	return "", "", fmt.Errorf("формат %q этой сборке неизвестен", format)
+	return mime, ext, nil
 }
 
 func optionsFromQuery(q url.Values) export.Options {

@@ -266,9 +266,9 @@ func TestPoll_SendsTheExportAsAFile(t *testing.T) {
 
 	var askedFor string
 	c := commandsFor(t, api, &fakeJobs{})
-	c.Export = func(_ context.Context, format string) (string, error) {
+	c.Export = func(_ context.Context, format string) (string, string, error) {
 		askedFor = format
-		return path, nil
+		return path, "Результаты, формат " + format, nil
 	}
 
 	if _, err := c.Poll(t.Context()); err != nil {
@@ -293,9 +293,9 @@ func TestPoll_ExportDefaultsToSomethingRatherThanRefusing(t *testing.T) {
 
 	var askedFor string
 	c := commandsFor(t, api, &fakeJobs{})
-	c.Export = func(_ context.Context, format string) (string, error) {
+	c.Export = func(_ context.Context, format string) (string, string, error) {
 		askedFor = format
-		return path, nil
+		return path, "Результаты, формат " + format, nil
 	}
 	if _, err := c.Poll(t.Context()); err != nil {
 		t.Fatalf("Poll: %v", err)
@@ -538,5 +538,47 @@ func TestHelp_MentionsEveryCommandTheBotAnswers(t *testing.T) {
 		if !strings.Contains(helpText, command) {
 			t.Errorf("в справке нет %s", command)
 		}
+	}
+}
+
+func TestPoll_TheCaptionTheProducerGaveIsWhatTheFileArrivesWith(t *testing.T) {
+	// Composed where the file was made, because what is worth saying about an
+	// export — as of when, how many rows — is known there and would have to be
+	// guessed at here. A pass-through that quietly rewrote it would put this
+	// package back in the business of guessing.
+	api := newFakeAPI(t)
+	queueUpdates(api, "/export xlsx")
+
+	path := filepath.Join(t.TempDir(), "results.xlsx")
+	if err := os.WriteFile(path, []byte("PK\x03\x04"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	const caption = "Результаты на 17.08.2026 18:30, формат xlsx: 4212 строк."
+	c := commandsFor(t, api, &fakeJobs{})
+	c.Export = func(context.Context, string) (string, string, error) { return path, caption, nil }
+
+	if _, err := c.Poll(t.Context()); err != nil {
+		t.Fatalf("Poll: %v", err)
+	}
+	if len(api.forms) < 2 || api.forms[1]["caption"] != caption {
+		t.Errorf("файл ушёл с подписью %q, ожидалась %q", api.forms[1]["caption"], caption)
+	}
+}
+
+func TestPoll_AFailedStartIsReportedWithWhatWentWrong(t *testing.T) {
+	// "Не удалось запустить" alone leaves a person with nothing to act on, and
+	// the reason a start fails is usually specific: no engine, already running,
+	// no such job.
+	api := newFakeAPI(t)
+	queueUpdates(api, "/run 3")
+
+	c := commandsFor(t, api, &fakeJobs{fail: errors.New("движок сбора не собран")})
+	if _, err := c.Poll(t.Context()); err != nil {
+		t.Fatalf("Poll: %v", err)
+	}
+	said := sent(api)
+	if len(said) != 1 || !strings.Contains(said[0], "движок сбора не собран") {
+		t.Errorf("ответ %v — без причины отказа", said)
 	}
 }

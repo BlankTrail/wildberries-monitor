@@ -82,10 +82,15 @@ type Charts interface {
 type Commands struct {
 	Bot  *Bot
 	Jobs Jobs
-	// Export writes the results in one of the formats the web interface
-	// offers and returns the path of the file to send. The caller deletes it;
-	// this package does not decide where temporary files live.
-	Export func(ctx context.Context, format string) (path string, err error)
+	// Export writes the results in one of the formats the web interface offers
+	// and returns the path of the file to send, with what to say about it.
+	//
+	// The caption comes back rather than being composed here for the reason
+	// Charts gives: what is worth saying about an export — as of when, how many
+	// rows, narrowed how — is known where the file was made, and this package
+	// would have to guess at all three. Where the file lives and when it is
+	// removed is likewise not this package's to decide.
+	Export func(ctx context.Context, format string) (path, caption string, err error)
 	// Charts is nil in a build without them, which /chart answers plainly.
 	Charts Charts
 
@@ -266,11 +271,11 @@ func (c *Commands) replyExport(ctx context.Context, u Update, format string, rep
 	if format == "" {
 		format = "csv"
 	}
-	path, err := c.Export(ctx, format)
+	path, caption, err := c.Export(ctx, format)
 	if err != nil {
 		return reply("Не удалось собрать выгрузку: " + err.Error())
 	}
-	return c.Bot.SendDocument(ctx, c.address(u), "Результаты, формат "+format, path)
+	return c.Bot.SendDocument(ctx, c.address(u), caption, path)
 }
 
 // replyChart sends one of the two pictures.

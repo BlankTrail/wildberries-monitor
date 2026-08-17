@@ -371,3 +371,206 @@ func TestFinishRun_KeepsTheCountsAndTheReason(t *testing.T) {
 		t.Error("finished_at is still null on a run that ended")
 	}
 }
+
+func TestJobs_ListsEveryJobIncludingOneThatNeverRan(t *testing.T) {
+	// An inner join over runs would leave every job off the list on a fresh
+	// install — which is exactly when a person is looking at it to check that
+	// what they just saved is there.
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	first := sampleJobRow()
+	first.Name = "первое"
+	firstID, err := s.SaveJob(ctx, first)
+	if err != nil {
+		t.Fatalf("SaveJob: %v", err)
+	}
+	second := sampleJobRow()
+	second.Name = "второе"
+	secondID, err := s.SaveJob(ctx, second)
+	if err != nil {
+		t.Fatalf("SaveJob: %v", err)
+	}
+
+	list, err := s.Jobs(ctx)
+	if err != nil {
+		t.Fatalf("Jobs: %v", err)
+	}
+	if len(list) != 2 {
+		t.Fatalf("заданий в списке: %d, ожидалось 2", len(list))
+	}
+	// Oldest first, so the numbers a person learns to type at the bot stay
+	// where they were when a new job is added.
+	if list[0].ID != firstID || list[1].ID != secondID {
+		t.Errorf("порядок %d, %d — ожидался %d, %d", list[0].ID, list[1].ID, firstID, secondID)
+	}
+	if list[0].Name != "первое" || list[0].Type != first.Type {
+		t.Errorf("первое задание пришло как %q/%q", list[0].Name, list[0].Type)
+	}
+	if list[0].Total != 0 || list[0].Done != 0 || list[0].LastFinish != 0 || list[0].LastState != "" {
+		t.Errorf("задание, которое не запускалось, отчиталось о прогоне: %+v", list[0])
+	}
+}
+
+func TestJobs_ProgressIsTheRunWithNoFinishTime(t *testing.T) {
+	// Done counts every item the run has stopped working on, failures and skips
+	// included: progress is how much of the plan is behind it, not how much of
+	// it succeeded. A bar that stalled on a failed item would report a run as
+	// hung when it is finishing.
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	jobID, err := s.SaveJob(ctx, sampleJobRow())
+	if err != nil {
+		t.Fatalf("SaveJob: %v", err)
+	}
+	runID, err := s.StartRun(ctx, jobID, []ItemRow{
+		{Kind: "page", Key: "a"},
+		{Kind: "page", Key: "b"},
+		{Kind: "page", Key: "c"},
+		{Kind: "page", Key: "d"},
+	})
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	if err := s.FinishItem(ctx, runID, 0, ItemDone, ""); err != nil {
+		t.Fatalf("FinishItem: %v", err)
+	}
+	if err := s.FinishItem(ctx, runID, 1, ItemFailed, "отказ канала"); err != nil {
+		t.Fatalf("FinishItem: %v", err)
+	}
+	if err := s.FinishItem(ctx, runID, 2, ItemSkipped, ""); err != nil {
+		t.Fatalf("FinishItem: %v", err)
+	}
+
+	list, err := s.Jobs(ctx)
+	if err != nil {
+		t.Fatalf("Jobs: %v", err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("заданий: %d", len(list))
+	}
+	if list[0].Total != 4 {
+		t.Errorf("Total = %d, ожидалось 4", list[0].Total)
+	}
+	if list[0].Done != 3 {
+		t.Errorf("Done = %d, ожидалось 3 — отказ и пропуск тоже позади", list[0].Done)
+	}
+}
+
+func TestJobs_AFinishedRunLeavesProgressBehindAndATime(t *testing.T) {
+	// The run is over: its item counts are not progress any more, and reported
+	// as such they would show a finished job as one that is 4 of 4 through
+	// something.
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	jobID, _ := s.SaveJob(ctx, sampleJobRow())
+	runID, err := s.StartRun(ctx, jobID, []ItemRow{{Kind: "page", Key: "a"}})
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+	if err := s.FinishItem(ctx, runID, 0, ItemDone, ""); err != nil {
+		t.Fatalf("FinishItem: %v", err)
+	}
+	if err := s.FinishRun(ctx, runID, RunDone, 12, 1, 0, ""); err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+
+	list, err := s.Jobs(ctx)
+	if err != nil {
+		t.Fatalf("Jobs: %v", err)
+	}
+	if list[0].Total != 0 || list[0].Done != 0 {
+		t.Errorf("закончившийся прогон всё ещё отчитывается прогрессом: %d из %d", list[0].Done, list[0].Total)
+	}
+	if list[0].LastFinish == 0 {
+		t.Error("нет времени последнего прогона")
+	}
+	if list[0].LastState != RunDone {
+		t.Errorf("LastState = %q, ожидалось %q", list[0].LastState, RunDone)
+	}
+}
+
+func TestJobs_LastFinishIsTheLatestFinishWhateverItFinishedAs(t *testing.T) {
+	// Not the last successful one: "ran an hour ago and failed" and "never ran"
+	// are different things to be told, and one number that hid the first behind
+	// the second would be the worse of the two answers.
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	jobID, _ := s.SaveJob(ctx, sampleJobRow())
+	for _, c := range []struct {
+		state string
+		at    time.Time
+	}{
+		{RunDone, time.Unix(1_700_000_000, 0)},
+		{RunFailed, time.Unix(1_700_010_000, 0)},
+	} {
+		s.SetClock(func() time.Time { return c.at })
+		runID, err := s.StartRun(ctx, jobID, []ItemRow{{Kind: "page", Key: "a"}})
+		if err != nil {
+			t.Fatalf("StartRun: %v", err)
+		}
+		if err := s.FinishRun(ctx, runID, c.state, 1, 1, 0, ""); err != nil {
+			t.Fatalf("FinishRun: %v", err)
+		}
+	}
+
+	list, err := s.Jobs(ctx)
+	if err != nil {
+		t.Fatalf("Jobs: %v", err)
+	}
+	if list[0].LastState != RunFailed {
+		t.Errorf("LastState = %q — не самый поздний прогон", list[0].LastState)
+	}
+	if list[0].LastFinish != 1_700_010_000 {
+		t.Errorf("LastFinish = %d, ожидалось 1700010000", list[0].LastFinish)
+	}
+}
+
+func TestJobs_ARunInFlightDoesNotHideTheLastFinishedOne(t *testing.T) {
+	// Both questions are asked at once — what is happening and when it last
+	// ran — and one pass over job_runs could not group by both.
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	jobID, _ := s.SaveJob(ctx, sampleJobRow())
+
+	s.SetClock(func() time.Time { return time.Unix(1_700_000_000, 0) })
+	done, err := s.StartRun(ctx, jobID, []ItemRow{{Kind: "page", Key: "a"}})
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+	if err := s.FinishRun(ctx, done, RunDone, 1, 1, 0, ""); err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+
+	s.SetClock(func() time.Time { return time.Unix(1_700_020_000, 0) })
+	if _, err := s.StartRun(ctx, jobID, []ItemRow{{Kind: "page", Key: "b"}, {Kind: "page", Key: "c"}}); err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	list, err := s.Jobs(ctx)
+	if err != nil {
+		t.Fatalf("Jobs: %v", err)
+	}
+	if list[0].Total != 2 {
+		t.Errorf("Total = %d — прогресс идущего прогона потерян", list[0].Total)
+	}
+	if list[0].LastFinish != 1_700_000_000 || list[0].LastState != RunDone {
+		t.Errorf("прошлый прогон потерян: %d/%q", list[0].LastFinish, list[0].LastState)
+	}
+}
+
+func TestJobs_NoJobsIsAnEmptyListAndNotAnError(t *testing.T) {
+	s := openTestStore(t)
+	list, err := s.Jobs(context.Background())
+	if err != nil {
+		t.Fatalf("Jobs: %v", err)
+	}
+	if len(list) != 0 {
+		t.Errorf("на пустой базе список из %d", len(list))
+	}
+}

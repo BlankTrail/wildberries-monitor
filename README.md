@@ -62,17 +62,25 @@ check passes.
 * **Результаты** — a table of what was collected, and the same data as a file:
   CSV, XLSX, JSON, JSONL or a SQLite database. Four of the five stream; the
   fifth cannot, because a SQLite file is finished by seeking back to its header.
-* **Telegram** — notifications, and a bot that answers `/jobs`, `/run`, `/stop`,
-  `/export` and `/chart` — the last one sending a price or search-position chart
-  as a photo, drawn without a plotting dependency and captioned rather than
-  labelled, so every word stays selectable text.
-  It reaches Telegram directly where that works and through your
-  BlankTrail port where it does not, and the settings screen shows which.
+* **Telegram** — notifications, and a bot. `/jobs` lists what is saved with the
+  progress of anything in flight; `/export` sends the results as a file in any
+  of the five formats; `/chart` sends a price or search-position chart as a
+  photo, drawn without a plotting dependency and captioned rather than labelled,
+  so every word stays selectable text. `/run` and `/stop` are answered but
+  refuse — see below. It reaches Telegram directly where that works and through
+  your BlankTrail port where it does not, and the settings screen shows which.
 
 ## What it does not do
 
 Stated plainly, because the alternative is a checkbox that collects nothing:
 
+* **Collect anything.** The engine is written and tested — planning, resuming,
+  per-item state, the fetchers for every task type — but nothing in this build
+  assembles it: there is no channel mixer (spec section 3.5) and so no site
+  client built on one. No job runs, from the panel, from a schedule or from the
+  bot, and `/run` says exactly that rather than pretending. Everything the
+  product does with data it has — history, rules, notifications, exports,
+  charts — works on data put there by something else.
 * **Promotions.** This build has no source for them, so no promotion fields and
   no promotion rules exist.
 * **Comparison against competitors.** Every rule of that kind is phrased

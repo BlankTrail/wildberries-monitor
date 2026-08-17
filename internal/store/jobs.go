@@ -157,6 +157,112 @@ func (s *Store) Job(ctx context.Context, id int64) (JobRow, error) {
 	return j, nil
 }
 
+// JobStatus is one saved job together with what its runs say about it.
+//
+// Deliberately not JobRow with fields added: a JobRow is what the jobs table
+// holds, and every field here comes from somewhere else — from job_runs and
+// job_items — which is exactly the distinction that keeps SaveJob from being
+// handed something it cannot store. Only the identifying part of the job comes
+// along, because the only two things that read this are the bot's job list and
+// the panel's, and neither shows a params blob.
+type JobStatus struct {
+	ID   int64
+	Name string
+	Type string
+
+	// Running is whether this job has a run with no finish time.
+	//
+	// A field of its own rather than something to infer from Total, even though
+	// StartRun refuses an empty plan and so a live run always has items: a
+	// caller reading "Total > 0" would be resting on that refusal without
+	// knowing it, and the day a run is opened before its plan is counted the
+	// list would call it idle.
+	Running bool
+	// Done and Total are the items of the run with no finish time, and both are
+	// zero when there is none. A run in flight is the only run whose progress
+	// anybody is asking about.
+	//
+	// Done counts every item the run has stopped working on, failures and skips
+	// included: progress is how much of the plan is behind it, not how much of
+	// it succeeded. A bar that stalled on a failed item would report a run as
+	// hung when it is finishing.
+	Done, Total int64
+
+	// LastFinish is when a run of this job last finished, whatever it finished
+	// as, and zero if none ever has. Not the last *successful* finish: "ran an
+	// hour ago and failed" and "never ran" are different things to be told, and
+	// one number that hid the first behind the second would be the worse of the
+	// two answers.
+	LastFinish int64
+	// LastState is what that run finished as — RunDone, RunFailed or
+	// RunStopped — and empty alongside a zero LastFinish.
+	LastState string
+}
+
+// Jobs lists every saved job with the state of its runs, oldest first.
+//
+// A slice rather than a stream, and that is not this package's usual choice:
+// the other reads here return iter.Seq2 because they walk history, which has no
+// bound. Jobs are configuration — there are tens of them, a person typed each
+// one, and every caller wants all of them at once to draw a list.
+//
+// Oldest first, so that the numbers a person learns to type at the bot stay
+// where they were when a new job is added.
+func (s *Store) Jobs(ctx context.Context) ([]JobStatus, error) {
+	// The two subqueries answer two different questions and are joined
+	// separately for that reason. "What is running" is about the run without a
+	// finish time; "when did it last run" is about the newest one with one, and
+	// a single pass over job_runs could not group by both at once.
+	//
+	// A LEFT JOIN either way: a job that has never run is not a job to leave
+	// out of the list, which is what an inner join would do to every job on a
+	// fresh install.
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT j.id, j.name, j.type,
+		       live.job_id IS NOT NULL,
+		       COALESCE(live.done, 0), COALESCE(live.total, 0),
+		       COALESCE(fin.finished_at, 0), COALESCE(fin.state, '')
+		FROM jobs j
+		LEFT JOIN (
+		    SELECT r.job_id,
+		           COUNT(i.position) AS total,
+		           SUM(CASE WHEN i.state IN ('pending', 'running') THEN 0 ELSE 1 END) AS done
+		    FROM job_runs r
+		    LEFT JOIN job_items i ON i.run_id = r.id
+		    WHERE r.finished_at IS NULL
+		    GROUP BY r.job_id
+		) live ON live.job_id = j.id
+		LEFT JOIN (
+		    SELECT r.job_id, r.finished_at, r.state
+		    FROM job_runs r
+		    WHERE r.finished_at IS NOT NULL
+		      AND r.finished_at = (
+		          SELECT MAX(r2.finished_at) FROM job_runs r2
+		          WHERE r2.job_id = r.job_id AND r2.finished_at IS NOT NULL
+		      )
+		    GROUP BY r.job_id
+		) fin ON fin.job_id = j.id
+		ORDER BY j.id`)
+	if err != nil {
+		return nil, fmt.Errorf("store: jobs: %w", err)
+	}
+	defer rows.Close()
+
+	var out []JobStatus
+	for rows.Next() {
+		var j JobStatus
+		if err := rows.Scan(&j.ID, &j.Name, &j.Type,
+			&j.Running, &j.Done, &j.Total, &j.LastFinish, &j.LastState); err != nil {
+			return nil, fmt.Errorf("store: jobs: %w", err)
+		}
+		out = append(out, j)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: jobs: %w", err)
+	}
+	return out, nil
+}
+
 // StartRun opens a run and writes its plan, both in one transaction.
 //
 // One transaction is the whole point. Half a written plan is worse than none:
