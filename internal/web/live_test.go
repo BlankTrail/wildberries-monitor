@@ -1,0 +1,267 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+package web
+
+import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/BlankTrail/wildberries-monitor/internal/events"
+)
+
+// liveServer is a server with a bus, listening on a real port.
+//
+// httptest.NewRecorder cannot be used here: it is not an http.Flusher in the
+// sense this handler needs — nothing reads from it while the handler is still
+// writing — so a streaming handler tested through it would only ever be
+// checked after it returned, which is the one moment its liveness does not
+// matter.
+func liveServer(t *testing.T) (*httptest.Server, *events.Bus) {
+	t.Helper()
+	srv := newServer(t)
+	bus := events.New()
+	t.Cleanup(func() { bus.Close() })
+	srv.Bus = bus
+
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+	return ts, bus
+}
+
+// openStream connects to /live and returns the response, ready to be read
+// message by message.
+func openStream(t *testing.T, ts *httptest.Server, ctx context.Context, run string) *http.Response {
+	t.Helper()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ts.URL+"/live?run="+run, nil)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	req.SetBasicAuth("monitor", "correct horse")
+	res, err := ts.Client().Do(req)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	t.Cleanup(func() { res.Body.Close() })
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("live = %d", res.StatusCode)
+	}
+	return res
+}
+
+// readMessage reads until the blank line that ends one SSE message.
+func readMessage(t *testing.T, res *http.Response) string {
+	t.Helper()
+	buf := make([]byte, 1)
+	var got strings.Builder
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		n, err := res.Body.Read(buf)
+		if err != nil {
+			t.Fatalf("read: %v (so far: %q)", err, got.String())
+		}
+		if n == 0 {
+			continue
+		}
+		got.WriteByte(buf[0])
+		if strings.HasSuffix(got.String(), "\n\n") {
+			return got.String()
+		}
+	}
+	t.Fatalf("no complete message within five seconds; got %q", got.String())
+	return ""
+}
+
+func TestLive_DeliversARunsProgressWithoutAReload(t *testing.T) {
+	ts, bus := liveServer(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	res := openStream(t, ts, ctx, "7")
+	if ct := res.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/event-stream") {
+		t.Errorf("content type = %q, want an event stream", ct)
+	}
+
+	if err := bus.Publish(ctx, events.Event{
+		Kind: events.RunProgress, RunID: 7, Payload: "12 из 40",
+	}); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+
+	msg := readMessage(t, res)
+	if !strings.Contains(msg, "event: progress") {
+		t.Errorf("message = %q, want a progress event", msg)
+	}
+	if !strings.Contains(msg, "12 из 40") {
+		t.Errorf("message = %q, want it to carry the payload", msg)
+	}
+}
+
+func TestLive_IgnoresAnotherRunsEvents(t *testing.T) {
+	// Two runs can be watched at once from two tabs. Without the filter each
+	// tab shows both, and the numbers on screen belong to neither run.
+	ts, bus := liveServer(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	res := openStream(t, ts, ctx, "7")
+
+	// The other run first, so that receiving the second message is proof the
+	// first was skipped rather than merely slow.
+	for _, ev := range []events.Event{
+		{Kind: events.RunProgress, RunID: 8, Payload: "чужой прогресс"},
+		{Kind: events.RunProgress, RunID: 7, Payload: "свой прогресс"},
+	} {
+		if err := bus.Publish(ctx, ev); err != nil {
+			t.Fatalf("Publish: %v", err)
+		}
+	}
+
+	msg := readMessage(t, res)
+	if strings.Contains(msg, "чужой") {
+		t.Errorf("another run's event arrived: %q", msg)
+	}
+	if !strings.Contains(msg, "свой") {
+		t.Errorf("message = %q, want this run's progress", msg)
+	}
+}
+
+func TestLive_ReleasesItsSubscriptionWhenTheBrowserLeaves(t *testing.T) {
+	// The trap this endpoint was specified around. A subscription nobody
+	// released is one the bus feeds forever, and every reload of the page
+	// would add another — after an afternoon of them, every publish walks a
+	// list of dead channels and counts a drop against each.
+	ts, bus := liveServer(t)
+	ctx, cancel := context.WithCancel(context.Background())
+
+	res := openStream(t, ts, ctx, "7")
+	if err := bus.Publish(ctx, events.Event{Kind: events.RunProgress, RunID: 7, Payload: "жив"}); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	readMessage(t, res)
+
+	cancel() // the browser goes away
+
+	// Each attempt publishes more than the follower's buffer could hold. A
+	// subscription still on the list fills up and counts a drop for every
+	// event past the buffer; a released one counts nothing, because it is no
+	// longer there to be sent to. Retried because the handler needs a moment
+	// to notice the connection died — what is being pinned is that it ever
+	// stops, not how fast.
+	waitFor(t, func() bool {
+		before := bus.Stats().Dropped
+		for range followBuffer + 10 {
+			_ = bus.Publish(context.Background(), events.Event{Kind: events.RunProgress, RunID: 7})
+		}
+		return bus.Stats().Dropped == before
+	}, "the subscription was still being fed after the browser left")
+}
+
+func TestLive_SaysSoWhenTheServerStops(t *testing.T) {
+	// A connection that simply stops looks like a network failure, and the
+	// browser retries it against a server that is going away.
+	ts, bus := liveServer(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	res := openStream(t, ts, ctx, "7")
+	if err := bus.Publish(ctx, events.Event{Kind: events.RunProgress, RunID: 7, Payload: "идёт"}); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	readMessage(t, res)
+
+	bus.Close()
+	msg := readMessage(t, res)
+	if !strings.Contains(msg, "event: done") {
+		t.Errorf("message = %q, want the stream to say it is finished", msg)
+	}
+}
+
+func TestLive_EndsWhenTheRunDoes(t *testing.T) {
+	// Left open, the connection is a subscription held for a run that will
+	// never publish again — and the browser's own reconnect logic would keep
+	// it alive across restarts.
+	ts, bus := liveServer(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	res := openStream(t, ts, ctx, "7")
+	if err := bus.Publish(ctx, events.Event{
+		Kind: events.RunFinished, RunID: 7, Payload: "готово: 40 из 40",
+	}); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+
+	if msg := readMessage(t, res); !strings.Contains(msg, "event: done") {
+		t.Errorf("message = %q, want a done event", msg)
+	}
+	// And the body ends rather than staying open. Read on its own goroutine
+	// so that a connection which never closes fails this test in a second
+	// rather than hanging until the whole package times out — a suite that
+	// reports "test timed out" names nothing.
+	ended := make(chan error, 1)
+	go func() {
+		_, err := res.Body.Read(make([]byte, 1))
+		ended <- err
+	}()
+	select {
+	case err := <-ended:
+		if err == nil {
+			t.Error("the connection stayed open after the run finished")
+		}
+	case <-time.After(2 * time.Second):
+		t.Error("the connection stayed open after the run finished")
+	}
+}
+
+func TestWriteEvent_KeepsAMultiLineBodyInOneMessage(t *testing.T) {
+	// A bare newline inside a body ends the message early, and the rest
+	// arrives as a message with no name — which looks like a truncated log
+	// line rather than like a framing bug.
+	var w strings.Builder
+	writeEvent(nopFlusher{&w}, "log", "первая\nвторая")
+
+	got := w.String()
+	if strings.Count(got, "data: ") != 2 {
+		t.Errorf("message = %q, want each line on its own data field", got)
+	}
+	if !strings.HasSuffix(got, "\n\n") {
+		t.Errorf("message = %q, want it terminated by a blank line", got)
+	}
+	if strings.Count(got, "event: ") != 1 {
+		t.Errorf("message = %q, want exactly one event name", got)
+	}
+}
+
+func TestLive_RefusesWithoutARun(t *testing.T) {
+	srv := newServer(t)
+	srv.Bus = events.New()
+	t.Cleanup(func() { srv.Bus.Close() })
+
+	if got := get(t, srv, "/live", "correct horse").Code; got != http.StatusBadRequest {
+		t.Errorf("no run id = %d, want 400", got)
+	}
+}
+
+// waitFor retries a condition until it holds or a second has passed.
+func waitFor(t *testing.T, cond func() bool, msg string) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Error(msg)
+}
+
+// nopFlusher lets writeEvent be tested against a plain builder.
+type nopFlusher struct{ w *strings.Builder }
+
+func (n nopFlusher) Header() http.Header         { return http.Header{} }
+func (n nopFlusher) Write(b []byte) (int, error) { return n.w.Write(b) }
+func (n nopFlusher) WriteHeader(int)             {}

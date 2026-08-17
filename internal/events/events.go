@@ -172,6 +172,56 @@ func (b *Bus) SubscribeAsync(name string, kind Kind, buffer int, fn Handler) err
 	return nil
 }
 
+// Follow registers a temporary asynchronous subscriber and hands back both
+// its channel and the function that removes it.
+//
+// The two are returned together on purpose. A live screen subscribes for as
+// long as a browser stays connected, and every one of those subscriptions has
+// to end when the connection does — a subscriber nobody removed is a
+// subscriber the bus keeps feeding forever, and every page reload would add
+// another. Handing out the channel without the way to give it back would make
+// that leak the easy path.
+//
+// stop is safe to call more than once and safe to call after Close: the two
+// paths race by construction — a browser can disappear at the same moment the
+// program shuts down — and a close of an already-closed channel would panic
+// inside whichever lost.
+//
+// Events are dropped when the buffer is full, exactly as for any other
+// asynchronous subscriber, and counted the same way. A browser on a slow link
+// must not be able to hold up a scrape.
+func (b *Bus) Follow(kind Kind, buffer int) (<-chan Event, func(), error) {
+	if buffer <= 0 {
+		return nil, nil, fmt.Errorf("events: follow: buffer must be positive, got %d", buffer)
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed {
+		return nil, nil, ErrClosed
+	}
+
+	s := &asyncSub{
+		subscription: subscription{name: "follow", kind: kind},
+		ch:           make(chan Event, buffer),
+	}
+	b.async = append(b.async, s)
+
+	stop := func() {
+		b.mu.Lock()
+		for i, other := range b.async {
+			if other == s {
+				b.async = append(b.async[:i], b.async[i+1:]...)
+				break
+			}
+		}
+		b.mu.Unlock()
+		// Closed after it is off the list, so Publish cannot be holding the
+		// read lock and about to send on a channel this is closing.
+		s.once.Do(func() { close(s.ch) })
+	}
+	return s.ch, stop, nil
+}
+
 // Publish delivers one event.
 //
 // Synchronous subscribers run first and in registration order, and the first

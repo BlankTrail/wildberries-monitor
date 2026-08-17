@@ -29,6 +29,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/BlankTrail/wildberries-monitor/internal/events"
 	"github.com/BlankTrail/wildberries-monitor/internal/store"
 )
 
@@ -73,6 +74,11 @@ type Server struct {
 	// in M0, and re-implementing it here would be a second opinion nobody
 	// asked for.
 	CheckBlankTrail func(url, apiKey string) error
+
+	// Bus is where the live screen gets its events. A field rather than a
+	// package-level default so that a server built without one refuses the
+	// live endpoint out loud instead of streaming an empty connection.
+	Bus *events.Bus
 
 	Now func() time.Time
 
@@ -151,6 +157,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /settings", s.auth(http.HandlerFunc(s.saveSettings)))
 	mux.Handle("POST /settings/check", s.auth(http.HandlerFunc(s.checkSettings)))
 
+	mux.Handle("GET /live", s.auth(http.HandlerFunc(s.live)))
 	mux.Handle("GET /jobs", s.auth(http.HandlerFunc(s.jobsPage)))
 	mux.Handle("POST /jobs", s.auth(http.HandlerFunc(s.saveJobHandler)))
 	mux.Handle("POST /jobs/estimate", s.auth(http.HandlerFunc(s.estimateHandler)))

@@ -259,3 +259,83 @@ func TestClose_IsSafeTwice(t *testing.T) {
 		t.Errorf("second Close: %v, want nil", err)
 	}
 }
+
+func TestFollow_StopsFeedingOnceItIsReleased(t *testing.T) {
+	// The leak this exists to prevent: a browser that reloads the page leaves
+	// its subscription behind, and after an afternoon of reloads the bus is
+	// feeding a hundred channels nobody reads.
+	b := New()
+	defer b.Close()
+
+	ch, stop, err := b.Follow("", 4)
+	if err != nil {
+		t.Fatalf("Follow: %v", err)
+	}
+	if err := b.Publish(context.Background(), Event{Kind: ItemScraped}); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	if got := <-ch; got.Kind != ItemScraped {
+		t.Errorf("got %v, want the published event", got.Kind)
+	}
+
+	stop()
+	if err := b.Publish(context.Background(), Event{Kind: ItemScraped}); err != nil {
+		t.Fatalf("Publish after stop: %v", err)
+	}
+	// The channel is closed, so a receive gives the zero value immediately
+	// rather than the event. A subscription still on the list would have been
+	// sent to instead — and, since nothing reads it, would fill and start
+	// counting drops against a run it no longer belongs to.
+	if _, open := <-ch; open {
+		t.Error("the follower was still on the list after it was released")
+	}
+}
+
+func TestFollow_ReleasingTwiceIsHarmless(t *testing.T) {
+	// A browser can disappear at the same moment the program shuts down, so
+	// the two paths race by construction. A second close of the same channel
+	// would panic inside whichever lost.
+	b := New()
+	_, stop, err := b.Follow("", 1)
+	if err != nil {
+		t.Fatalf("Follow: %v", err)
+	}
+	stop()
+	stop()
+	if err := b.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+}
+
+func TestFollow_ASlowReaderIsDroppedRatherThanWaitedFor(t *testing.T) {
+	// A browser on a train must not be able to hold up a scrape. The drop is
+	// counted, because a live screen that silently missed events would be
+	// worse than one that says it fell behind.
+	b := New()
+	defer b.Close()
+
+	_, stop, err := b.Follow("", 1)
+	if err != nil {
+		t.Fatalf("Follow: %v", err)
+	}
+	defer stop()
+
+	for range 5 {
+		if err := b.Publish(context.Background(), Event{Kind: ItemScraped}); err != nil {
+			t.Fatalf("Publish: %v", err)
+		}
+	}
+	if got := b.Stats().Dropped; got == 0 {
+		t.Error("a follower that read nothing caused no drops, so the publisher was waiting on it")
+	}
+}
+
+func TestFollow_RefusesToHandOutAnUnbufferedChannel(t *testing.T) {
+	// Zero capacity makes every publish rendezvous with the browser, which is
+	// the one thing an asynchronous subscriber exists not to do.
+	b := New()
+	defer b.Close()
+	if _, _, err := b.Follow("", 0); err == nil {
+		t.Error("a zero-length buffer was accepted")
+	}
+}
