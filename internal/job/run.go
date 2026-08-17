@@ -230,5 +230,10 @@ func (r *Runner) walk(ctx context.Context, j Job, runID int64, todo []store.Item
 	}
 	close(work)
 	wg.Wait()
-	return stopped.Load()
+	// Cancelled at any point during the walk counts as stopped, even when
+	// every remaining item happened to finish before the cancellation was
+	// noticed. The alternative reports "completed" for a run the user
+	// stopped, which is a lie about why it ended — and the run record is what
+	// an operator reads afterwards to find out.
+	return stopped.Load() || ctx.Err() != nil
 }
