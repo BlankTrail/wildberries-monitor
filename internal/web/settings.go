@@ -41,12 +41,14 @@ func (s *Server) writeSettingsForm(w http.ResponseWriter, r *http.Request, notic
 	// Read for display, never in the clear: this is the one function whose
 	// output goes into a page, and the page is what a user screenshots.
 	shown, err := s.Store.SettingsForDisplay(r.Context(),
-		store.SettingBlankTrailURL, store.SettingBlankTrailAPIKey)
+		store.SettingBlankTrailURL, store.SettingBlankTrailAPIKey,
+		store.SettingTelegramToken, store.SettingTelegramChat)
 	if err != nil {
 		http.Error(w, "settings: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 	url, key := shown[0], shown[1]
+	tgToken, tgChat := shown[2], shown[3]
 
 	var b strings.Builder
 	b.WriteString(`<form class="bt-fieldset" data-post="/settings" data-target="#settings-body">`)
@@ -77,11 +79,44 @@ func (s *Server) writeSettingsForm(w http.ResponseWriter, r *http.Request, notic
   <span class="bt-form-hint">` + keyHint + `</span>
 </div>`)
 
+	// The same masking as the API key, and for a stronger reason: whoever
+	// holds a bot token holds the bot, including every chat it has been added
+	// to.
+	tokenHint := "Токен не задан. Уведомления никуда не уйдут."
+	if tgToken.Set && tgToken.Value != "" {
+		tokenHint = "Токен сохранён. Оставьте поле как есть, чтобы не менять его."
+	}
+	b.WriteString(`<h3>Telegram</h3>`)
+	b.WriteString(`<div class="bt-field">
+  <label class="bt-label" for="tg-token">Токен бота</label>
+  <input class="bt-input bt-input--mono" id="tg-token" name="telegram_token" type="password"
+         autocomplete="off" value="` + html.EscapeString(tgToken.Value) + `">
+  <span class="bt-form-hint">` + tokenHint + ` Выдаётся @BotFather.</span>
+</div>`)
+	b.WriteString(`<div class="bt-field">
+  <label class="bt-label" for="tg-chat">Чат по умолчанию</label>
+  <input class="bt-input bt-input--mono" id="tg-chat" name="telegram_chat"
+         placeholder="123456789" value="` + html.EscapeString(tgChat.Value) + `">
+  <span class="bt-form-hint">Числовой идентификатор, @имя канала или «чат:тема» для темы в форуме.
+  В правиле можно указать свой адресат.</span>
+</div>`)
+	// Which rung of the ladder is live. Spec section 8.1's last sentence, and
+	// the only place a person can find out why their notifications go the way
+	// they do.
+	b.WriteString(`<div class="bt-field">
+  <span class="bt-label">Путь до Telegram</span>
+  <span class="bt-badge bt-badge--neutral">` + html.EscapeString(s.telegramRoute()) + `</span>
+  <span class="bt-form-hint">Выбирается сам при первой отправке: сначала напрямую, затем через BlankTrail.</span>
+</div>`)
+
 	b.WriteString(`<div class="bt-field">
   <button class="bt-btn bt-btn--primary" type="submit">Сохранить</button>
   <button class="bt-btn bt-btn--secondary" type="button"
           data-get="/settings/check" data-target="#settings-body"
           formnovalidate>Проверить соединение</button>
+  <button class="bt-btn bt-btn--secondary" type="button"
+          data-get="/settings/telegram" data-target="#settings-body"
+          formnovalidate>Проверить Telegram</button>
   <button class="bt-btn bt-btn--ghost" type="button" data-close-settings>Закрыть</button>
 </div>`)
 	b.WriteString(`</form>`)
@@ -102,6 +137,20 @@ func (s *Server) saveSettings(w http.ResponseWriter, r *http.Request) {
 	if err := s.Store.SetSetting(ctx, store.SettingBlankTrailURL, url, store.SettingText); err != nil {
 		http.Error(w, "settings: "+err.Error(), http.StatusInternalServerError)
 		return
+	}
+
+	if err := s.Store.SetSetting(ctx, store.SettingTelegramChat,
+		strings.TrimSpace(r.FormValue("telegram_chat")), store.SettingText); err != nil {
+		http.Error(w, "settings: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	// Same rule as the API key below: the mask means "leave it alone".
+	if token := r.FormValue("telegram_token"); token != store.MaskedSecret() {
+		if err := s.Store.SetSetting(ctx, store.SettingTelegramToken,
+			strings.TrimSpace(token), store.SettingSecret); err != nil {
+			http.Error(w, "settings: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 
 	// The mask coming back means "leave it alone". Without this the act of
@@ -144,5 +193,46 @@ func (s *Server) checkSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.writeSettingsForm(w, r, `<div class="bt-alert bt-alert--success">Соединение установлено.</div>`)
+	}
+}
+
+// telegramRoute names the rung of the ladder currently in use.
+//
+// A method on the server rather than a read of the ladder at the call site,
+// because a build with no Telegram wired up at all must say so plainly: an
+// empty badge reads as "something is broken" when the truth is "nothing is
+// configured yet".
+func (s *Server) telegramRoute() string {
+	if s.TelegramRoute == nil {
+		return "не настроен"
+	}
+	return s.TelegramRoute()
+}
+
+// checkTelegram asks Telegram who this bot is, over the ladder.
+//
+// getMe rather than a message to the configured chat: the check must not put
+// a test message into the group the user shares with their colleagues, and it
+// still proves both halves — the route reaches Telegram and Telegram accepts
+// the token.
+func (s *Server) checkTelegram(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	token := s.Store.SettingOr(ctx, store.SettingTelegramToken, "")
+
+	switch {
+	case token == "":
+		s.writeSettingsForm(w, r, `<div class="bt-alert bt-alert--warning">Сначала укажите токен бота.</div>`)
+	case s.CheckTelegram == nil:
+		s.writeSettingsForm(w, r, `<div class="bt-alert bt-alert--neutral">Проверка недоступна в этой сборке.</div>`)
+	default:
+		name, err := s.CheckTelegram(ctx, token)
+		if err != nil {
+			s.writeSettingsForm(w, r,
+				`<div class="bt-alert bt-alert--error">Telegram не отвечает: `+html.EscapeString(err.Error())+`</div>`)
+			return
+		}
+		s.writeSettingsForm(w, r,
+			`<div class="bt-alert bt-alert--success">Бот на связи: @`+html.EscapeString(name)+
+				`, путь — `+html.EscapeString(s.telegramRoute())+`.</div>`)
 	}
 }

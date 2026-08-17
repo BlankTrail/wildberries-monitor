@@ -15,6 +15,7 @@
 package web
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/subtle"
 	"embed"
@@ -74,6 +75,13 @@ type Server struct {
 	// in M0, and re-implementing it here would be a second opinion nobody
 	// asked for.
 	CheckBlankTrail func(url, apiKey string) error
+
+	// CheckTelegram asks Telegram who this bot is, over whatever ladder the
+	// wiring built. A field for the same reason CheckBlankTrail is one: the
+	// suite must not need a live Telegram.
+	CheckTelegram func(ctx context.Context, token string) (username string, err error)
+	// TelegramRoute names the rung currently in use, for the settings screen.
+	TelegramRoute func() string
 
 	// Bus is where the live screen gets its events. A field rather than a
 	// package-level default so that a server built without one refuses the
@@ -156,6 +164,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /settings", s.auth(http.HandlerFunc(s.settingsForm)))
 	mux.Handle("POST /settings", s.auth(http.HandlerFunc(s.saveSettings)))
 	mux.Handle("POST /settings/check", s.auth(http.HandlerFunc(s.checkSettings)))
+	mux.Handle("POST /settings/telegram", s.auth(http.HandlerFunc(s.checkTelegram)))
+	mux.Handle("GET /settings/telegram", s.auth(http.HandlerFunc(s.checkTelegram)))
 
 	mux.Handle("GET /rules", s.auth(http.HandlerFunc(s.rulesPage)))
 	mux.Handle("POST /rules", s.auth(http.HandlerFunc(s.saveRule)))

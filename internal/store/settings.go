@@ -19,6 +19,13 @@ const (
 	SettingBlankTrailAPIKey = "blanktrail.api_key"
 	SettingDataDir          = "data.dir"
 	SettingListenLAN        = "web.listen_lan"
+
+	// SettingTelegramToken is the bot token, and it is a secret in the strong
+	// sense: whoever holds it holds the bot, including every chat it is in.
+	SettingTelegramToken = "telegram.token"
+	// SettingTelegramChat is the default addressee — spec section 8.3's "by
+	// default everything into one chat". A rule may name its own instead.
+	SettingTelegramChat = "telegram.chat"
 )
 
 // Setting value types, matching the CHECK on settings.type.
