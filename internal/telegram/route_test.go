@@ -51,13 +51,13 @@ func request(t *testing.T) *http.Request {
 	return req
 }
 
-func TestLadder_TakesTheFirstRungThatWorks(t *testing.T) {
+func TestRouteLadder_TakesTheFirstRungThatWorks(t *testing.T) {
 	// The whole reason section 8.1 is a ladder rather than a setting: the
 	// answer differs per machine, and a user should not have to know which
 	// network they are on.
 	blocked := &rung{name: "direct", fail: errors.New("i/o timeout")}
 	open := &rung{name: "blanktrail"}
-	l := &Ladder{Routes: []Route{blocked, open}}
+	l := &RouteLadder{Routes: []Route{blocked, open}}
 
 	res, err := l.Do(t.Context(), request(t))
 	if err != nil {
@@ -70,13 +70,13 @@ func TestLadder_TakesTheFirstRungThatWorks(t *testing.T) {
 	}
 }
 
-func TestLadder_RemembersTheRungItFound(t *testing.T) {
+func TestRouteLadder_RemembersTheRungItFound(t *testing.T) {
 	// A live check costs a round trip. Paid before every notification, a
 	// monitor sending thirty messages an hour spends thirty extra round trips
 	// on a question whose answer changes about never.
 	blocked := &rung{name: "direct", fail: errors.New("i/o timeout")}
 	open := &rung{name: "blanktrail"}
-	l := &Ladder{Routes: []Route{blocked, open}}
+	l := &RouteLadder{Routes: []Route{blocked, open}}
 
 	for range 5 {
 		res, err := l.Do(t.Context(), request(t))
@@ -93,14 +93,14 @@ func TestLadder_RemembersTheRungItFound(t *testing.T) {
 	}
 }
 
-func TestLadder_AFailureSendsItBackToTheTop(t *testing.T) {
+func TestRouteLadder_AFailureSendsItBackToTheTop(t *testing.T) {
 	// Both halves matter. Retrying the same broken path is how a monitor
 	// spends an outage failing in one place while another was open — and
 	// walking from the top is also how a user who fixed their network gets
 	// the direct route back without restarting anything.
 	direct := &rung{name: "direct", fail: errors.New("i/o timeout")}
 	fallback := &rung{name: "blanktrail"}
-	l := &Ladder{Routes: []Route{direct, fallback}}
+	l := &RouteLadder{Routes: []Route{direct, fallback}}
 
 	res, err := l.Do(t.Context(), request(t))
 	if err != nil {
@@ -126,15 +126,15 @@ func TestLadder_AFailureSendsItBackToTheTop(t *testing.T) {
 	}
 }
 
-func TestLadder_UsesTheLiveCheckBeforeCommitting(t *testing.T) {
+func TestRouteLadder_UsesItsProbeBeforeCommitting(t *testing.T) {
 	// A route that reaches Telegram with a token Telegram rejects is not a
 	// route that can deliver anything. Without the check, the ladder would
 	// settle on it and every message would fail there.
 	rejected := &rung{name: "direct"}
 	good := &rung{name: "blanktrail"}
-	l := &Ladder{
+	l := &RouteLadder{
 		Routes: []Route{rejected, good},
-		Check: func(_ context.Context, r Route) error {
+		Probe: func(_ context.Context, r Route) error {
 			if r.Name() == "direct" {
 				return errors.New("Unauthorized")
 			}
@@ -156,10 +156,10 @@ func TestLadder_UsesTheLiveCheckBeforeCommitting(t *testing.T) {
 	}
 }
 
-func TestLadder_NamesEveryRungsOwnReason(t *testing.T) {
+func TestRouteLadder_NamesEveryRungsOwnReason(t *testing.T) {
 	// One combined "Telegram is unreachable" leaves a user guessing which of
 	// three things to fix, and the three fixes are unrelated.
-	l := &Ladder{Routes: []Route{
+	l := &RouteLadder{Routes: []Route{
 		&rung{name: "direct", fail: errors.New("i/o timeout")},
 		&rung{name: "blanktrail", fail: errors.New("license does not allow this domain")},
 	}}
@@ -175,13 +175,13 @@ func TestLadder_NamesEveryRungsOwnReason(t *testing.T) {
 	}
 }
 
-func TestLadder_DoesNotBlameTheRouteForACancelledRequest(t *testing.T) {
+func TestRouteLadder_DoesNotBlameTheRouteForACancelledRequest(t *testing.T) {
 	// Walking the ladder on a cancelled context checks every rung against a
 	// context that will refuse them all, and forgets a route that was fine.
 	// The user then pays a full walk on the next message for nothing.
 	open := &rung{name: "direct"}
 	fallback := &rung{name: "blanktrail"}
-	l := &Ladder{Routes: []Route{open, fallback}}
+	l := &RouteLadder{Routes: []Route{open, fallback}}
 
 	res, err := l.Do(t.Context(), request(t))
 	if err != nil {
@@ -203,10 +203,10 @@ func TestLadder_DoesNotBlameTheRouteForACancelledRequest(t *testing.T) {
 	}
 }
 
-func TestLadder_SaysSoWhenNothingIsConfigured(t *testing.T) {
+func TestRouteLadder_SaysSoWhenNothingIsConfigured(t *testing.T) {
 	// A fresh installation has no route. Reported as a network failure, the
 	// user goes looking at their firewall.
-	l := &Ladder{}
+	l := &RouteLadder{}
 	if _, err := l.Do(t.Context(), request(t)); err == nil {
 		t.Error("an empty ladder reported success")
 	}
@@ -287,7 +287,7 @@ type roundTripperFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
-func TestLadder_ForgetsABrokenRungEvenWhenNothingElseWorks(t *testing.T) {
+func TestRouteLadder_ForgetsABrokenRungEvenWhenNothingElseWorks(t *testing.T) {
 	// The half the recovery test cannot see: when a later walk succeeds it
 	// records the new rung anyway, so forgetting looks unnecessary. It is not.
 	// With every rung down, a remembered broken one is tried first on every
@@ -295,7 +295,7 @@ func TestLadder_ForgetsABrokenRungEvenWhenNothingElseWorks(t *testing.T) {
 	// that comes back first.
 	direct := &rung{name: "direct"}
 	fallback := &rung{name: "blanktrail", fail: errors.New("gateway down")}
-	l := &Ladder{Routes: []Route{direct, fallback}}
+	l := &RouteLadder{Routes: []Route{direct, fallback}}
 
 	res, err := l.Do(t.Context(), request(t))
 	if err != nil {

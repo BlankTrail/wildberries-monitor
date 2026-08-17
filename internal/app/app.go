@@ -51,6 +51,7 @@ type App struct {
 
 	Scheduler *job.Scheduler
 	Bot       *telegram.Bot
+	MTProto   *telegram.MTProto
 	Commands  *telegram.Commands
 	Ladder    *telegram.Ladder
 
@@ -99,23 +100,20 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 		Log: log.New(os.Stderr, "wbmon ", log.LstdFlags),
 	}
 
-	a.Ladder = &telegram.Ladder{Routes: []telegram.Route{telegram.DirectRoute{}}}
-	a.Bot = &telegram.Bot{Route: a.Ladder}
-	a.Ladder.Check = func(ctx context.Context, r telegram.Route) error {
-		// The check is the bot's own getMe over that one rung, which is the
-		// only check that proves what a message will actually need: the route
-		// reaches Telegram and Telegram accepts the token.
-		probe := &telegram.Bot{Token: a.Bot.Token, Route: r, API: a.Bot.API}
-		_, err := probe.GetMe(ctx)
-		return err
-	}
+	// The three rungs of spec section 8.1, in the order the spec puts them.
+	// Two share the Bot API and differ only in how they leave this machine;
+	// the third speaks Telegram's own protocol and depends on neither
+	// api.telegram.org nor a gateway.
+	a.Bot = &telegram.Bot{Route: telegram.DirectRoute{}}
+	a.MTProto = &telegram.MTProto{SessionDir: dir}
+	a.Ladder = &telegram.Ladder{Senders: []telegram.Sender{a.Bot, a.MTProto}}
 
 	a.Worker = &notify.Worker{
 		Store: s,
 		// Keyed on notify_targets.kind, which is what the queue looks up. A
 		// target of another kind waits rather than fails, which is how a build
 		// that adds a second transport finds its messages still there.
-		Transports: map[string]notify.Transport{"telegram": a.Bot},
+		Transports: map[string]notify.Transport{"telegram": telegram.AsTransport(a.Ladder)},
 	}
 
 	a.Server = &web.Server{
@@ -124,8 +122,14 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 		TelegramRoute: a.Ladder.Name,
 		Autostart:     osAutostart{},
 		CheckTelegram: func(ctx context.Context, token string) (string, error) {
-			probe := &telegram.Bot{Token: token, Route: a.Ladder, API: a.Bot.API}
-			return probe.GetMe(ctx)
+			// The whole ladder, not one rung: the question a person presses
+			// this for is "can you reach Telegram", and answering it about the
+			// path that happens to be first would say no on exactly the
+			// machines this ladder exists for.
+			if err := a.Ladder.Check(ctx); err != nil {
+				return "", err
+			}
+			return a.Ladder.Name(), nil
 		},
 	}
 
@@ -168,11 +172,15 @@ const settingTelegramOffset = "telegram.offset"
 // finding the tray icon, and on a server means an ssh session.
 func (a *App) reloadTelegram(ctx context.Context) {
 	token := a.Store.SettingOr(ctx, store.SettingTelegramToken, "")
-	if token != a.Bot.Token {
+	appID, _ := strconv.Atoi(a.Store.SettingOr(ctx, store.SettingTelegramAppID, "0"))
+	appHash := a.Store.SettingOr(ctx, store.SettingTelegramAppHash, "")
+
+	if token != a.Bot.Token || appID != a.MTProto.AppID || appHash != a.MTProto.AppHash {
 		a.Bot.Token = token
-		// A new token is a new bot: the rung that worked for the old one
-		// proves nothing about this one, and getMe is what the ladder checks
-		// with.
+		a.MTProto.Token, a.MTProto.AppID, a.MTProto.AppHash = token, appID, appHash
+		// New credentials are a new bot: the rung that worked for the old ones
+		// proves nothing about these, and the ladder's check is a real
+		// exchange.
 		a.Ladder.Forget()
 	}
 

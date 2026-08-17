@@ -23,6 +23,15 @@ const (
 	// SettingTelegramToken is the bot token, and it is a secret in the strong
 	// sense: whoever holds it holds the bot, including every chat it is in.
 	SettingTelegramToken = "telegram.token"
+	// SettingTelegramAppID and SettingTelegramAppHash are the my.telegram.org
+	// pair the MTProto rung needs. Spec section 8.2 asks for them only when
+	// the first two rungs are unavailable — sending somebody to
+	// my.telegram.org on a machine where the direct route works would be a
+	// setup step charged for nothing — so the settings screen keeps them out
+	// of the way until they are needed.
+	SettingTelegramAppID   = "telegram.app_id"
+	SettingTelegramAppHash = "telegram.app_hash"
+
 	// SettingTelegramChat is the default addressee — spec section 8.3's "by
 	// default everything into one chat". A rule may name its own instead.
 	SettingTelegramChat = "telegram.chat"

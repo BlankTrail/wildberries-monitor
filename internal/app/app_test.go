@@ -4,8 +4,6 @@ package app
 
 import (
 	"context"
-	"io"
-	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -171,35 +169,27 @@ func TestTick_PicksUpATokenSavedAMomentAgo(t *testing.T) {
 	}
 }
 
-// stubRoute is a rung that always works, so the ladder has something to
-// choose before the token changes underneath it.
-type stubRoute struct{}
+// stubSender is a rung that always works, so the ladder has something to
+// choose before the credentials change underneath it.
+type stubSender struct{}
 
-func (stubRoute) Name() string { return "stub" }
+func (stubSender) Name() string                                               { return "stub" }
+func (stubSender) Check(context.Context) error                                { return nil }
+func (stubSender) SendMessage(context.Context, string, string) error          { return nil }
+func (stubSender) SendDocument(context.Context, string, string, string) error { return nil }
 
-func (stubRoute) Do(context.Context, *http.Request) (*http.Response, error) {
-	return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"ok":true}`))}, nil
-}
-
-func TestReloadTelegram_ANewTokenForgetsTheRungTheOldOneUsed(t *testing.T) {
-	// A new token is a new bot. The rung that worked for the old one proves
-	// nothing about this one, and the ladder's own check is getMe — which the
-	// new token has never passed.
+func TestReloadTelegram_NewCredentialsForgetTheRungTheOldOnesUsed(t *testing.T) {
+	// New credentials are a new bot. The rung that worked for the old ones
+	// proves nothing about these, and the ladder's own check is a real
+	// exchange — which the new token has never made.
 	a := newApp(t)
 	ctx := t.Context()
 
 	a.Bot.Token = "old"
-	a.Ladder.Routes = []telegram.Route{stubRoute{}}
-	a.Ladder.Check = nil
-	req, err := http.NewRequest(http.MethodPost, "https://api.telegram.org/botX/getMe", nil)
-	if err != nil {
-		t.Fatalf("request: %v", err)
+	a.Ladder.Senders = []telegram.Sender{stubSender{}}
+	if err := a.Ladder.Check(ctx); err != nil {
+		t.Fatalf("Check: %v", err)
 	}
-	res, err := a.Ladder.Do(ctx, req)
-	if err != nil {
-		t.Fatalf("Do: %v", err)
-	}
-	res.Body.Close()
 	if a.Ladder.Chosen() == nil {
 		t.Fatal("the ladder chose nothing to begin with")
 	}
@@ -210,7 +200,52 @@ func TestReloadTelegram_ANewTokenForgetsTheRungTheOldOneUsed(t *testing.T) {
 	a.reloadTelegram(ctx)
 
 	if a.Ladder.Chosen() != nil {
-		t.Error("the ladder kept a rung chosen under the previous token")
+		t.Error("the ladder kept a rung chosen under the previous credentials")
+	}
+}
+
+func TestReloadTelegram_PicksUpTheMyTelegramOrgPair(t *testing.T) {
+	// The third rung cannot work without them, and the settings screen is the
+	// only place they arrive from.
+	a := newApp(t)
+	ctx := t.Context()
+
+	if err := a.Store.SetSetting(ctx, store.SettingTelegramAppID, "1234567", store.SettingInt); err != nil {
+		t.Fatalf("SetSetting: %v", err)
+	}
+	if err := a.Store.SetSetting(ctx, store.SettingTelegramAppHash, "deadbeef", store.SettingSecret); err != nil {
+		t.Fatalf("SetSetting: %v", err)
+	}
+	a.reloadTelegram(ctx)
+
+	if a.MTProto.AppID != 1234567 || a.MTProto.AppHash != "deadbeef" {
+		t.Errorf("mtproto has %d/%q, want the pair just saved", a.MTProto.AppID, a.MTProto.AppHash)
+	}
+	// And the token is shared: MTProto logs in as the same bot, and asking the
+	// user for it twice would be asking them to keep two copies in step.
+	if err := a.Store.SetSetting(ctx, store.SettingTelegramToken, "1234:secret", store.SettingSecret); err != nil {
+		t.Fatalf("SetSetting: %v", err)
+	}
+	a.reloadTelegram(ctx)
+	if a.MTProto.Token != a.Bot.Token {
+		t.Errorf("mtproto token %q, bot token %q — they are the same bot", a.MTProto.Token, a.Bot.Token)
+	}
+}
+
+func TestNew_LaddersAllThreeRungsInTheSpecsOrder(t *testing.T) {
+	// The order is the spec's: direct first because it is fastest where it
+	// works, the gateway next, MTProto last because it is the one that always
+	// works and the one that costs a login.
+	a := newApp(t)
+	if len(a.Ladder.Senders) < 2 {
+		t.Fatalf("%d rungs, want at least the Bot API and MTProto", len(a.Ladder.Senders))
+	}
+	first, last := a.Ladder.Senders[0].Name(), a.Ladder.Senders[len(a.Ladder.Senders)-1].Name()
+	if !strings.Contains(first, "bot api") {
+		t.Errorf("the first rung is %q, want the Bot API", first)
+	}
+	if last != "mtproto" {
+		t.Errorf("the last rung is %q, want mtproto", last)
 	}
 }
 

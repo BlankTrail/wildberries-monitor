@@ -112,7 +112,7 @@ func (r *releaseOnClose) Close() error {
 	return err
 }
 
-// Ladder tries routes in order and remembers the one that worked.
+// RouteLadder tries HTTP transports in order and remembers the one that worked.
 //
 // Caching is the point: a live check costs a round trip, and paying it before
 // every notification would make a monitor that sends thirty messages an hour
@@ -120,12 +120,13 @@ func (r *releaseOnClose) Close() error {
 // never. A failure clears the memory, so the next message re-walks the ladder
 // from the top — which is also how a user who fixed their network gets the
 // direct route back without restarting anything.
-type Ladder struct {
+type RouteLadder struct {
 	Routes []Route
-	// Check reports whether a route is usable. Replaced in tests; in the
-	// product it is the bot's own getMe, which is the only check that
-	// establishes what the message will actually need.
-	Check func(ctx context.Context, r Route) error
+	// Probe reports whether a route is usable before a request is committed
+	// to it. Nil means "just try the request", which is what the product
+	// does: the sender above already checked with getMe, and probing again
+	// here would be the same round trip twice.
+	Probe func(ctx context.Context, r Route) error
 
 	mu     sync.Mutex
 	chosen Route
@@ -133,20 +134,20 @@ type Ladder struct {
 
 // Chosen is the rung currently in use, or nil before the first success. The
 // settings screen shows it, which is spec section 8.1's last sentence.
-func (l *Ladder) Chosen() Route {
+func (l *RouteLadder) Chosen() Route {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.chosen
 }
 
 // Forget drops the remembered rung, so the next request walks from the top.
-func (l *Ladder) Forget() {
+func (l *RouteLadder) Forget() {
 	l.mu.Lock()
 	l.chosen = nil
 	l.mu.Unlock()
 }
 
-func (l *Ladder) Name() string {
+func (l *RouteLadder) Name() string {
 	if c := l.Chosen(); c != nil {
 		return c.Name()
 	}
@@ -154,7 +155,7 @@ func (l *Ladder) Name() string {
 }
 
 // Do sends one request over the first route that works.
-func (l *Ladder) Do(ctx context.Context, req *http.Request) (*http.Response, error) {
+func (l *RouteLadder) Do(ctx context.Context, req *http.Request) (*http.Response, error) {
 	if chosen := l.Chosen(); chosen != nil {
 		res, err := chosen.Do(ctx, req)
 		if err == nil {
@@ -174,15 +175,15 @@ func (l *Ladder) Do(ctx context.Context, req *http.Request) (*http.Response, err
 	return l.walk(ctx, req)
 }
 
-func (l *Ladder) walk(ctx context.Context, req *http.Request) (*http.Response, error) {
+func (l *RouteLadder) walk(ctx context.Context, req *http.Request) (*http.Response, error) {
 	if len(l.Routes) == 0 {
 		return nil, fmt.Errorf("telegram: no route to Telegram is configured")
 	}
 
 	var problems []string
 	for _, route := range l.Routes {
-		if l.Check != nil {
-			if err := l.Check(ctx, route); err != nil {
+		if l.Probe != nil {
+			if err := l.Probe(ctx, route); err != nil {
 				problems = append(problems, route.Name()+": "+err.Error())
 				continue
 			}

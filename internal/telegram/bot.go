@@ -294,6 +294,24 @@ func truncateCaption(text string) string {
 	return string(runes[:maxCaption-1]) + "…"
 }
 
+// Name is the rung's name on the settings screen. It names the transport
+// underneath, because "Bot API" alone would not tell two of the three rungs
+// apart — they are the same protocol over different ways out of the machine.
+func (b *Bot) Name() string {
+	if b.Route == nil {
+		return "bot api"
+	}
+	return "bot api / " + b.Route.Name()
+}
+
+// Check is getMe: the cheapest call that proves both that the route reaches
+// Telegram and that Telegram accepts this token. A route that reaches Telegram
+// with a token it rejects is not a route that can deliver anything.
+func (b *Bot) Check(ctx context.Context) error {
+	_, err := b.GetMe(ctx)
+	return err
+}
+
 // Send makes a Bot into a notify.Transport.
 //
 // The adapter is here rather than in internal/notify because this is the side
