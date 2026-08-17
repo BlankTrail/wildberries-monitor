@@ -88,6 +88,11 @@ var wantPrimaryKeys = map[string][]string{
 	// the BlankTrail address read differently depending on which row a query
 	// happened to find first.
 	"settings": {"key"},
+
+	// The key that makes an uploaded file's duplicates free: (list, text),
+	// never (list, position). Keyed on position instead, the same phrase
+	// appearing twice in a file would be collected and paid for twice.
+	"phrase_list_items": {"list_id", "text"},
 }
 
 // wantIndexes names, for every index this schema declares, its columns in
@@ -144,6 +149,11 @@ var wantIndexes = map[string][]string{
 	"idx_rule_events_dedup":           {"dedup_key", "fired_at"},
 	// The worker's only question: what is pending and ready to go.
 	"idx_notify_outbox_due": {"state", "due_at"},
+
+	// Migration 0009: a phrase list is read in the order the uploaded file
+	// had, and the table's own key sorts by text instead — so the ordering
+	// the planner walks exists only here.
+	"idx_phrase_list_items_order": {"list_id", "position"},
 }
 
 // pkColumns reports table's primary key columns, in key order.
