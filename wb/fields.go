@@ -146,7 +146,66 @@ type Field struct {
 var catalogue = []Field{
 	// Base: everything here arrives with the search page already being paid
 	// for (Product, see extractProduct), so ticking all of it costs nothing
-	// beyond the search itself. price_sale, price_base and discount_pct are
+	// beyond the search itself.
+	//
+	// ts, dest and app_type come first, before nm_id and everything else,
+	// and that ordering is deliberate: catalogue order is column order (spec
+	// section 5.3), and these three are not content about the product, they
+	// are the conditions the reading was taken under. Product.FetchedAt,
+	// Product.AppType and Product.Dest are stamped once per page by
+	// Client.SearchPage (see the loop at the end of that method) from the
+	// clock and the query, not extracted from the payload, but they still
+	// cost nothing beyond the search: no request depends on whether a caller
+	// asks for them.
+	//
+	// Skipping them is legal — Selection is a plain slice of keys, and
+	// nothing here refuses one that omits ts, dest or app_type — but doing
+	// so is close to always a mistake. store.ProductRow carries exactly
+	// these three (TS, Dest, AppType) beside NmID because a snapshot's
+	// identity is (product, region, audience, time), Store.Products sorts
+	// by them for that reason, and DiffProducts refuses to compare two
+	// readings whose Observation.SameContext disagrees on Dest or AppType
+	// (see ErrContextMismatch in observation.go) — the site itself will not
+	// answer "did the price change" across a region or audience switch, so a
+	// diff spanning one is not data, it is a mistake wearing an export
+	// column. Drop ts and an export of two dates collapses into one
+	// undated pile; drop dest or app_type and Moscow's Tuesday reading sits
+	// in the same row shape as Penza's Wednesday one, indistinguishable
+	// after the fact. A field can be free and still be load-bearing: cost
+	// is what Cost prices, not what a row can be safely read without.
+	//
+	// There is no code here that forces a selection to include them — no
+	// MinimalSelection function, no check inside Cost or Sources. A
+	// constructor UI is free to pre-tick and grey them out; that is a
+	// presentation choice for whoever renders the checkbox, not something
+	// this package should own by refusing a Selection that omits them. This
+	// catalogue already draws that line in three places — a field with no
+	// producer is left undeclared rather than declared-and-rejected (package
+	// comment), an unknown key is reported rather than dropped (Cost.Unknown),
+	// and shelf_position is pinned by a dedicated test rather than by a
+	// runtime guard (TestFields_ShelfPositionIsDeclared) — and the same
+	// choice applies here: this comment, plus TestFields_MatchTheGoldenList
+	// pinning all three keys, is what stops the omission from going
+	// unnoticed; a caller who ignores both a documented warning and a
+	// visibly incomparable export was not going to be stopped by a returned
+	// error either, only annoyed by one.
+	//
+	// ts is FieldTime, not FieldInt, for the same reason card_created and
+	// review_created are: a writer that rendered a Unix second as a plain
+	// number would make every export's date column look like the one field
+	// nobody bothered to format. dest is FieldText: a region is WB's own
+	// destination code (e.g. "-1257786", "12358499"), not a quantity, and
+	// nothing about it should ever go through a number formatter. app_type
+	// is FieldInt: it is one of a short closed set of audience codes (see
+	// AppWeb and friends), and a writer prints the code — resolving it to a
+	// human label is a presentation concern this catalogue does not own, the
+	// same way warehouse_id is left as a bare id rather than a resolved
+	// warehouse name.
+	{Key: "ts", Name: "Время чтения", Group: GroupBase, Type: FieldTime, Source: FieldSourceSearchResult},
+	{Key: "dest", Name: "Регион", Group: GroupBase, Type: FieldText, Source: FieldSourceSearchResult},
+	{Key: "app_type", Name: "Тип приложения", Group: GroupBase, Type: FieldInt, Source: FieldSourceSearchResult},
+
+	// price_sale, price_base and discount_pct are
 	// computed by Product.SalePrice, Product.BasePrice and
 	// Product.DiscountPercent from the same search-result Sizes rather than
 	// read off a flat field, but the search page is still all they cost.

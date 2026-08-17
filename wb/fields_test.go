@@ -437,6 +437,10 @@ func TestFields_MatchTheGoldenList(t *testing.T) {
 		Group FieldGroup
 		Type  FieldType
 	}{
+		{"ts", GroupBase, FieldTime},
+		{"dest", GroupBase, FieldText},
+		{"app_type", GroupBase, FieldInt},
+
 		{"nm_id", GroupBase, FieldInt},
 		{"name", GroupBase, FieldText},
 		{"brand", GroupBase, FieldText},
