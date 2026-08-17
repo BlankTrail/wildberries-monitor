@@ -82,6 +82,12 @@ var wantPrimaryKeys = map[string][]string{
 	"rule_events":    {"id"},
 	"notify_targets": {"id"},
 	"notify_outbox":  {"id"},
+
+	// settings is keyed by its own key rather than a surrogate id: there is
+	// exactly one value per setting, and a table that allowed two would let
+	// the BlankTrail address read differently depending on which row a query
+	// happened to find first.
+	"settings": {"key"},
 }
 
 // wantIndexes names, for every index this schema declares, its columns in
