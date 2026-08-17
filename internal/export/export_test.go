@@ -491,3 +491,176 @@ func TestExport_StopsWhenTheContextIsCancelled(t *testing.T) {
 		t.Errorf("wrote %d rows under a cancelled context, want 0", n)
 	}
 }
+
+// columnsFor is the column set of a selection, for a test that does not care
+// about unknown keys. Declared here because tasks 4 and 5 consume it: one
+// declaration means one answer to "which columns does this selection give".
+func columnsFor(t *testing.T, keys ...string) []wb.Field {
+	t.Helper()
+	cols, unknown := Columns(wb.Selection(keys))
+	if len(unknown) != 0 {
+		t.Fatalf("columnsFor: the catalogue does not declare %v", unknown)
+	}
+	return cols
+}
+
+// allTypeColumns is one column of every FieldType the catalogue uses, so a
+// writer can be tested against the whole type range rather than the two types
+// that happen to appear first.
+func allTypeColumns(t *testing.T) []wb.Field {
+	t.Helper()
+	byType := map[wb.FieldType]wb.Field{}
+	for _, f := range wb.Fields() {
+		if _, seen := byType[f.Type]; !seen {
+			byType[f.Type] = f
+		}
+	}
+	var keys []string
+	for _, f := range wb.Fields() {
+		if byType[f.Type].Key == f.Key {
+			keys = append(keys, f.Key)
+		}
+	}
+	if len(keys) < 4 {
+		t.Fatalf("allTypeColumns found only %d distinct types; the catalogue declares more", len(keys))
+	}
+	return columnsFor(t, keys...)
+}
+
+// TestRowOf_AbsentIsNotZeroForEveryOptionalKind closes a gap review found: the
+// rule was pinned for integers alone, so a float and a money value could both
+// have collapsed nil into a present zero and no test would have said so.
+//
+// The cost of that collapse is the reason the whole milestone carries
+// pointers: a product whose price the site did not send becomes 0.00 in all
+// five formats — indistinguishable from a real zero and summable in a
+// spreadsheet — and a product with no rating sorts as the worst rated.
+func TestRowOf_AbsentIsNotZeroForEveryOptionalKind(t *testing.T) {
+	cols := columnsFor(t, "price_sale", "rating", "feedbacks")
+	row := store.ProductRow{NmID: 1, Currency: "RUB"} // every optional field nil
+
+	got := RowOf(row, cols)
+	for i, f := range cols {
+		if !got[i].Absent {
+			t.Errorf("column %q came back present (%+v) for a row that carries no such value; absent must stay absent", f.Key, got[i])
+		}
+	}
+
+	// And the mirror: a present zero is present, not absent. Without this the
+	// guard above could be satisfied by marking everything absent.
+	zero := store.ProductRow{
+		NmID:      1,
+		PriceSale: ptrInt64(0),
+		Rating:    ptrFloat64(0),
+		Feedbacks: ptrInt64(0),
+		Currency:  "RUB",
+	}
+	for i, f := range cols {
+		v := RowOf(zero, cols)[i]
+		if v.Absent {
+			t.Errorf("column %q came back absent for a row that carries a real zero; a zero the site sent is a fact", f.Key)
+		}
+	}
+}
+
+// TestRowOf_AnswersEveryColumnItClaimsToWithItsOwnValue is the guard on
+// valueOf's switch. Review found five of its fifteen cases unverified by any
+// value: price_base could have returned price_sale and supplier_name could
+// have returned brand, with the whole suite green. A discount report reading
+// two identical price columns shows zeroes and blames the site.
+func TestRowOf_AnswersEveryColumnItClaimsToWithItsOwnValue(t *testing.T) {
+	row := sampleRow()
+	want := map[string]Value{
+		"ts":             {Unix: 1755000000},
+		"dest":           {Text: "-1257786"},
+		"app_type":       {Int: 1},
+		"nm_id":          {Int: 123},
+		"name":           {Text: "Куртка"},
+		"brand":          {Text: "Bask"},
+		"supplier_id":    {Int: 77},
+		"supplier_name":  {Text: "ООО Ромашка"},
+		"price_sale":     {Minor: 999900, Currency: "RUB"},
+		"price_base":     {Minor: 1234500, Currency: "RUB"},
+		"currency":       {Text: "RUB"},
+		"discount_pct":   {Int: 19},
+		"rating":         {Float: 4.5},
+		"feedbacks":      {Int: 12},
+		"total_quantity": {Int: 3},
+	}
+
+	var keys []string
+	for k := range want {
+		keys = append(keys, k)
+	}
+	cols := columnsFor(t, keys...)
+	if len(cols) != len(want) {
+		t.Fatalf("asked for %d columns, got %d", len(want), len(cols))
+	}
+
+	got := RowOf(row, cols)
+	for i, f := range cols {
+		if got[i] != want[f.Key] {
+			t.Errorf("column %q = %+v, want %+v", f.Key, got[i], want[f.Key])
+		}
+	}
+}
+
+// TestExport_HandsTheWriterEachRowsOwnValues closes the gap review found: every
+// Export test measured lengths, and all three fixture rows were the same row,
+// so passing a zero value or hoisting RowOf out of the loop would have gone
+// unnoticed. A million-row export filled with zeroes is a green suite and a
+// worthless file, and all five formats would inherit it from here.
+func TestExport_HandsTheWriterEachRowsOwnValues(t *testing.T) {
+	first, second := sampleRow(), sampleRow()
+	second.NmID = 456
+	second.Name = "Ботинки"
+	second.PriceSale = ptrInt64(555500)
+
+	w := &recordingWriter{}
+	n, err := Export(context.Background(),
+		seqOf([]store.ProductRow{first, second}, nil),
+		wb.Selection{"nm_id", "name", "price_sale"}, w)
+	if err != nil {
+		t.Fatalf("Export: %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("Export wrote %d rows, want 2", n)
+	}
+	if len(w.rows) != 2 {
+		t.Fatalf("the writer saw %d rows, want 2", len(w.rows))
+	}
+
+	// Read the values, not their count: the whole point is that row two is
+	// row two and not a copy of row one.
+	for i, want := range [][]Value{
+		{{Int: 123}, {Text: "Куртка"}, {Minor: 999900, Currency: "RUB"}},
+		{{Int: 456}, {Text: "Ботинки"}, {Minor: 555500, Currency: "RUB"}},
+	} {
+		for j := range want {
+			if w.rows[i][j] != want[j] {
+				t.Errorf("row %d column %d = %+v, want %+v", i, j, w.rows[i][j], want[j])
+			}
+		}
+	}
+}
+
+// TestExport_RefusesACancelledContextBeforeDeclaringColumns is the other half
+// of the cancellation guard. Without it a user who pressed stop got "done, 0
+// rows" and a file holding a header and nothing else — an export that looks
+// finished for a run that never started.
+func TestExport_RefusesACancelledContextBeforeDeclaringColumns(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	w := &recordingWriter{}
+	n, err := Export(ctx, seqOf(nil, nil), wb.Selection{"nm_id"}, w)
+	if err == nil {
+		t.Fatal("Export reported success on a cancelled context")
+	}
+	if n != 0 {
+		t.Errorf("Export = %d rows, want 0", n)
+	}
+	if len(w.begun) != 0 {
+		t.Errorf("the writer was told its columns %d time(s) for a run that never started", len(w.begun))
+	}
+}

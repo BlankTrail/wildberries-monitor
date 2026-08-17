@@ -288,8 +288,13 @@ func optMoney(p *int64, currency string) Value {
 // an export that lost a kopeck on large amounts would lose it invisibly.
 func formatMoney(minor int64, decimal rune) string {
 	neg := minor < 0
-	// Negated as an unsigned magnitude rather than with -minor, which
-	// overflows for math.MinInt64 and would print a positive price.
+	// Negated through an unsigned magnitude. Go defines signed overflow as
+	// two's-complement wraparound, so -minor would in fact give the right
+	// bits even for math.MinInt64 — this is not a correctness fix, and an
+	// earlier version of this comment claimed otherwise. It is written this
+	// way because the magnitude is what the digits below are taken from, and
+	// naming it as unsigned says so; the reader does not have to know the
+	// wraparound rule to see that the loop cannot produce a negative digit.
 	u := uint64(minor)
 	if neg {
 		u = uint64(-(minor + 1)) + 1
@@ -339,6 +344,15 @@ func Export(ctx context.Context, rows iter.Seq2[store.ProductRow, error], sel wb
 		// finding, later, a file quietly missing a column they asked for.
 		return 0, fmt.Errorf("export: the selection names %d field(s) this build does not declare: %s",
 			len(unknown), strings.Join(unknown, ", "))
+	}
+	// Checked before Begin, not only inside the loop. A cancelled context with
+	// an empty stream would otherwise report "done, 0 rows" and leave a file
+	// holding nothing but a header — a finished-looking export of a run the
+	// user stopped. The real store.Products fails on a cancelled context of
+	// its own accord, but relying on that makes this function's honesty
+	// somebody else's property.
+	if err := ctx.Err(); err != nil {
+		return 0, fmt.Errorf("export: before the first row: %w", err)
 	}
 	if err := w.Begin(cols); err != nil {
 		return 0, fmt.Errorf("export: begin: %w", err)
