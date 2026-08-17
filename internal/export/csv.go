@@ -143,7 +143,7 @@ func (c *csvWriter) Write(values []Value) error {
 
 	cells := make([]string, len(values))
 	for i, v := range values {
-		s, err := renderCell(v, c.cols[i].Type, c.decimal)
+		s, err := Cell(v, c.cols[i].Type, c.decimal)
 		if err != nil {
 			return fmt.Errorf("export: csv: row %d, column %s: %w", c.row, c.cols[i].Key, err)
 		}
@@ -194,7 +194,11 @@ func (c *csvWriter) Close() error {
 // FieldType added to wb/fields.go would otherwise arrive here and come out as
 // an empty cell, which is this package's word for absence — a new column would
 // silently read as missing data in every export.
-func renderCell(v Value, t wb.FieldType, decimal rune) (string, error) {
+// Exported because the interface's results table renders the same values on
+// screen. Numbers are where a second opinion would be a real defect: a price
+// shown as 1299 and written as 12.99 is a bug nobody would think to look for,
+// so the screen borrows this rather than re-deriving it.
+func Cell(v Value, t wb.FieldType, decimal rune) (string, error) {
 	if v.Absent {
 		// The empty cell is the whole of CSV's vocabulary for absence, and
 		// spending it here is why a zero must never be rendered this way. It

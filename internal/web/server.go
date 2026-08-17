@@ -157,6 +157,9 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /settings", s.auth(http.HandlerFunc(s.saveSettings)))
 	mux.Handle("POST /settings/check", s.auth(http.HandlerFunc(s.checkSettings)))
 
+	mux.Handle("GET /results", s.auth(http.HandlerFunc(s.resultsPage)))
+	mux.Handle("GET /results/table", s.auth(http.HandlerFunc(s.resultsFragment)))
+	mux.Handle("GET /results/export", s.auth(http.HandlerFunc(s.exportHandler)))
 	mux.Handle("GET /live", s.auth(http.HandlerFunc(s.live)))
 	mux.Handle("GET /jobs", s.auth(http.HandlerFunc(s.jobsPage)))
 	mux.Handle("POST /jobs", s.auth(http.HandlerFunc(s.saveJobHandler)))

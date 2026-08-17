@@ -136,6 +136,19 @@
       });
     });
 
+    // A filter form that reads rather than writes: its fields go into the
+    // query string, so the resulting view has a URL a person can bookmark or
+    // send to somebody, which a POST would take away.
+    root.querySelectorAll("form[data-get-form]").forEach((form) => {
+      if (form.dataset.wired) return;
+      form.dataset.wired = "1";
+      form.addEventListener("submit", (ev) => {
+        ev.preventDefault();
+        const q = new URLSearchParams(new FormData(form)).toString();
+        swap(form.dataset.target || "#main", form.dataset.getForm + "?" + q);
+      });
+    });
+
     root.querySelectorAll("[data-tab]").forEach((el) => {
       if (el.dataset.wired) return;
       el.dataset.wired = "1";
