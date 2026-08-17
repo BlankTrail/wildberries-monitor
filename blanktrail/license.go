@@ -21,7 +21,10 @@ type LicenseStatus struct {
 	Pool bool `json:"pool"`
 
 	// JsSolverMaxProcs is the licensed ceiling on Challenge Breaker solver
-	// processes. Zero means the feature is not entitled at all.
+	// processes. Zero means the feature is not entitled at all. What one of
+	// those processes is made of is BlankTrail's business, not this client's:
+	// all this package needs is how many are licensed, how many are set up and
+	// how many are running.
 	JsSolverMaxProcs int `json:"js_solver_max_procs"`
 	// JsSolverProcs is how many processes are configured right now.
 	JsSolverProcs int `json:"js_solver_procs"`
