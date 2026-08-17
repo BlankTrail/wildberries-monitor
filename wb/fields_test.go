@@ -212,6 +212,122 @@ func TestGroups_AreOrderedByWhatTheyCost(t *testing.T) {
 	}
 }
 
+func TestSelectionCost_FreeFieldsCostNothing(t *testing.T) {
+	// Everything in the base, stock and delivery groups rides on requests the
+	// job makes anyway. A user who ticks all of them must see zero extra
+	// requests, or the estimate teaches them to avoid free data.
+	var free Selection
+	for _, g := range []FieldGroup{GroupBase, GroupStock, GroupDelivery} {
+		for _, f := range FieldsOfGroup(g) {
+			free = append(free, f.Key)
+		}
+	}
+	got := free.Cost()
+	if got.PerProduct != 0 {
+		t.Errorf("PerProduct = %d for the free groups, want 0", got.PerProduct)
+	}
+	if got.PerPhrase != 0 {
+		t.Errorf("PerPhrase = %d for the free groups, want 0", got.PerPhrase)
+	}
+	if len(got.Unknown) != 0 {
+		t.Errorf("Unknown = %v, want none", got.Unknown)
+	}
+}
+
+func TestSelectionCost_CountsOneRequestPerSourceNotPerField(t *testing.T) {
+	// Four fields out of one card document are one request, not four. An
+	// estimate that counted fields would quadruple the number a user sees and
+	// make the cheap groups look expensive.
+	one := Selection{"description"}
+	four := Selection{"description", "vendor_code", "subject_name", "composition"}
+
+	if a, b := one.Cost().PerProduct, four.Cost().PerProduct; a != b {
+		t.Errorf("one field costs %d and four fields of the same document cost %d; they are one request", a, b)
+	}
+	if one.Cost().PerProduct != 1 {
+		t.Errorf("one card field costs %d requests per product, want 1", one.Cost().PerProduct)
+	}
+}
+
+func TestSelectionCost_AddsUpAcrossSources(t *testing.T) {
+	// Card, reviews and questions are three different responses, so three
+	// requests per product.
+	s := Selection{"description", "review_text", "question_text"}
+	if got := s.Cost().PerProduct; got != 3 {
+		t.Errorf("PerProduct = %d, want 3 (card, reviews, questions)", got)
+	}
+}
+
+func TestSelectionCost_NamesAKeyItDoesNotKnow(t *testing.T) {
+	// A saved job from another release may carry a key this build has never
+	// heard of. Counting it as free would understate the estimate; dropping it
+	// silently would lose a column the user asked for. It is reported.
+	s := Selection{"description", "colour_of_the_sky"}
+	got := s.Cost()
+	if len(got.Unknown) != 1 || got.Unknown[0] != "colour_of_the_sky" {
+		t.Errorf("Unknown = %v, want [colour_of_the_sky]", got.Unknown)
+	}
+	if got.PerProduct != 1 {
+		t.Errorf("PerProduct = %d, want 1 — the known field still counts", got.PerProduct)
+	}
+}
+
+func TestSelectionCost_IsIndifferentToOrderAndRepetition(t *testing.T) {
+	a := Selection{"description", "review_text", "description"}
+	b := Selection{"review_text", "description"}
+	if a.Cost().PerProduct != b.Cost().PerProduct {
+		t.Errorf("repeating a key changed the cost: %d vs %d", a.Cost().PerProduct, b.Cost().PerProduct)
+	}
+}
+
+func TestSelectionSources_ListsEachSourceOnce(t *testing.T) {
+	s := Selection{"description", "vendor_code", "review_text"}
+	got := s.Sources()
+	if len(got) != 2 {
+		t.Fatalf("Sources() = %v, want two distinct sources", got)
+	}
+	seen := map[FieldSource]int{}
+	for _, src := range got {
+		seen[src]++
+	}
+	for src, n := range seen {
+		if n != 1 {
+			t.Errorf("source %q listed %d times", src, n)
+		}
+	}
+}
+
+func TestSelectionSources_OrderIsCatalogueOrderRegardlessOfSelectionOrder(t *testing.T) {
+	// Sources() must walk the catalogue, not the set it built from the
+	// selection: a map has no stable iteration order, so building the result
+	// from the "want" map instead of from catalogue would report a selection's
+	// sources in a different, random order on every call. One key per source,
+	// forward and reversed, pins all six against the one order that matters:
+	// catalogue order. Two entries picked at random from six would still have
+	// a 1-in-6 chance of landing in catalogue order by luck of the map's
+	// iteration; comparing the full six-element permutation instead leaves a
+	// map-ordered implementation only a 1-in-720 chance of passing by chance,
+	// which is the point of using all of them rather than a couple.
+	want := []FieldSource{
+		FieldSourceSearchResult, FieldSourceCardDetail, FieldSourceCardDocument,
+		FieldSourceReviews, FieldSourceQuestions, FieldSourceShelves,
+	}
+	forward := Selection{"nm_id", "size_name", "description", "review_text", "question_text", "shelf_title"}
+	backward := Selection{"shelf_title", "question_text", "review_text", "description", "size_name", "nm_id"}
+
+	for name, s := range map[string]Selection{"forward": forward, "backward": backward} {
+		got := s.Sources()
+		if len(got) != len(want) {
+			t.Fatalf("%s: Sources() = %v, want %v", name, got, want)
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Errorf("%s: Sources()[%d] = %q, want %q (catalogue order, not selection or map order)", name, i, got[i], want[i])
+			}
+		}
+	}
+}
+
 func TestFields_EveryDeclaredSourceIsOneTheDomainActuallyProduces(t *testing.T) {
 	// The catalogue must not offer a checkbox the product cannot fill. Spec
 	// section 4.4 lists nine groups; three of them (ads by phrase, promotions,

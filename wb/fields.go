@@ -238,3 +238,78 @@ func Groups() []FieldGroup {
 	copy(out, groupOrder)
 	return out
 }
+
+// Selection is the set of field keys a job asks for.
+type Selection []string
+
+// Cost is what a selection adds to a job, counted in requests.
+//
+// PerProduct multiplies by the number of products a job touches. PerPhrase
+// multiplies by phrases times regions instead — ads by phrase are measured
+// per phrase per region, not per product — and is a separate term for that
+// reason (spec section 4.4). No source in this package's catalogue produces
+// it yet (see the package comment), so it is always zero today; the field
+// exists so that adding that source later is a matter of summing into it,
+// not of discovering after the fact that every caller of Cost assumed one
+// number meant "per product". Time is deliberately absent: it depends on
+// threads, delays and result size, none of which the catalogue knows.
+type Cost struct {
+	PerProduct int
+	PerPhrase  int
+	// Unknown holds keys this build does not declare. A job saved by another
+	// release may carry them; counting them as free would understate the
+	// estimate, and dropping them silently would lose a column the user asked
+	// for.
+	Unknown []string
+}
+
+// requestsPerProduct is what one extra fetch of each source costs, per
+// product. Sources that ride along with a request the job makes anyway are
+// zero, and that is the whole point of the grouping: a user must be able to
+// see where the free part of the list ends.
+var requestsPerProduct = map[FieldSource]int{
+	FieldSourceSearchResult: 0,
+	FieldSourceCardDetail:   0,
+	FieldSourceCardDocument: 1,
+	FieldSourceReviews:      1,
+	FieldSourceQuestions:    1,
+	FieldSourceShelves:      1,
+}
+
+// Cost counts requests, not fields: four fields read out of one card document
+// are one request. Counting fields would quadruple the number a user sees and
+// make a cheap group look expensive.
+func (s Selection) Cost() Cost {
+	var c Cost
+	for _, src := range s.Sources() {
+		c.PerProduct += requestsPerProduct[src]
+	}
+	for _, key := range s {
+		if _, ok := FieldByKey(key); !ok {
+			c.Unknown = append(c.Unknown, key)
+		}
+	}
+	return c
+}
+
+// Sources lists the distinct responses a selection has to be read out of, in
+// catalogue order so that two selections naming the same sources in a
+// different order give the same answer: it walks catalogue and keeps a
+// source the first time it is seen, rather than building the result from the
+// "want" set, whose iteration order Go leaves unspecified.
+func (s Selection) Sources() []FieldSource {
+	want := map[FieldSource]bool{}
+	for _, key := range s {
+		if f, ok := FieldByKey(key); ok {
+			want[f.Source] = true
+		}
+	}
+	var out []FieldSource
+	for _, f := range catalogue {
+		if want[f.Source] {
+			out = append(out, f.Source)
+			delete(want, f.Source)
+		}
+	}
+	return out
+}
