@@ -1,0 +1,341 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+package store
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+)
+
+// This file is the state a run leaves behind, and it is deliberately written
+// in terms of its own row types rather than internal/job's Job.
+//
+// The dependency has to point one way. The engine knows about storage — it
+// decides what to persist and when — but storage must not know about the
+// engine, or the two cannot be built or tested apart. So the rows below carry
+// strings and integers, the engine maps its own types onto them, and the
+// JSON-shaped columns stay opaque here: this package never asks what is
+// inside params or fields, only that it gets back what it was given.
+//
+// The tables were declared by migration 0005 without repositories, on the
+// grounds that inventing an interface before its producer exists gets the
+// interface wrong. The producer exists now.
+
+// Run states, matching the CHECK constraint on job_runs.state.
+const (
+	RunRunning = "running"
+	RunDone    = "done"
+	RunFailed  = "failed"
+	RunStopped = "stopped"
+)
+
+// Item states, matching the CHECK constraint on job_items.state.
+const (
+	ItemPending = "pending"
+	ItemRunning = "running"
+	ItemDone    = "done"
+	ItemFailed  = "failed"
+	ItemSkipped = "skipped"
+)
+
+// JobRow is one saved job, as the database holds it.
+type JobRow struct {
+	ID       int64
+	Name     string
+	Type     string
+	Params   string // JSON, opaque here
+	Fields   string // JSON array of catalogue keys
+	Regions  string // JSON array of dest codes
+	Channels string // JSON array
+	Schedule string
+	Threads  int
+	DelayMS  int
+	Enabled  bool
+
+	FirstSavedAt int64
+	LastSavedAt  int64
+}
+
+// RunRow is one attempt at a job.
+type RunRow struct {
+	ID         int64
+	JobID      int64
+	StartedAt  int64
+	FinishedAt *int64
+	State      string
+	Requests   int64
+	Items      int64
+	Errors     int64
+	Error      string
+}
+
+// ItemRow is one unit of work inside a run.
+//
+// Position is the item's place in the plan and is part of the key: the plan
+// is written before the run starts, so that an interrupted run knows what it
+// had meant to do. Without a recorded plan, resuming can only guess, and a
+// guess that is short looks exactly like a run that finished.
+type ItemRow struct {
+	Position   int
+	Kind       string
+	Key        string
+	State      string
+	Attempts   int
+	Error      string
+	StartedAt  *int64
+	FinishedAt *int64
+}
+
+// SaveJob inserts or updates a job and returns its id.
+//
+// FirstSavedAt survives an update for the same reason products.first_seen_at
+// does: when a job was first defined is a fact about it, and an update is not
+// a new definition.
+func (s *Store) SaveJob(ctx context.Context, j JobRow) (int64, error) {
+	now := s.now().UTC().Unix()
+	if j.ID == 0 {
+		res, err := s.db.ExecContext(ctx, `
+			INSERT INTO jobs (name, type, params, fields, regions, channels,
+			                  schedule, threads, delay_ms, enabled, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			j.Name, j.Type, jsonOr(j.Params, "{}"), jsonOr(j.Fields, "[]"),
+			jsonOr(j.Regions, "[]"), jsonOr(j.Channels, "[]"),
+			j.Schedule, j.Threads, j.DelayMS, boolInt(j.Enabled), now, now)
+		if err != nil {
+			return 0, fmt.Errorf("store: save job %q: %w", j.Name, err)
+		}
+		id, err := res.LastInsertId()
+		if err != nil {
+			return 0, fmt.Errorf("store: save job %q: %w", j.Name, err)
+		}
+		return id, nil
+	}
+
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE jobs SET name = ?, type = ?, params = ?, fields = ?, regions = ?,
+		                channels = ?, schedule = ?, threads = ?, delay_ms = ?,
+		                enabled = ?, updated_at = ?
+		WHERE id = ?`,
+		j.Name, j.Type, jsonOr(j.Params, "{}"), jsonOr(j.Fields, "[]"),
+		jsonOr(j.Regions, "[]"), jsonOr(j.Channels, "[]"),
+		j.Schedule, j.Threads, j.DelayMS, boolInt(j.Enabled), now, j.ID)
+	if err != nil {
+		return 0, fmt.Errorf("store: save job %d: %w", j.ID, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("store: save job %d: %w", j.ID, err)
+	}
+	if n == 0 {
+		// An update that matched nothing is a job the caller believes exists
+		// and does not. Reporting success would let a scheduler run a job
+		// whose definition was never stored.
+		return 0, fmt.Errorf("store: save job %d: no such job", j.ID)
+	}
+	return j.ID, nil
+}
+
+// Job reads one job.
+func (s *Store) Job(ctx context.Context, id int64) (JobRow, error) {
+	var j JobRow
+	var enabled int
+	err := s.db.QueryRowContext(ctx, `
+		SELECT id, name, type, params, fields, regions, channels, schedule,
+		       threads, delay_ms, enabled, created_at, updated_at
+		FROM jobs WHERE id = ?`, id).
+		Scan(&j.ID, &j.Name, &j.Type, &j.Params, &j.Fields, &j.Regions, &j.Channels,
+			&j.Schedule, &j.Threads, &j.DelayMS, &enabled, &j.FirstSavedAt, &j.LastSavedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return JobRow{}, fmt.Errorf("store: job %d: %w", id, err)
+	}
+	if err != nil {
+		return JobRow{}, fmt.Errorf("store: job %d: %w", id, err)
+	}
+	j.Enabled = enabled != 0
+	return j, nil
+}
+
+// StartRun opens a run and writes its plan, both in one transaction.
+//
+// One transaction is the whole point. Half a written plan is worse than none:
+// resuming walks the recorded items, decides the missing ones were never
+// meant to exist, and reports a run as finished that collected a fraction of
+// what was asked for.
+func (s *Store) StartRun(ctx context.Context, jobID int64, plan []ItemRow) (int64, error) {
+	if len(plan) == 0 {
+		return 0, errors.New("store: start run: the plan is empty")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("store: start run: %w", err)
+	}
+	defer tx.Rollback()
+
+	now := s.now().UTC().Unix()
+	res, err := tx.ExecContext(ctx,
+		`INSERT INTO job_runs (job_id, started_at, state) VALUES (?, ?, ?)`,
+		jobID, now, RunRunning)
+	if err != nil {
+		return 0, fmt.Errorf("store: start run for job %d: %w", jobID, err)
+	}
+	runID, err := res.LastInsertId()
+	if err != nil {
+		return 0, fmt.Errorf("store: start run for job %d: %w", jobID, err)
+	}
+
+	for i, it := range plan {
+		state := it.State
+		if state == "" {
+			state = ItemPending
+		}
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO job_items (run_id, position, kind, item_key, state)
+			 VALUES (?, ?, ?, ?, ?)`,
+			runID, i, it.Kind, it.Key, state); err != nil {
+			return 0, fmt.Errorf("store: write plan item %d of run %d: %w", i, runID, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("store: start run for job %d: %w", jobID, err)
+	}
+	return runID, nil
+}
+
+// FinishItem records how one item ended.
+//
+// state must be a terminal one; a caller that passed "running" would leave a
+// row that resuming treats as unfinished forever.
+func (s *Store) FinishItem(ctx context.Context, runID int64, position int, state, failure string) error {
+	switch state {
+	case ItemDone, ItemFailed, ItemSkipped:
+	default:
+		return fmt.Errorf("store: finish item %d of run %d: %q is not a terminal state", position, runID, state)
+	}
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE job_items
+		SET state = ?, error = ?, attempts = attempts + 1, finished_at = ?
+		WHERE run_id = ? AND position = ?`,
+		state, failure, s.now().UTC().Unix(), runID, position)
+	if err != nil {
+		return fmt.Errorf("store: finish item %d of run %d: %w", position, runID, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("store: finish item %d of run %d: %w", position, runID, err)
+	}
+	if n == 0 {
+		return fmt.Errorf("store: finish item %d of run %d: no such item", position, runID)
+	}
+	return nil
+}
+
+// FinishRun closes a run.
+func (s *Store) FinishRun(ctx context.Context, runID int64, state string, requests, items, errCount int64, failure string) error {
+	switch state {
+	case RunDone, RunFailed, RunStopped:
+	default:
+		return fmt.Errorf("store: finish run %d: %q is not a terminal state", runID, state)
+	}
+	now := s.now().UTC().Unix()
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE job_runs
+		SET state = ?, finished_at = ?, requests = ?, items = ?, errors = ?, error = ?
+		WHERE id = ?`,
+		state, now, requests, items, errCount, failure, runID)
+	if err != nil {
+		return fmt.Errorf("store: finish run %d: %w", runID, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("store: finish run %d: %w", runID, err)
+	}
+	if n == 0 {
+		return fmt.Errorf("store: finish run %d: no such run", runID)
+	}
+	return nil
+}
+
+// UnfinishedRun returns the most recent run of a job that never reached a
+// terminal state, which is what a crash leaves behind.
+//
+// The bool is false when there is none. It is not an error: starting fresh is
+// the ordinary case, and making the caller distinguish "no crash" from "the
+// query broke" by reading an error message is how the two get conflated.
+func (s *Store) UnfinishedRun(ctx context.Context, jobID int64) (RunRow, bool, error) {
+	var r RunRow
+	var finished sql.NullInt64
+	err := s.db.QueryRowContext(ctx, `
+		SELECT id, job_id, started_at, finished_at, state, requests, items, errors, error
+		FROM job_runs
+		WHERE job_id = ? AND state = ?
+		ORDER BY started_at DESC, id DESC
+		LIMIT 1`, jobID, RunRunning).
+		Scan(&r.ID, &r.JobID, &r.StartedAt, &finished, &r.State,
+			&r.Requests, &r.Items, &r.Errors, &r.Error)
+	if errors.Is(err, sql.ErrNoRows) {
+		return RunRow{}, false, nil
+	}
+	if err != nil {
+		return RunRow{}, false, fmt.Errorf("store: unfinished run of job %d: %w", jobID, err)
+	}
+	if finished.Valid {
+		r.FinishedAt = &finished.Int64
+	}
+	return r, true, nil
+}
+
+// PendingItems returns a run's items that have not reached a terminal state,
+// in plan order.
+//
+// "running" counts as pending: a process that died mid-item left the row that
+// way, and the item was not done. Retrying it can duplicate work, which is
+// the cheaper of the two mistakes — the alternative is deciding it succeeded
+// on no evidence.
+func (s *Store) PendingItems(ctx context.Context, runID int64) ([]ItemRow, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT position, kind, item_key, state, attempts, error, started_at, finished_at
+		FROM job_items
+		WHERE run_id = ? AND state IN (?, ?)
+		ORDER BY position`, runID, ItemPending, ItemRunning)
+	if err != nil {
+		return nil, fmt.Errorf("store: pending items of run %d: %w", runID, err)
+	}
+	defer rows.Close()
+
+	var out []ItemRow
+	for rows.Next() {
+		var it ItemRow
+		var started, finished sql.NullInt64
+		if err := rows.Scan(&it.Position, &it.Kind, &it.Key, &it.State,
+			&it.Attempts, &it.Error, &started, &finished); err != nil {
+			return nil, fmt.Errorf("store: pending items of run %d: %w", runID, err)
+		}
+		if started.Valid {
+			it.StartedAt = &started.Int64
+		}
+		if finished.Valid {
+			it.FinishedAt = &finished.Int64
+		}
+		out = append(out, it)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: pending items of run %d: %w", runID, err)
+	}
+	return out, nil
+}
+
+func jsonOr(s, fallback string) string {
+	if s == "" {
+		return fallback
+	}
+	return s
+}
+
+func boolInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
