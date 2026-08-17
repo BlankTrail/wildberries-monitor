@@ -113,6 +113,13 @@ func TestSnapshotHistory_KeepsTheRegionsApart(t *testing.T) {
 	at := time.Date(2026, 8, 16, 9, 0, 0, 0, time.UTC)
 	saveReading(t, s, readingAt(1, "-1257786", 1, 100000, at))
 	saveReading(t, s, readingAt(1, "-2162196", 1, 700000, at))
+	// A second product in the same two regions, at a price neither test case
+	// below names. nm_id is the first dimension of the key, and a store that
+	// only ever holds one product cannot catch a query that dropped it: dest
+	// alone would already narrow to one row. With two products sharing both
+	// regions, a missing "AND nm_id = ?" returns this row too.
+	saveReading(t, s, readingAt(2, "-1257786", 1, 999000, at))
+	saveReading(t, s, readingAt(2, "-2162196", 1, 999000, at))
 
 	for _, tc := range []struct {
 		dest string
@@ -121,11 +128,34 @@ func TestSnapshotHistory_KeepsTheRegionsApart(t *testing.T) {
 		got := collectSeq(t, "SnapshotHistory",
 			s.SnapshotHistory(ctx, 1, tc.dest, 1, 0, 0))
 		if len(got) != 1 {
-			t.Fatalf("dest %s: got %d points, want 1", tc.dest, len(got))
+			t.Fatalf("dest %s: got %d points, want 1 — the other product leaked in", tc.dest, len(got))
 		}
 		if got[0].PriceSale == nil || *got[0].PriceSale != tc.sale {
 			t.Errorf("dest %s: PriceSale = %v, want %d", tc.dest, got[0].PriceSale, tc.sale)
 		}
+	}
+}
+
+func TestSnapshotHistory_EmptyDestIsItsOwnSeries(t *testing.T) {
+	// dest is the identity of the series here, not a filter's "any region" —
+	// SnapshotHistory deliberately breaks with ProductFilter's own convention
+	// (see its doc comment). SaveProduct writes dest="" for a reading that
+	// named no region at all, and a reader that treated "" as "no predicate"
+	// would answer a request for that empty-region series with every named
+	// region's price glued onto it.
+	s := openTestStore(t)
+	ctx := context.Background()
+	at := time.Date(2026, 8, 16, 9, 0, 0, 0, time.UTC)
+	saveReading(t, s, readingAt(1, "", 1, 100000, at))
+	saveReading(t, s, readingAt(1, "-1257786", 1, 700000, at))
+
+	got := collectSeq(t, "SnapshotHistory",
+		s.SnapshotHistory(ctx, 1, "", 1, 0, 0))
+	if len(got) != 1 {
+		t.Fatalf("got %d points, want 1 — the named region's reading leaked into the empty one", len(got))
+	}
+	if got[0].PriceSale == nil || *got[0].PriceSale != 100000 {
+		t.Errorf("PriceSale = %v, want 100000", got[0].PriceSale)
 	}
 }
 
@@ -286,6 +316,13 @@ func TestPositionHistory_KeepsThePhrasesApart(t *testing.T) {
 	saveReading(t, s, readingAt(1, "-1257786", 1, 100000, at))
 	putPosition(t, s, 1, "winter jacket", "-1257786", 1, at.Unix(), 12, 1)
 	putPosition(t, s, 1, "parka", "-1257786", 1, at.Unix(), 87, 2)
+	// A second product standing on the same phrase, in the same region and
+	// audience, at a rank neither test case below names. nm_id is the first
+	// dimension of the key here too, and with only one product on record a
+	// query that dropped "AND nm_id = ?" would still narrow to one row on
+	// "winter jacket" — this is what catches it.
+	saveReading(t, s, readingAt(2, "-1257786", 1, 200000, at))
+	putPosition(t, s, 2, "winter jacket", "-1257786", 1, at.Unix(), 55, 3)
 
 	for _, tc := range []struct {
 		query string
@@ -295,7 +332,7 @@ func TestPositionHistory_KeepsThePhrasesApart(t *testing.T) {
 		got := collectSeq(t, "PositionHistory",
 			s.PositionHistory(ctx, 1, tc.query, "-1257786", 1, 0, 0))
 		if len(got) != 1 {
-			t.Fatalf("%q: got %d points, want 1 — the other phrase leaked in", tc.query, len(got))
+			t.Fatalf("%q: got %d points, want 1 — another phrase or product leaked in", tc.query, len(got))
 		}
 		if got[0].Rank != tc.rank || got[0].Page != tc.page {
 			t.Errorf("%q: rank/page = %d/%d, want %d/%d", tc.query, got[0].Rank, got[0].Page, tc.rank, tc.page)
