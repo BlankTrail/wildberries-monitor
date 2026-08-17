@@ -73,6 +73,34 @@ func TestFieldByKey_FindsAndRefuses(t *testing.T) {
 	}
 }
 
+func TestFields_ShelfPositionIsDeclared(t *testing.T) {
+	// Shelf.Products (shelf.go) is a plain ordered slice with no field of its
+	// own naming a product's place on the shelf, and it would be easy to read
+	// that as "no producer" the way ads-by-phrase and promotions genuinely
+	// have none. They differ: internal/store/shelves.go already persists
+	// this exact value, as shelf_items.position, taken from the slice index
+	// at save time rather than from any field decodeShelves stamped — the
+	// order itself is the fact "third in 'people also buy'" states, the same
+	// way price_sale is a real, produced value despite not being a field
+	// Product carries either (see Product.SalePrice).
+	//
+	// This field is pinned by its own name rather than folded into
+	// TestFieldsOfGroup_ReturnsOnlyThatGroupAndNotAnEmptyOne above: shelf_title
+	// and shelf_nm_id keep GroupShelves non-empty even with shelf_position
+	// removed, so that test alone would not notice this one key going
+	// missing.
+	f, ok := FieldByKey("shelf_position")
+	if !ok {
+		t.Fatal(`"shelf_position" is not declared; Shelf.Products is an ordered slice and the store layer already persists that order as shelf_items.position`)
+	}
+	if f.Group != GroupShelves {
+		t.Errorf("shelf_position is in group %q, want %q", f.Group, GroupShelves)
+	}
+	if f.Source != FieldSourceShelves {
+		t.Errorf("shelf_position names source %q, want %q", f.Source, FieldSourceShelves)
+	}
+}
+
 func TestFieldsOfGroup_ReturnsOnlyThatGroupAndNotAnEmptyOne(t *testing.T) {
 	// Every declared group must hold at least one field: a group with none is
 	// an empty section in the task constructor, which reads as "this product

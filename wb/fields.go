@@ -15,6 +15,16 @@ package wb
 // this package, so they are absent rather than declared-but-empty. A checkbox
 // that collects nothing is worse than a missing one: it also makes the cost
 // estimate count requests nobody will make.
+//
+// "Has a producer" is not "has an identically named struct field". A field
+// counts as produced when the value can be read out of what the domain
+// already returns, however it is read: the order of elements in a slice
+// (shelf_position, out of Shelf.Products), a value computed from two others
+// (price_sale and discount_pct, out of Product.Sizes), or whether a pointer
+// is nil (question_answered, out of Question.Answer) are all real answers,
+// not stand-ins for a field that does not exist. The question to ask of a
+// candidate field is "can this be read from what a wb call returns", not
+// "does some type in this package already carry a field by this name".
 
 // FieldSource names the response a field is read out of. The scheduler turns
 // the set of sources a selection touches into the set of requests a job must
@@ -158,15 +168,20 @@ var catalogue = []Field{
 	{Key: "question_text", Name: "Текст вопроса", Group: GroupReputation, Type: FieldText, Source: FieldSourceQuestions},
 	{Key: "question_answered", Name: "Вопрос отвечен", Group: GroupReputation, Type: FieldBool, Source: FieldSourceQuestions},
 
-	// Shelves: up to three requests per product. shelf_position is not
-	// declared here: unlike Product.Rank, which Client.SearchPage computes
-	// and stamps explicitly (see client.go), nothing in this package assigns
-	// a product a numbered position within the shelf it was found on —
-	// decodeShelfEntries builds Shelf.Products in the order the site sent it
-	// and stops there. Declaring shelf_position would be exactly the
-	// checkbox-that-collects-nothing this file's own doc comment warns
-	// against, for a field this package could add cheaply but has not.
+	// Shelves: up to three requests per product. shelf_position has no field
+	// of its own on Shelf or Product — Shelf.Products is a plain ordered
+	// slice (decodeShelfEntries) — but a source is what the domain can hand a
+	// caller, not what has a same-named struct field to read: the position in
+	// that slice is exactly the fact "third in 'people also buy'" is, and
+	// internal/store/shelves.go already persists it as shelf_items.position,
+	// keyed on the slice index at save time, not on anything decodeShelves
+	// itself stamped. See TestFields_ShelfPositionIsDeclared for why this one
+	// key is pinned by name rather than folded into the group-emptiness
+	// check alone: shelf_title and shelf_nm_id keep the group non-empty even
+	// with shelf_position gone, so that check alone would not notice it
+	// missing.
 	{Key: "shelf_title", Name: "Полка", Group: GroupShelves, Type: FieldText, Source: FieldSourceShelves},
+	{Key: "shelf_position", Name: "Место на полке", Group: GroupShelves, Type: FieldInt, Source: FieldSourceShelves},
 	{Key: "shelf_nm_id", Name: "Артикул на полке", Group: GroupShelves, Type: FieldInt, Source: FieldSourceShelves},
 }
 
