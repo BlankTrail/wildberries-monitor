@@ -98,16 +98,24 @@ func (e *Engine) RunnerFor(ctx context.Context, j job.Job) (*job.Runner, func(),
 		return nil, nil, fmt.Errorf("engine: прокси не готов: %s", firstBlocking(report))
 	}
 
-	pool, err := blanktrail.NewPool(ctx, poolConfig(client, j, report.CA))
+	channels, closeChannels, err := e.Channels(ctx)
 	if err != nil {
+		return nil, nil, err
+	}
+
+	pool, err := blanktrail.NewPool(ctx, poolConfig(client, j, report.CA, channels))
+	if err != nil {
+		closeChannels()
 		return nil, nil, fmt.Errorf("engine: не удалось открыть порты: %w", err)
 	}
 
+	// Whether there is anywhere to move to decides how hard a challenge is
+	// worth fighting. With an egress channel, a challenge that survives the
+	// first tries is most likely the address behind that port, and the run
+	// should walk through addresses until one gets through; on the host's own
+	// address there is one and no search to make, so the budget stops early.
 	site := wb.NewClientWithRetry(wb.FromPool(pool), wb.NewSessions(),
-		// false: with no egress channel there is one address and no search to
-		// make, so a challenge that survives the first tries will survive the
-		// rest too, and spending the budget on it only delays the report.
-		wb.DefaultRetryPolicy(false))
+		wb.DefaultRetryPolicy(len(channels) > 0))
 
 	runner := &job.Runner{
 		Store:   e.Store,
@@ -126,10 +134,13 @@ func (e *Engine) RunnerFor(ctx context.Context, j job.Job) (*job.Runner, func(),
 	return runner, func() {
 		// Every way out of a run, including the ones that stopped it. Ports left
 		// open are ports somebody is paying for and nothing is using, and the
-		// next run of this job would open its own on top of them.
+		// next run of this job would open its own on top of them; a list channel
+		// left open keeps a goroutine re-reading its source for the life of the
+		// program.
 		if err := pool.Close(); err != nil {
 			e.logf("порты задания %d не закрылись: %v", j.ID, err)
 		}
+		closeChannels()
 	}, nil
 }
 
@@ -187,19 +198,16 @@ func preflightInput(eps wb.Endpoints, j job.Job) blanktrail.PreflightInput {
 // without a live proxy, and CountFailure in particular is invisible by
 // inspection once it is missing. It cannot be reached any other way — the
 // preflight above needs a real instance, and it comes first on purpose.
-func poolConfig(client *blanktrail.Client, j job.Job, ca *x509.CertPool) blanktrail.PoolConfig {
+func poolConfig(client *blanktrail.Client, j job.Job, ca *x509.CertPool, channels []blanktrail.Channel) blanktrail.PoolConfig {
 	return blanktrail.PoolConfig{
 		Client:         client,
 		Threads:        threadsOf(j),
 		PortsPerThread: portsPerThread,
 		Spec:           wb.ModeOf(j.AppType).Spec(blanktrail.DefaultPortSpec()),
-		// Direct egress. The mixer behind this field takes a proxy list, a
-		// rotating address and a vendor gateway just as readily — that is spec
-		// section 3.5, and blanktrail implements all four — but nothing in this
-		// build can yet create a channel to put here: the channels table has no
-		// writer and the panel has no screen for it. An empty slice is the honest
-		// state, and the pool reads it as the host's own address.
-		Channels:       nil,
+		// Spec section 3.5's mix, as the channels screen saved it. Empty is not a
+		// mistake: it is what a person who has configured nothing has, and the
+		// pool reads it as the host's own address.
+		Channels:       channels,
 		CA:             ca,
 		RequestTimeout: requestTimeout,
 		// The pause the pool offers callers between requests, taken from the job

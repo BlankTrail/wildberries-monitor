@@ -94,6 +94,12 @@ type Server struct {
 	// TelegramRoute names the rung currently in use, for the settings screen.
 	TelegramRoute func() string
 
+	// CheckChannel reports what one egress channel holds, or why it cannot be
+	// used. A field for the reason the two checks above are fields: reading a
+	// proxy list is the engine's business and asking BlankTrail which gateways
+	// exist needs a live one, and this package's tests must need neither.
+	CheckChannel func(ctx context.Context, id int64) (summary string, err error)
+
 	// Autostart is the operating system's own start-at-login mechanism, or
 	// nil in a build that has none. An interface rather than the package, so
 	// the settings screen can be tested without writing to a real registry or
@@ -192,6 +198,10 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /results/table", s.auth(http.HandlerFunc(s.resultsFragment)))
 	mux.Handle("GET /results/export", s.auth(http.HandlerFunc(s.exportHandler)))
 	mux.Handle("GET /live", s.auth(http.HandlerFunc(s.live)))
+	mux.Handle("GET /channels", s.auth(http.HandlerFunc(s.channelsPage)))
+	mux.Handle("POST /channels", s.auth(http.HandlerFunc(s.saveChannel)))
+	mux.Handle("GET /channels/test", s.auth(http.HandlerFunc(s.testChannel)))
+	mux.Handle("POST /channels/delete", s.auth(http.HandlerFunc(s.deleteChannel)))
 	mux.Handle("GET /jobs", s.auth(http.HandlerFunc(s.jobsPage)))
 	mux.Handle("POST /jobs", s.auth(http.HandlerFunc(s.saveJobHandler)))
 	mux.Handle("POST /jobs/estimate", s.auth(http.HandlerFunc(s.estimateHandler)))
@@ -282,6 +292,7 @@ func (s *Server) tabs(current string) []Tab {
 		{Label: "Обзор", Href: "/"},
 		{Label: "Задачи", Href: "/jobs"},
 		{Label: "Правила", Href: "/rules"},
+		{Label: "Каналы", Href: "/channels"},
 		{Label: "Результаты", Href: "/results"},
 	}
 	for i := range all {

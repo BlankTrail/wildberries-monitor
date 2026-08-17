@@ -77,7 +77,6 @@ var wantPrimaryKeys = map[string][]string{
 	"job_runs":       {"id"},
 	"job_items":      {"run_id", "position"},
 	"channels":       {"id"},
-	"proxies":        {"id"},
 	"rules":          {"id"},
 	"rule_events":    {"id"},
 	"notify_targets": {"id"},

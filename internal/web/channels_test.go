@@ -1,0 +1,318 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+package web
+
+import (
+	"context"
+	"errors"
+	"net/url"
+	"strconv"
+	"strings"
+	"testing"
+
+	"github.com/BlankTrail/wildberries-monitor/internal/store"
+)
+
+// channelForm is what the form posts for a proxy list, with overrides.
+func channelFormValues(over map[string]string) url.Values {
+	form := url.Values{
+		"name":                {"список провайдера"},
+		"kind":                {store.ChannelList},
+		"source":              {"https://provider.example/list.txt"},
+		"default_scheme":      {"socks5"},
+		"rotate_url":          {""},
+		"rotate_min_interval": {""},
+		"enabled":             {"1"},
+	}
+	for k, v := range over {
+		form.Set(k, v)
+	}
+	return form
+}
+
+func TestChannels_TheScreenSaysAFreshInstallIsWorkingAndNotBroken(t *testing.T) {
+	// Collection works with no channels at all — the pool reads an empty mix as
+	// the host's own address. A screen showing an empty table sends somebody
+	// looking for the fault that is not there.
+	srv := newServer(t)
+
+	body := get(t, srv, "/channels", "correct horse").Body.String()
+	if !strings.Contains(body, "собственного адреса") {
+		t.Errorf("пустой экран не объясняет, что происходит:\n%s", body)
+	}
+	if !strings.Contains(body, "не поломка") {
+		t.Error("пустой экран не говорит, что это рабочее состояние")
+	}
+}
+
+func TestChannels_SavesWhatWasFilledInAndShowsItBack(t *testing.T) {
+	srv := newServer(t)
+
+	w := postForm(t, srv, "/channels", channelFormValues(nil))
+	if w.Code != 200 {
+		t.Fatalf("сохранение = %d", w.Code)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "Канал сохранён") {
+		t.Errorf("нет подтверждения:\n%s", body)
+	}
+	for _, want := range []string{"список провайдера", "Список прокси", "provider.example", "socks5"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("в списке нет %q", want)
+		}
+	}
+
+	saved, err := srv.Store.Channels(context.Background())
+	if err != nil {
+		t.Fatalf("Channels: %v", err)
+	}
+	if len(saved) != 1 {
+		t.Fatalf("сохранено каналов: %d", len(saved))
+	}
+	if saved[0].Kind != store.ChannelList || !saved[0].Enabled {
+		t.Errorf("сохранено как %+v", saved[0])
+	}
+}
+
+func TestChannels_TheRotatingIntervalIsSecondsAndNotNanoseconds(t *testing.T) {
+	// The form asks for seconds and the row holds a duration. Ninety that came
+	// back as ninety nanoseconds would let the change link be pulled far more
+	// often than the provider allows — which costs the channel.
+	srv := newServer(t)
+
+	postForm(t, srv, "/channels", channelFormValues(map[string]string{
+		"kind":                store.ChannelRotating,
+		"source":              "socks5://user:pass@10.0.0.1:1080",
+		"rotate_url":          "https://provider.example/rotate",
+		"rotate_min_interval": "90",
+	}))
+
+	saved, err := srv.Store.Channels(context.Background())
+	if err != nil {
+		t.Fatalf("Channels: %v", err)
+	}
+	if len(saved) != 1 {
+		t.Fatalf("сохранено каналов: %d", len(saved))
+	}
+	if got := saved[0].RotateMinInterval.Seconds(); got != 90 {
+		t.Errorf("интервал = %v секунд, ожидалось 90", got)
+	}
+}
+
+func TestChannels_AnUntickedSwitchIsOffAndTheChannelStaysSaved(t *testing.T) {
+	// An unticked checkbox posts nothing at all, so this is the one field a
+	// form parser gets wrong by doing nothing. And off has to keep the row: a
+	// list being repaired should not have to be retyped.
+	srv := newServer(t)
+	form := channelFormValues(nil)
+	form.Del("enabled")
+
+	postForm(t, srv, "/channels", form)
+
+	saved, err := srv.Store.Channels(context.Background())
+	if err != nil {
+		t.Fatalf("Channels: %v", err)
+	}
+	if len(saved) != 1 {
+		t.Fatalf("сохранено каналов: %d", len(saved))
+	}
+	if saved[0].Enabled {
+		t.Error("канал сохранён включённым, хотя галочка снята")
+	}
+}
+
+func TestChannels_ARefusalComesBackAsSomethingToRead(t *testing.T) {
+	// The refusals here — no name, a kind or a scheme outside the catalogue —
+	// are things the person filling the form has to change. A status code they
+	// cannot read tells them nothing.
+	for _, c := range []struct {
+		name string
+		over map[string]string
+	}{
+		{"без названия", map[string]string{"name": ""}},
+		{"неизвестный вид", map[string]string{"kind": "wireguard"}},
+		{"схема с опечаткой", map[string]string{"default_scheme": "sock5"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			srv := newServer(t)
+			w := postForm(t, srv, "/channels", channelFormValues(c.over))
+
+			if w.Code != 200 {
+				t.Errorf("код %d — отказ ушёл мимо экрана", w.Code)
+			}
+			if !strings.Contains(w.Body.String(), "bt-alert--error") {
+				t.Errorf("на экране нет сообщения об отказе:\n%s", w.Body.String())
+			}
+			if saved, _ := srv.Store.Channels(context.Background()); len(saved) != 0 {
+				t.Errorf("отказ всё равно сохранил %d каналов", len(saved))
+			}
+		})
+	}
+}
+
+func TestChannels_DeleteRemovesItFromTheScreenAndTheStore(t *testing.T) {
+	srv := newServer(t)
+	id, err := srv.Store.SaveChannel(context.Background(), store.ChannelRow{
+		Name: "лишний", Kind: store.ChannelDirect, Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("SaveChannel: %v", err)
+	}
+
+	w := postForm(t, srv, "/channels/delete?id="+strconv.FormatInt(id, 10), nil)
+	if w.Code != 200 {
+		t.Fatalf("удаление = %d", w.Code)
+	}
+	if strings.Contains(w.Body.String(), "лишний") {
+		t.Error("удалённый канал остался на экране")
+	}
+	if saved, _ := srv.Store.Channels(context.Background()); len(saved) != 0 {
+		t.Errorf("после удаления каналов %d", len(saved))
+	}
+}
+
+func TestChannels_TheTestButtonReportsWhatWasFoundAndWhatFailed(t *testing.T) {
+	// The part that earns the screen. "Twelve addresses" and "nothing parsed,
+	// the first bad line was this one" are the two answers somebody presses it
+	// for, and both have to arrive as text they can act on.
+	srv := newServer(t)
+	id, err := srv.Store.SaveChannel(context.Background(), store.ChannelRow{
+		Name: "список", Kind: store.ChannelList, Source: "list.txt", Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("SaveChannel: %v", err)
+	}
+
+	var asked int64
+	srv.CheckChannel = func(_ context.Context, id int64) (string, error) {
+		asked = id
+		return "Разобрано адресов: 12.", nil
+	}
+	body := get(t, srv, "/channels/test?id="+strconv.FormatInt(id, 10), "correct horse").Body.String()
+	if asked != id {
+		t.Errorf("проверен канал %d, ожидался %d", asked, id)
+	}
+	if !strings.Contains(body, "12") {
+		t.Errorf("ответ проверки не показан:\n%s", body)
+	}
+
+	srv.CheckChannel = func(context.Context, int64) (string, error) {
+		return "", errors.New("ни одного адреса не разобрано")
+	}
+	body = get(t, srv, "/channels/test?id="+strconv.FormatInt(id, 10), "correct horse").Body.String()
+	if !strings.Contains(body, "ни одного адреса") {
+		t.Errorf("причина отказа не показана:\n%s", body)
+	}
+	if !strings.Contains(body, "bt-alert--error") {
+		t.Error("отказ показан как успех")
+	}
+}
+
+func TestChannels_TheTestButtonSaysSoWhenTheBuildCannotCheck(t *testing.T) {
+	// Silence would read as a button that does nothing, which is the one thing
+	// worse than a button that says it cannot.
+	srv := newServer(t)
+	id, err := srv.Store.SaveChannel(context.Background(), store.ChannelRow{
+		Name: "список", Kind: store.ChannelDirect, Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("SaveChannel: %v", err)
+	}
+
+	body := get(t, srv, "/channels/test?id="+strconv.FormatInt(id, 10), "correct horse").Body.String()
+	if !strings.Contains(body, "недоступна") {
+		t.Errorf("кнопка промолчала:\n%s", body)
+	}
+}
+
+func TestChannels_TheTabIsThereAndItsScreenAnswers(t *testing.T) {
+	// A tab that opens onto nothing is the same promise a field with no source
+	// makes, and this project has refused that three times for the same reason.
+	srv := newServer(t)
+
+	body := get(t, srv, "/", "correct horse").Body.String()
+	if !strings.Contains(body, `href="/channels"`) {
+		t.Error("вкладки «Каналы» нет в навигации")
+	}
+	if got := get(t, srv, "/channels", "correct horse").Code; got != 200 {
+		t.Errorf("экран каналов = %d", got)
+	}
+}
+
+func TestChannels_EveryKindTheFormOffersIsOneTheStoreAccepts(t *testing.T) {
+	// A kind on the form that the schema refuses is a choice that fails on
+	// save, which is the worst place to find out.
+	for _, k := range channelKinds {
+		t.Run(k.Kind, func(t *testing.T) {
+			srv := newServer(t)
+			w := postForm(t, srv, "/channels", channelFormValues(map[string]string{
+				"kind":   k.Kind,
+				"source": "берлин",
+			}))
+			if strings.Contains(w.Body.String(), "bt-alert--error") {
+				t.Errorf("вид %q форма предлагает, а хранилище не принимает:\n%s", k.Kind, w.Body.String())
+			}
+		})
+	}
+}
+
+func TestChannels_EverySchemeTheFormOffersIsOneTheStoreAccepts(t *testing.T) {
+	for _, scheme := range proxySchemes {
+		srv := newServer(t)
+		w := postForm(t, srv, "/channels", channelFormValues(map[string]string{
+			"default_scheme": scheme,
+		}))
+		if strings.Contains(w.Body.String(), "bt-alert--error") {
+			t.Errorf("схему %q форма предлагает, а хранилище не принимает", scheme)
+		}
+	}
+}
+
+func TestMaskPassword_HidesTheCredentialAndKeepsTheAddressReadable(t *testing.T) {
+	// The table is the thing that gets screenshotted into a support chat. The
+	// user name stays: it is half of what says which of a provider's accounts
+	// this is, and masking it would leave two channels looking identical.
+	for _, c := range []struct{ in, want string }{
+		{"socks5://user:pass@10.0.0.1:1080", "socks5://user:***@10.0.0.1:1080"},
+		{"user:pass@10.0.0.1:1080", "user:***@10.0.0.1:1080"},
+		{"http://u:p@host:8080/list.txt", "http://u:***@host:8080/list.txt"},
+		// Nothing to hide, and nothing to garble.
+		{"socks5://10.0.0.1:1080", "socks5://10.0.0.1:1080"},
+		{"user@10.0.0.1:1080", "user@10.0.0.1:1080"},
+		{"https://provider.example/list.txt", "https://provider.example/list.txt"},
+		{`C:\proxies\list.txt`, `C:\proxies\list.txt`},
+		{"/etc/wbmon/proxies.txt", "/etc/wbmon/proxies.txt"},
+		{"", ""},
+		// An "@" past the authority is not a credential, and treating it as one
+		// would garble an address that is fine.
+		{"https://provider.example/list.txt?tag=a@b", "https://provider.example/list.txt?tag=a@b"},
+	} {
+		if got := maskPassword(c.in); got != c.want {
+			t.Errorf("maskPassword(%q) = %q, ожидалось %q", c.in, got, c.want)
+		}
+	}
+}
+
+func TestChannels_TheTableDoesNotPrintAProxyPassword(t *testing.T) {
+	srv := newServer(t)
+	if _, err := srv.Store.SaveChannel(context.Background(), store.ChannelRow{
+		Name: "ротируемый", Kind: store.ChannelRotating,
+		Source: "socks5://u:sekret@10.0.0.1:1080", RotateURL: "https://p.example/rotate",
+		Enabled: true,
+	}); err != nil {
+		t.Fatalf("SaveChannel: %v", err)
+	}
+
+	body := get(t, srv, "/channels", "correct horse").Body.String()
+	if strings.Contains(body, "sekret") {
+		t.Error("пароль прокси напечатан на экране")
+	}
+	if !strings.Contains(body, "10.0.0.1") {
+		t.Error("адрес пропал вместе с паролем — канал стало не опознать")
+	}
+	// And the change link is not drawn at all: it usually carries a key of its
+	// own in the query, where nothing can tell it from an ordinary parameter.
+	if strings.Contains(body, "p.example/rotate") {
+		t.Error("ссылка смены адреса напечатана в таблице")
+	}
+}

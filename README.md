@@ -59,6 +59,15 @@ check passes.
   than 5% while stock is under ten"). Thresholds, quiet hours, per-product rate
   limits and deduplication are all there, and every match is logged — including
   the ones that were suppressed, with the reason.
+* **Каналы** — how the collection reaches the site: a proxy list from a file or
+  a URL, a rotating address with its change link, a BlankTrail gateway, and the
+  host's own address, in any mix. Ports are spread over whatever is ticked, and
+  a channel that starts producing blocks loses weight on its own. Each one has
+  a test that costs nothing: a list is read and counted with the first bad line
+  quoted, a gateway name is checked against the ones BlankTrail actually has,
+  and a rotating channel's change link is deliberately **not** pulled — the
+  provider limits how often it may be, and a test that broke what it was
+  testing would be worse than none.
 * **Результаты** — a table of what was collected, and the same data as a file:
   CSV, XLSX, JSON, JSONL or a SQLite database. Four of the five stream; the
   fifth cannot, because a SQLite file is finished by seeking back to its header.
@@ -74,12 +83,6 @@ check passes.
 
 Stated plainly, because the alternative is a checkbox that collects nothing:
 
-* **Reach the site any way but directly.** Collection runs through a BlankTrail
-  port, and this build gives every port the host's own address. Spec section
-  3.5's other three channels — a proxy list, a rotating address, a vendor
-  gateway — are implemented in the `blanktrail` package and spread over ports by
-  its mixer, but nothing here can yet create one: the channels table has no
-  writer and the panel has no screen for it.
 * **Promotions.** This build has no source for them, so no promotion fields and
   no promotion rules exist.
 * **Comparison against competitors.** Every rule of that kind is phrased

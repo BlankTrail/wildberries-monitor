@@ -146,6 +146,15 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 		Password: password, GeneratedPassword: generated,
 		TelegramRoute: a.Ladder.Name,
 		Autostart:     osAutostart{},
+		CheckChannel: func(ctx context.Context, id int64) (string, error) {
+			// Read when pressed, not captured: the engine is built a few lines
+			// below this literal, and a half-built App in a test may never get
+			// one at all.
+			if a.Engine == nil {
+				return "", errors.New("сбор не собран в этой сборке")
+			}
+			return a.Engine.TestChannel(ctx, id)
+		},
 		// token is ignored on purpose: the ladder checks with whatever is
 		// configured, and a token typed into the box but not yet saved is not
 		// the one a rule would send with.

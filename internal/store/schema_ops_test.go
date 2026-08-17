@@ -19,7 +19,7 @@ func TestRestOfTheSchema_CreatesEveryTable(t *testing.T) {
 	for _, want := range []string{
 		"ad_placements", "promos", "promo_items",
 		"profiles", "profile_items", "phrases", "competitors", "benchmarks",
-		"jobs", "job_runs", "job_items", "channels", "proxies",
+		"jobs", "job_runs", "job_items", "channels",
 		"rules", "rule_events", "notify_targets", "notify_outbox",
 	} {
 		if !contains(got, want) {
@@ -253,57 +253,8 @@ func TestChannels_RefuseAKindOutsideTheFour(t *testing.T) {
 	s := openTestStore(t)
 
 	execFails(t, s, "a channel of an unknown kind",
-		`INSERT INTO channels (name, kind, source, weight, enabled, created_at, updated_at)
-		 VALUES ('vpn', 'wireguard', '', 100, 1, 10, 10)`)
-}
-
-func TestProxies_DeletingAChannelTakesItsProxies(t *testing.T) {
-	s := openTestStore(t)
-
-	execOK(t, s, `INSERT INTO channels (id, name, kind, source, weight, enabled, created_at, updated_at)
-	              VALUES (1, 'list', 'proxy-list', 'proxies.txt', 100, 1, 10, 10)`)
-	execOK(t, s, `INSERT INTO proxies (channel_id, scheme, host, port, username, password)
-	              VALUES (1, 'socks5', '10.0.0.1', 1080, 'u', 'p')`)
-
-	execOK(t, s, `DELETE FROM channels WHERE id = 1`)
-
-	if n := countQuery(t, s, `SELECT count(*) FROM proxies`); n != 0 {
-		t.Errorf("proxies left %d rows after its channel was deleted, want 0", n)
-	}
-}
-
-func TestProxies_RefuseASchemeOutsideTheFive(t *testing.T) {
-	// Spec section 3.5 names exactly five accepted schemes. A typo like
-	// 'sock5' that this table let through would sit unnoticed until the
-	// channel tried to dial it and failed, and the parser -- not this
-	// schema, which had the chance to refuse the row outright -- would take
-	// the blame.
-	s := openTestStore(t)
-
-	execOK(t, s, `INSERT INTO channels (id, name, kind, source, weight, enabled, created_at, updated_at)
-	              VALUES (2, 'list', 'proxy-list', 'proxies.txt', 100, 1, 10, 10)`)
-
-	execFails(t, s, "a proxy scheme that is not one of the five spec names",
-		`INSERT INTO proxies (channel_id, scheme, host, port) VALUES (2, 'sock5', '10.0.0.1', 1080)`)
-}
-
-func TestProxies_RefuseTheSameProxyTwice(t *testing.T) {
-	// A proxy list is reread on every run of the channel that owns it. Without
-	// the unique key, rereading the same list twice doubles every entry
-	// instead of leaving it in place, fail_streak splits across the
-	// duplicates instead of accumulating on one row, and a proxy that should
-	// have been quarantined after enough failures never crosses the
-	// threshold because no single row saw them all.
-	s := openTestStore(t)
-
-	execOK(t, s, `INSERT INTO channels (id, name, kind, source, weight, enabled, created_at, updated_at)
-	              VALUES (3, 'list', 'proxy-list', 'proxies.txt', 100, 1, 10, 10)`)
-	execOK(t, s, `INSERT INTO proxies (channel_id, scheme, host, port, username, password)
-	              VALUES (3, 'socks5', '10.0.0.1', 1080, 'u', 'p')`)
-
-	execFails(t, s, "the same channel/scheme/host/port/username reread a second time",
-		`INSERT INTO proxies (channel_id, scheme, host, port, username, password)
-		 VALUES (3, 'socks5', '10.0.0.1', 1080, 'u', 'different-password-does-not-matter')`)
+		`INSERT INTO channels (name, kind, source, enabled, created_at, updated_at)
+		 VALUES ('vpn', 'wireguard', '', 1, 10, 10)`)
 }
 
 func TestRules_DeletingARuleTakesItsFirings(t *testing.T) {

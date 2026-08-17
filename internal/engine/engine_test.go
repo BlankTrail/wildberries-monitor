@@ -138,7 +138,7 @@ func TestPoolConfig_CarriesWhatOnlyThisPackageKnows(t *testing.T) {
 	// generic rule — every non-2xx replaces the port's address — and on this
 	// target that burns a solved challenge for a fault that travels with the
 	// request rather than with the address.
-	cfg := poolConfig(nil, job.Job{Threads: 3}, nil)
+	cfg := poolConfig(nil, job.Job{Threads: 3}, nil, nil)
 
 	if cfg.CountFailure == nil {
 		t.Fatal("CountFailure не передан — пул будет жечь адреса на своих же ошибках")
@@ -167,7 +167,7 @@ func TestPoolConfig_OpensTheJobsThreadsAndNoMore(t *testing.T) {
 		{4, 4 * portsPerThread},
 	} {
 		j := job.Job{Threads: c.threads}
-		if got := poolConfig(nil, j, nil).Size(); got != c.wantPorts {
+		if got := poolConfig(nil, j, nil, nil).Size(); got != c.wantPorts {
 			t.Errorf("потоков %d: портов %d, ожидалось %d", c.threads, got, c.wantPorts)
 		}
 		// And the preflight is told the same number, because a licence counts
@@ -199,7 +199,7 @@ func TestPreflightInput_AsksAboutTheHostAndNotTheWholeAddress(t *testing.T) {
 
 func TestPoolConfig_TakesThePauseFromTheJobRatherThanInventingOne(t *testing.T) {
 	// A person set that number on the job's own form, on their own budget.
-	cfg := poolConfig(nil, job.Job{Delay: 900 * time.Millisecond}, nil)
+	cfg := poolConfig(nil, job.Job{Delay: 900 * time.Millisecond}, nil, nil)
 	if cfg.DelayMin != 900*time.Millisecond || cfg.DelayMax != 900*time.Millisecond {
 		t.Errorf("пауза %v..%v, ожидалось 900ms обе", cfg.DelayMin, cfg.DelayMax)
 	}
@@ -208,8 +208,8 @@ func TestPoolConfig_TakesThePauseFromTheJobRatherThanInventingOne(t *testing.T) 
 func TestPoolConfig_TheProfileFollowsTheAudienceTheJobCollectsAs(t *testing.T) {
 	// A rank taken as Android and a rank taken as Web are different facts, and
 	// a port wearing the wrong surface collects the other one.
-	desktop := poolConfig(nil, job.Job{AppType: wb.AppWeb}, nil)
-	mobile := poolConfig(nil, job.Job{AppType: wb.AppMobile}, nil)
+	desktop := poolConfig(nil, job.Job{AppType: wb.AppWeb}, nil, nil)
+	mobile := poolConfig(nil, job.Job{AppType: wb.AppMobile}, nil, nil)
 
 	if desktop.Spec.OS == mobile.Spec.OS && desktop.Spec.Browser == mobile.Spec.Browser {
 		t.Errorf("оба профиля одинаковы: %s/%s", desktop.Spec.OS, desktop.Spec.Browser)
@@ -221,13 +221,25 @@ func TestPoolConfig_TheProfileFollowsTheAudienceTheJobCollectsAs(t *testing.T) {
 	}
 }
 
-func TestPoolConfig_HasNoEgressChannelYetAndSaysSoByBeingEmpty(t *testing.T) {
-	// The honest state of spec section 3.5 in this build: blanktrail implements
-	// all four kinds, and nothing here can create one to put in the slice. An
-	// empty slice is read by the pool as the host's own address, which is what
-	// actually happens.
-	if got := poolConfig(nil, job.Job{}, nil).Channels; len(got) != 0 {
+func TestPoolConfig_CarriesTheChannelsItWasGivenAndNothingWhenThereAreNone(t *testing.T) {
+	// Empty is not a mistake: it is what a person who has configured nothing
+	// has, and the pool reads it as the host's own address.
+	if got := poolConfig(nil, job.Job{}, nil, nil).Channels; len(got) != 0 {
 		t.Errorf("каналов %d, ожидалось ни одного", len(got))
+	}
+
+	mix := []blanktrail.Channel{
+		blanktrail.NewDirectChannel("свой адрес"),
+		blanktrail.NewGatewayChannel("шлюз", "berlin"),
+	}
+	got := poolConfig(nil, job.Job{}, nil, mix).Channels
+	if len(got) != len(mix) {
+		t.Fatalf("каналов %d, ожидалось %d", len(got), len(mix))
+	}
+	for i := range mix {
+		if got[i].Name() != mix[i].Name() {
+			t.Errorf("на месте %d канал %q, ожидался %q", i, got[i].Name(), mix[i].Name())
+		}
 	}
 }
 
