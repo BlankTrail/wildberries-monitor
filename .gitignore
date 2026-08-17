@@ -2,7 +2,13 @@
 /bin/
 /dist/
 *.exe
+
+# .syso files are build output when a tool makes them, and source when the
+# program draws its own icon. These are drawn — see internal/winres — and are
+# committed so a release needs nothing but the go tool. A test regenerates them
+# and refuses a file that has drifted from the drawing.
 *.syso
+!cmd/*/icon_windows_*.syso
 
 # runtime data
 /data/

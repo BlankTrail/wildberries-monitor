@@ -223,3 +223,142 @@ func TestPrice_StaysFarEnoughInsideThatTheStrokeNeverReachesTheEdge(t *testing.T
 		}
 	}
 }
+
+func TestIconImages_CoverTheSizesWindowsAsksFor(t *testing.T) {
+	// Explorer picks by view — small icons, large icons, tiles — and scales
+	// whatever is nearest when the size it wants is missing. A file with only
+	// sixteen in it is the blurry icon on every view but one.
+	images := IconImages()
+	if len(images) != len(IconSizes) {
+		t.Fatalf("изображений %d, размеров %d", len(images), len(IconSizes))
+	}
+	for i, im := range images {
+		if im.Width != IconSizes[i] || im.Height != IconSizes[i] {
+			t.Errorf("изображение %d — %dx%d, ожидалось %d", i, im.Width, im.Height, IconSizes[i])
+		}
+	}
+	// The two Windows actually asks for most, present by name rather than by
+	// accident of the list.
+	for _, want := range []int{16, 32, 256} {
+		found := false
+		for _, s := range IconSizes {
+			found = found || s == want
+		}
+		if !found {
+			t.Errorf("нет размера %d", want)
+		}
+	}
+}
+
+func TestIconImageData_IsAHeaderTheColoursAndAMask(t *testing.T) {
+	// The one rule everybody gets wrong the first time: the header says the
+	// image is twice as tall, because it describes the colours and the mask
+	// stacked. A file that stops early is one the shell refuses.
+	const size = 32
+	data := iconImageData(size)
+
+	maskStride := ((size + 31) / 32) * 4
+	want := 40 + size*size*4 + maskStride*size
+	if len(data) != want {
+		t.Fatalf("байт %d, ожидалось %d", len(data), want)
+	}
+
+	get32 := func(at int) int32 {
+		return int32(uint32(data[at]) | uint32(data[at+1])<<8 | uint32(data[at+2])<<16 | uint32(data[at+3])<<24)
+	}
+	if got := get32(0); got != 40 {
+		t.Errorf("размер заголовка %d", got)
+	}
+	if got := get32(4); got != size {
+		t.Errorf("ширина %d", got)
+	}
+	if got := get32(8); got != size*2 {
+		t.Errorf("высота %d, ожидалась удвоенная (%d)", got, size*2)
+	}
+	if got := data[14]; got != 32 {
+		t.Errorf("бит на пиксель %d", got)
+	}
+}
+
+func TestIconImageData_RunsBottomUpUnlikeTheTrayBuffer(t *testing.T) {
+	// A BMP has always been stored bottom row first, and the tray's buffer is
+	// top row first. Written the same way round the mark is upside down, which
+	// on this mark is a picture of a price rising and then falling — the
+	// opposite claim, drawn convincingly.
+	//
+	// Compared row against row rather than by transparency alone: the tile is
+	// symmetric top to bottom, so its alpha cannot tell the two apart. Only the
+	// line can, and the line is in the colours.
+	const size = 32
+	data := iconImageData(size)
+	pixels := markPixels(size)
+
+	for y := range size {
+		icon := data[40+y*size*4 : 40+(y+1)*size*4]
+		drawn := pixels[(size-1-y)*size*4 : (size-y)*size*4]
+		for x := range size {
+			want := straight(drawn[x*4], drawn[x*4+1], drawn[x*4+2], drawn[x*4+3])
+			got := icon[x*4 : x*4+4]
+			for c := range 4 {
+				if got[c] != want[c] {
+					t.Fatalf("строка %d, пиксель %d: %v, ожидалось %v (строка рисунка %d)",
+						y, x, got, want, size-1-y)
+				}
+			}
+		}
+	}
+}
+
+func TestIconImageData_ColoursAreStraightRatherThanPremultiplied(t *testing.T) {
+	// The tray needs premultiplied colours because the shell blends them
+	// itself; an icon resource needs the plain ones, because Windows multiplies
+	// them on load and doing it twice leaves a dark ring around everything soft.
+	const size = 48
+	data := iconImageData(size)
+
+	softAndBright := 0
+	for i := 40; i+4 <= 40+size*size*4; i += 4 {
+		b, g, r, a := data[i], data[i+1], data[i+2], data[i+3]
+		if a == 0 || a == 0xff {
+			continue
+		}
+		// The exact inverse of the premultiplied rule, which is that no channel
+		// exceeds its own alpha. At the tile's soft edge the blue stays the
+		// tile's blue whatever the coverage, so it does exceed it — and cannot,
+		// if the multiplication is still in there.
+		_, _ = g, r
+		if b > a {
+			softAndBright++
+		}
+	}
+	if softAndBright == 0 {
+		t.Error("ни одного полупрозрачного пикселя ярче своей альфы — цвета остались домноженными")
+	}
+}
+
+func TestStraight_UndoesThePremultiplicationWithoutWrapping(t *testing.T) {
+	// Rounding can carry a channel one past its alpha, and a byte that wrapped
+	// there turns a white edge black.
+	for _, c := range []struct {
+		b, g, r, a byte
+		want       [4]byte
+	}{
+		{0, 0, 0, 0, [4]byte{0, 0, 0, 0}},                 // nothing there
+		{255, 255, 255, 255, [4]byte{255, 255, 255, 255}}, // opaque white
+		{128, 128, 128, 128, [4]byte{255, 255, 255, 128}}, // half-covered white
+		// A mixed edge: half covered, so each channel doubles — and 64 doubles
+		// to 128 rather than to 127, because the rounding is to nearest.
+		{64, 32, 16, 128, [4]byte{128, 64, 32, 128}},
+		// A channel already at its alpha stays there rather than wrapping past
+		// it, which is what would turn a white edge black.
+		{255, 255, 255, 128, [4]byte{255, 255, 255, 128}},
+	} {
+		got := straight(c.b, c.g, c.r, c.a)
+		for i := range 4 {
+			if got[i] != c.want[i] {
+				t.Errorf("straight(%d,%d,%d,%d) = %v, ожидалось %v", c.b, c.g, c.r, c.a, got, c.want)
+				break
+			}
+		}
+	}
+}
