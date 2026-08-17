@@ -363,69 +363,6 @@ func TestCSV_Windows1251EncodesCyrillicToSingleBytes(t *testing.T) {
 	}
 }
 
-func TestCP1251_TableRoundTripsEveryByteItDefines(t *testing.T) {
-	// The table is written by hand, so it is checked against itself: every
-	// byte the high half defines must encode back to itself. A typo that gave
-	// two bytes the same rune, or shifted a row of the table by one, is
-	// exactly what this catches.
-	for i, r := range cp1251High {
-		b := byte(0x80 + i)
-		if r == 0 {
-			continue // unassigned; see the table's own comment
-		}
-		got, err := encode1251(string(r))
-		if err != nil {
-			t.Errorf("byte %#02x (%q): %v", b, r, err)
-			continue
-		}
-		if len(got) != 1 || got[0] != b {
-			t.Errorf("%q encoded to % x, want %#02x", r, got, b)
-		}
-	}
-	for b := 0xC0; b <= 0xFF; b++ {
-		r := rune(0x0410 + b - 0xC0)
-		got, err := encode1251(string(r))
-		if err != nil {
-			t.Errorf("byte %#02x (%q): %v", b, r, err)
-			continue
-		}
-		if len(got) != 1 || got[0] != byte(b) {
-			t.Errorf("%q encoded to % x, want %#02x", r, got, b)
-		}
-	}
-	for b := 0x00; b < 0x80; b++ {
-		got, err := encode1251(string(rune(b)))
-		if err != nil || len(got) != 1 || got[0] != byte(b) {
-			t.Errorf("ASCII %#02x encoded to % x, %v", b, got, err)
-		}
-	}
-}
-
-func TestCP1251_NoTwoBytesShareARune(t *testing.T) {
-	// Two entries with the same rune would make the table lossy in one
-	// direction and silently unreachable in the other, and the round-trip test
-	// above would still pass for whichever entry won the map.
-	defined := 0
-	for _, r := range cp1251High {
-		if r != 0 {
-			defined++
-		}
-	}
-	if len(cp1251Byte) != defined {
-		t.Errorf("the table defines %d runes but the reverse map holds %d; two bytes share a rune", defined, len(cp1251Byte))
-	}
-}
-
-func TestCP1251_ByteNineEightIsNotClaimedByAnyRune(t *testing.T) {
-	// 0x98 is unassigned in windows-1251. A table that let some rune land
-	// there would produce files that decode differently on different machines.
-	for r, b := range cp1251Byte {
-		if b == 0x98 {
-			t.Errorf("%q (U+%04X) maps to the unassigned byte 0x98", r, r)
-		}
-	}
-}
-
 func TestCSV_Windows1251RefusesACharacterItCannotHold(t *testing.T) {
 	// The decision this task exists to make: an error, not a silent "?".
 	// A replacement turns "Куртка ❤" and "Куртка ★" into one row in whatever

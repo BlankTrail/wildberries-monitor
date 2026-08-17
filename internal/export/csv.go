@@ -11,6 +11,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/BlankTrail/wildberries-monitor/internal/cp1251"
 	"github.com/BlankTrail/wildberries-monitor/wb"
 )
 
@@ -268,7 +269,7 @@ func encodingByName(name string) (encoding, error) {
 		// page and every Russian name arrives as mojibake.
 		return encoding{name: "utf-8-bom", bom: []byte{0xEF, 0xBB, 0xBF}, encode: encodeUTF8}, nil
 	case "windows-1251":
-		return encoding{name: "windows-1251", encode: encode1251}, nil
+		return encoding{name: "windows-1251", encode: cp1251.Encode}, nil
 	}
 	return encoding{}, fmt.Errorf(`unknown encoding %q; this build has "utf-8", "utf-8-bom" and "windows-1251"`, name)
 }
@@ -285,74 +286,7 @@ func encodeUTF8(s string) ([]byte, error) {
 	return []byte(s), nil
 }
 
-// cp1251High is the half of windows-1251 that is not ASCII and not the
-// contiguous Cyrillic block. Index i is byte 0x80+i. The standard library has
-// no table for this encoding and golang.org/x/text is a dependency this
-// project does not take, so it is written out here: sixty-four entries and a
-// computed range.
-//
-// Byte 0x98 is unassigned in windows-1251. The zero at that index means "no
-// character" rather than U+0000, and the reverse map below skips it — a table
-// that let some rune land there would produce files that decode differently on
-// different machines.
-var cp1251High = [0x40]rune{
-	0x0402, 0x0403, 0x201A, 0x0453, 0x201E, 0x2026, 0x2020, 0x2021, // 0x80
-	0x20AC, 0x2030, 0x0409, 0x2039, 0x040A, 0x040C, 0x040B, 0x040F, // 0x88
-	0x0452, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014, // 0x90
-	0x0000, 0x2122, 0x0459, 0x203A, 0x045A, 0x045C, 0x045B, 0x045F, // 0x98
-	0x00A0, 0x040E, 0x045E, 0x0408, 0x00A4, 0x0490, 0x00A6, 0x00A7, // 0xA0
-	0x0401, 0x00A9, 0x0404, 0x00AB, 0x00AC, 0x00AD, 0x00AE, 0x0407, // 0xA8
-	0x00B0, 0x00B1, 0x0406, 0x0456, 0x0491, 0x00B5, 0x00B6, 0x00B7, // 0xB0
-	0x0451, 0x2116, 0x0454, 0x00BB, 0x0458, 0x0405, 0x0455, 0x0457, // 0xB8
-}
-
-// cp1251Byte is cp1251High read the other way. Built once at init rather than
-// searched linearly per rune: a million-row export walks it a hundred million
-// times.
-var cp1251Byte = func() map[rune]byte {
-	m := make(map[rune]byte, len(cp1251High))
-	for i, r := range cp1251High {
-		if r == 0 {
-			continue
-		}
-		m[r] = byte(0x80 + i)
-	}
-	return m
-}()
-
-// encode1251 renders text as windows-1251, and refuses a character the
-// encoding does not have.
-//
-// Refuses rather than substitutes, which is the decision this file is here to
-// make. A '?' in place of an emoji looks like data rather than like a failure:
-// "Куртка ❤" and "Куртка ★" become one row in whatever price list this file
-// ends up in, and nobody learns why. The error arrives while the user is still
-// looking at the screen and names the way out — utf-8-bom, which the same
-// Russian Excel opens just as happily.
-func encode1251(s string) ([]byte, error) {
-	out := make([]byte, 0, len(s))
-	for _, r := range s {
-		switch {
-		case r == utf8.RuneError:
-			// Either the text is not valid UTF-8 or it genuinely holds
-			// U+FFFD. Both are refusals here — U+FFFD has no byte in
-			// windows-1251 either — so the conflation costs nothing and the
-			// message is the more useful of the two.
-			return nil, errors.New("the text is not valid UTF-8")
-		case r < 0x80:
-			out = append(out, byte(r))
-		case r >= 0x0410 && r <= 0x044F:
-			// А..я, contiguous at 0xC0..0xFF. Computed rather than tabled:
-			// sixty-four table entries that are all "the previous one plus
-			// one" are sixty-four chances to make a typo.
-			out = append(out, byte(r-0x0410)+0xC0)
-		default:
-			b, ok := cp1251Byte[r]
-			if !ok {
-				return nil, fmt.Errorf("windows-1251 has no byte for %q (U+%04X); export as \"utf-8-bom\" instead, which Excel reads too", r, r)
-			}
-			out = append(out, b)
-		}
-	}
-	return out, nil
-}
+// The windows-1251 table itself lives in internal/cp1251: the same encoding
+// is read as well as written — a phrase file saved by the same Russian Excel
+// these exports are written for arrives at the task constructor — and one
+// table read in two directions beats two tables that must agree.

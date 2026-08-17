@@ -9,7 +9,9 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
+	"github.com/BlankTrail/wildberries-monitor/internal/cp1251"
 	"github.com/BlankTrail/wildberries-monitor/internal/store"
 	"github.com/BlankTrail/wildberries-monitor/wb"
 )
@@ -132,26 +134,19 @@ func csvHeader(t *testing.T, out []byte, sep rune) []string {
 }
 
 // decode1251 turns windows-1251 bytes back into text, using the same table the
-// writer encodes with. Reading the file back through the table is also the one
-// test that exercises it in the decoding direction.
+// writer encodes with.
+//
+// The replacement character can only have come from the one unassigned byte:
+// the writer refuses U+FFFD outright, so it is never in a file this test reads
+// back, and finding one means the export wrote a byte windows-1251 does not
+// assign.
 func decode1251(t *testing.T, in []byte) []byte {
 	t.Helper()
-	var b strings.Builder
-	for _, c := range in {
-		switch {
-		case c < 0x80:
-			b.WriteByte(c)
-		case c >= 0xC0:
-			b.WriteRune(rune(0x0410 + int(c) - 0xC0))
-		default:
-			r := cp1251High[c-0x80]
-			if r == 0 {
-				t.Fatalf("the output holds byte %#02x, which windows-1251 does not assign", c)
-			}
-			b.WriteRune(r)
-		}
+	out := cp1251.Decode(in)
+	if strings.ContainsRune(out, utf8.RuneError) {
+		t.Fatalf("the output holds a byte windows-1251 does not assign: % x", in)
 	}
-	return []byte(b.String())
+	return []byte(out)
 }
 
 // paritySelection is the selection every format is asked for. Deliberately in
