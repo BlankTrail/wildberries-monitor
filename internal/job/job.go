@@ -62,6 +62,19 @@ type Job struct {
 	BrandID    int64
 	Articles   []int64
 
+	// PhraseListID points at an uploaded file of phrases instead of Phrases.
+	// The two are alternatives: a handful typed into the form travels in the
+	// job, a hundred thousand uploaded from a file stays in the store and is
+	// streamed when the run needs it. A job carrying that many phrases in its
+	// own parameters would cost megabytes to read its own name.
+	PhraseListID int64
+	// PhraseListCount is how many phrases that list holds. Copied from the
+	// store when the job is built or loaded, and kept here for one reason:
+	// Estimate must price a job without touching a database. A stale count
+	// makes the estimate wrong; an estimate that needed I/O could not be
+	// shown while the user is still ticking boxes.
+	PhraseListCount int
+
 	// Regions is the list of dest codes to collect for. Every region is a
 	// separate pass: search results and prices are both regional, and the
 	// domain refuses to compare readings taken for different ones.
@@ -82,6 +95,24 @@ type Job struct {
 	// Threads and Delay are how hard to push. Zero threads means one.
 	Threads int
 	Delay   time.Duration
+
+	// Schedule is how often to repeat, in the spelling ParseSchedule reads
+	// ("every 3h"). Empty means the job only runs when a person asks.
+	Schedule string
+	// Enabled is whether the schedule is honoured. A job can be kept, and its
+	// history kept with it, without being run.
+	Enabled bool
+}
+
+// phraseCount is how many phrases the job searches for, from whichever of the
+// two sources it uses. Validate refuses a job that filled in both, so at most
+// one of them is ever non-zero here; typed phrases are checked first because
+// a job whose list was deleted still knows what it was typed with.
+func (j Job) phraseCount() int {
+	if n := len(nonEmpty(j.Phrases)); n > 0 {
+		return n
+	}
+	return j.PhraseListCount
 }
 
 // Validate reports every reason a job cannot run, rather than the first.
@@ -105,8 +136,15 @@ func (j Job) Validate() error {
 
 	switch j.Kind {
 	case KindPhrase, KindPhraseAds:
-		if len(nonEmpty(j.Phrases)) == 0 {
+		if j.phraseCount() == 0 {
+			// Either source will do — a few typed in, or a file uploaded.
 			bad = append(bad, "no phrases: a phrase job with nothing to search for enumerates nothing")
+		}
+		if len(nonEmpty(j.Phrases)) > 0 && j.PhraseListID != 0 {
+			// Refused rather than merged. Which one the estimate priced and
+			// which one the run walked would be two different answers, and
+			// the user would see neither.
+			bad = append(bad, "both typed phrases and an uploaded list: pick one")
 		}
 	case KindSeller:
 		if j.SupplierID <= 0 {
@@ -223,7 +261,7 @@ func (j Job) Estimate(items int) Estimate {
 	if regions == 0 {
 		regions = 1
 	}
-	phrases := len(nonEmpty(j.Phrases))
+	phrases := j.phraseCount()
 
 	cost := j.Fields.Cost()
 

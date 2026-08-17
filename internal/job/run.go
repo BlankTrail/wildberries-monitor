@@ -143,6 +143,19 @@ func (r *Runner) openRun(ctx context.Context, j Job) (Result, []store.ItemRow, e
 		}
 	}
 
+	// An uploaded list is resolved here, at the one point that has both the
+	// job and a store. The planner deliberately has neither, and a job whose
+	// phrases live in a table would otherwise plan nothing at all and report
+	// it as "the plan enumerated no items" — a run that looks like an empty
+	// search rather than like a wiring mistake.
+	if j.PhraseListID != 0 {
+		phrases, err := r.phrasesOfList(ctx, j.PhraseListID)
+		if err != nil {
+			return Result{}, nil, err
+		}
+		j.Phrases, j.PhraseListID = phrases, 0
+	}
+
 	plan, err := r.Planner.Plan(j)
 	if err != nil {
 		return Result{}, nil, fmt.Errorf("job: planning: %w", err)
@@ -159,6 +172,29 @@ func (r *Runner) openRun(ctx context.Context, j Job) (Result, []store.ItemRow, e
 		return Result{}, nil, fmt.Errorf("job: opening a run: %w", err)
 	}
 	return Result{RunID: runID}, rows, nil
+}
+
+// phrasesOfList reads an uploaded list.
+//
+// Collected, unlike everywhere else this project touches that list, and the
+// reason is the planner rather than the storage: StaticPlanner returns its
+// whole plan as a slice, so the phrases are the smaller of the two things
+// already in memory by the time this returns. Making this a stream would move
+// the ceiling without lowering it. The planner is where that has to change,
+// and until it does, saying so here beats a streaming read that reads into a
+// slice ten lines later.
+func (r *Runner) phrasesOfList(ctx context.Context, listID int64) ([]string, error) {
+	var out []string
+	for phrase, err := range r.Store.Phrases(ctx, listID) {
+		if err != nil {
+			return nil, fmt.Errorf("job: reading phrase list %d: %w", listID, err)
+		}
+		out = append(out, phrase)
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("job: phrase list %d holds no phrases", listID)
+	}
+	return out, nil
 }
 
 // walk does the items, with the job's own concurrency and delay. It reports
