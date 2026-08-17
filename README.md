@@ -83,7 +83,11 @@ check passes.
   CSV, XLSX, JSON, JSONL or a SQLite database. Four of the five stream; the
   fifth cannot, because a SQLite file is finished by seeking back to its header.
 * **Telegram** — notifications, and a bot: `/jobs` lists what is saved with the
-  progress of anything in flight, `/run` and `/stop` control it, `/export` sends
+  progress of anything in flight, `/run` and `/stop` control it, `/track`, `/untrack` and
+  `/tracked` put a product or a phrase under a job's watch from a link or an
+  article number — into a job that exists, because a job needs a region and an
+  audience and choosing those for somebody decides which facts they collect.
+  `/export` sends
   the results as a file in any of the five formats, and `/chart` sends a price
   or search-position chart as a photo, drawn without a plotting dependency and
   captioned rather than labelled, so every word stays selectable text. It

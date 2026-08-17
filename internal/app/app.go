@@ -186,10 +186,11 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 	a.primeSchedule(ctx)
 
 	a.Commands = &telegram.Commands{
-		Bot:    a.Bot,
-		Jobs:   botJobs{a},
-		Charts: botCharts{a},
-		Export: a.botExport,
+		Bot:      a.Bot,
+		Jobs:     botJobs{a},
+		Charts:   botCharts{a},
+		Tracking: botTracking{a},
+		Export:   a.botExport,
 		LoadOffset: func(ctx context.Context) (int64, error) {
 			// A stored value this cannot read means zero, which replays what
 			// Telegram still holds — noisy but not wrong. Refusing to poll at
