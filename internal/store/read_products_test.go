@@ -484,6 +484,37 @@ func TestProducts_LatestIsTheLastRowInsideTheWindow(t *testing.T) {
 	}
 }
 
+func TestProducts_LatestWithLimitCapsSeriesNotSnapshots(t *testing.T) {
+	// productsQuery deliberately keeps LIMIT on the outer half of the query,
+	// never pushed into the inner one: pushed inward it would cap the rows
+	// before recency = 1 is applied, and "the latest reading of the first
+	// three products" would become "the last three snapshots that happened
+	// to sort first, however many series those belong to". Three triples of
+	// three readings each, capped at three, is exactly the shape that tells
+	// the two apart: the correct query still names one row per triple.
+	s := openTestStore(t)
+	ctx := context.Background()
+	at := time.Date(2026, 8, 16, 9, 0, 0, 0, time.UTC)
+	for i, sale := range []int64{100000, 110000, 120000} {
+		ts := at.Add(time.Duration(i) * time.Hour)
+		saveReading(t, s, readingAt(1, "-1257786", 1, sale, ts))
+		saveReading(t, s, readingAt(1, "-1257786", 64, sale+5, ts))
+		saveReading(t, s, readingAt(1, "-2162196", 1, sale+9, ts))
+	}
+
+	got := collectSeq(t, "Products", s.Products(ctx, ProductFilter{Latest: true, Limit: 3}))
+	if len(got) != 3 {
+		t.Fatalf("got %d rows, want 3 — one per (dest, app_type) triple, not three arbitrary snapshots", len(got))
+	}
+	seen := map[string]bool{}
+	for _, r := range got {
+		seen[r.Dest+"/"+strconv.Itoa(r.AppType)] = true
+	}
+	if len(seen) != 3 {
+		t.Errorf("the 3 rows named %d distinct series, want 3: %v", len(seen), seen)
+	}
+}
+
 func TestProducts_LimitCapsTheStream(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
@@ -627,6 +658,72 @@ func int64sOf(v []int) []int64 {
 		out[i] = int64(n)
 	}
 	return out
+}
+
+func TestStreamRows_ReportsAFetchThatFailsAfterSomeRowsAlreadyWentOut(t *testing.T) {
+	// The third of streamRows' own three promises, and the one neither test
+	// above reaches: TestProducts_ReportsAFailureOnceAndStops fails before
+	// the loop even starts (QueryContext itself errors on a closed
+	// database), and the scan-error test above fails inside a row's own
+	// Scan. Neither exercises the branch below the loop, where rows.Err()
+	// reports a fetch that broke after several rows had already gone out
+	// cleanly — a canceled context or a dropped connection partway through a
+	// million-row export.
+	//
+	// A stream that swallowed that error — "_ = rows.Err()" instead of
+	// yielding it — would answer such a failure by simply ending, and a
+	// writer draining it would produce a file that looks complete and is
+	// not. That is exactly the lie iter.Seq2 was chosen over a cursor's own,
+	// skippable Err() to make impossible (see streamRows' own doc comment),
+	// so this branch needs the same proof the other two already have.
+	//
+	// Reaching it without a race is the actual difficulty: a context
+	// canceled mid-stream was the first design tried here, and it does not
+	// work — database/sql can just as well surface that cancellation from
+	// inside Scan (which the branch above already covers) as from Next, so
+	// which of the two branches catches a given run is a coin flip, and a
+	// mutation to this one specifically survives roughly half the time. What
+	// forces the failure to be Next's alone is an error the SQL engine
+	// itself raises while stepping to a row, before any value reaches Scan:
+	// json_extract on malformed JSON does exactly that, deterministically,
+	// with no goroutine and nothing to race.
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	scan := func(sc rowScanner) (int, error) {
+		var n int
+		err := sc.Scan(&n)
+		return n, err
+	}
+
+	seq := streamRows(ctx, s.db, "test rows", `
+		WITH RECURSIVE gen(n) AS (
+			SELECT 1
+			UNION ALL
+			SELECT n + 1 FROM gen WHERE n < 4
+		)
+		SELECT CASE WHEN n = 3 THEN json_extract('{', '$') ELSE n END AS n FROM gen`, nil, scan)
+
+	var yielded []int
+	yields := 0
+	var last error
+	for v, err := range seq {
+		yields++
+		last = err
+		if err != nil {
+			break
+		}
+		yielded = append(yielded, v)
+	}
+	if !sameIDs(int64sOf(yielded), []int64{1, 2}) {
+		t.Fatalf("values yielded without error = %v, want [1 2] — the rows before the one SQLite itself fails to fetch", yielded)
+	}
+	if last == nil {
+		t.Fatalf("the stream yielded %d time(s) and no error, though the underlying fetch failed after two good rows", yields)
+	}
+	if !strings.Contains(last.Error(), "malformed JSON") {
+		t.Errorf("last error = %v, want one naming the fetch failure", last)
+	}
 }
 
 func TestProduct_ReadsTheNewestReading(t *testing.T) {
