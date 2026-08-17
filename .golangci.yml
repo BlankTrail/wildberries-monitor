@@ -33,6 +33,14 @@ linters:
         - fmt.Fprint
         - fmt.Fprintf
         - fmt.Fprintln
+        # A Win32 call's third return is the calling thread's last-error value,
+        # not a report about this call. Win32's own contract is that the return
+        # value says whether the call failed and the last error is meaningful
+        # only then — so checking it unconditionally reports a stale success as
+        # a failure. internal/tray captures it exactly where the return value
+        # says something went wrong (registering the class, creating the window,
+        # adding the icon) and nowhere else.
+        - (*golang.org/x/sys/windows.LazyProc).Call
   exclusions:
     rules:
       - path: _test\.go

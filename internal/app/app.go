@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/BlankTrail/wildberries-monitor/internal/autostart"
@@ -62,8 +63,25 @@ type App struct {
 
 	Log *log.Logger
 
+	// paused stops the background round without stopping the program. The tray
+	// menu drives it, and the panel keeps serving either way: a person who
+	// paused because their proxy is misbehaving still wants to read what has
+	// been collected and change what runs next.
+	paused    atomic.Bool
 	closeOnce sync.Once
 }
+
+// Pause stops or resumes the background round.
+//
+// Not a stop: what pauses is the tick — the notification queue and the bot's
+// own polling — and nothing already in flight is torn down. A message being
+// delivered when the pause arrives is delivered; the next one waits.
+func (a *App) Pause(on bool) { a.paused.Store(on) }
+
+// Paused says whether the background round is held. The tray reads it to draw
+// its own menu, so the label a person sees comes from the program's own state
+// rather than from whatever the menu was last told.
+func (a *App) Paused() bool { return a.paused.Load() }
 
 // New opens everything and wires it together.
 //
@@ -298,7 +316,14 @@ func (a *App) loop(ctx context.Context) {
 
 // Tick does one round of background work. Exported so a test — and a shutdown
 // that wants one last attempt at the queue — can ask for exactly one.
+//
+// A paused program does nothing here and says nothing about it. The pause is
+// the operator's own decision, and a line in the log every minute reporting
+// that they are still paused is a log nobody reads afterwards.
 func (a *App) Tick(ctx context.Context) {
+	if a.Paused() {
+		return
+	}
 	// Settings first: a token saved a second ago should be in use this round,
 	// not the next one.
 	a.reloadTelegram(ctx)

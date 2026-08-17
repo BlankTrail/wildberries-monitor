@@ -55,6 +55,17 @@ jobs:
               -ldflags "-s -w -X github.com/BlankTrail/wildberries-monitor/internal/app.version=${version}" \
               -o "${out}/wbmon${ext}" ./cmd/wbmon
 
+            # The tray is Windows only, and spec section 9 says why: the
+            # systray packages need CGO elsewhere, and CGO would end this
+            # cross-compile. -H windowsgui is what keeps a console window from
+            # appearing behind the icon.
+            if [ "$goos" = windows ]; then
+              GOOS="$goos" GOARCH="$goarch" go build \
+                -trimpath \
+                -ldflags "-s -w -H windowsgui -X github.com/BlankTrail/wildberries-monitor/internal/app.version=${version}" \
+                -o "${out}/wbmon-tray.exe" ./cmd/wbmon-tray
+            fi
+
             cp LICENSE NOTICE README.md "$out/"
             if [ "$goos" = windows ]; then
               cp packaging/start.bat "$out/"

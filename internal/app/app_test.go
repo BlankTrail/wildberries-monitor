@@ -361,3 +361,48 @@ func TestConfig_TheTickIsNoCoarserThanTheFinestSchedule(t *testing.T) {
 		t.Errorf("the default tick is %v, coarser than the finest schedule", got)
 	}
 }
+
+func TestPause_HoldsTheBackgroundRoundAndNothingElse(t *testing.T) {
+	// The tray menu's middle line. What pauses is the tick — the notification
+	// queue and the bot's polling — and the panel keeps serving either way: a
+	// person who paused because their proxy is misbehaving still wants to read
+	// what was collected and change what runs next.
+	a := newApp(t)
+	ctx := t.Context()
+
+	if a.Paused() {
+		t.Fatal("a fresh program starts paused")
+	}
+
+	// The observable effect: a paused tick does not pick up settings. With a
+	// token saved and the program paused, the bot stays without one.
+	if err := a.Store.SetSetting(ctx, store.SettingTelegramToken, "1234:secret", store.SettingSecret); err != nil {
+		t.Fatalf("SetSetting: %v", err)
+	}
+	a.Pause(true)
+	a.Tick(ctx)
+	if a.Bot.Token != "" {
+		t.Errorf("a paused round did work: the bot picked up %q", a.Bot.Token)
+	}
+
+	a.Pause(false)
+	a.Tick(ctx)
+	if a.Bot.Token != "1234:secret" {
+		t.Errorf("the round did not resume: token = %q", a.Bot.Token)
+	}
+}
+
+func TestPause_SaysWhichWayItIsSoTheMenuCannotDisagree(t *testing.T) {
+	// The tray draws its middle line from this, at the moment the menu opens. A
+	// tray that kept its own copy would disagree with the program the first time
+	// anything else paused it.
+	a := newApp(t)
+	a.Pause(true)
+	if !a.Paused() {
+		t.Error("paused program reports itself running")
+	}
+	a.Pause(false)
+	if a.Paused() {
+		t.Error("resumed program reports itself paused")
+	}
+}

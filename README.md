@@ -18,6 +18,13 @@ run `start.bat` (Windows) or `./start.sh` (macOS, Linux). Or build it yourself:
 go build ./cmd/wbmon
 ```
 
+On Windows the archive also carries `wbmon-tray.exe`: the same program with no
+console window and an icon in the notification area, whose menu opens the
+panel, pauses collection and quits. It is the one to put in autostart. There is
+no tray on macOS or Linux — the packages that draw one need CGO there, and CGO
+would end the single-machine cross-compile this project is built around; those
+platforms get the same panel, started by a launchd or systemd unit.
+
 The first start prints the address of the panel and a generated password, and
 writes the same password to `first-run.txt` in the data directory. The panel is
 on `http://127.0.0.1:8760/` by default, and it is closed to the rest of the
