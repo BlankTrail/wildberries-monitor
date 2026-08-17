@@ -21,9 +21,16 @@ jobs:
       # v7 is the first release line that installs golangci-lint v2, which is
       # the schema .golangci.yml is written in. v6 installs v1.x and rejects the
       # config outright, before it ever looks at the code.
+      #
+      # The version pin has to keep up with go.mod. golangci-lint refuses a
+      # module whose Go version is newer than the one it was built with, and
+      # v2.0.2 — pinned when this project targeted Go 1.24 — failed outright
+      # once go.mod moved to 1.26: "the Go language version (go1.24) used to
+      # build golangci-lint is lower than the targeted Go version (1.26.0)".
+      # Not a finding about the code; a linter that could not start.
       - uses: golangci/golangci-lint-action@v7
         with:
-          version: v2.0.2
+          version: v2.12.2
 
   build-matrix:
     runs-on: ubuntu-latest
