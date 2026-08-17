@@ -151,6 +151,11 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /settings", s.auth(http.HandlerFunc(s.saveSettings)))
 	mux.Handle("POST /settings/check", s.auth(http.HandlerFunc(s.checkSettings)))
 
+	mux.Handle("GET /jobs", s.auth(http.HandlerFunc(s.jobsPage)))
+	mux.Handle("POST /jobs", s.auth(http.HandlerFunc(s.saveJobHandler)))
+	mux.Handle("POST /jobs/estimate", s.auth(http.HandlerFunc(s.estimateHandler)))
+	mux.Handle("POST /jobs/phrases", s.auth(http.HandlerFunc(s.uploadPhrases)))
+
 	return mux
 }
 
@@ -193,6 +198,14 @@ type page struct {
 	SourceURL       string
 	FollowRun       string
 }
+
+// rawHTML marks a string as already-escaped markup.
+//
+// Every handler in this package assembles its own HTML and escapes each value
+// it interpolates with html.EscapeString at the point of interpolation. This
+// is where that discipline is named, so that a future caller passing a raw
+// user string through it has one obvious line to have gone past.
+func rawHTML(s string) template.HTML { return template.HTML(s) }
 
 func (s *Server) templates() (*template.Template, error) {
 	s.tmplOnce.Do(func() {

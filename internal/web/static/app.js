@@ -54,6 +54,8 @@
   // so that a template author adds a working control without touching this
   // file — the one property that made htmx worth considering.
 
+  let estimateTimer = null;
+
   function wire(root) {
     root.querySelectorAll("[data-get]").forEach((el) => {
       if (el.dataset.wired) return;
@@ -76,6 +78,61 @@
           method: "POST",
           body: new FormData(form),
         });
+      });
+    });
+
+    // A button that posts the form it sits in without submitting it — the
+    // cost estimate, which must not save anything.
+    root.querySelectorAll("[data-post-form]").forEach((el) => {
+      if (el.dataset.wired) return;
+      el.dataset.wired = "1";
+      el.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        const form = el.closest("form");
+        if (!form) return;
+        swap(el.dataset.target || "#main", el.dataset.postForm, {
+          method: "POST",
+          body: new FormData(form),
+        });
+      });
+    });
+
+    // The file upload. The body is the File object itself, not its contents:
+    // the browser streams it off disk, so a hundred-megabyte phrase list
+    // never has to fit in the tab's memory — which is the whole point.
+    root.querySelectorAll("[data-upload]").forEach((el) => {
+      if (el.dataset.wired) return;
+      el.dataset.wired = "1";
+      el.addEventListener("click", async (ev) => {
+        ev.preventDefault();
+        const input = document.querySelector(el.dataset.file);
+        if (!input || !input.files || !input.files.length) return;
+        const body = new FormData();
+        body.append("name", input.files[0].name);
+        body.append("file", input.files[0]);
+        await swap(el.dataset.target || "#main", el.dataset.upload, {
+          method: "POST",
+          body,
+        });
+      });
+    });
+
+    // Anything that changes the price re-asks for the price. Debounced,
+    // because a person types a page count digit by digit and each keystroke
+    // would otherwise be a request.
+    root.querySelectorAll("[data-estimate]").forEach((el) => {
+      if (el.dataset.wired) return;
+      el.dataset.wired = "1";
+      el.addEventListener("input", () => {
+        const form = el.closest("form");
+        if (!form) return;
+        clearTimeout(estimateTimer);
+        estimateTimer = setTimeout(() => {
+          swap("#estimate", "/jobs/estimate", {
+            method: "POST",
+            body: new FormData(form),
+          });
+        }, 300);
       });
     });
 
