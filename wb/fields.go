@@ -11,10 +11,20 @@ package wb
 // everywhere (spec section 5.3).
 //
 // Only fields with a real producer are declared. Spec section 4.4 lists nine
-// groups; ads by phrase, promotions, and photo/video links have no client in
-// this package, so they are absent rather than declared-but-empty. A checkbox
+// groups; three of them have no client in this package and are absent rather
+// than declared-but-empty: recommendation shelves (similar items, bought
+// together, kits — keyed on a product, and nothing in this package fetches a
+// per-product recommendation), promotions, and photo/video links. A checkbox
 // that collects nothing is worse than a missing one: it also makes the cost
 // estimate count requests nobody will make.
+//
+// Ads by phrase is declared, not absent — see GroupPhraseAds below — but it
+// is worth naming here because it was misfiled as "recommendation shelves"
+// for one release: Client.Shelves takes a phrase and a region (SearchQuery),
+// never a product, so wb.Shelves is the ad placements WB mixes into a
+// search's results, not a per-product recommendation. The two are easy to
+// conflate because the site's own UI calls both a "shelf" — see
+// FieldSourceShelves for the source itself.
 //
 // "Has a producer" is not "has an identically named struct field". A field
 // counts as produced when the value can be read out of what the domain
@@ -32,13 +42,25 @@ package wb
 //
 // This is a separate type from Source (see provenance.go), not an alias of
 // it, and its constants carry a FieldSource prefix rather than reusing
-// Source's own names (SourceCardDetail, SourceReviews, SourceQuestions,
-// SourceShelves are already claimed there, at the identical string value):
-// Source names one HTTP request's provenance on a Fetch, FieldSource names a
-// column's provenance in the catalogue, and the two audiences read a value of
-// this type through unrelated call paths. Reusing Source itself would make
-// every field's Source field either the wrong type for a Fetch or force this
-// file to reach into transport telemetry it has no business depending on.
+// Source's own names: Source names one HTTP request's provenance on a Fetch,
+// FieldSource names a column's provenance in the catalogue, and the two
+// audiences read a value of this type through unrelated call paths. Reusing
+// Source itself would make every field's Source field either the wrong type
+// for a Fetch or force this file to reach into transport telemetry it has no
+// business depending on.
+//
+// Four of Source's own identifiers — SourceCardDetail, SourceReviews,
+// SourceQuestions, SourceShelves — would collide outright if this type
+// reused those names, but the prefix is not only about avoiding that
+// collision: of those four, only Reviews, Questions and Shelves also share
+// Source's string value ("reviews", "questions", "shelves", identical on
+// both types). SourceCardDetail's own value is "card live", not
+// "card-detail". The other two FieldSource constants below, SearchResult and
+// CardDocument, do not collide with any Source identifier at all — Source
+// spells the same two requests SourceSearch ("search page") and
+// SourceCardStatic ("card static") — because Source names what a request
+// did, this type names what a column is priced by, and the two vocabularies
+// were never meant to line up beyond the three that do.
 type FieldSource string
 
 const (
@@ -59,7 +81,12 @@ const (
 	FieldSourceReviews FieldSource = "reviews"
 	// FieldSourceQuestions is a card's buyer questions.
 	FieldSourceQuestions FieldSource = "questions"
-	// FieldSourceShelves is a product's recommendation shelves.
+	// FieldSourceShelves is one banners/shelfs/search response: the
+	// advertising placements WB mixes into a search's results for one phrase
+	// and region (see Shelf and Shelves in shelf.go). Client.Shelves takes a
+	// SearchQuery — a phrase and a region — never a product, so this is the
+	// one source in this catalogue priced per phrase × region rather than per
+	// product; see Cost.PerPhrase and requestsPerPhrase.
 	FieldSourceShelves FieldSource = "shelves"
 )
 
@@ -75,7 +102,11 @@ const (
 	GroupDelivery   FieldGroup = "delivery"
 	GroupContent    FieldGroup = "content"
 	GroupReputation FieldGroup = "reputation"
-	GroupShelves    FieldGroup = "shelves"
+	// GroupPhraseAds is priced per phrase × region, not per product — see
+	// FieldSourceShelves and Cost.PerPhrase. Its three fields keep their
+	// "shelf_" key prefix regardless; see the catalogue comment next to
+	// shelf_title for why renaming them would cost more than it is worth.
+	GroupPhraseAds FieldGroup = "phrase-ads"
 )
 
 // FieldType is what a value is, for a writer that has to render it. Money is
@@ -168,21 +199,30 @@ var catalogue = []Field{
 	{Key: "question_text", Name: "Текст вопроса", Group: GroupReputation, Type: FieldText, Source: FieldSourceQuestions},
 	{Key: "question_answered", Name: "Вопрос отвечен", Group: GroupReputation, Type: FieldBool, Source: FieldSourceQuestions},
 
-	// Shelves: up to three requests per product. shelf_position has no field
-	// of its own on Shelf or Product — Shelf.Products is a plain ordered
-	// slice (decodeShelfEntries) — but a source is what the domain can hand a
+	// PhraseAds: one request per phrase × region (Client.Shelves takes a
+	// SearchQuery, not a product), priced into PerPhrase rather than
+	// PerProduct — see FieldSourceShelves. shelf_position has no field of its
+	// own on Shelf or Product — Shelf.Products is a plain ordered slice
+	// (decodeShelfEntries) — but a source is what the domain can hand a
 	// caller, not what has a same-named struct field to read: the position in
-	// that slice is exactly the fact "third in 'people also buy'" is, and
-	// internal/store/shelves.go already persists it as shelf_items.position,
-	// keyed on the slice index at save time, not on anything decodeShelves
-	// itself stamped. See TestFields_ShelfPositionIsDeclared for why this one
-	// key is pinned by name rather than folded into the group-emptiness
-	// check alone: shelf_title and shelf_nm_id keep the group non-empty even
-	// with shelf_position gone, so that check alone would not notice it
-	// missing.
-	{Key: "shelf_title", Name: "Полка", Group: GroupShelves, Type: FieldText, Source: FieldSourceShelves},
-	{Key: "shelf_position", Name: "Место на полке", Group: GroupShelves, Type: FieldInt, Source: FieldSourceShelves},
-	{Key: "shelf_nm_id", Name: "Артикул на полке", Group: GroupShelves, Type: FieldInt, Source: FieldSourceShelves},
+	// that slice is exactly the fact "third product on this placement" is,
+	// and internal/store/shelves.go already persists it as
+	// shelf_items.position, keyed on the slice index at save time, not on
+	// anything decodeShelves itself stamped. See TestFields_ShelfPositionIsDeclared
+	// for why this one key is pinned by name rather than folded into the
+	// group-emptiness check alone: shelf_title and shelf_nm_id keep the group
+	// non-empty even with shelf_position gone, so that check alone would not
+	// notice it missing.
+	//
+	// The three keys keep their "shelf" spelling rather than being renamed to
+	// match the group: "shelf" is the site's own word for this UI block and
+	// for the wire arrays this package decodes it from (banners/shelfs, see
+	// shelf.go), the store layer already persists it as shelf_items, and a
+	// saved job's column is not worth breaking to fix a naming mismatch that
+	// was really about the group, not the fields.
+	{Key: "shelf_title", Name: "Полка", Group: GroupPhraseAds, Type: FieldText, Source: FieldSourceShelves},
+	{Key: "shelf_position", Name: "Место на полке", Group: GroupPhraseAds, Type: FieldInt, Source: FieldSourceShelves},
+	{Key: "shelf_nm_id", Name: "Артикул на полке", Group: GroupPhraseAds, Type: FieldInt, Source: FieldSourceShelves},
 }
 
 // groupOrder is the order the constructor shows groups in: free first, then
@@ -190,7 +230,7 @@ var catalogue = []Field{
 // nothing until they reach GroupContent.
 var groupOrder = []FieldGroup{
 	GroupBase, GroupStock, GroupDelivery,
-	GroupContent, GroupReputation, GroupShelves,
+	GroupContent, GroupReputation, GroupPhraseAds,
 }
 
 // Fields returns the whole catalogue in its declared order.
@@ -245,14 +285,14 @@ type Selection []string
 // Cost is what a selection adds to a job, counted in requests.
 //
 // PerProduct multiplies by the number of products a job touches. PerPhrase
-// multiplies by phrases times regions instead — ads by phrase are measured
-// per phrase per region, not per product — and is a separate term for that
-// reason (spec section 4.4). No source in this package's catalogue produces
-// it yet (see the package comment), so it is always zero today; the field
-// exists so that adding that source later is a matter of summing into it,
-// not of discovering after the fact that every caller of Cost assumed one
-// number meant "per product". Time is deliberately absent: it depends on
-// threads, delays and result size, none of which the catalogue knows.
+// multiplies by phrases times regions instead: GroupPhraseAds is the one
+// group in this catalogue priced that way (FieldSourceShelves — Client.Shelves
+// takes a phrase and a region, never a product), and it is kept as a
+// separate term rather than folded into PerProduct for exactly that reason
+// (spec section 4.4) — a job over five products and one phrase must not read
+// "6 requests" as if the two counted the same thing. Time is deliberately
+// absent: it depends on threads, delays and result size, none of which the
+// catalogue knows.
 type Cost struct {
 	PerProduct int
 	PerPhrase  int
@@ -263,17 +303,32 @@ type Cost struct {
 	Unknown []string
 }
 
-// requestsPerProduct is what one extra fetch of each source costs, per
-// product. Sources that ride along with a request the job makes anyway are
-// zero, and that is the whole point of the grouping: a user must be able to
-// see where the free part of the list ends.
+// requestsPerProduct is what one extra fetch of each per-product source
+// costs, per product. Sources that ride along with a request the job makes
+// anyway are zero, and that is the whole point of the grouping: a user must
+// be able to see where the free part of the list ends.
+//
+// FieldSourceShelves has no entry here on purpose — see requestsPerPhrase —
+// so that a lookup for it in this map returns Go's int zero-value for the
+// same reason FieldSourceSearchResult's explicit 0 does NOT: one is "free",
+// the other is "priced in the other unit", and Cost keeps them apart by
+// keeping the two maps apart rather than by a value that looks identical in
+// both.
 var requestsPerProduct = map[FieldSource]int{
 	FieldSourceSearchResult: 0,
 	FieldSourceCardDetail:   0,
 	FieldSourceCardDocument: 1,
 	FieldSourceReviews:      1,
 	FieldSourceQuestions:    1,
-	FieldSourceShelves:      1,
+}
+
+// requestsPerPhrase is what one extra fetch of each per-phrase source costs,
+// per phrase × region. FieldSourceShelves is the only entry: Client.Shelves
+// is called once per phrase and region regardless of how many placements or
+// products it returns, so the whole group is one request, never one per
+// product riding along with it.
+var requestsPerPhrase = map[FieldSource]int{
+	FieldSourceShelves: 1,
 }
 
 // Cost counts requests, not fields: four fields read out of one card document
@@ -283,6 +338,7 @@ func (s Selection) Cost() Cost {
 	var c Cost
 	for _, src := range s.Sources() {
 		c.PerProduct += requestsPerProduct[src]
+		c.PerPhrase += requestsPerPhrase[src]
 	}
 	for _, key := range s {
 		if _, ok := FieldByKey(key); !ok {

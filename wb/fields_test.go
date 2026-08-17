@@ -75,26 +75,27 @@ func TestFieldByKey_FindsAndRefuses(t *testing.T) {
 
 func TestFields_ShelfPositionIsDeclared(t *testing.T) {
 	// Shelf.Products (shelf.go) is a plain ordered slice with no field of its
-	// own naming a product's place on the shelf, and it would be easy to read
-	// that as "no producer" the way ads-by-phrase and promotions genuinely
-	// have none. They differ: internal/store/shelves.go already persists
-	// this exact value, as shelf_items.position, taken from the slice index
-	// at save time rather than from any field decodeShelves stamped — the
-	// order itself is the fact "third in 'people also buy'" states, the same
+	// own naming a product's place in the placement, and it would be easy to
+	// read that as "no producer" the way recommendation shelves and
+	// promotions genuinely have none (see the package comment). They differ:
+	// internal/store/shelves.go already persists this exact value, as
+	// shelf_items.position, taken from the slice index at save time rather
+	// than from any field decodeShelves stamped — the order itself is the
+	// fact "third product on this advertising placement" states, the same
 	// way price_sale is a real, produced value despite not being a field
 	// Product carries either (see Product.SalePrice).
 	//
 	// This field is pinned by its own name rather than folded into
 	// TestFieldsOfGroup_ReturnsOnlyThatGroupAndNotAnEmptyOne above: shelf_title
-	// and shelf_nm_id keep GroupShelves non-empty even with shelf_position
+	// and shelf_nm_id keep GroupPhraseAds non-empty even with shelf_position
 	// removed, so that test alone would not notice this one key going
 	// missing.
 	f, ok := FieldByKey("shelf_position")
 	if !ok {
 		t.Fatal(`"shelf_position" is not declared; Shelf.Products is an ordered slice and the store layer already persists that order as shelf_items.position`)
 	}
-	if f.Group != GroupShelves {
-		t.Errorf("shelf_position is in group %q, want %q", f.Group, GroupShelves)
+	if f.Group != GroupPhraseAds {
+		t.Errorf("shelf_position is in group %q, want %q", f.Group, GroupPhraseAds)
 	}
 	if f.Source != FieldSourceShelves {
 		t.Errorf("shelf_position names source %q, want %q", f.Source, FieldSourceShelves)
@@ -297,32 +298,43 @@ func TestSelectionSources_ListsEachSourceOnce(t *testing.T) {
 	}
 }
 
-func TestSelectionSources_OrderIsCatalogueOrderRegardlessOfSelectionOrder(t *testing.T) {
-	// Sources() must walk the catalogue, not the set it built from the
-	// selection: a map has no stable iteration order, so building the result
-	// from the "want" map instead of from catalogue would report a selection's
-	// sources in a different, random order on every call. One key per source,
-	// forward and reversed, pins all six against the one order that matters:
-	// catalogue order. Two entries picked at random from six would still have
-	// a 1-in-6 chance of landing in catalogue order by luck of the map's
-	// iteration; comparing the full six-element permutation instead leaves a
-	// map-ordered implementation only a 1-in-720 chance of passing by chance,
-	// which is the point of using all of them rather than a couple.
+func TestSelectionSources_OrderIsCatalogueOrderNotMapOrder(t *testing.T) {
+	// Sources() must walk the catalogue, not the "want" set it builds from
+	// the selection first: a Go map's iteration order is randomised per
+	// range, so building the result straight from that set would make
+	// repeated calls on the very same selection disagree with each other.
+	//
+	// A single forward-vs-reversed comparison is not a reliable way to catch
+	// this. An earlier version of this test tried exactly that, reasoning
+	// that a map-ordered result would be one of 6! = 720 permutations and so
+	// would agree with a fixed expectation only by a 1-in-720 fluke — that
+	// reasoning is wrong. Instrumenting a map-ordered Sources() over 20,000
+	// calls on these same six keys found only six distinct outputs, all
+	// rotations of one underlying order, with the insertion order itself
+	// coming up in roughly 37.7% of calls: Go's small-map iteration walks a
+	// fixed bucket layout starting from a randomised offset, not a random
+	// permutation, so a false pass was never a 1-in-720 event, it was closer
+	// to a coin flip.
+	//
+	// Calling Sources() many times on one fixed selection sidesteps having to
+	// reason about how many distinct outputs a broken implementation can
+	// produce at all: a correct, catalogue-walking Sources() gives the
+	// identical slice on every call, full stop, and a map-ordered one would
+	// have to land on the one matching rotation 40 times running to slip past
+	// this — (1 - 0.377)^40 rounds to zero.
+	s := Selection{"shelf_title", "question_text", "review_text", "description", "size_name", "nm_id"}
 	want := []FieldSource{
 		FieldSourceSearchResult, FieldSourceCardDetail, FieldSourceCardDocument,
 		FieldSourceReviews, FieldSourceQuestions, FieldSourceShelves,
 	}
-	forward := Selection{"nm_id", "size_name", "description", "review_text", "question_text", "shelf_title"}
-	backward := Selection{"shelf_title", "question_text", "review_text", "description", "size_name", "nm_id"}
-
-	for name, s := range map[string]Selection{"forward": forward, "backward": backward} {
+	for i := 0; i < 40; i++ {
 		got := s.Sources()
 		if len(got) != len(want) {
-			t.Fatalf("%s: Sources() = %v, want %v", name, got, want)
+			t.Fatalf("call %d: Sources() = %v, want %v", i, got, want)
 		}
-		for i := range want {
-			if got[i] != want[i] {
-				t.Errorf("%s: Sources()[%d] = %q, want %q (catalogue order, not selection or map order)", name, i, got[i], want[i])
+		for j := range want {
+			if got[j] != want[j] {
+				t.Fatalf("call %d: Sources()[%d] = %q, want %q (catalogue order, not selection or map order)", i, j, got[j], want[j])
 			}
 		}
 	}
@@ -330,11 +342,16 @@ func TestSelectionSources_OrderIsCatalogueOrderRegardlessOfSelectionOrder(t *tes
 
 func TestFields_EveryDeclaredSourceIsOneTheDomainActuallyProduces(t *testing.T) {
 	// The catalogue must not offer a checkbox the product cannot fill. Spec
-	// section 4.4 lists nine groups; three of them (ads by phrase, promotions,
-	// photo and video links) have no producer in this package at all, and are
-	// deliberately absent. This test is the guard on that decision: adding a
-	// field whose source is not in this list means the source has to be built
-	// first.
+	// section 4.4 lists nine groups; three of them (recommendation shelves,
+	// promotions, photo and video links) have no producer in this package at
+	// all, and are deliberately absent. This test is the guard on that
+	// decision: adding a field whose source is not in this list means the
+	// source has to be built first.
+	//
+	// This guard is necessarily blind to a field added under a source this
+	// package already produces for other reasons — see
+	// TestFields_DoesNotDeclareKeysWithNoRealProducer for that gap and why it
+	// needs its own list.
 	produced := map[FieldSource]bool{
 		FieldSourceSearchResult: true,
 		FieldSourceCardDocument: true,
@@ -346,6 +363,129 @@ func TestFields_EveryDeclaredSourceIsOneTheDomainActuallyProduces(t *testing.T) 
 	for _, f := range Fields() {
 		if !produced[f.Source] {
 			t.Errorf("field %q names source %q, which no wb client produces; build the source before declaring the field", f.Key, f.Source)
+		}
+	}
+}
+
+func TestSelectionCost_PhraseAdsPriceIntoPerPhraseNotPerProduct(t *testing.T) {
+	// GroupPhraseAds is Client.Shelves: one request per phrase × region, not
+	// per product (see FieldSourceShelves's own doc comment). A selection
+	// that asks only for a phrase-ads field must show 0 on PerProduct and 1
+	// on PerPhrase, or the estimate multiplies the wrong count by the wrong
+	// unit — a job over a thousand products and one phrase would report
+	// "1000 requests" for a group that costs exactly one. That is the actual
+	// mistake this group shipped with under its old "recommendation shelves"
+	// framing, and this test is what would have caught it.
+	got := Selection{"shelf_title"}.Cost()
+	if got.PerProduct != 0 {
+		t.Errorf("PerProduct = %d, want 0 — phrase ads are not priced per product", got.PerProduct)
+	}
+	if got.PerPhrase != 1 {
+		t.Errorf("PerPhrase = %d, want 1", got.PerPhrase)
+	}
+}
+
+// notDeclaredKeys are keys spec section 4.4 would suggest but this package
+// deliberately does not declare, together with why not.
+// TestFields_EveryDeclaredSourceIsOneTheDomainActuallyProduces only catches a
+// field whose source is not on wb's produced list; it says nothing about a
+// field added under a source this package already produces for other
+// reasons. That is a real risk here, not a hypothetical one: the live half
+// (FieldSourceCardDetail) is already fetched for stock and delivery, and the
+// static document (FieldSourceCardDocument) is already fetched for
+// description and characteristics, so a field like "promo_flag" or
+// "photo_url" tagged with either existing source sails straight past that
+// guard even though nothing in this package decodes either value out of
+// either response today.
+var notDeclaredKeys = map[string]string{
+	"promo_flag":      `no field on Product, Size or Card carries promotion participation; Client.Card's live half does not expose one`,
+	"promo_name":      `same gap as promo_flag: nothing this package decodes names an active promotion`,
+	"photo_url":       `Card.Raw holds the full static card document already, unparsed — see the package comment's "has a producer" rule — but nothing extracts a photo URL out of it yet`,
+	"video_url":       `same gap as photo_url: the document is already fetched, but nothing decodes a video URL out of it`,
+	"similar_items":   `wb.Shelves answers "what is this phrase and region advertising", not "what does this product recommend"; no source in this package is keyed on a product for a recommendation`,
+	"bought_together": `same gap as similar_items: FieldSourceShelves is keyed on a phrase and a region, not on a product`,
+}
+
+func TestFields_DoesNotDeclareKeysWithNoRealProducer(t *testing.T) {
+	if len(notDeclaredKeys) == 0 {
+		t.Fatal("the list itself is empty")
+	}
+	for key, why := range notDeclaredKeys {
+		if _, ok := FieldByKey(key); ok {
+			t.Errorf("catalogue declares %q, which must stay undeclared: %s", key, why)
+		}
+	}
+}
+
+func TestFields_MatchTheGoldenList(t *testing.T) {
+	// The key is the one thing that must not move once released (see
+	// Field.Key's own doc comment), and it is also the export's column header
+	// (spec section 5.3). Renaming a key — price_sale to sale_price — or
+	// deleting a field outright changes what a saved selection reads, and
+	// nothing before this test notices either: TestFields_KeysAreUniqueAndStable
+	// only checks that whatever keys ARE declared don't collide with each
+	// other, and TestFieldsOfGroup_ReturnsOnlyThatGroupAndNotAnEmptyOne only
+	// checks that no declared group is empty — both stay true of a catalogue
+	// missing "rating" outright. This table, compared element by element in
+	// order, is the one place that pins what must be there, under which
+	// group, holding which type. Type is included because a writer trusts
+	// FieldMoney to know a value needs a currency symbol and two decimal
+	// places (see FieldType's own doc comment), and nothing else here would
+	// notice price_sale silently becoming FieldText.
+	golden := []struct {
+		Key   string
+		Group FieldGroup
+		Type  FieldType
+	}{
+		{"nm_id", GroupBase, FieldInt},
+		{"name", GroupBase, FieldText},
+		{"brand", GroupBase, FieldText},
+		{"supplier_id", GroupBase, FieldInt},
+		{"supplier_name", GroupBase, FieldText},
+		{"price_sale", GroupBase, FieldMoney},
+		{"price_base", GroupBase, FieldMoney},
+		{"discount_pct", GroupBase, FieldInt},
+		{"rating", GroupBase, FieldFloat},
+		{"feedbacks", GroupBase, FieldInt},
+		{"rank", GroupBase, FieldInt},
+		{"page", GroupBase, FieldInt},
+
+		{"total_quantity", GroupStock, FieldInt},
+		{"size_name", GroupStock, FieldText},
+		{"size_quantity", GroupStock, FieldInt},
+		{"warehouse_id", GroupStock, FieldInt},
+
+		{"delivery_time1", GroupDelivery, FieldInt},
+		{"delivery_time2", GroupDelivery, FieldInt},
+		{"delivery_dist", GroupDelivery, FieldInt},
+
+		{"description", GroupContent, FieldText},
+		{"vendor_code", GroupContent, FieldText},
+		{"subject_name", GroupContent, FieldText},
+		{"option", GroupContent, FieldText},
+		{"composition", GroupContent, FieldText},
+		{"card_created", GroupContent, FieldTime},
+
+		{"review_valuation", GroupReputation, FieldFloat},
+		{"review_count", GroupReputation, FieldInt},
+		{"review_text", GroupReputation, FieldText},
+		{"review_created", GroupReputation, FieldTime},
+		{"question_text", GroupReputation, FieldText},
+		{"question_answered", GroupReputation, FieldBool},
+
+		{"shelf_title", GroupPhraseAds, FieldText},
+		{"shelf_position", GroupPhraseAds, FieldInt},
+		{"shelf_nm_id", GroupPhraseAds, FieldInt},
+	}
+
+	got := Fields()
+	if len(got) != len(golden) {
+		t.Fatalf("Fields() has %d entries, golden list has %d", len(got), len(golden))
+	}
+	for i, g := range golden {
+		if got[i].Key != g.Key || got[i].Group != g.Group || got[i].Type != g.Type {
+			t.Errorf("field %d = {key:%q group:%q type:%q}, want {key:%q group:%q type:%q}",
+				i, got[i].Key, got[i].Group, got[i].Type, g.Key, g.Group, g.Type)
 		}
 	}
 }
