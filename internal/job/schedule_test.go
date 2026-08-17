@@ -5,6 +5,7 @@ package job
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -281,4 +282,85 @@ func TestScheduler_IsSafeUnderConcurrentUse(t *testing.T) {
 		}(i)
 	}
 	wg.Wait()
+}
+
+// countingRunners hands back one runner and records the cleanups it issued.
+type countingRunners struct {
+	runner *Runner
+	built  int
+	closed int
+	fail   error
+}
+
+func (c *countingRunners) RunnerFor(context.Context, Job) (*Runner, func(), error) {
+	if c.fail != nil {
+		return nil, nil, c.fail
+	}
+	c.built++
+	return c.runner, func() { c.closed++ }, nil
+}
+
+func TestStart_ReleasesWhatTheRunnerOpened(t *testing.T) {
+	// The cleanup is not the runner's own Close: what needs releasing is a pool
+	// of ports on a proxy, and ports left open are ports somebody is paying for
+	// and nothing is using. It has to run however the run ended.
+	r, store, _ := newRunner(t, []Item{{Kind: ItemProduct, Key: "a"}},
+		FetcherFunc(func(context.Context, Item) (int, error) { return 1, nil }))
+	j := savedJob(t, store)
+	src := &countingRunners{runner: r}
+	sch := NewScheduler(src)
+
+	if _, err := sch.Start(t.Context(), j); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if src.built != 1 || src.closed != 1 {
+		t.Errorf("собрано %d исполнителей, закрыто %d", src.built, src.closed)
+	}
+
+	// And after a run that failed, which is when leaving ports open is easiest
+	// to do and hardest to notice.
+	failing, failingStore, _ := newRunner(t, []Item{{Kind: ItemProduct, Key: "a"}},
+		FetcherFunc(func(context.Context, Item) (int, error) {
+			return 0, errors.New("отказ канала")
+		}))
+	src = &countingRunners{runner: failing}
+	sch = NewScheduler(src)
+	if _, err := sch.Start(t.Context(), savedJob(t, failingStore)); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if src.closed != 1 {
+		t.Errorf("после неудачного прогона закрыто %d уборок", src.closed)
+	}
+}
+
+func TestStart_ABuildThatFailedIsReportedAndNothingRuns(t *testing.T) {
+	// Preparing a run reaches a network — a licence check, ports being opened —
+	// and it fails for reasons that have nothing to do with the job. The failure
+	// is the caller's answer, not a run that quietly collected nothing.
+	_, store, _ := newRunner(t, nil,
+		FetcherFunc(func(context.Context, Item) (int, error) { return 1, nil }))
+	j := savedJob(t, store)
+	sch := NewScheduler(&countingRunners{fail: errors.New("прокси не готов")})
+
+	_, err := sch.Start(t.Context(), j)
+	if err == nil || !strings.Contains(err.Error(), "прокси не готов") {
+		t.Errorf("Start = %v", err)
+	}
+	// And the job is not left marked as running, or nothing could start it again.
+	if sch.Running(j.ID) {
+		t.Error("задание осталось помеченным идущим после неудачной сборки")
+	}
+}
+
+func TestStart_ASchedulerWithNoRunnersRefusesRatherThanPanics(t *testing.T) {
+	// NewScheduler(nil) is the reachable version of this mistake — a caller
+	// wiring a scheduler before the thing that builds its runners exists — and a
+	// nil interface dereferenced takes the whole program down with it.
+	//
+	// A typed nil is a different case and needs no guard here: it satisfies the
+	// interface, hands back a runner with no store, and the runner's own check
+	// says so by name.
+	if _, err := NewScheduler(nil).Start(t.Context(), Job{ID: 1}); err == nil {
+		t.Error("планировщик без исполнителей принял запуск")
+	}
 }

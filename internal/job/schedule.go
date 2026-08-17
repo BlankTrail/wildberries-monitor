@@ -94,7 +94,19 @@ var ErrAlreadyRunning = errors.New("job: this job is already running")
 // it unanswerable — so the second attempt is refused rather than queued: a
 // queue would hold a run whose schedule has already moved on.
 type Scheduler struct {
-	Runner *Runner
+	// Runners hands over the runner for one job, and the cleanup that goes with
+	// it.
+	//
+	// A source rather than a runner, because a runner is not necessarily
+	// reusable across jobs: the real fetcher is built around one job — which
+	// fields it collects decides which sources it reads — and it holds a pool of
+	// proxy ports opened for that job's thread count. One runner shared between
+	// two jobs would have to be mutated between runs, which is a race with
+	// exactly the shape this type exists to prevent.
+	//
+	// A single *Runner satisfies this by handing itself back, so a caller with
+	// nothing per-job to do writes NewScheduler(runner) as before.
+	Runners Runners
 	// Now is the clock. Replaced in tests; nothing else writes it.
 	Now func() time.Time
 
@@ -103,10 +115,32 @@ type Scheduler struct {
 	last    map[int64]time.Time
 }
 
+// Runners provides the runner for one job, and the cleanup for what it opened.
+//
+// The cleanup runs when the job is finished with, however it finished. It is
+// separate from the runner rather than a Close method on it because what needs
+// releasing is not the runner's: it is a pool of ports on a proxy, and leaving
+// those open costs money on somebody's licence.
+type Runners interface {
+	RunnerFor(ctx context.Context, j Job) (r *Runner, done func(), err error)
+}
+
+// RunnerFor hands back this runner itself, so one runner is a Runners.
+//
+// The cleanup is empty for the same reason it exists at all: this runner opened
+// nothing for this job in particular, so there is nothing of this job's to
+// close.
+func (r *Runner) RunnerFor(context.Context, Job) (*Runner, func(), error) {
+	return r, func() {}, nil
+}
+
 // NewScheduler returns a scheduler that runs jobs through r.
-func NewScheduler(r *Runner) *Scheduler {
+//
+// A single *Runner is a Runners — it hands itself back — so a caller with
+// nothing per-job to build passes one and reads no differently than before.
+func NewScheduler(r Runners) *Scheduler {
 	return &Scheduler{
-		Runner:  r,
+		Runners: r,
 		Now:     time.Now,
 		running: map[int64]context.CancelFunc{},
 		last:    map[int64]time.Time{},
@@ -138,7 +172,20 @@ func (s *Scheduler) Start(ctx context.Context, j Job) (Result, error) {
 		cancel()
 	}()
 
-	return s.Runner.Run(runCtx, j)
+	if s.Runners == nil {
+		return Result{}, errors.New("job: the scheduler has no runners")
+	}
+	// After the job is marked running, not before. Building a runner can mean
+	// opening proxy ports, which takes seconds and can fail; done outside the
+	// claim, two Starts arriving together would both build one and only then
+	// discover that one of them has to be thrown away.
+	runner, done, err := s.Runners.RunnerFor(runCtx, j)
+	if err != nil {
+		return Result{}, err
+	}
+	defer done()
+
+	return runner.Run(runCtx, j)
 }
 
 // Stop asks a running job to stop and reports whether it was running.

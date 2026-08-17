@@ -3,7 +3,6 @@
 package app
 
 import (
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -85,26 +84,6 @@ func TestBotJobs_AJobWithNoNameIsStillPickableFromTheList(t *testing.T) {
 	}
 	if list[0].ID != id {
 		t.Errorf("номер %d, ожидался %d", list[0].ID, id)
-	}
-}
-
-func TestBotJobs_StartAndStopSayWhatIsMissingRatherThanNothing(t *testing.T) {
-	// Nothing in this build runs a job, and the honest answer names that. A
-	// silent success would report a collection started that never was.
-	a := newApp(t)
-	id := savedJob(t, a, "кроссовки", "phrase")
-	jobs := botJobs{a}
-
-	for name, err := range map[string]error{
-		"start": jobs.Start(t.Context(), id),
-		"stop":  jobs.Stop(t.Context(), id),
-	} {
-		if !errors.Is(err, ErrNoEngine) {
-			t.Errorf("%s = %v, ожидался ErrNoEngine", name, err)
-		}
-		if err != nil && !strings.Contains(err.Error(), "движок сбора") {
-			t.Errorf("%s: %v — не говорит, чего не хватает", name, err)
-		}
 	}
 }
 

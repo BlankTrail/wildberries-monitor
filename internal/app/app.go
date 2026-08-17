@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/BlankTrail/wildberries-monitor/internal/autostart"
+	"github.com/BlankTrail/wildberries-monitor/internal/engine"
 	"github.com/BlankTrail/wildberries-monitor/internal/events"
 	"github.com/BlankTrail/wildberries-monitor/internal/job"
 	"github.com/BlankTrail/wildberries-monitor/internal/notify"
@@ -50,6 +51,10 @@ type App struct {
 	Server *web.Server
 	Worker *notify.Worker
 
+	// Engine builds a runner per job, and Scheduler decides when one runs and
+	// refuses to run one twice. Both are nil in no build; they are here rather
+	// than inside the tick because the bot and the panel start jobs too.
+	Engine    *engine.Engine
 	Scheduler *job.Scheduler
 	Bot       *telegram.Bot
 	MTProto   *telegram.MTProto
@@ -155,6 +160,19 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 			return a.Ladder.Name(), nil
 		},
 	}
+
+	eps, err := loadEndpoints(dir)
+	if err != nil {
+		return nil, err
+	}
+	a.Engine = &engine.Engine{
+		Store: s, Bus: a.Bus, Endpoints: eps,
+		Log: func(format string, args ...any) { a.Log.Printf(format, args...) },
+	}
+	a.Scheduler = job.NewScheduler(a.Engine)
+	// Before the first tick, so a restart does not make every scheduled job due
+	// at once — see primeSchedule.
+	a.primeSchedule(ctx)
 
 	a.Commands = &telegram.Commands{
 		Bot:    a.Bot,
@@ -340,6 +358,8 @@ func (a *App) Tick(ctx context.Context) {
 			a.Log.Printf("уведомлений отброшено: %d", stats.GaveUp)
 		}
 	}
+
+	a.runDue(ctx)
 
 	if a.Commands != nil && a.Bot.Token != "" {
 		if _, err := a.Commands.Poll(ctx); err != nil && ctx.Err() == nil {

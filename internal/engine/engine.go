@@ -1,0 +1,258 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+// Package engine assembles what a collection run needs and hands it to the
+// scheduler.
+//
+// Everything it puts together already existed and was tested: the pool and its
+// channel mixer in blanktrail, the site client in wb, the fetcher in collect,
+// the planner and the runner in job. What was missing was the assembly — and
+// it turned out to be the reason nothing in this product collected anything
+// from any surface.
+//
+// It is a package rather than a file in internal/app for one reason: opening a
+// pool of proxy ports is the only part of this program that spends somebody's
+// money, and it deserves a boundary where the decisions about it can be read
+// in one place and tested without an App around them.
+package engine
+
+import (
+	"context"
+	"crypto/x509"
+	"errors"
+	"fmt"
+	"net/url"
+	"strings"
+	"time"
+
+	"github.com/BlankTrail/wildberries-monitor/blanktrail"
+	"github.com/BlankTrail/wildberries-monitor/internal/collect"
+	"github.com/BlankTrail/wildberries-monitor/internal/events"
+	"github.com/BlankTrail/wildberries-monitor/internal/job"
+	"github.com/BlankTrail/wildberries-monitor/internal/store"
+	"github.com/BlankTrail/wildberries-monitor/wb"
+)
+
+// ErrNotConfigured is returned when there is no BlankTrail to collect through.
+//
+// A distinct error because it is the one failure that is not a fault: a fresh
+// install has no proxy configured, and the settings screen is where that is
+// fixed. Anything that reports it as a breakage sends somebody looking for one.
+var ErrNotConfigured = errors.New("engine: BlankTrail не настроен — укажите адрес и ключ в настройках")
+
+// Engine builds a runner per job.
+//
+// Per job and not once, because both halves of a runner are the job's own: the
+// fetcher reads only the sources this job's field selection needs, and the pool
+// opens this job's thread count in ports. A shared runner would have to be
+// mutated between runs, which is the race the scheduler exists to prevent.
+type Engine struct {
+	Store *store.Store
+	Bus   *events.Bus
+
+	// Endpoints is the address registry — the defaults, or whatever
+	// endpoints.yaml beside the binary overrode them with. Held rather than
+	// read per run: a file the user edits to follow a path Wildberries moved is
+	// read at start, and re-reading it mid-run would change the addresses under
+	// a plan already written against them.
+	Endpoints wb.Endpoints
+
+	// Log is where a run's preparation reports what it found. Optional.
+	Log func(format string, args ...any)
+}
+
+// Check reports whether a run could be prepared at all.
+//
+// Settings only, which is what makes it instant and therefore worth having: it
+// is asked before a run is spawned, so that "/run 3" on a fresh install answers
+// "BlankTrail не настроен" straight away instead of reporting a start that
+// then fails out of sight. What it cannot answer — is the licence live, is the
+// solver armed, can this instance reach the target — needs a round trip and is
+// the preflight's job, in RunnerFor, where the run can be stopped with a reason.
+func (e *Engine) Check(ctx context.Context) error {
+	_, err := e.control(ctx)
+	return err
+}
+
+// RunnerFor builds everything one job needs, and the cleanup that closes it.
+//
+// The order is the order things can fail in, cheapest first: settings before a
+// network call, the preflight before ports are opened, ports before a plan is
+// written. Opening a pool and then discovering the licence is expired would
+// have spent the ports to learn it.
+func (e *Engine) RunnerFor(ctx context.Context, j job.Job) (*job.Runner, func(), error) {
+	client, err := e.control(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// The preflight is not optional and not only advice: it is where the
+	// proxy's own CA comes from, and a pool built without it cannot read a
+	// single response. That it also answers "is the licence live, is the
+	// solver armed, can this instance reach the target" before any port is
+	// opened is the second reason to keep it.
+	report := blanktrail.Preflight(ctx, client, preflightInput(e.Endpoints, j))
+	for _, f := range report.Findings {
+		e.logf("прокси: [%s] %s — %s", f.Severity, f.Title, f.Action)
+	}
+	if !report.OK() {
+		return nil, nil, fmt.Errorf("engine: прокси не готов: %s", firstBlocking(report))
+	}
+
+	pool, err := blanktrail.NewPool(ctx, poolConfig(client, j, report.CA))
+	if err != nil {
+		return nil, nil, fmt.Errorf("engine: не удалось открыть порты: %w", err)
+	}
+
+	site := wb.NewClientWithRetry(wb.FromPool(pool), wb.NewSessions(),
+		// false: with no egress channel there is one address and no search to
+		// make, so a challenge that survives the first tries will survive the
+		// rest too, and spending the budget on it only delays the report.
+		wb.DefaultRetryPolicy(false))
+
+	runner := &job.Runner{
+		Store:   e.Store,
+		Bus:     e.Bus,
+		Planner: job.StaticPlanner{},
+		Fetcher: &collect.Fetcher{
+			Site:   site,
+			Store:  e.Store,
+			Bus:    e.Bus,
+			Basket: wb.NewBasket(site),
+			Eps:    e.Endpoints,
+			Job:    j,
+		},
+	}
+
+	return runner, func() {
+		// Every way out of a run, including the ones that stopped it. Ports left
+		// open are ports somebody is paying for and nothing is using, and the
+		// next run of this job would open its own on top of them.
+		if err := pool.Close(); err != nil {
+			e.logf("порты задания %d не закрылись: %v", j.ID, err)
+		}
+	}, nil
+}
+
+// portsPerThread is how many proxy ports one thread gets.
+//
+// Two, and the reason is the pool's own cooldown: ports are shared across
+// threads rather than pinned to one, and a thread with a single port waits out
+// that port's gap between requests with nothing else to reach for. The second
+// port is what turns that wait into work. More than two mostly buys ports
+// sitting idle on a licence that counts them.
+const portsPerThread = 2
+
+// requestTimeout bounds one request through a leased port, retries included.
+//
+// Generous on purpose: a port clearing an interactive challenge legitimately
+// takes minutes, and cutting it short throws away both the request and the
+// session it was solving for. A dead address is caught long before this by the
+// port's own timeout, so the two are not the same budget.
+const requestTimeout = 300 * time.Second
+
+// control builds the API client from what the settings screen saved.
+func (e *Engine) control(ctx context.Context) (*blanktrail.Client, error) {
+	addr := strings.TrimSpace(e.Store.SettingOr(ctx, store.SettingBlankTrailURL, ""))
+	key := strings.TrimSpace(e.Store.SettingOr(ctx, store.SettingBlankTrailAPIKey, ""))
+	if addr == "" || key == "" {
+		return nil, ErrNotConfigured
+	}
+	client, err := blanktrail.NewClient(addr, key)
+	if err != nil {
+		return nil, fmt.Errorf("engine: %w", err)
+	}
+	return client, nil
+}
+
+// preflightInput is what the proxy is asked about before a port is opened.
+//
+// Extracted for the reason poolConfig is: what it carries is invisible by
+// inspection once it is wrong, and the call it feeds needs a licensed instance
+// so no test can reach it any other way. Both of its fields matter. The domain
+// is the host and not the whole address, because the preflight resolves and
+// dials what it is given — handed a URL it reports the target unreachable on a
+// machine where it is fine. The port count is this job's, because a licence
+// counts ports and the answer to "will this run fit" depends on how many.
+func preflightInput(eps wb.Endpoints, j job.Job) blanktrail.PreflightInput {
+	return blanktrail.PreflightInput{
+		Domains: []string{hostOf(eps.Home)},
+		Ports:   threadsOf(j) * portsPerThread,
+	}
+}
+
+// poolConfig is the pool this job will drive.
+//
+// A named function rather than a literal inline, for the reason the reference
+// assembly in examples/wbsearch gives: a test can then assert what it carries
+// without a live proxy, and CountFailure in particular is invisible by
+// inspection once it is missing. It cannot be reached any other way — the
+// preflight above needs a real instance, and it comes first on purpose.
+func poolConfig(client *blanktrail.Client, j job.Job, ca *x509.CertPool) blanktrail.PoolConfig {
+	return blanktrail.PoolConfig{
+		Client:         client,
+		Threads:        threadsOf(j),
+		PortsPerThread: portsPerThread,
+		Spec:           wb.ModeOf(j.AppType).Spec(blanktrail.DefaultPortSpec()),
+		// Direct egress. The mixer behind this field takes a proxy list, a
+		// rotating address and a vendor gateway just as readily — that is spec
+		// section 3.5, and blanktrail implements all four — but nothing in this
+		// build can yet create a channel to put here: the channels table has no
+		// writer and the panel has no screen for it. An empty slice is the honest
+		// state, and the pool reads it as the host's own address.
+		Channels:       nil,
+		CA:             ca,
+		RequestTimeout: requestTimeout,
+		// The pause the pool offers callers between requests, taken from the job
+		// because that is where a person set it. Both ends the same: a job that
+		// asked for half a second means half a second, and a range it never named
+		// would be this package inventing jitter on somebody else's budget.
+		DelayMin: j.Delay,
+		DelayMax: j.Delay,
+		// The one thing the pool cannot know and this package can. Left nil it
+		// counts every non-2xx towards replacing a port's address, and on this
+		// target that is wrong twice over: a challenge status is what the port's
+		// own solver is there to clear, and a refusal aimed at our headers travels
+		// with the request rather than with the address — so rotating on either
+		// throws away a solved challenge and buys nothing.
+		CountFailure: wb.CountFailure,
+	}
+}
+
+// threadsOf is how hard this job asked to be pushed, with the floor a run needs
+// to happen at all.
+func threadsOf(j job.Job) int {
+	if j.Threads < 1 {
+		return 1
+	}
+	return j.Threads
+}
+
+func (e *Engine) logf(format string, args ...any) {
+	if e.Log != nil {
+		e.Log(format, args...)
+	}
+}
+
+// firstBlocking is the finding to put in an error.
+//
+// One rather than all of them: every finding has already gone to the log with
+// its own remedy, and an error message carrying four paragraphs is one nobody
+// reads to the end. The first blocking one is the one to fix first.
+func firstBlocking(r blanktrail.Report) string {
+	for _, f := range r.Blocking() {
+		return f.Title + " — " + f.Action
+	}
+	return "причина не названа"
+}
+
+// hostOf is the host part of a registry address, for the preflight to ask
+// about. An address that will not parse is passed through: the preflight's own
+// answer about a host it cannot resolve is a better report than one this
+// function could invent.
+func hostOf(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return raw
+	}
+	return u.Hostname()
+}

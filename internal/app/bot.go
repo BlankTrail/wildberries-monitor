@@ -4,7 +4,6 @@ package app
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -24,26 +23,13 @@ import (
 // botJobs answers the bot's questions about jobs.
 type botJobs struct{ a *App }
 
-// ErrNoEngine is what the two controlling verbs return.
-//
-// Nothing in this build runs a job — not a schedule, not the panel, not the
-// bot: assembling the collection engine needs the channel mixer of spec
-// section 3.5 and a site client built on it, and neither is in internal/app
-// yet. Listing does not need any of that, which is why it works.
-//
-// A named error rather than a silent no-op, and specific rather than "not
-// available in this build": the second reads like a compile-time choice
-// somebody could flip, and would have whoever hits it looking for a flag.
-var ErrNoEngine = errors.New("запуск заданий пока не подключён: движок сбора не собран в этой сборке")
-
 // List is every saved job with what is known about its runs.
 //
-// Running is read from the run rows rather than from a scheduler, because there
-// is no scheduler here to ask — see ErrNoEngine. A run row with no finish time
-// is what "in flight" means to the database, and it is also how section 10
-// recognises a run a crash interrupted, so the two agree: a job with an open
-// run is a job whose plan is not finished, whether or not a goroutine is
-// currently working on it.
+// Running comes from the run rows and not from the scheduler, which knows the
+// same thing a few milliseconds wider at each end. The rows answer one more
+// question the scheduler cannot: a run a crash interrupted is still open, which
+// is exactly how section 10 recognises one to resume, and a list that asked
+// only this process would call it finished.
 func (b botJobs) List(ctx context.Context) ([]telegram.JobSummary, error) {
 	list, err := b.a.Store.Jobs(ctx)
 	if err != nil {
@@ -66,8 +52,8 @@ func (b botJobs) List(ctx context.Context) ([]telegram.JobSummary, error) {
 	return out, nil
 }
 
-func (b botJobs) Start(context.Context, int64) error { return ErrNoEngine }
-func (b botJobs) Stop(context.Context, int64) error  { return ErrNoEngine }
+func (b botJobs) Start(ctx context.Context, id int64) error { return b.a.StartJob(ctx, id) }
+func (b botJobs) Stop(_ context.Context, id int64) error    { return b.a.StopJob(id) }
 
 // jobName is what to call a job in a list.
 //

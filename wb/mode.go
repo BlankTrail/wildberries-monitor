@@ -50,6 +50,19 @@ func (m Mode) String() string {
 	return "desktop"
 }
 
+// ModeOf is the surface an app_type belongs to — the inverse of AppType.
+//
+// Needed because a job stores the audience as the number the site sends, while
+// a port profile is chosen by surface. Anything that is not the mobile number
+// is desktop, which is the same fallback every method on this type makes and
+// for the same reason: desktop is the one surface this milestone observed live.
+func ModeOf(appType int) Mode {
+	if appType == AppMobile {
+		return ModeMobile
+	}
+	return ModeDesktop
+}
+
 // AppType is the value the site's own front end sends for this surface.
 func (m Mode) AppType() int {
 	if m == ModeMobile {

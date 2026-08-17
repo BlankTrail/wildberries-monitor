@@ -81,3 +81,23 @@ func TestMode_SpecChangesExactlyTheSurfaceAndNothingElse(t *testing.T) {
 		t.Errorf("Spec mutated the base; two pools from one base would share a surface")
 	}
 }
+
+func TestModeOf_IsTheInverseOfAppType(t *testing.T) {
+	// A job stores the audience as the number the site sends; a port profile is
+	// chosen by surface. The two have to agree, and a round trip is the only
+	// way to say so that stays true when either side gains a value.
+	for _, m := range []Mode{ModeDesktop, ModeMobile} {
+		if got := ModeOf(m.AppType()); got != m {
+			t.Errorf("ModeOf(%d) = %v, ожидалось %v", m.AppType(), got, m)
+		}
+	}
+}
+
+func TestModeOf_AnUnknownAudienceIsDesktop(t *testing.T) {
+	// The same fallback every method on this type makes: desktop is the one
+	// surface this milestone observed live, and a job carrying an app_type
+	// nobody recognises is better collected as the observed one than refused.
+	if got := ModeOf(9999); got != ModeDesktop {
+		t.Errorf("ModeOf(9999) = %v", got)
+	}
+}
