@@ -88,7 +88,13 @@ func TestDataDir_IsNotBesideTheBinary(t *testing.T) {
 func TestNew_KeepsTheDataDirectoryToItself(t *testing.T) {
 	// It holds the database, the first-run password, and through the settings
 	// table a proxy key and a bot token.
-	dir := t.TempDir()
+	//
+	// A path that does not exist yet, so New is the one that creates it.
+	// Handed t.TempDir() itself — which already exists — MkdirAll is a no-op
+	// and this measured the temp directory's own mode instead of anything this
+	// program decided. It passed on Windows because the check is skipped
+	// there, and CI on Linux said 755 the first time it ever ran.
+	dir := filepath.Join(t.TempDir(), "wbmon")
 	a, err := New(t.Context(), Config{DataDir: dir})
 	if err != nil {
 		t.Fatalf("New: %v", err)
