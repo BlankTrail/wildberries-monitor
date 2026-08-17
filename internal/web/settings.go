@@ -42,13 +42,15 @@ func (s *Server) writeSettingsForm(w http.ResponseWriter, r *http.Request, notic
 	// output goes into a page, and the page is what a user screenshots.
 	shown, err := s.Store.SettingsForDisplay(r.Context(),
 		store.SettingBlankTrailURL, store.SettingBlankTrailAPIKey,
-		store.SettingTelegramToken, store.SettingTelegramChat)
+		store.SettingTelegramToken, store.SettingTelegramChat,
+		store.SettingTelegramAppID, store.SettingTelegramAppHash)
 	if err != nil {
 		http.Error(w, "settings: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 	url, key := shown[0], shown[1]
 	tgToken, tgChat := shown[2], shown[3]
+	tgAppID, tgAppHash := shown[4], shown[5]
 
 	var b strings.Builder
 	b.WriteString(`<form class="bt-fieldset" data-post="/settings" data-target="#settings-body">`)
@@ -100,6 +102,28 @@ func (s *Server) writeSettingsForm(w http.ResponseWriter, r *http.Request, notic
   <span class="bt-form-hint">Числовой идентификатор, @имя канала или «чат:тема» для темы в форуме.
   В правиле можно указать свой адресат.</span>
 </div>`)
+	// The my.telegram.org pair, folded away. Spec section 8.2 asks for it only
+	// when the first two rungs are unavailable — sending somebody to
+	// my.telegram.org on a machine where the direct route works would be a
+	// setup step charged for nothing — and <details> is how that is said
+	// without hiding it from the person who does need it.
+	appHashHint := "Не задан. MTProto без него не поднимется."
+	if tgAppHash.Set && tgAppHash.Value != "" {
+		appHashHint = "Сохранён. Оставьте поле как есть, чтобы не менять его."
+	}
+	b.WriteString(`<details class="bt-field">
+  <summary>Запасной путь: MTProto</summary>
+  <span class="bt-form-hint">Нужен, только если Telegram недоступен ни напрямую, ни через BlankTrail.
+  Пара берётся на my.telegram.org. Токен бота тот же, что выше.</span>
+  <label class="bt-label" for="tg-app-id">api_id</label>
+  <input class="bt-input bt-input--mono" id="tg-app-id" name="telegram_app_id" type="number"
+         value="` + html.EscapeString(tgAppID.Value) + `">
+  <label class="bt-label" for="tg-app-hash">api_hash</label>
+  <input class="bt-input bt-input--mono" id="tg-app-hash" name="telegram_app_hash" type="password"
+         autocomplete="off" value="` + html.EscapeString(tgAppHash.Value) + `">
+  <span class="bt-form-hint">` + appHashHint + `</span>
+</details>`)
+
 	// Autostart is asked of the operating system, not read back from a
 	// setting: a registry entry or a unit file can be removed by anything, and
 	// a checkbox that showed a stored intention rather than the truth would
@@ -173,6 +197,21 @@ func (s *Server) saveSettings(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "settings: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+	if err := s.Store.SetSetting(ctx, store.SettingTelegramAppID,
+		strings.TrimSpace(r.FormValue("telegram_app_id")), store.SettingInt); err != nil {
+		http.Error(w, "settings: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	// The api_hash is a secret in the same sense the token is: it identifies
+	// the application to Telegram, and the two together are the login.
+	if hash := r.FormValue("telegram_app_hash"); hash != store.MaskedSecret() {
+		if err := s.Store.SetSetting(ctx, store.SettingTelegramAppHash,
+			strings.TrimSpace(hash), store.SettingSecret); err != nil {
+			http.Error(w, "settings: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+
 	// Same rule as the API key below: the mask means "leave it alone".
 	if token := r.FormValue("telegram_token"); token != store.MaskedSecret() {
 		if err := s.Store.SetSetting(ctx, store.SettingTelegramToken,

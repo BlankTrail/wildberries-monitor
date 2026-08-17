@@ -3,6 +3,7 @@ module github.com/BlankTrail/wildberries-monitor
 go 1.26.0
 
 require (
+	github.com/gotd/td v0.161.0
 	golang.org/x/sys v0.47.0
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.56.0
@@ -25,7 +26,6 @@ require (
 	github.com/gotd/ige v0.3.0 // indirect
 	github.com/gotd/log v0.1.0 // indirect
 	github.com/gotd/neo v0.1.5 // indirect
-	github.com/gotd/td v0.161.0 // indirect
 	github.com/klauspost/compress v1.19.0 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
@@ -55,3 +55,5 @@ require (
 	modernc.org/memory v1.11.0 // indirect
 	rsc.io/qr v0.2.0 // indirect
 )
+
+replace nhooyr.io/websocket => github.com/coder/websocket v1.8.14

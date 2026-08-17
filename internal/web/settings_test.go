@@ -212,3 +212,67 @@ func TestSettings_ABuildWithoutAutostartOffersNoBox(t *testing.T) {
 		t.Error("a build with no autostart mechanism offered the box anyway")
 	}
 }
+
+func TestSettings_KeepsTheMyTelegramOrgPairOutOfTheWayButReachable(t *testing.T) {
+	// Spec section 8.2: asked for only when the first two rungs are
+	// unavailable. Sending somebody to my.telegram.org on a machine where the
+	// direct route works is a setup step charged for nothing — and hiding it
+	// altogether would strand the person who does need it.
+	srv := newServer(t)
+	body := get(t, srv, "/settings", "correct horse").Body.String()
+
+	if !strings.Contains(body, "<details") || !strings.Contains(body, "MTProto") {
+		t.Errorf("the fallback path is not offered at all: %q", firstLines(body))
+	}
+	if !strings.Contains(body, `name="telegram_app_id"`) || !strings.Contains(body, `name="telegram_app_hash"`) {
+		t.Error("the my.telegram.org pair has no fields")
+	}
+	// It must not be the first thing a person meets: the fold comes after the
+	// two rungs that work without it.
+	if strings.Index(body, "<details") < strings.Index(body, `name="telegram_token"`) {
+		t.Error("the fallback path is offered before the bot token")
+	}
+}
+
+func TestSettings_NeverRendersTheAppHash(t *testing.T) {
+	// It identifies the application to Telegram, and with the token it is the
+	// login. The same masking as every other secret.
+	srv := newServer(t)
+	const hash = "0123456789abcdef0123456789abcdef"
+	if err := srv.Store.SetSetting(t.Context(), store.SettingTelegramAppHash, hash, store.SettingSecret); err != nil {
+		t.Fatalf("SetSetting: %v", err)
+	}
+
+	body := get(t, srv, "/settings", "correct horse").Body.String()
+	if strings.Contains(body, hash) || strings.Contains(body, hash[:8]) {
+		t.Error("the settings dialog rendered the api_hash")
+	}
+	if !strings.Contains(body, "Сохранён") {
+		t.Error("the dialog does not say a hash is stored, so hidden reads as unset")
+	}
+}
+
+func TestSaveSettings_KeepsTheStoredAppHashBehindItsMask(t *testing.T) {
+	srv := newServer(t)
+	ctx := t.Context()
+	if err := srv.Store.SetSetting(ctx, store.SettingTelegramAppHash, "the real hash", store.SettingSecret); err != nil {
+		t.Fatalf("SetSetting: %v", err)
+	}
+
+	w := postForm(t, srv, "/settings", url.Values{
+		"url":               {"http://127.0.0.1:8891"},
+		"api_key":           {store.MaskedSecret()},
+		"telegram_token":    {store.MaskedSecret()},
+		"telegram_app_id":   {"1234567"},
+		"telegram_app_hash": {store.MaskedSecret()},
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("save = %d: %s", w.Code, w.Body.String())
+	}
+	if got, _ := srv.Store.Setting(ctx, store.SettingTelegramAppHash); got != "the real hash" {
+		t.Errorf("the stored api_hash is now %q", got)
+	}
+	if got, _ := srv.Store.Setting(ctx, store.SettingTelegramAppID); got != "1234567" {
+		t.Errorf("the api_id was not saved: %q", got)
+	}
+}
