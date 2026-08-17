@@ -157,6 +157,10 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /settings", s.auth(http.HandlerFunc(s.saveSettings)))
 	mux.Handle("POST /settings/check", s.auth(http.HandlerFunc(s.checkSettings)))
 
+	mux.Handle("GET /rules", s.auth(http.HandlerFunc(s.rulesPage)))
+	mux.Handle("POST /rules", s.auth(http.HandlerFunc(s.saveRule)))
+	mux.Handle("GET /rules/log", s.auth(http.HandlerFunc(s.ruleLog)))
+	mux.Handle("POST /rules/delete", s.auth(http.HandlerFunc(s.deleteRule)))
 	mux.Handle("GET /results", s.auth(http.HandlerFunc(s.resultsPage)))
 	mux.Handle("GET /results/table", s.auth(http.HandlerFunc(s.resultsFragment)))
 	mux.Handle("GET /results/export", s.auth(http.HandlerFunc(s.exportHandler)))
@@ -250,6 +254,7 @@ func (s *Server) tabs(current string) []Tab {
 	all := []Tab{
 		{Label: "Обзор", Href: "/"},
 		{Label: "Задачи", Href: "/jobs"},
+		{Label: "Правила", Href: "/rules"},
 		{Label: "Результаты", Href: "/results"},
 	}
 	for i := range all {
