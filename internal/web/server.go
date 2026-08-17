@@ -94,6 +94,16 @@ type Server struct {
 	// TelegramRoute names the rung currently in use, for the settings screen.
 	TelegramRoute func() string
 
+	// StartJob and StopJob are how the jobs screen drives a collection. Fields
+	// for the same reason the checks above are: starting a run means opening
+	// ports on a licensed proxy, and this package's tests must not need one.
+	//
+	// StartJob returns as soon as the run is under way, having already answered
+	// what can be answered at once — no proxy configured, no such job, already
+	// going. StopJob asks a run to stop and says so when there is none.
+	StartJob func(ctx context.Context, id int64) error
+	StopJob  func(id int64) error
+
 	// CheckChannel reports what one egress channel holds, or why it cannot be
 	// used. A field for the reason the two checks above are fields: reading a
 	// proxy list is the engine's business and asking BlankTrail which gateways
@@ -206,6 +216,10 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /jobs", s.auth(http.HandlerFunc(s.saveJobHandler)))
 	mux.Handle("POST /jobs/estimate", s.auth(http.HandlerFunc(s.estimateHandler)))
 	mux.Handle("POST /jobs/phrases", s.auth(http.HandlerFunc(s.uploadPhrases)))
+	mux.Handle("POST /jobs/run", s.auth(http.HandlerFunc(s.runJobHandler)))
+	mux.Handle("POST /jobs/stop", s.auth(http.HandlerFunc(s.stopJobHandler)))
+	mux.Handle("POST /jobs/toggle", s.auth(http.HandlerFunc(s.toggleJobHandler)))
+	mux.Handle("POST /jobs/delete", s.auth(http.HandlerFunc(s.deleteJobHandler)))
 
 	return mux
 }

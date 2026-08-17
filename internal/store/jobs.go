@@ -170,6 +170,14 @@ type JobStatus struct {
 	Name string
 	Type string
 
+	// Schedule and Enabled are the two things a list has to show that are not
+	// about runs: whether this job comes round on its own, and whether it is
+	// allowed to. Both are columns of the job itself, carried here because a
+	// list that showed neither would leave "why did this never run" unanswerable
+	// from the one screen built to answer it.
+	Schedule string
+	Enabled  bool
+
 	// Running is whether this job has a run with no finish time.
 	//
 	// A field of its own rather than something to infer from Total, even though
@@ -218,7 +226,7 @@ func (s *Store) Jobs(ctx context.Context) ([]JobStatus, error) {
 	// out of the list, which is what an inner join would do to every job on a
 	// fresh install.
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT j.id, j.name, j.type,
+		SELECT j.id, j.name, j.type, j.schedule, j.enabled,
 		       live.job_id IS NOT NULL,
 		       COALESCE(live.done, 0), COALESCE(live.total, 0),
 		       COALESCE(fin.finished_at, 0), COALESCE(fin.state, '')
@@ -251,16 +259,58 @@ func (s *Store) Jobs(ctx context.Context) ([]JobStatus, error) {
 	var out []JobStatus
 	for rows.Next() {
 		var j JobStatus
-		if err := rows.Scan(&j.ID, &j.Name, &j.Type,
+		var enabled int
+		if err := rows.Scan(&j.ID, &j.Name, &j.Type, &j.Schedule, &enabled,
 			&j.Running, &j.Done, &j.Total, &j.LastFinish, &j.LastState); err != nil {
 			return nil, fmt.Errorf("store: jobs: %w", err)
 		}
+		j.Enabled = enabled != 0
 		out = append(out, j)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("store: jobs: %w", err)
 	}
 	return out, nil
+}
+
+// DeleteJob removes a job, its runs and their items.
+//
+// What it does not remove is what those runs collected. A product's price
+// history is a fact about the site, recorded on a date; the job is only what
+// asked for it. Deleting a year of readings because somebody tidied up the job
+// that gathered them would throw away the one thing this program exists to
+// accumulate, and there would be no getting it back.
+func (s *Store) DeleteJob(ctx context.Context, id int64) error {
+	// The runs and items go with it by the schema's own cascade, which is
+	// where that decision belongs: they are about this job and about nothing
+	// else, and a run row pointing at a job that is gone can answer no
+	// question at all.
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM jobs WHERE id = ?`, id); err != nil {
+		return fmt.Errorf("store: delete job %d: %w", id, err)
+	}
+	return nil
+}
+
+// SetJobEnabled turns a job's schedule on or off without touching anything
+// else about it.
+//
+// Its own statement rather than a round trip through SaveJob, because that
+// would rewrite every column from whatever the caller happened to have loaded —
+// and the caller here has a list row, which is not the whole job.
+func (s *Store) SetJobEnabled(ctx context.Context, id int64, on bool) error {
+	enabled := 0
+	if on {
+		enabled = 1
+	}
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE jobs SET enabled = ?, updated_at = ? WHERE id = ?`, enabled, s.now().UTC().Unix(), id)
+	if err != nil {
+		return fmt.Errorf("store: job %d: %w", id, err)
+	}
+	if n, err := res.RowsAffected(); err == nil && n == 0 {
+		return fmt.Errorf("store: job %d: %w", id, sql.ErrNoRows)
+	}
+	return nil
 }
 
 // StartRun opens a run and writes its plan, both in one transaction.

@@ -48,7 +48,11 @@ check passes.
 
 ## What it does
 
-* **Задачи** — build a collection job: what to enumerate (a phrase, a seller,
+* **Задачи** — what is saved and what it is doing: progress of a run in flight,
+  how the last one ended and when, and buttons to start, stop, switch the
+  schedule off and delete. Deleting takes the job and its runs and leaves what
+  they collected — that is data about the site, not about the job. Below it,
+  build a collection job: what to enumerate (a phrase, a seller,
   a brand, a list of article numbers, the paid placements for a phrase), which
   of 38 fields to collect, over which regions and for which audience. The
   screen prices the job in requests before you start it, and says which of its

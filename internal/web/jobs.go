@@ -64,12 +64,236 @@ const productsPerPage = 100
 
 // jobsPage renders the constructor as a whole page.
 func (s *Server) jobsPage(w http.ResponseWriter, r *http.Request) {
-	body, err := s.constructorHTML(r)
+	body, err := s.jobsHTML(r)
 	if err != nil {
 		http.Error(w, "jobs: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 	s.render(w, r, page{Title: "Задачи", Body: rawHTML(body)})
+}
+
+// jobsHTML is the whole screen: what exists, then what to add.
+//
+// The list comes first because it is what a returning visitor came for. Until
+// this existed, a job saved yesterday could not be seen, started, stopped or
+// removed from anywhere but the bot — the screen offered only the form that
+// made it.
+func (s *Server) jobsHTML(r *http.Request) (string, error) {
+	list, err := s.Store.Jobs(r.Context())
+	if err != nil {
+		return "", err
+	}
+	constructor, err := s.constructorHTML(r)
+	if err != nil {
+		return "", err
+	}
+	return s.jobListHTML(list) + constructor, nil
+}
+
+// jobsFragment re-renders the screen after an action, without the page around
+// it.
+func (s *Server) jobsFragment(w http.ResponseWriter, r *http.Request, notice string) {
+	body, err := s.jobsHTML(r)
+	if err != nil {
+		http.Error(w, "jobs: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	fmt.Fprint(w, notice+body)
+}
+
+// jobListHTML draws the saved jobs.
+func (s *Server) jobListHTML(list []store.JobStatus) string {
+	var b strings.Builder
+	b.WriteString(`<section id="jobs-body" class="bt-card"><h2>Задания</h2>`)
+
+	if len(list) == 0 {
+		b.WriteString(`<div class="bt-alert bt-alert--neutral">Заданий пока нет. Первое — в форме ниже.</div>`)
+		b.WriteString(`</section>`)
+		return b.String()
+	}
+
+	b.WriteString(`<div class="bt-table-wrap"><table class="bt-table"><thead><tr>` +
+		`<th>№</th><th>Задание</th><th>Тип</th><th>Что сейчас</th><th>Расписание</th><th></th>` +
+		`</tr></thead><tbody>`)
+
+	for _, j := range list {
+		kind := kindLabels[job.Kind(j.Type)]
+		if kind == "" {
+			kind = j.Type
+		}
+
+		b.WriteString(`<tr>`)
+		fmt.Fprintf(&b, `<td>%d</td>`, j.ID)
+		b.WriteString(`<td>` + html.EscapeString(jobTitle(j)) + `</td>`)
+		b.WriteString(`<td>` + html.EscapeString(kind) + `</td>`)
+		b.WriteString(`<td>` + jobStateHTML(j) + `</td>`)
+		b.WriteString(`<td>` + html.EscapeString(scheduleText(j)) + `</td>`)
+		b.WriteString(`<td>` + jobActionsHTML(j) + `</td>`)
+		b.WriteString(`</tr>`)
+	}
+
+	b.WriteString(`</tbody></table></div>`)
+	b.WriteString(`</section>`)
+	return b.String()
+}
+
+// jobTitle is what to call a job in the list. A job may be saved without a
+// name, and a column of blanks is a column nobody can pick a row out of.
+func jobTitle(j store.JobStatus) string {
+	if strings.TrimSpace(j.Name) != "" {
+		return j.Name
+	}
+	return "без названия"
+}
+
+// jobStateHTML is the one cell somebody actually reads.
+func jobStateHTML(j store.JobStatus) string {
+	switch {
+	case j.Running && j.Total > 0:
+		return fmt.Sprintf(`<span class="bt-badge bt-badge--success bt-badge--sm">идёт</span> %d из %d`,
+			j.Done, j.Total)
+	case j.Running:
+		// Running with no plan size yet is a run that has just opened. Reported
+		// as "0 из 0" it reads like a job doing nothing.
+		return `<span class="bt-badge bt-badge--success bt-badge--sm">идёт</span> план составляется`
+	case j.LastFinish == 0:
+		return `<span class="bt-badge bt-badge--neutral bt-badge--sm">не запускалось</span>`
+	}
+
+	// How it ended matters as much as when. "Ran an hour ago" over a run that
+	// failed is the sentence that keeps somebody from looking at the log.
+	badge := `<span class="bt-badge bt-badge--neutral bt-badge--sm">завершено</span>`
+	switch j.LastState {
+	case store.RunFailed:
+		badge = `<span class="bt-badge bt-badge--error bt-badge--sm">с ошибкой</span>`
+	case store.RunStopped:
+		badge = `<span class="bt-badge bt-badge--warning bt-badge--sm">остановлено</span>`
+	}
+	return badge + " " + html.EscapeString(time.Unix(j.LastFinish, 0).Local().Format("02.01.2006 15:04"))
+}
+
+// scheduleText says when a job comes round, including the two ways it does not.
+func scheduleText(j store.JobStatus) string {
+	if strings.TrimSpace(j.Schedule) == "" {
+		return "по запросу"
+	}
+	if !j.Enabled {
+		// The distinction the switch exists for: a job with a schedule that is
+		// switched off is not a job without a schedule, and shown as one nobody
+		// would think to turn it back on.
+		return j.Schedule + " (выключено)"
+	}
+	return j.Schedule
+}
+
+func jobActionsHTML(j store.JobStatus) string {
+	var b strings.Builder
+	if j.Running {
+		fmt.Fprintf(&b, `<button class="bt-btn bt-btn--ghost bt-btn--sm" data-post="/jobs/stop?id=%d" data-target="#jobs-body">Остановить</button>`, j.ID)
+	} else {
+		fmt.Fprintf(&b, `<button class="bt-btn bt-btn--ghost bt-btn--sm" data-post="/jobs/run?id=%d" data-target="#jobs-body">Запустить</button>`, j.ID)
+	}
+	if strings.TrimSpace(j.Schedule) != "" {
+		label := "Выключить"
+		if !j.Enabled {
+			label = "Включить"
+		}
+		fmt.Fprintf(&b, `<button class="bt-btn bt-btn--ghost bt-btn--sm" data-post="/jobs/toggle?id=%d" data-target="#jobs-body">%s</button>`, j.ID, label)
+	}
+	fmt.Fprintf(&b, `<button class="bt-btn bt-btn--ghost bt-btn--sm" data-post="/jobs/delete?id=%d" data-target="#jobs-body">Удалить</button>`, j.ID)
+	return b.String()
+}
+
+// runJobHandler starts one.
+func (s *Server) runJobHandler(w http.ResponseWriter, r *http.Request) {
+	id, ok := jobIDFromQuery(w, r)
+	if !ok {
+		return
+	}
+	if s.StartJob == nil {
+		s.jobsFragment(w, r, alert("neutral", "Запуск заданий недоступен в этой сборке."))
+		return
+	}
+	if err := s.StartJob(r.Context(), id); err != nil {
+		// Onto the screen rather than out as a status: every refusal here — no
+		// proxy configured, already running, no such job — is something the
+		// person reading it can act on.
+		s.jobsFragment(w, r, alert("error", err.Error()))
+		return
+	}
+	s.jobsFragment(w, r, alert("success", fmt.Sprintf("Задание %d запущено.", id)))
+}
+
+func (s *Server) stopJobHandler(w http.ResponseWriter, r *http.Request) {
+	id, ok := jobIDFromQuery(w, r)
+	if !ok {
+		return
+	}
+	if s.StopJob == nil {
+		s.jobsFragment(w, r, alert("neutral", "Управление заданиями недоступно в этой сборке."))
+		return
+	}
+	if err := s.StopJob(id); err != nil {
+		s.jobsFragment(w, r, alert("error", err.Error()))
+		return
+	}
+	s.jobsFragment(w, r, alert("success", fmt.Sprintf("Задание %d остановлено.", id)))
+}
+
+func (s *Server) toggleJobHandler(w http.ResponseWriter, r *http.Request) {
+	id, ok := jobIDFromQuery(w, r)
+	if !ok {
+		return
+	}
+	row, err := s.Store.Job(r.Context(), id)
+	if err != nil {
+		s.jobsFragment(w, r, alert("error", err.Error()))
+		return
+	}
+	if err := s.Store.SetJobEnabled(r.Context(), id, !row.Enabled); err != nil {
+		s.jobsFragment(w, r, alert("error", err.Error()))
+		return
+	}
+	if row.Enabled {
+		s.jobsFragment(w, r, alert("success", "Расписание выключено. Задание осталось — его можно запускать вручную."))
+		return
+	}
+	s.jobsFragment(w, r, alert("success", "Расписание включено."))
+}
+
+func (s *Server) deleteJobHandler(w http.ResponseWriter, r *http.Request) {
+	id, ok := jobIDFromQuery(w, r)
+	if !ok {
+		return
+	}
+	// Stopped first, if it is going. Deleting a job out from under its own run
+	// leaves the run writing rows against a job that no longer exists, and the
+	// cascade has already taken the plan it was resuming from.
+	if s.StopJob != nil {
+		_ = s.StopJob(id)
+	}
+	if err := s.Store.DeleteJob(r.Context(), id); err != nil {
+		s.jobsFragment(w, r, alert("error", err.Error()))
+		return
+	}
+	s.jobsFragment(w, r, alert("success",
+		"Задание удалено вместе с его прогонами. Собранное осталось: это данные о сайте, а не о задании."))
+}
+
+// jobIDFromQuery reads the id, or answers why it could not.
+func jobIDFromQuery(w http.ResponseWriter, r *http.Request) (int64, bool) {
+	id, err := strconv.ParseInt(r.URL.Query().Get("id"), 10, 64)
+	if err != nil {
+		http.Error(w, "jobs: which job?", http.StatusBadRequest)
+		return 0, false
+	}
+	return id, true
+}
+
+// alert is one message above the screen.
+func alert(kind, text string) string {
+	return `<div class="bt-alert bt-alert--` + kind + `">` + html.EscapeString(text) + `</div>`
 }
 
 // constructorHTML is the constructor itself, without the page around it.

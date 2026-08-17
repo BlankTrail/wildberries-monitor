@@ -146,6 +146,8 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 		Password: password, GeneratedPassword: generated,
 		TelegramRoute: a.Ladder.Name,
 		Autostart:     osAutostart{},
+		StartJob:      func(ctx context.Context, id int64) error { return a.StartJob(ctx, id) },
+		StopJob:       func(id int64) error { return a.StopJob(id) },
 		CheckChannel: func(ctx context.Context, id int64) (string, error) {
 			// Read when pressed, not captured: the engine is built a few lines
 			// below this literal, and a half-built App in a test may never get

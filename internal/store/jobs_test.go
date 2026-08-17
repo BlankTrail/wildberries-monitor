@@ -4,6 +4,8 @@ package store
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"testing"
 	"time"
 )
@@ -573,4 +575,136 @@ func TestJobs_NoJobsIsAnEmptyListAndNotAnError(t *testing.T) {
 	if len(list) != 0 {
 		t.Errorf("на пустой базе список из %d", len(list))
 	}
+}
+
+func TestJobs_CarriesTheScheduleAndTheSwitch(t *testing.T) {
+	// The two things a list has to show that are not about runs. Without them,
+	// "почему это ни разу не запускалось" cannot be answered from the one
+	// screen built to answer it.
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	row := sampleJobRow()
+	row.Schedule = "every 6h"
+	row.Enabled = false
+	if _, err := s.SaveJob(ctx, row); err != nil {
+		t.Fatalf("SaveJob: %v", err)
+	}
+
+	list, err := s.Jobs(ctx)
+	if err != nil {
+		t.Fatalf("Jobs: %v", err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("заданий: %d", len(list))
+	}
+	if list[0].Schedule != "every 6h" {
+		t.Errorf("расписание = %q", list[0].Schedule)
+	}
+	if list[0].Enabled {
+		t.Error("выключенное задание пришло включённым")
+	}
+}
+
+func TestSetJobEnabled_FlipsTheSwitchAndLeavesEverythingElse(t *testing.T) {
+	// A round trip through SaveJob would rewrite every column from whatever the
+	// caller happened to have loaded, and the caller here holds a list row —
+	// which is not the whole job.
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	want := sampleJobRow()
+	want.Enabled = true
+	id, err := s.SaveJob(ctx, want)
+	if err != nil {
+		t.Fatalf("SaveJob: %v", err)
+	}
+
+	if err := s.SetJobEnabled(ctx, id, false); err != nil {
+		t.Fatalf("SetJobEnabled: %v", err)
+	}
+	got, err := s.Job(ctx, id)
+	if err != nil {
+		t.Fatalf("Job: %v", err)
+	}
+	if got.Enabled {
+		t.Error("выключение не сохранилось")
+	}
+	if got.Params != want.Params || got.Fields != want.Fields || got.Name != want.Name {
+		t.Errorf("вместе с переключателем переписалось остальное: %+v", got)
+	}
+
+	if err := s.SetJobEnabled(ctx, id, true); err != nil {
+		t.Fatalf("SetJobEnabled: %v", err)
+	}
+	if got, _ := s.Job(ctx, id); !got.Enabled {
+		t.Error("включение не сохранилось")
+	}
+}
+
+func TestSetJobEnabled_AJobThatIsGoneIsReported(t *testing.T) {
+	s := openTestStore(t)
+	if err := s.SetJobEnabled(context.Background(), 404, true); !errors.Is(err, sql.ErrNoRows) {
+		t.Errorf("SetJobEnabled = %v, ожидалось sql.ErrNoRows", err)
+	}
+}
+
+func TestDeleteJob_TakesItsRunsAndLeavesWhatTheyCollected(t *testing.T) {
+	// A product's price history is a fact about the site, recorded on a date;
+	// the job is only what asked for it. Deleting a year of readings because
+	// somebody tidied up the job that gathered them would throw away the one
+	// thing this program exists to accumulate.
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	if _, err := s.SaveProduct(ctx, sampleProduct(), "winter jacket"); err != nil {
+		t.Fatalf("SaveProduct: %v", err)
+	}
+	id, err := s.SaveJob(ctx, sampleJobRow())
+	if err != nil {
+		t.Fatalf("SaveJob: %v", err)
+	}
+	runID, err := s.StartRun(ctx, id, []ItemRow{{Kind: "page", Key: "a"}})
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+	if err := s.FinishRun(ctx, runID, RunDone, 1, 1, 0, ""); err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+
+	if err := s.DeleteJob(ctx, id); err != nil {
+		t.Fatalf("DeleteJob: %v", err)
+	}
+
+	if list, _ := s.Jobs(ctx); len(list) != 0 {
+		t.Errorf("после удаления заданий %d", len(list))
+	}
+	if n := countRowsForTest(t, s, `SELECT count(*) FROM job_runs`); n != 0 {
+		t.Errorf("прогонов осталось %d — они не о чём, если задания нет", n)
+	}
+	if n := countRowsForTest(t, s, `SELECT count(*) FROM job_items`); n != 0 {
+		t.Errorf("пунктов плана осталось %d", n)
+	}
+	if n := countRowsForTest(t, s, `SELECT count(*) FROM snapshots`); n == 0 {
+		t.Error("удаление задания стёрло собранное — это не его данные")
+	}
+}
+
+func TestDeleteJob_ForgivesOneThatIsAlreadyGone(t *testing.T) {
+	// Two tabs, one of them stale. An error on the second is about a state the
+	// user already has.
+	s := openTestStore(t)
+	if err := s.DeleteJob(context.Background(), 404); err != nil {
+		t.Errorf("DeleteJob: %v", err)
+	}
+}
+
+// countRowsForTest is one count, for the assertions above.
+func countRowsForTest(t *testing.T, s *Store, query string) int {
+	t.Helper()
+	n, err := s.CountForTest(context.Background(), query)
+	if err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	return n
 }
