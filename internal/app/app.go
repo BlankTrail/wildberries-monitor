@@ -190,6 +190,7 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 		Jobs:     botJobs{a},
 		Charts:   botCharts{a},
 		Tracking: botTracking{a},
+		Cards:    botCards{a},
 		Export:   a.botExport,
 		LoadOffset: func(ctx context.Context) (int64, error) {
 			// A stored value this cannot read means zero, which replays what

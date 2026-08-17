@@ -132,6 +132,18 @@ type Tracking interface {
 	Watched(ctx context.Context) ([]WatchedJob, error)
 }
 
+// Cards renders one product as a message.
+//
+// A string rather than a photo and a caption, and that is the whole shape of
+// the decision behind it: the picture comes from Telegram's own preview of the
+// product link on the last line, because the CDN's image address needs a
+// request through somebody's proxy to resolve and a path this build has never
+// checked against the live site. A picture the site would answer with a 404 is
+// worse than the one the link already brings.
+type Cards interface {
+	Card(ctx context.Context, nmID int64) (string, error)
+}
+
 // Commands answers messages sent to the bot.
 type Commands struct {
 	Bot  *Bot
@@ -149,6 +161,8 @@ type Commands struct {
 	Charts Charts
 	// Tracking is what /track, /untrack and /tracked drive.
 	Tracking Tracking
+	// Cards is what /card renders.
+	Cards Cards
 
 	// Allowed reports whether this chat may give orders.
 	//
@@ -282,6 +296,9 @@ func (c *Commands) handle(ctx context.Context, u Update) error {
 
 	case "/tracked":
 		return c.replyTracked(ctx, reply)
+
+	case "/card":
+		return c.replyCard(ctx, argument, reply)
 	}
 
 	// An unknown command is answered rather than swallowed. A bot that says
@@ -296,6 +313,7 @@ const helpText = `Что я умею:
 /export csv — прислать результаты файлом (csv, xlsx, json, jsonl, sqlite)
 /chart 123456789 — график цены товара (можно вставить ссылку)
 /chart 123456789 кофемолка — график его позиции по фразе
+/card 123456789 — карточка товара (можно вставить ссылку)
 /tracked — что сейчас под наблюдением
 /track 123456789 — добавить товар в задание (можно вставить ссылку)
 /track кофемолка — добавить фразу
@@ -392,6 +410,26 @@ func (c *Commands) replyChart(ctx context.Context, u Update, argument string, re
 	}
 
 	return c.Bot.SendPhoto(ctx, c.address(u), caption, path)
+}
+
+// replyCard sends one product card.
+func (c *Commands) replyCard(ctx context.Context, argument string, reply func(string) error) error {
+	if c.Cards == nil {
+		return reply("Карточки недоступны в этой сборке.")
+	}
+	nmID, ok := wb.NmID(argument)
+	if !ok {
+		return reply("Нужен артикул или ссылка на товар: /card 123456789")
+	}
+
+	card, err := c.Cards.Card(ctx, nmID)
+	if err != nil {
+		// Nothing collected yet is the ordinary answer for an article somebody
+		// has just heard of, not a fault, and the error says so in its own
+		// words — this package only has to not dress it up as a breakage.
+		return reply(err.Error())
+	}
+	return reply(card)
 }
 
 // replyTrack adds one thing to a job's watch, or takes it out.

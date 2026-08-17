@@ -87,7 +87,10 @@ check passes.
   `/tracked` put a product or a phrase under a job's watch from a link or an
   article number — into a job that exists, because a job needs a region and an
   audience and choosing those for somebody decides which facts they collect.
-  `/export` sends
+  `/card` sends a product's card —
+  what it costs, what it cost before the discount, its rating, what is left in
+  stock, and when the site was last read for it, ending in the product link so
+  that Telegram's own preview supplies the picture. `/export` sends
   the results as a file in any of the five formats, and `/chart` sends a price
   or search-position chart as a photo, drawn without a plotting dependency and
   captioned rather than labelled, so every word stays selectable text. It
