@@ -47,6 +47,17 @@ var staticFS embed.FS
 // link that can be pointed somewhere else.
 const SourceURL = "https://github.com/BlankTrail/wildberries-monitor"
 
+// Autostart is what the settings checkbox drives.
+//
+// Enabled is asked rather than remembered: an entry can be removed by
+// anything, and a checkbox showing a stored intention would tell the user
+// their monitor starts at login when it does not.
+type Autostart interface {
+	Enabled() (bool, error)
+	Enable() error
+	Disable() error
+}
+
 // Tab is one entry in the header navigation.
 type Tab struct {
 	Label  string
@@ -82,6 +93,12 @@ type Server struct {
 	CheckTelegram func(ctx context.Context, token string) (username string, err error)
 	// TelegramRoute names the rung currently in use, for the settings screen.
 	TelegramRoute func() string
+
+	// Autostart is the operating system's own start-at-login mechanism, or
+	// nil in a build that has none. An interface rather than the package, so
+	// the settings screen can be tested without writing to a real registry or
+	// a real home directory.
+	Autostart Autostart
 
 	// Bus is where the live screen gets its events. A field rather than a
 	// package-level default so that a server built without one refuses the

@@ -106,3 +106,109 @@ func TestCheckTelegram_AsksForTheTokenFirst(t *testing.T) {
 		t.Errorf("the dialog does not say what is missing: %q", firstLines(body))
 	}
 }
+
+// fakeAutostart is the operating system's mechanism, without one.
+type fakeAutostart struct {
+	on      bool
+	failOn  error
+	failOff error
+	reads   error
+}
+
+func (f *fakeAutostart) Enabled() (bool, error) { return f.on, f.reads }
+
+func (f *fakeAutostart) Enable() error {
+	if f.failOn != nil {
+		return f.failOn
+	}
+	f.on = true
+	return nil
+}
+
+func (f *fakeAutostart) Disable() error {
+	if f.failOff != nil {
+		return f.failOff
+	}
+	f.on = false
+	return nil
+}
+
+func TestSettings_AsksTheSystemWhetherAutostartIsOn(t *testing.T) {
+	// A checkbox showing a stored intention rather than the truth tells the
+	// user their monitor starts at login when it does not — a registry entry
+	// or a unit file can be removed by anything.
+	srv := newServer(t)
+	auto := &fakeAutostart{on: true}
+	srv.Autostart = auto
+
+	body := get(t, srv, "/settings", "correct horse").Body.String()
+	if !strings.Contains(body, `name="autostart" value="1" checked`) {
+		t.Errorf("autostart is on and the box is not ticked: %q", firstLines(body))
+	}
+
+	auto.on = false
+	body = get(t, srv, "/settings", "correct horse").Body.String()
+	if strings.Contains(body, `name="autostart" value="1" checked`) {
+		t.Error("autostart is off and the box is ticked")
+	}
+}
+
+func TestSettings_SaysSoWhenItCannotReadTheAutostartState(t *testing.T) {
+	// An unticked box and an unreadable one look the same. Only one of them is
+	// worth doing something about.
+	srv := newServer(t)
+	srv.Autostart = &fakeAutostart{reads: errors.New("отказано в доступе")}
+
+	body := get(t, srv, "/settings", "correct horse").Body.String()
+	if !strings.Contains(body, "отказано в доступе") {
+		t.Errorf("the dialog hides why it could not read: %q", firstLines(body))
+	}
+}
+
+func TestSaveSettings_TurnsAutostartOnAndOff(t *testing.T) {
+	srv := newServer(t)
+	auto := &fakeAutostart{}
+	srv.Autostart = auto
+
+	form := url.Values{"url": {"http://127.0.0.1:8891"}, "autostart": {"1"}}
+	if w := postForm(t, srv, "/settings", form); w.Code != http.StatusOK {
+		t.Fatalf("save = %d", w.Code)
+	}
+	if !auto.on {
+		t.Error("the box was ticked and autostart was not turned on")
+	}
+
+	delete(form, "autostart")
+	if w := postForm(t, srv, "/settings", form); w.Code != http.StatusOK {
+		t.Fatalf("save = %d", w.Code)
+	}
+	if auto.on {
+		t.Error("the box was cleared and autostart stayed on")
+	}
+}
+
+func TestSaveSettings_ARefusedAutostartIsShownNotSwallowed(t *testing.T) {
+	// Telling the user "saved" while the operating system refused the entry is
+	// how a monitor silently stops starting at login.
+	srv := newServer(t)
+	srv.Autostart = &fakeAutostart{failOn: errors.New("реестр только для чтения")}
+
+	w := postForm(t, srv, "/settings", url.Values{
+		"url": {"http://127.0.0.1:8891"}, "autostart": {"1"},
+	})
+	body := w.Body.String()
+	if !strings.Contains(body, "реестр только для чтения") {
+		t.Errorf("the refusal was hidden: %q", firstLines(body))
+	}
+	if strings.Contains(body, "Сохранено") {
+		t.Error("the dialog said everything was saved after autostart was refused")
+	}
+}
+
+func TestSettings_ABuildWithoutAutostartOffersNoBox(t *testing.T) {
+	// A checkbox that does nothing is worse than a missing one.
+	srv := newServer(t)
+	if body := get(t, srv, "/settings", "correct horse").Body.String(); strings.Contains(body, `name="autostart"`) {
+		t.Error("a build with no autostart mechanism offered the box anyway")
+	}
+}

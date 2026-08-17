@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/BlankTrail/wildberries-monitor/internal/autostart"
 	"github.com/BlankTrail/wildberries-monitor/internal/events"
 	"github.com/BlankTrail/wildberries-monitor/internal/job"
 	"github.com/BlankTrail/wildberries-monitor/internal/notify"
@@ -121,6 +122,7 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 		Store: s, Bus: a.Bus,
 		Password: password, GeneratedPassword: generated,
 		TelegramRoute: a.Ladder.Name,
+		Autostart:     osAutostart{},
 		CheckTelegram: func(ctx context.Context, token string) (string, error) {
 			probe := &telegram.Bot{Token: token, Route: a.Ladder, API: a.Bot.API}
 			return probe.GetMe(ctx)
@@ -323,3 +325,24 @@ func (a *App) Close() error {
 	})
 	return err
 }
+
+// osAutostart hands the settings screen the operating system's own mechanism.
+//
+// A type rather than the package functions directly, because web.Autostart is
+// an interface — which is what lets the settings screen be tested without
+// writing to a real registry or a real home directory.
+type osAutostart struct{}
+
+func (osAutostart) Enabled() (bool, error) { return autostart.Enabled() }
+
+func (osAutostart) Enable() error {
+	// -open=false, always. A browser window opening by itself at every login
+	// is the fastest way to make somebody turn autostart off.
+	c, err := autostart.Self("-open=false")
+	if err != nil {
+		return err
+	}
+	return autostart.Enable(c)
+}
+
+func (osAutostart) Disable() error { return autostart.Disable() }

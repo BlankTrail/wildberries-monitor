@@ -100,6 +100,24 @@ func (s *Server) writeSettingsForm(w http.ResponseWriter, r *http.Request, notic
   <span class="bt-form-hint">Числовой идентификатор, @имя канала или «чат:тема» для темы в форуме.
   В правиле можно указать свой адресат.</span>
 </div>`)
+	// Autostart is asked of the operating system, not read back from a
+	// setting: a registry entry or a unit file can be removed by anything, and
+	// a checkbox that showed a stored intention rather than the truth would
+	// tell the user their monitor starts at login when it does not.
+	if s.Autostart != nil {
+		on, err := s.Autostart.Enabled()
+		checked, hint := "", "Запускать при входе в систему."
+		if err != nil {
+			hint = "Не удалось прочитать: " + err.Error()
+		} else if on {
+			checked = " checked"
+		}
+		b.WriteString(`<div class="bt-field">
+  <label class="bt-checkbox"><input type="checkbox" name="autostart" value="1"` + checked + `> Автозапуск</label>
+  <span class="bt-form-hint">` + html.EscapeString(hint) + `</span>
+</div>`)
+	}
+
 	// Which rung of the ladder is live. Spec section 8.1's last sentence, and
 	// the only place a person can find out why their notifications go the way
 	// they do.
@@ -137,6 +155,17 @@ func (s *Server) saveSettings(w http.ResponseWriter, r *http.Request) {
 	if err := s.Store.SetSetting(ctx, store.SettingBlankTrailURL, url, store.SettingText); err != nil {
 		http.Error(w, "settings: "+err.Error(), http.StatusInternalServerError)
 		return
+	}
+
+	if s.Autostart != nil {
+		// Done before the settings are written, and its failure is shown
+		// rather than swallowed. Telling the user "saved" while the operating
+		// system refused the entry is how a monitor silently stops starting.
+		if err := s.setAutostart(r.FormValue("autostart") != ""); err != nil {
+			s.writeSettingsForm(w, r,
+				`<div class="bt-alert bt-alert--error">Автозапуск: `+html.EscapeString(err.Error())+`</div>`)
+			return
+		}
 	}
 
 	if err := s.Store.SetSetting(ctx, store.SettingTelegramChat,
@@ -235,4 +264,12 @@ func (s *Server) checkTelegram(w http.ResponseWriter, r *http.Request) {
 			`<div class="bt-alert bt-alert--success">Бот на связи: @`+html.EscapeString(name)+
 				`, путь — `+html.EscapeString(s.telegramRoute())+`.</div>`)
 	}
+}
+
+// setAutostart turns the operating system's own mechanism on or off.
+func (s *Server) setAutostart(on bool) error {
+	if !on {
+		return s.Autostart.Disable()
+	}
+	return s.Autostart.Enable()
 }
