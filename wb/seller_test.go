@@ -77,11 +77,11 @@ func TestDecodeSellerStatic_ReadsNameFullNameTypeAndID(t *testing.T) {
 	if got.SupplierID != 350748670 {
 		t.Errorf("SupplierID=%d, want 350748670", got.SupplierID)
 	}
-	if got.Name != "Елена" {
-		t.Errorf("Name=%q, want %q", got.Name, "Елена")
+	if got.Name != "Аврора" {
+		t.Errorf("Name=%q, want %q", got.Name, "Аврора")
 	}
-	if got.FullName != "Елена" {
-		t.Errorf("FullName=%q, want %q", got.FullName, "Елена")
+	if got.FullName != "Аврора" {
+		t.Errorf("FullName=%q, want %q", got.FullName, "Аврора")
 	}
 	if got.Type != "C2C" {
 		t.Errorf("Type=%q, want %q", got.Type, "C2C")
@@ -90,7 +90,7 @@ func TestDecodeSellerStatic_ReadsNameFullNameTypeAndID(t *testing.T) {
 
 // TestDecodeSellerStatic_KeepsNameAndFullNameDistinct closes a gap the
 // fixture itself cannot: supplier-static.json's own supplierName and
-// supplierFullName happen to be the identical string ("Елена"), so a tag
+// supplierFullName happen to be the identical string ("Аврора"), so a tag
 // swap between Name and FullName would pass
 // TestDecodeSellerStatic_ReadsNameFullNameTypeAndID by coincidence — the
 // same "identical values under two fields" trap review_test.go's own
@@ -430,8 +430,8 @@ func TestClient_SellerMergesStaticAndProfile(t *testing.T) {
 		t.Errorf("ID=%d, want 350748670", got.ID)
 	}
 	// From the static record.
-	if got.Name != "Елена" || got.FullName != "Елена" || got.Type != "C2C" {
-		t.Errorf("static-record fields = %+v, want Name/FullName Елена, Type C2C", got)
+	if got.Name != "Аврора" || got.FullName != "Аврора" || got.Type != "C2C" {
+		t.Errorf("static-record fields = %+v, want Name/FullName Аврора, Type C2C", got)
 	}
 	// From the profile.
 	if got.Valuation == nil || *got.Valuation != 0.0 {
@@ -546,7 +546,7 @@ func TestClient_SellerSurvivesAFailedProfile(t *testing.T) {
 	if !strings.Contains(err.Error(), "profile") {
 		t.Errorf("error %q does not say the profile is what failed", err)
 	}
-	if got.Name != "Елена" || got.FullName != "Елена" || got.Type != "C2C" {
+	if got.Name != "Аврора" || got.FullName != "Аврора" || got.Type != "C2C" {
 		t.Errorf("static-record fields = %+v, want them to have survived the profile's failure", got)
 	}
 	if got.Valuation != nil {
