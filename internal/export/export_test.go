@@ -504,27 +504,31 @@ func columnsFor(t *testing.T, keys ...string) []wb.Field {
 	return cols
 }
 
-// allTypeColumns is one column of every FieldType the catalogue uses, so a
+// allTypeColumns is one column of every FieldType, in a fixed order, so a
 // writer can be tested against the whole type range rather than the two types
 // that happen to appear first.
+//
+// The six keys are named here rather than derived. Deriving them — "whichever
+// column of each type the catalogue declares first" — is not a property any
+// test should rest on: it moves the day a field is added, and the tests that
+// break are the ones asserting on cell A2, three files away, for a reason
+// that has nothing to do with them.
+//
+// The order is still Columns' own, which is the catalogue's, because that is
+// the order every writer must produce. These six happen to fall in the order
+// int, text, money, float, time, bool, and the fixtures downstream are
+// written against that; if the catalogue ever reorders them, those fixtures
+// are what will say so.
 func allTypeColumns(t *testing.T) []wb.Field {
 	t.Helper()
-	byType := map[wb.FieldType]wb.Field{}
-	for _, f := range wb.Fields() {
-		if _, seen := byType[f.Type]; !seen {
-			byType[f.Type] = f
-		}
-	}
-	var keys []string
-	for _, f := range wb.Fields() {
-		if byType[f.Type].Key == f.Key {
-			keys = append(keys, f.Key)
-		}
-	}
-	if len(keys) < 4 {
-		t.Fatalf("allTypeColumns found only %d distinct types; the catalogue declares more", len(keys))
-	}
-	return columnsFor(t, keys...)
+	return columnsFor(t,
+		"nm_id",             // int
+		"name",              // text
+		"price_sale",        // money
+		"rating",            // float
+		"card_created",      // time
+		"question_answered", // bool
+	)
 }
 
 // TestRowOf_AbsentIsNotZeroForEveryOptionalKind closes a gap review found: the
