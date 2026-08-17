@@ -4,7 +4,6 @@ package app
 
 import (
 	"errors"
-	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -199,40 +198,6 @@ func TestCharts_AskingTwiceOverwritesRatherThanAccumulates(t *testing.T) {
 			names[i] = e.Name()
 		}
 		t.Errorf("файлов после трёх запросов: %v", names)
-	}
-}
-
-func TestCharts_MaxGapFollowsTheStoresOwnAnchorInterval(t *testing.T) {
-	// The store promises a row at least every AnchorEvery, and that promise is
-	// the only thing separating "the price held" from "nobody looked". Copied
-	// from the defaults instead of read, a changed setting would leave every
-	// chart wrong about the one thing it claims.
-	a := newApp(t)
-	charts := botCharts{a}
-
-	base := charts.maxGap()
-	if base <= 0 {
-		t.Fatalf("maxGap = %d — разрывы не рвутся никогда", base)
-	}
-
-	r := a.Store.Retention()
-	r.AnchorEvery = 6 * time.Hour
-	a.Store.SetRetention(r)
-
-	if got, want := charts.maxGap(), int64(12*3600); got != want {
-		t.Errorf("maxGap = %d, ожидалось %d", got, want)
-	}
-}
-
-func TestMinorToFloat_AMissingPriceIsAHoleAndNotAZero(t *testing.T) {
-	// A snapshot row with no price says the card was read and carried none.
-	// Drawn as zero it is a product that briefly cost nothing, which is a claim
-	// the site never made.
-	if got := minorToFloat(nil); !math.IsNaN(got) {
-		t.Errorf("minorToFloat(nil) = %v, ожидался NaN", got)
-	}
-	if got := minorToFloat(ptrTo(int64(234950))); got != 2349.5 {
-		t.Errorf("minorToFloat(234950) = %v", got)
 	}
 }
 

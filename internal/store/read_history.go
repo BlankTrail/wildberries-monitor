@@ -4,6 +4,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"iter"
 )
 
@@ -127,4 +128,41 @@ func (s *Store) PositionHistory(ctx context.Context, nmID int64, query, dest str
 			err := sc.Scan(&p.TS, &p.Rank, &p.Page)
 			return p, err
 		})
+}
+
+// PositionPhrases lists the phrases this product has ever been ranked for, in
+// one region for one audience, most recently seen first.
+//
+// The identity of the series is the same three dimensions PositionHistory
+// takes, and for the same reason: a rank measured in Moscow and one measured
+// in Penza are different facts, and a list that merged them would offer a
+// phrase whose chart then came back empty.
+//
+// Most recently seen first, because a tracking screen is opened to look at
+// what is happening now, and a phrase last ranked for in March is not it.
+func (s *Store) PositionPhrases(ctx context.Context, nmID int64, dest string, appType int) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT query, MAX(ts) AS last_seen
+		FROM positions
+		WHERE nm_id = ? AND dest = ? AND app_type = ?
+		GROUP BY query
+		ORDER BY last_seen DESC, query`, nmID, dest, appType)
+	if err != nil {
+		return nil, fmt.Errorf("store: position phrases for %d: %w", nmID, err)
+	}
+	defer rows.Close()
+
+	var out []string
+	for rows.Next() {
+		var phrase string
+		var lastSeen int64
+		if err := rows.Scan(&phrase, &lastSeen); err != nil {
+			return nil, fmt.Errorf("store: position phrases for %d: %w", nmID, err)
+		}
+		out = append(out, phrase)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: position phrases for %d: %w", nmID, err)
+	}
+	return out, nil
 }

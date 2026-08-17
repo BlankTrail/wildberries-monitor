@@ -4,155 +4,71 @@ package app
 
 import (
 	"context"
-	"database/sql"
-	"errors"
 	"fmt"
-	"math"
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/BlankTrail/wildberries-monitor/internal/chart"
+	"github.com/BlankTrail/wildberries-monitor/internal/history"
 	"github.com/BlankTrail/wildberries-monitor/internal/store"
 	"github.com/BlankTrail/wildberries-monitor/wb"
 )
 
-// botCharts draws the two pictures spec section 8.3 asks the bot for.
+// botCharts sends the two pictures spec section 8.3 asks the bot for.
 //
-// The drawing is the chart package's; this is the half that knows what to draw
-// it from and what to say about it. The chart itself carries no words at all,
-// so everything a person reads comes out of here as the photo's caption — which
-// also makes it selectable text in the chat rather than pixels.
+// The drawing is the chart package's and the series are the history package's;
+// what is left here is the half that is the bot's own — a file to upload and a
+// caption to read. The chart carries no letters at all, so everything a person
+// reads is that caption, which also makes it selectable text in the chat rather
+// than pixels.
 type botCharts struct{ a *App }
 
-// chartWindow is how far back a chart looks when nobody said.
-//
-// A month: long enough to show a promotion cycle, short enough that a daily
-// tick still leaves the axis readable. A person wanting a year has the panel.
-const chartWindow = 30 * 24 * time.Hour
+func (c botCharts) reader() history.Reader { return history.Reader{Store: c.a.Store} }
 
-// maxGap is how long a series may go unread before the line is broken.
-//
-// Twice the store's own anchor interval, which is what makes it a fact rather
-// than a taste: an anchor row is written whenever a whole interval passes with
-// nothing changing, so the store promises a row at least that often. A stretch
-// longer than two of them is not a price that held — it is a stretch nobody
-// collected, and drawing through it would show a move that was never observed.
-//
-// Read off the store rather than copied from its defaults, because the setting
-// can be changed and a line drawn to the old promise would be wrong about the
-// only thing it claims.
-func (c botCharts) maxGap() int64 {
-	return int64(2 * c.a.Store.Retention().AnchorEvery / time.Second)
-}
-
-// Price draws one product's discounted price over the window.
-//
-// One line, not two. The full price beside it would need the caption to say
-// which colour is which, and a legend written in one file about a palette
-// chosen in another is a legend that goes quietly out of step. What a buyer
-// pays is also what a rule fires on, so it is the line worth having.
+// Price draws one product's discounted price and says what is in the picture.
 func (c botCharts) Price(ctx context.Context, nmID int64) (string, string, error) {
-	product, err := c.product(ctx, nmID)
+	line, facts, err := c.reader().Price(ctx, nmID, history.DefaultWindow)
 	if err != nil {
 		return "", "", err
 	}
 
-	from, to := c.window()
-	var points []chart.Point
-	var last, lo, hi *int64
-	for p, err := range c.a.Store.SnapshotHistory(ctx, nmID, product.Dest, product.AppType, from, to) {
-		if err != nil {
-			return "", "", err
-		}
-		points = append(points, chart.Point{TS: p.TS, Value: minorToFloat(p.PriceSale)})
-		if p.PriceSale == nil {
-			continue
-		}
-		last = p.PriceSale
-		if lo == nil || *p.PriceSale < *lo {
-			lo = p.PriceSale
-		}
-		if hi == nil || *p.PriceSale > *hi {
-			hi = p.PriceSale
-		}
-	}
-
-	path, err := c.render(nmID, "price", chart.Line{
-		MaxGap: c.maxGap(),
-		Series: []chart.Series{{Points: points}},
-	})
+	path, err := c.render(nmID, "price", line)
 	if err != nil {
 		return "", "", err
 	}
 
 	var caption strings.Builder
-	caption.WriteString(describe(product))
+	caption.WriteString(describe(facts.Product))
 	caption.WriteString("\nЦена со скидкой за 30 дней.\n")
-	fmt.Fprintf(&caption, "Сейчас %s", money(last, product.Currency))
-	if lo != nil && hi != nil && *lo != *hi {
-		fmt.Fprintf(&caption, ", от %s до %s", money(lo, product.Currency), money(hi, product.Currency))
+	fmt.Fprintf(&caption, "Сейчас %s", money(facts.Last, facts.Product.Currency))
+	if facts.Lo != nil && facts.Hi != nil && *facts.Lo != *facts.Hi {
+		fmt.Fprintf(&caption, ", от %s до %s",
+			money(facts.Lo, facts.Product.Currency), money(facts.Hi, facts.Product.Currency))
 	}
 	caption.WriteString(".\n")
-	caption.WriteString(where(product))
+	caption.WriteString(where(facts.Product))
 	return path, caption.String(), nil
 }
 
-// Position draws one product's place for one phrase over the window.
+// Position draws one product's place for one phrase.
 func (c botCharts) Position(ctx context.Context, nmID int64, phrase string) (string, string, error) {
-	product, err := c.product(ctx, nmID)
+	line, facts, err := c.reader().Position(ctx, nmID, phrase, history.DefaultWindow)
 	if err != nil {
 		return "", "", err
 	}
 
-	from, to := c.window()
-	var points []chart.Point
-	last, best := 0, 0
-	for p, err := range c.a.Store.PositionHistory(ctx, nmID, phrase, product.Dest, product.AppType, from, to) {
-		if err != nil {
-			return "", "", err
-		}
-		points = append(points, chart.Point{TS: p.TS, Value: float64(p.Rank)})
-		last = p.Rank
-		if best == 0 || p.Rank < best {
-			best = p.Rank
-		}
-	}
-
-	path, err := c.render(nmID, "position", chart.Line{
-		MaxGap: c.maxGap(),
-		// Rank 1 is the best result and belongs at the top. Drawn the usual way
-		// up, a product falling out of the first page draws a rising line.
-		Y:      chart.Axis{Invert: true},
-		Series: []chart.Series{{Points: points}},
-	})
+	path, err := c.render(nmID, "position", line)
 	if err != nil {
 		return "", "", err
 	}
 
 	var caption strings.Builder
-	caption.WriteString(describe(product))
+	caption.WriteString(describe(facts.Product))
 	fmt.Fprintf(&caption, "\nПозиция по фразе «%s» за 30 дней.\n", phrase)
-	fmt.Fprintf(&caption, "Сейчас %d-я, лучшая %d-я.\n", last, best)
-	caption.WriteString(where(product))
+	fmt.Fprintf(&caption, "Сейчас %d-я, лучшая %d-я.\n", facts.LastRank, facts.Best)
+	caption.WriteString(where(facts.Product))
 	return path, caption.String(), nil
-}
-
-// product reads the stable half, and turns "never heard of it" into something
-// the bot can say out loud.
-func (c botCharts) product(ctx context.Context, nmID int64) (store.ProductRow, error) {
-	product, err := c.a.Store.Product(ctx, nmID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return product, fmt.Errorf("товар %d ещё ни разу не собирался", nmID)
-	}
-	return product, err
-}
-
-// window is the span a chart covers, ending now.
-func (c botCharts) window() (from, to int64) {
-	now := time.Now().UTC()
-	return now.Add(-chartWindow).Unix(), now.Unix()
 }
 
 // render writes the picture and returns its path.
@@ -191,19 +107,6 @@ func (c botCharts) render(nmID int64, kind string, line chart.Line) (string, err
 		return "", err
 	}
 	return final, nil
-}
-
-// minorToFloat turns a nullable amount into a value a chart can draw, and a
-// missing one into the break it means.
-//
-// NaN rather than zero, and that is the whole point of the conversion: a
-// snapshot row with no price says the card was read and carried none, and drawn
-// as zero it would be a product that briefly cost nothing.
-func minorToFloat(minor *int64) float64 {
-	if minor == nil {
-		return math.NaN()
-	}
-	return float64(*minor) / 100
 }
 
 // money renders an amount for a caption, or says it is not there.

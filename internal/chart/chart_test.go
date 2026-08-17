@@ -686,3 +686,41 @@ func plotOf(t *testing.T, l Line) image.Rectangle {
 	}
 	return image.Rect(widest+10, glyphH+4, width-8, height-(glyphH*2+10))
 }
+
+func TestDraw_TimeLabelsStayInsideTheirOwnColumn(t *testing.T) {
+	// The value labels live in the margin to the left of the plot. A time label
+	// centred on the leftmost tick runs out under them — two numbers on top of
+	// each other, and neither readable — and one on the rightmost runs off the
+	// image entirely.
+	base := time.Date(2026, 7, 9, 0, 0, 0, 0, time.UTC).Unix()
+	var points []Point
+	for day := range 40 {
+		points = append(points, Point{TS: base + int64(day)*86400, Value: 2600 + float64(day)*20})
+	}
+	line := Line{Width: 900, Height: 420, Loc: time.UTC, Series: []Series{{Points: points}}}
+
+	img, err := line.draw()
+	if err != nil {
+		t.Fatalf("draw: %v", err)
+	}
+	plot := plotOf(t, line)
+
+	// Below the bottom value label is the time axis and nothing else. The band
+	// starts past that label's own descenders, which straddle the plot's edge
+	// because the label is centred on the tick.
+	for y := plot.Max.Y + glyphH + 1; y < img.Bounds().Max.Y; y++ {
+		for x := img.Bounds().Min.X; x < img.Bounds().Max.X; x++ {
+			if img.RGBAAt(x, y) != colText {
+				continue
+			}
+			if x < plot.Min.X {
+				t.Fatalf("подпись времени залезла в колонку значений: (%d,%d), график начинается с %d",
+					x, y, plot.Min.X)
+			}
+			if x >= plot.Max.X {
+				t.Fatalf("подпись времени вышла за правый край: (%d,%d), график кончается на %d",
+					x, y, plot.Max.X)
+			}
+		}
+	}
+}

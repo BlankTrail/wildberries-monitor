@@ -208,6 +208,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /results/table", s.auth(http.HandlerFunc(s.resultsFragment)))
 	mux.Handle("GET /results/export", s.auth(http.HandlerFunc(s.exportHandler)))
 	mux.Handle("GET /live", s.auth(http.HandlerFunc(s.live)))
+	mux.Handle("GET /track", s.auth(http.HandlerFunc(s.trackPage)))
+	mux.Handle("GET /track/chart", s.auth(http.HandlerFunc(s.trackChart)))
 	mux.Handle("GET /channels", s.auth(http.HandlerFunc(s.channelsPage)))
 	mux.Handle("POST /channels", s.auth(http.HandlerFunc(s.saveChannel)))
 	mux.Handle("GET /channels/test", s.auth(http.HandlerFunc(s.testChannel)))
@@ -305,6 +307,7 @@ func (s *Server) tabs(current string) []Tab {
 	all := []Tab{
 		{Label: "Обзор", Href: "/"},
 		{Label: "Задачи", Href: "/jobs"},
+		{Label: "Отслеживание", Href: "/track"},
 		{Label: "Правила", Href: "/rules"},
 		{Label: "Каналы", Href: "/channels"},
 		{Label: "Результаты", Href: "/results"},

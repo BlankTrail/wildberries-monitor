@@ -57,6 +57,13 @@ check passes.
   of 38 fields to collect, over which regions and for which audience. The
   screen prices the job in requests before you start it, and says which of its
   numbers is a guess.
+* **Отслеживание** — what has been collected, and the two charts of it: the
+  discounted price and the search position for every phrase the product has
+  been ranked for. Drawn on request and never written to disk, without a
+  plotting dependency, over a window of a week to a year. A reading with no
+  price breaks the line rather than being drawn as a zero, and so does a
+  stretch nobody collected — the limit for that comes from the store's own
+  promise to write a row at least every so often.
 * **Правила** — say what is worth being told about: price and stock moves,
   places in the results, sizes and warehouses disappearing, ratings and review
   counts. Conditions combine the change and the state it ended at ("fell more

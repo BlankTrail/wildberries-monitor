@@ -394,7 +394,14 @@ func (l Line) draw() (*image.RGBA, error) {
 		x := l.xPixel(ts, b.from, b.to, plot)
 		fill(img, image.Rect(x, plot.Min.Y, x+1, plot.Max.Y), colGrid)
 		label := clean(time.Unix(ts, 0).In(loc).Format(layout))
-		drawText(img, label, x-textWidth(label, scale)/2, plot.Max.Y+6, scale, colText)
+		// Centred on its tick, but never past the plot's own edges. The leftmost
+		// tick is close enough to them that a centred label runs out under the
+		// value labels, which live in the margin to the left — two numbers on
+		// top of each other, and neither readable. Pushed in rather than
+		// dropped: the label is what says which end of the window this is.
+		width := textWidth(label, scale)
+		at := min(max(x-width/2, plot.Min.X), plot.Max.X-width)
+		drawText(img, label, at, plot.Max.Y+6, scale, colText)
 	}
 
 	// The frame before the series, not after: it is decoration and the line is
