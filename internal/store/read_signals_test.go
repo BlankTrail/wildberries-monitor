@@ -4,6 +4,7 @@ package store
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -122,40 +123,107 @@ func TestEvents_KeepsTwoEventsThatShareASecond(t *testing.T) {
 	// its rows by time rather than by row id would fuse them: one headline,
 	// with the other event's evidence filed under it as if it were the same
 	// statement.
+	//
+	// Each event carries two changes, not one. With a single change per
+	// event, both events' only row shares the same position (0), the sort
+	// key ties completely regardless of which column breaks it, and a reader
+	// that dropped the row id from the outer ORDER BY would still happen to
+	// keep the two rows apart — the fixture would pass by accident rather
+	// than by the id actually doing the grouping. With two changes each, the
+	// rows for the two events interleave by position (A0, B0, A1, B1) once
+	// the id stops being the tiebreak, and a reader assembling purely by
+	// "a different id arrived" would flush each event twice, on half its
+	// evidence, four events out of two.
 	s := openTestStore(t)
 	at := time.Date(2026, 8, 16, 9, 0, 0, 0, time.UTC)
 	saveOneEvent(t, s, wb.Event{
 		Kind: wb.CompetitorPriceCut, At: at, NmID: 11, Dest: "-1257786",
 		Confidence: wb.ConfidenceObserved,
-		Changes:    []wb.Change{{Field: "sizes[45].price.product", Was: "82400", Now: "70000"}},
+		Changes: []wb.Change{
+			{Field: "sizes[45].price.product", Was: "82400", Now: "70000"},
+			{Field: "sizes[46].price.product", Was: "82400", Now: "71000"},
+		},
 	})
 	saveOneEvent(t, s, wb.Event{
 		Kind: wb.CompetitorOutOfStock, At: at, NmID: 22, Dest: "-1257786",
 		Confidence: wb.ConfidenceInferred,
-		Changes:    []wb.Change{{Field: "totalQuantity", Was: "14", Now: "0"}},
+		Changes: []wb.Change{
+			{Field: "totalQuantity", Was: "14", Now: "0"},
+			{Field: "sizes[45].quantity", Was: "3", Now: "0"},
+		},
 	})
 
 	got := collectSeq(t, "Events", s.Events(context.Background(), EventFilter{}))
 	if len(got) != 2 {
-		t.Fatalf("got %d events, want 2 — two events in one second were fused into one", len(got))
+		t.Fatalf("got %d events, want 2 — two events in one second were fused or torn apart", len(got))
 	}
 	for i, want := range []struct {
-		kind  wb.EventKind
-		nmID  int64
-		field string
+		kind       wb.EventKind
+		nmID       int64
+		confidence float64
+		fields     []string
 	}{
-		{wb.CompetitorPriceCut, 11, "sizes[45].price.product"},
-		{wb.CompetitorOutOfStock, 22, "totalQuantity"},
+		{wb.CompetitorPriceCut, 11, wb.ConfidenceObserved, []string{"sizes[45].price.product", "sizes[46].price.product"}},
+		{wb.CompetitorOutOfStock, 22, wb.ConfidenceInferred, []string{"totalQuantity", "sizes[45].quantity"}},
 	} {
 		if got[i].Kind != want.kind || got[i].NmID != want.nmID {
 			t.Errorf("event %d = %q about %d, want %q about %d", i, got[i].Kind, got[i].NmID, want.kind, want.nmID)
 		}
-		if len(got[i].Changes) != 1 {
-			t.Fatalf("event %d: got %d changes, want 1 — the other event's evidence was filed here", i, len(got[i].Changes))
+		// Confidence read back distinguishes the observed fact from the
+		// inferred one: an operator is meant to act on them differently, and
+		// a reader that hard-coded ConfidenceObserved on the way out would
+		// still pass every other assertion here.
+		if got[i].Confidence != want.confidence {
+			t.Errorf("event %d: Confidence = %v, want %v", i, got[i].Confidence, want.confidence)
 		}
-		if got[i].Changes[0].Field != want.field {
-			t.Errorf("event %d: Changes[0].Field = %q, want %q", i, got[i].Changes[0].Field, want.field)
+		if len(got[i].Changes) != len(want.fields) {
+			t.Fatalf("event %d: got %d changes, want %d — the other event's evidence was filed here or half went missing",
+				i, len(got[i].Changes), len(want.fields))
 		}
+		for j, field := range want.fields {
+			if got[i].Changes[j].Field != field {
+				t.Errorf("event %d: Changes[%d].Field = %q, want %q", i, j, got[i].Changes[j].Field, field)
+			}
+		}
+	}
+}
+
+func TestEvents_OrdersByObservedAtRatherThanBySaveOrder(t *testing.T) {
+	// Every other fixture in this file saves events in chronological order,
+	// so save order and observed_at order coincide and a reader that quietly
+	// dropped the ORDER BY — on either half of the query — would still come
+	// back sorted, purely because SQLite's rowid happens to walk the table in
+	// insertion order on a fresh database with no deletes. A backfill or a
+	// retry breaks that coincidence on purpose: it writes yesterday's event
+	// after today's, and a feed that is really "insertion order" rather than
+	// "observed_at order" would then answer "what happened, oldest first"
+	// with today's event ahead of yesterday's — and a Limit would keep the
+	// first-recorded events rather than the earliest ones.
+	s := openTestStore(t)
+	ctx := context.Background()
+	at := time.Date(2026, 8, 16, 9, 0, 0, 0, time.UTC)
+
+	// Saved out of chronological order: +2h, then +0h (the backfill), then
+	// +1h. Insertion order is [late, early, middle]; time order is
+	// [early, middle, late].
+	saveOneEvent(t, s, wb.Event{Kind: wb.CompetitorPriceCut, At: at.Add(2 * time.Hour), NmID: 33, Dest: "-1257786", Confidence: wb.ConfidenceObserved})
+	saveOneEvent(t, s, wb.Event{Kind: wb.RatingDropped, At: at, ImtID: 901, Dest: "-1257786", Confidence: wb.ConfidenceObserved})
+	saveOneEvent(t, s, wb.Event{Kind: wb.CompetitorOutOfStock, At: at.Add(time.Hour), NmID: 22, Dest: "-1257786", Confidence: wb.ConfidenceInferred})
+
+	got := kindsOf(collectSeq(t, "Events", s.Events(ctx, EventFilter{})))
+	want := []string{"rating-dropped", "competitor-out-of-stock", "competitor-price-cut"}
+	if !sameStrings(got, want) {
+		t.Errorf("Events = %v, want %v — oldest observed_at first, not oldest inserted first", got, want)
+	}
+
+	// Limit must keep the two earliest by observed_at (the backfilled one and
+	// the middle one), not the two saved first (the late one and the
+	// backfill).
+	limited := kindsOf(collectSeq(t, "Events", s.Events(ctx, EventFilter{Limit: 2})))
+	wantLimited := []string{"rating-dropped", "competitor-out-of-stock"}
+	if !sameStrings(limited, wantLimited) {
+		t.Errorf("Events with Limit 2 = %v, want %v — the earliest two by observed_at, not the first two recorded",
+			limited, wantLimited)
 	}
 }
 
@@ -289,8 +357,9 @@ func TestEvents_FilterOnOneRegionKeepsTheOtherRegionsEvent(t *testing.T) {
 
 func TestEvents_LimitCountsEventsAndNotTheirEvidence(t *testing.T) {
 	// The trap of assembling one row from several. A LIMIT on the joined
-	// query caps rows, so "the last twenty events" comes back as twenty rows
-	// of evidence — three events, the last of them cut in half.
+	// query caps rows, so "the earliest twenty events" (the feed is
+	// oldest-first) comes back as twenty rows of evidence — three events, the
+	// last of them cut in half.
 	s := openTestStore(t)
 	ctx := context.Background()
 	at := time.Date(2026, 8, 16, 9, 0, 0, 0, time.UTC)
@@ -540,5 +609,67 @@ func TestReviewSummaryHistory_EarlyExitReleasesTheConnection(t *testing.T) {
 	}
 	if n != 3 {
 		t.Errorf("review_summaries = %d, want 3", n)
+	}
+}
+
+// TestEvents_ReportsAFailureOnceAndStops and
+// TestReviewSummaryHistory_ReportsAFailureOnceAndStops close the mirror gap
+// left by copying streamRows' three rules into a hand-written loop instead of
+// calling it: streamRows' own contract is proven by
+// TestProducts_ReportsAFailureOnceAndStops and TestStreamRows_*, but nothing
+// forced these two readers to keep it. A reader that swallowed the query
+// error would answer a broken database with an empty feed, which reads as
+// "nothing happened today" rather than "the database could not be read".
+func TestEvents_ReportsAFailureOnceAndStops(t *testing.T) {
+	s := openTestStore(t)
+	at := time.Date(2026, 8, 16, 9, 0, 0, 0, time.UTC)
+	saveOneEvent(t, s, wb.Event{Kind: wb.CompetitorPriceCut, At: at, NmID: 11, Dest: "-1257786", Confidence: wb.ConfidenceObserved})
+
+	// Closed here and again by openTestStore's cleanup; (*sql.DB).Close is
+	// idempotent, so this is a legal way to make every query fail.
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	yields := 0
+	var last error
+	for row, err := range s.Events(context.Background(), EventFilter{}) {
+		yields++
+		last = err
+		if err == nil {
+			t.Errorf("yield %d returned event %d and no error, against a closed database", yields, row.ID)
+		}
+	}
+	if yields != 1 {
+		t.Fatalf("the stream yielded %d times, want exactly one — the error and nothing after it", yields)
+	}
+	if last == nil || !strings.Contains(last.Error(), "store: read events") {
+		t.Errorf("error = %v, want one naming the read that failed", last)
+	}
+}
+
+func TestReviewSummaryHistory_ReportsAFailureOnceAndStops(t *testing.T) {
+	s := openTestStore(t)
+	at := time.Date(2026, 8, 16, 9, 0, 0, 0, time.UTC)
+	saveSummary(t, s, 55501, at, wb.ReviewSummary{Valuation: 4.8, Count: 311})
+
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	yields := 0
+	var last error
+	for point, err := range s.ReviewSummaryHistory(context.Background(), 55501, 0, 0) {
+		yields++
+		last = err
+		if err == nil {
+			t.Errorf("yield %d returned a point at %d and no error, against a closed database", yields, point.TS)
+		}
+	}
+	if yields != 1 {
+		t.Fatalf("the stream yielded %d times, want exactly one — the error and nothing after it", yields)
+	}
+	if last == nil || !strings.Contains(last.Error(), "store: read review summary history") {
+		t.Errorf("error = %v, want one naming the read that failed", last)
 	}
 }

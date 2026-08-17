@@ -74,9 +74,10 @@ type EventRow struct {
 // Two halves, and which half carries what is the whole point. The inner
 // select filters, orders and caps events; the outer one hangs each event's
 // evidence off it with a LEFT JOIN. A LIMIT on the joined query would cap
-// rows instead — "the last twenty events" would come back as twenty rows of
-// evidence, three events, the last one cut in half — and an inner join would
-// delete every event that rests on no field-level move.
+// rows instead — "the earliest twenty events" (the feed is oldest-first; see
+// Events) would come back as twenty rows of evidence, three events, the last
+// one cut in half — and an inner join would delete every event that rests on
+// no field-level move.
 //
 // The ordering is (observed_at, id) in both halves, so one event's rows are
 // contiguous and the assembly below can emit an event as soon as a row for a
