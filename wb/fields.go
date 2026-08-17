@@ -150,6 +150,18 @@ var catalogue = []Field{
 	// computed by Product.SalePrice, Product.BasePrice and
 	// Product.DiscountPercent from the same search-result Sizes rather than
 	// read off a flat field, but the search page is still all they cost.
+	//
+	// currency rides along with them rather than costing a source of its own:
+	// Product.SalePrice and Product.BasePrice both return a wb.Money, and
+	// Money is an amount paired with its currency (see money.go), so the
+	// value is already sitting in the same struct price_sale and price_base
+	// are read out of. It is FieldText, not FieldMoney, because it names a
+	// unit ("RUB"), not an amount, and a writer that put it through the money
+	// formatter would print a currency code with two invented decimal places.
+	// Declared here, beside the two money fields, rather than at the end of
+	// the group: catalogue order is column order (spec section 5.3), and a
+	// currency column read far from the amounts it labels is harder to check
+	// against them than one sitting right next to them.
 	{Key: "nm_id", Name: "Артикул", Group: GroupBase, Type: FieldInt, Source: FieldSourceSearchResult},
 	{Key: "name", Name: "Название", Group: GroupBase, Type: FieldText, Source: FieldSourceSearchResult},
 	{Key: "brand", Name: "Бренд", Group: GroupBase, Type: FieldText, Source: FieldSourceSearchResult},
@@ -157,6 +169,7 @@ var catalogue = []Field{
 	{Key: "supplier_name", Name: "Продавец", Group: GroupBase, Type: FieldText, Source: FieldSourceSearchResult},
 	{Key: "price_sale", Name: "Цена со скидкой", Group: GroupBase, Type: FieldMoney, Source: FieldSourceSearchResult},
 	{Key: "price_base", Name: "Цена без скидки", Group: GroupBase, Type: FieldMoney, Source: FieldSourceSearchResult},
+	{Key: "currency", Name: "Валюта", Group: GroupBase, Type: FieldText, Source: FieldSourceSearchResult},
 	{Key: "discount_pct", Name: "Скидка, %", Group: GroupBase, Type: FieldInt, Source: FieldSourceSearchResult},
 	{Key: "rating", Name: "Рейтинг", Group: GroupBase, Type: FieldFloat, Source: FieldSourceSearchResult},
 	{Key: "feedbacks", Name: "Число отзывов", Group: GroupBase, Type: FieldInt, Source: FieldSourceSearchResult},

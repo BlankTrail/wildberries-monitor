@@ -444,6 +444,7 @@ func TestFields_MatchTheGoldenList(t *testing.T) {
 		{"supplier_name", GroupBase, FieldText},
 		{"price_sale", GroupBase, FieldMoney},
 		{"price_base", GroupBase, FieldMoney},
+		{"currency", GroupBase, FieldText},
 		{"discount_pct", GroupBase, FieldInt},
 		{"rating", GroupBase, FieldFloat},
 		{"feedbacks", GroupBase, FieldInt},
