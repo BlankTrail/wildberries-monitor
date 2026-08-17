@@ -22,23 +22,22 @@ type ThinStats struct {
 	Deleted int
 }
 
-// The week and day dividers thinSnapshotsSQL and thinPositionsSQL bucket rows
-// into. They are declared here rather than left as bare numbers so the
-// comment explaining 345600 lives next to a name, but they cannot be bound as
-// query parameters — a bucket width is baked into the CASE expression, not a
-// value compared against a column — so the SQL below repeats them as literals
-// and go vet's "unused constant" complaint, if it ever fires, is the signal
-// to move this comment rather than delete the constants.
-const (
-	secondsPerDay  = 86400
-	secondsPerWeek = 604800
-	// firstMonday is 1970-01-05 00:00 UTC in Unix seconds. The epoch itself
-	// fell on a Thursday, so ts/secondsPerWeek would cut weeks at Thursday
-	// midnight and file a Sunday together with the Monday after it. Shifting
-	// by this makes a week mean Monday through Sunday, which is the week the
-	// person reading the chart has in mind.
-	firstMonday = 345600
-)
+// The week and day dividers the SQL below buckets rows into are written as
+// literals, because a bucket width is baked into a CASE expression rather than
+// compared against a column and so cannot be bound as a query parameter.
+//
+// They were named constants once, purely so this explanation could sit next to
+// a name. The comment there said that if a linter ever called them unused,
+// that was the signal to move this text rather than delete them — golangci-lint
+// did, the first time it ran on this branch, and this is that move.
+//
+//	86400   seconds in a day
+//	604800  seconds in a week
+//	345600  1970-01-05 00:00 UTC, the first Monday. The epoch itself fell on a
+//	        Thursday, so ts/604800 would cut weeks at Thursday midnight and
+//	        file a Sunday together with the Monday after it. Shifting by this
+//	        makes a week mean Monday through Sunday, which is the week the
+//	        person reading the chart has in mind.
 
 // thinSnapshotsSQL keeps one snapshot per product, region, app type and
 // period, and deletes the rest.

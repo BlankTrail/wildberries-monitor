@@ -49,7 +49,14 @@ func main() {
 		fmt.Fprintln(os.Stderr, "wbmon:", err)
 		os.Exit(1)
 	}
-	defer a.Close()
+	defer func() {
+		// The error is reported rather than dropped: Close is what waits for
+		// the bus's subscribers to finish their writes, and a failure there is
+		// data that did not reach the database.
+		if err := a.Close(); err != nil {
+			fmt.Fprintln(os.Stderr, "wbmon: остановка:", err)
+		}
+	}()
 
 	if err := a.Run(ctx); err != nil {
 		fmt.Fprintln(os.Stderr, "wbmon:", err)
@@ -57,7 +64,9 @@ func main() {
 		// os.Exit skips: the bus's Close is what waits for the writes still in
 		// flight, and skipping it is exactly the unclean shutdown the queue
 		// exists to survive.
-		a.Close()
+		if err := a.Close(); err != nil {
+			fmt.Fprintln(os.Stderr, "wbmon: остановка:", err)
+		}
 		os.Exit(1)
 	}
 }
