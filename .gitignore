@@ -27,7 +27,18 @@
 *.swp
 
 # Working artefacts that must never reach a public repository.
+#
+# *.html is here to keep captured Wildberries pages out. It also swallowed
+# this program's own templates, which are embedded into the binary — so from
+# milestone M3b until this line was written, a clean clone did not build at
+# all: the //go:embed pattern matched nothing and the compiler said so. The
+# repository looked complete because the file was on the machine that wrote
+# it and in nobody else's checkout.
+#
+# The un-ignore below is what keeps both true: captures stay out, and the
+# templates the program cannot start without stay in.
 .superpowers/
 docs/superpowers/
 *.har
 *.html
+!internal/web/templates/*.html

@@ -1,0 +1,57 @@
+{{/* SPDX-License-Identifier: AGPL-3.0-or-later */}}
+<!doctype html>
+<html lang="ru" class="bt" data-bt-theme="dashboard">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Title}} — BlankTrail Monitor</title>
+<link rel="stylesheet" href="/static/blanktrail.css">
+<script src="/static/app.js" defer></script>
+</head>
+<body class="bt-dashboard-shell"{{if .FollowRun}} data-follow-run="{{.FollowRun}}"{{end}}>
+
+<header class="bt-dash-header">
+  <div class="bt-container bt-container--wide">
+    <span class="bt-badge bt-badge--accent bt-badge--soft">BlankTrail</span>
+    <strong>Monitor</strong>
+    <span class="bt-badge bt-badge--neutral bt-badge--sm">Wildberries</span>
+
+    <nav class="bt-filter-tabs" aria-label="Разделы">
+      {{range .Tabs}}
+        <a href="{{.Href}}" data-tab="{{.Href}}"
+           class="bt-filter-tab{{if .Active}} bt-filter-tab--active{{end}}">{{.Label}}</a>
+      {{end}}
+    </nav>
+
+    {{/* The BlankTrail state lives in the header rather than on a screen of
+         its own: it is the one fact that explains every other number on the
+         page, and a person whose collection stopped should not have to go
+         looking for the reason. */}}
+    <span class="bt-badge {{if .BlankTrailOK}}bt-badge--success{{else}}bt-badge--warning{{end}} bt-badge--soft"
+          title="{{.BlankTrailNote}}">BlankTrail: {{.BlankTrailState}}</span>
+
+    <button class="bt-btn bt-btn--ghost bt-btn--sm" data-open-settings>Настройки</button>
+  </div>
+</header>
+
+<main id="main" class="bt-container bt-container--wide bt-container--padded">
+  {{.Body}}
+</main>
+
+{{/* A native dialog: the browser handles focus, Escape and the backdrop,
+     which hand-written code gets subtly wrong and nobody notices until a
+     keyboard user meets it. */}}
+<dialog id="settings-dialog" class="bt-modal bt-modal--md" aria-label="Настройки">
+  <div id="settings-body"></div>
+</dialog>
+
+<footer class="bt-container bt-container--wide">
+  {{/* Required by the AGPL of anyone who lets others reach this over a
+       network, and section 7 asks for it by name. Not a courtesy link: it is
+       the condition on which this page may be served at all. */}}
+  <a class="bt-btn bt-btn--link bt-btn--sm" href="{{.SourceURL}}" rel="noopener" target="_blank">Исходный код</a>
+  <span class="bt-form-hint">AGPL-3.0-or-later</span>
+</footer>
+
+</body>
+</html>
