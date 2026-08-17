@@ -1,0 +1,437 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+package job
+
+import (
+	"context"
+	"errors"
+	"path/filepath"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/BlankTrail/wildberries-monitor/internal/events"
+	"github.com/BlankTrail/wildberries-monitor/internal/store"
+	"github.com/BlankTrail/wildberries-monitor/wb"
+)
+
+// fixedPlan is a planner that returns what it was given, so that a test of
+// the runner tests the runner and not a planning rule.
+type fixedPlan []Item
+
+func (p fixedPlan) Plan(Job) ([]Item, error) { return []Item(p), nil }
+
+// recordingFetcher remembers which items it was asked for, in the order it
+// finished them, and can be told to fail some of them.
+type recordingFetcher struct {
+	mu   sync.Mutex
+	seen []string
+
+	failOn   map[string]error
+	requests int
+	hook     func(Item)
+}
+
+func (f *recordingFetcher) Fetch(_ context.Context, it Item) (int, error) {
+	if f.hook != nil {
+		f.hook(it)
+	}
+	f.mu.Lock()
+	f.seen = append(f.seen, it.Key)
+	f.mu.Unlock()
+	n := f.requests
+	if n == 0 {
+		n = 1
+	}
+	if err, bad := f.failOn[it.Key]; bad {
+		return n, err
+	}
+	return n, nil
+}
+
+func (f *recordingFetcher) keys() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := append([]string(nil), f.seen...)
+	return out
+}
+
+func newRunner(t *testing.T, plan []Item, f Fetcher) (*Runner, *store.Store, *events.Bus) {
+	t.Helper()
+	s, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "run.db"))
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { s.Close() })
+
+	b := events.New()
+	t.Cleanup(func() { b.Close() })
+
+	return &Runner{Store: s, Bus: b, Planner: fixedPlan(plan), Fetcher: f}, s, b
+}
+
+// savedJob stores a job so that it has an id, which is what resuming keys on.
+func savedJob(t *testing.T, s *store.Store) Job {
+	t.Helper()
+	id, err := s.SaveJob(context.Background(), store.JobRow{
+		Name: "тест", Type: string(KindArticles),
+		Fields: `["nm_id"]`, Regions: `["-1257786"]`, Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("SaveJob: %v", err)
+	}
+	return Job{
+		ID: id, Kind: KindArticles, Articles: []int64{1, 2, 3},
+		Regions: []string{"-1257786"}, Fields: wb.Selection{"nm_id"},
+	}
+}
+
+func TestRun_DoesEveryItemAndCountsWhatItCost(t *testing.T) {
+	f := &recordingFetcher{requests: 2}
+	r, s, _ := newRunner(t, []Item{
+		{Kind: "product", Key: "a"},
+		{Kind: "product", Key: "b"},
+		{Kind: "product", Key: "c"},
+	}, f)
+	j := savedJob(t, s)
+
+	res, err := r.Run(context.Background(), j)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Items != 3 {
+		t.Errorf("Items = %d, want 3", res.Items)
+	}
+	if res.Failed != 0 {
+		t.Errorf("Failed = %d, want 0", res.Failed)
+	}
+	// The real number, not the estimate: an operator comparing what a run
+	// cost against what it was promised needs what actually happened.
+	if res.Requests != 6 {
+		t.Errorf("Requests = %d, want 6 (three items at two requests each)", res.Requests)
+	}
+	if res.Resumed {
+		t.Error("a first run reported itself as resumed")
+	}
+	if len(f.keys()) != 3 {
+		t.Errorf("the fetcher saw %d items, want 3", len(f.keys()))
+	}
+}
+
+func TestRun_OneItemsFailureIsNotTheRuns(t *testing.T) {
+	// A thousand-product job that stopped at the first challenge would
+	// collect nothing and still cost the request. The failure belongs to the
+	// item.
+	boom := errors.New("challenge not solved")
+	f := &recordingFetcher{failOn: map[string]error{"b": boom}}
+	r, s, _ := newRunner(t, []Item{
+		{Kind: "product", Key: "a"},
+		{Kind: "product", Key: "b"},
+		{Kind: "product", Key: "c"},
+	}, f)
+	j := savedJob(t, s)
+
+	res, err := r.Run(context.Background(), j)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Items != 2 || res.Failed != 1 {
+		t.Errorf("Items/Failed = %d/%d, want 2/1", res.Items, res.Failed)
+	}
+	if len(f.keys()) != 3 {
+		t.Errorf("the fetcher saw %d items; the walk must go on past a failure", len(f.keys()))
+	}
+}
+
+func TestRun_ResumesFromWhatIsLeftRatherThanFromTheStart(t *testing.T) {
+	// Section 10's promise, and the reason the plan is written before the work
+	// starts. A resumed run that began again would pay twice for everything
+	// the first attempt had already collected.
+	ctx := context.Background()
+	f := &recordingFetcher{}
+	r, s, _ := newRunner(t, []Item{
+		{Kind: "product", Key: "a"},
+		{Kind: "product", Key: "b"},
+		{Kind: "product", Key: "c"},
+		{Kind: "product", Key: "d"},
+	}, f)
+	j := savedJob(t, s)
+
+	// A first attempt that got two items in and then died: the run is left
+	// open, which is exactly what a crash leaves.
+	runID, err := s.StartRun(ctx, j.ID, []store.ItemRow{
+		{Position: 0, Kind: "product", Key: "a"},
+		{Position: 1, Kind: "product", Key: "b"},
+		{Position: 2, Kind: "product", Key: "c"},
+		{Position: 3, Kind: "product", Key: "d"},
+	})
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+	if err := s.FinishItem(ctx, runID, 0, store.ItemDone, ""); err != nil {
+		t.Fatalf("FinishItem: %v", err)
+	}
+	if err := s.FinishItem(ctx, runID, 1, store.ItemDone, ""); err != nil {
+		t.Fatalf("FinishItem: %v", err)
+	}
+
+	res, err := r.Run(ctx, j)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !res.Resumed {
+		t.Error("Resumed = false; this run continued an earlier one")
+	}
+	if res.RunID != runID {
+		t.Errorf("RunID = %d, want the interrupted run %d", res.RunID, runID)
+	}
+	got := f.keys()
+	if len(got) != 2 || got[0] != "c" || got[1] != "d" {
+		t.Errorf("the fetcher saw %v, want [c d]: the first two were already done", got)
+	}
+}
+
+func TestRun_RecordsEachItemAsItGoesRatherThanAtTheEnd(t *testing.T) {
+	// A crash must lose at most the item in flight. If state were written once
+	// at the end, a run killed at ninety per cent would resume from zero — the
+	// exact cost section 10 exists to avoid.
+	//
+	// The run id is not known until Run opens it, so the hook finds the open
+	// run by asking the store. An earlier version of this test closed over a
+	// variable assigned after Run returned, which meant it queried run zero,
+	// found nothing, and could not fail — a test that measured nothing.
+	ctx := context.Background()
+	var s *store.Store
+	var j Job
+	var checked bool
+
+	f := &recordingFetcher{}
+	f.hook = func(it Item) {
+		if it.Key != "c" {
+			return
+		}
+		run, ok, err := s.UnfinishedRun(ctx, j.ID)
+		if err != nil || !ok {
+			t.Errorf("no open run while the third item is in flight (ok %v, err %v)", ok, err)
+			return
+		}
+		pending, err := s.PendingItems(ctx, run.ID)
+		if err != nil {
+			t.Errorf("PendingItems mid-run: %v", err)
+			return
+		}
+		checked = true
+		// Two items are done and the third is in flight, so at most the third
+		// and whatever follows it may still be pending.
+		if len(pending) > 1 {
+			t.Errorf("%d items still pending while the third is in flight; state is written at the end, not as it goes", len(pending))
+		}
+	}
+
+	r, st, _ := newRunner(t, []Item{
+		{Kind: "product", Key: "a"},
+		{Kind: "product", Key: "b"},
+		{Kind: "product", Key: "c"},
+	}, f)
+	s = st
+	j = savedJob(t, s)
+	j.Threads = 1 // one at a time, so "already done" is a fact and not a race
+
+	res, err := r.Run(ctx, j)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !checked {
+		t.Fatal("the hook never ran, so this test asserted nothing")
+	}
+	if left, _ := s.PendingItems(ctx, res.RunID); len(left) != 0 {
+		t.Errorf("%d items left pending after a finished run", len(left))
+	}
+}
+
+func TestRun_StoppingLeavesWhatWasDoneAndSaysItStopped(t *testing.T) {
+	// Stop must not throw away what was already collected and paid for.
+	ctx, cancel := context.WithCancel(context.Background())
+	f := &recordingFetcher{}
+	var seen int
+	var mu sync.Mutex
+	f.hook = func(Item) {
+		mu.Lock()
+		seen++
+		n := seen
+		mu.Unlock()
+		if n == 2 {
+			cancel()
+		}
+	}
+
+	r, s, _ := newRunner(t, []Item{
+		{Kind: "product", Key: "a"},
+		{Kind: "product", Key: "b"},
+		{Kind: "product", Key: "c"},
+		{Kind: "product", Key: "d"},
+		{Kind: "product", Key: "e"},
+	}, f)
+	j := savedJob(t, s)
+	j.Threads = 1
+
+	res, err := r.Run(ctx, j)
+	if !errors.Is(err, ErrStopped) {
+		t.Fatalf("Run = %v, want ErrStopped", err)
+	}
+	if res.Items == 0 {
+		t.Error("a stopped run reported nothing collected; what was done before the stop was still paid for")
+	}
+	if res.Items >= 5 {
+		t.Errorf("Items = %d; the run was stopped and should not have finished everything", res.Items)
+	}
+
+	// The run is closed, not left open: an open run would be resumed forever.
+	if _, ok, _ := s.UnfinishedRun(context.Background(), j.ID); ok {
+		t.Error("a stopped run was left open, so every later attempt would resume it")
+	}
+
+	// And what was done is recorded, not merely counted in memory. The stop
+	// arrives while an item is in flight, so recording its outcome runs under
+	// an already-cancelled context: written with that context, the write
+	// fails, the item stays pending, and a request the user paid for is
+	// forgotten. Result.Items alone cannot see that — it counts what the
+	// worker did, not what survived.
+	done := countRows(t, s, `SELECT count(*) FROM job_items WHERE state = 'done'`)
+	if int64(done) != res.Items {
+		t.Errorf("%d item(s) recorded as done but %d were collected; work paid for before the stop was not written down", done, res.Items)
+	}
+}
+
+func TestRun_TellsTheBusWhenItStartsAndFinishes(t *testing.T) {
+	f := &recordingFetcher{}
+	r, s, b := newRunner(t, []Item{{Kind: "product", Key: "a"}}, f)
+	j := savedJob(t, s)
+
+	var kinds []events.Kind
+	var mu sync.Mutex
+	if err := b.Subscribe("spy", "", func(_ context.Context, ev events.Event) error {
+		mu.Lock()
+		kinds = append(kinds, ev.Kind)
+		mu.Unlock()
+		return nil
+	}); err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+
+	if _, err := r.Run(context.Background(), j); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(kinds) < 2 || kinds[0] != events.RunStarted || kinds[len(kinds)-1] != events.RunFinished {
+		t.Errorf("events = %v, want a run-started first and a run-finished last", kinds)
+	}
+}
+
+func TestRun_CarriesTheBussDropCountIntoTheResult(t *testing.T) {
+	// A run whose exporter fell behind lost rows, and that is a fact about
+	// the run rather than about the bus. An operator reading a run's record
+	// has to be able to see it there.
+	release := make(chan struct{})
+	f := &recordingFetcher{}
+	r, s, b := newRunner(t, []Item{
+		{Kind: "product", Key: "a"},
+		{Kind: "product", Key: "b"},
+		{Kind: "product", Key: "c"},
+	}, f)
+	j := savedJob(t, s)
+	j.Threads = 1
+
+	entered := make(chan struct{}, 1)
+	if err := b.SubscribeAsync("slow", "", 1, func(context.Context, events.Event) error {
+		select {
+		case entered <- struct{}{}:
+		default:
+		}
+		<-release
+		return nil
+	}); err != nil {
+		t.Fatalf("SubscribeAsync: %v", err)
+	}
+
+	f.hook = func(Item) {
+		select {
+		case <-entered:
+		default:
+		}
+	}
+
+	res, err := r.Run(context.Background(), j)
+	close(release)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Dropped != b.Stats().Dropped {
+		t.Errorf("Result.Dropped = %d but the bus counted %d; the run's record must carry it", res.Dropped, b.Stats().Dropped)
+	}
+}
+
+func TestRun_RefusesAJobThatCannotRun(t *testing.T) {
+	// Before opening a run, not after: an invalid job that got a run row
+	// would leave one more thing to clean up and one more "running" row for
+	// the resumer to find.
+	f := &recordingFetcher{}
+	r, s, _ := newRunner(t, []Item{{Kind: "product", Key: "a"}}, f)
+	j := savedJob(t, s)
+	j.Regions = nil
+
+	if _, err := r.Run(context.Background(), j); err == nil {
+		t.Fatal("Run accepted a job with no region")
+	}
+	if len(f.keys()) != 0 {
+		t.Error("the fetcher was asked for work by a job that could not run")
+	}
+}
+
+func TestRun_RefusesAPlanWithNothingInIt(t *testing.T) {
+	f := &recordingFetcher{}
+	r, s, _ := newRunner(t, nil, f)
+	j := savedJob(t, s)
+
+	if _, err := r.Run(context.Background(), j); !errors.Is(err, ErrNoItems) {
+		t.Errorf("Run = %v, want ErrNoItems", err)
+	}
+}
+
+func TestRun_DelayIsSpentBetweenItems(t *testing.T) {
+	// The politeness setting has to actually cost time, or a user who set it
+	// is being lied to about what their run does to the site.
+	f := &recordingFetcher{}
+	r, s, _ := newRunner(t, []Item{
+		{Kind: "product", Key: "a"},
+		{Kind: "product", Key: "b"},
+		{Kind: "product", Key: "c"},
+	}, f)
+	j := savedJob(t, s)
+	j.Threads = 1
+	j.Delay = 30 * time.Millisecond
+
+	start := time.Now()
+	if _, err := r.Run(context.Background(), j); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	// Three items at thirty milliseconds each. Compared against a floor well
+	// under the real figure so that a slow machine does not fail the test,
+	// while a delay of zero still cannot pass it.
+	if elapsed := time.Since(start); elapsed < 60*time.Millisecond {
+		t.Errorf("three items with a 30ms delay took %v; the delay was not spent", elapsed)
+	}
+}
+
+// countRows counts what a query returns, so a test can ask what survived
+// rather than what a counter in memory believes.
+func countRows(t *testing.T, s *store.Store, query string) int {
+	t.Helper()
+	n, err := s.CountForTest(context.Background(), query)
+	if err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	return n
+}

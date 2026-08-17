@@ -339,3 +339,18 @@ func boolInt(b bool) int {
 	}
 	return 0
 }
+
+// CountForTest runs a single-value COUNT query.
+//
+// Exported for the engine's tests, which have to be able to ask what actually
+// reached the database rather than what an in-memory counter believes. The
+// distinction is not academic: a run stopped mid-item records its outcome
+// under a cancelled context, and only the database can say whether that write
+// survived.
+func (s *Store) CountForTest(ctx context.Context, query string, args ...any) (int, error) {
+	var n int
+	if err := s.db.QueryRowContext(ctx, query, args...).Scan(&n); err != nil {
+		return 0, fmt.Errorf("store: count: %w", err)
+	}
+	return n, nil
+}
