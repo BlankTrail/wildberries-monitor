@@ -35,6 +35,8 @@ import (
 // dropped-event report, a log line and a stored row all say the same word.
 type Kind string
 
+// The kinds this bus carries, and the whole of them: a subscriber that
+// switches on Kind can be read against this block to see what it ignores.
 const (
 	// ItemScraped is one product read from the site.
 	ItemScraped Kind = "item-scraped"

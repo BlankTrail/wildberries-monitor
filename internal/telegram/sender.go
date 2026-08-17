@@ -92,10 +92,12 @@ func (l *Ladder) Check(ctx context.Context) error {
 	return err
 }
 
+// SendMessage delivers text over the remembered rung, or finds one.
 func (l *Ladder) SendMessage(ctx context.Context, chat, text string) error {
 	return l.deliver(ctx, func(s Sender) error { return s.SendMessage(ctx, chat, text) })
 }
 
+// SendDocument delivers a file over the remembered rung, or finds one.
 func (l *Ladder) SendDocument(ctx context.Context, chat, caption, path string) error {
 	return l.deliver(ctx, func(s Sender) error { return s.SendDocument(ctx, chat, caption, path) })
 }

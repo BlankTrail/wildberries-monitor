@@ -188,12 +188,13 @@ func (c *csvWriter) Close() error {
 	return nil
 }
 
-// renderCell turns one value into one cell's text.
+// Cell turns one value into one cell's text.
 //
 // An unknown field type is an error rather than a fallback. A seventh
 // FieldType added to wb/fields.go would otherwise arrive here and come out as
 // an empty cell, which is this package's word for absence — a new column would
 // silently read as missing data in every export.
+//
 // Exported because the interface's results table renders the same values on
 // screen. Numbers are where a second opinion would be a real defect: a price
 // shown as 1299 and written as 12.99 is a bug nobody would think to look for,

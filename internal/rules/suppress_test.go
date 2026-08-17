@@ -125,7 +125,7 @@ func TestDecide_StopsTheSameChangeArrivingTwice(t *testing.T) {
 	// genuinely identical change every time it comes back.
 	var asked string
 	s := permissive()
-	s.SeenSince = func(key string, since time.Time) (bool, error) {
+	s.SeenSince = func(key string, _ time.Time) (bool, error) {
 		asked = key
 		return true, nil
 	}

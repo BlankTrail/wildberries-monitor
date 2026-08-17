@@ -140,10 +140,10 @@ func (s *Server) ruleList(all []rules.Rule) string {
 		b.WriteString(`<td>` + html.EscapeString(scopeText(rule.Scope)) + `</td>`)
 		b.WriteString(`<td>` + html.EscapeString(thresholdText(rule)) + `</td>`)
 		b.WriteString(`<td>` + state + `</td>`)
-		b.WriteString(fmt.Sprintf(
+		fmt.Fprintf(&b,
 			`<td><button class="bt-btn bt-btn--ghost bt-btn--sm" data-get="/rules/log?id=%d" data-target="#rule-log">Журнал</button>`+
 				`<button class="bt-btn bt-btn--ghost bt-btn--sm" data-post="/rules/delete?id=%d" data-target="#rules-body">Удалить</button></td>`,
-			rule.ID, rule.ID))
+			rule.ID, rule.ID)
 		b.WriteString(`</tr>`)
 	}
 	b.WriteString(`</tbody></table></div>`)
@@ -241,7 +241,7 @@ func (s *Server) ruleLog(w http.ResponseWriter, r *http.Request) {
 			b.WriteString(`<tr>`)
 			b.WriteString(`<td>` + time.Unix(e.FiredAt, 0).UTC().Format("2006-01-02 15:04") + `</td>`)
 			b.WriteString(`<td>` + html.EscapeString(kindLabel(track.Kind(e.Kind))+subject) + `</td>`)
-			b.WriteString(fmt.Sprintf(`<td>%d, %s</td>`, e.NmID, html.EscapeString(e.Dest)))
+			fmt.Fprintf(&b, `<td>%d, %s</td>`, e.NmID, html.EscapeString(e.Dest))
 			b.WriteString(`<td>` + result + `</td>`)
 			b.WriteString(`</tr>`)
 		}
@@ -290,7 +290,7 @@ func ruleForm(targets []store.TargetRow) string {
 	b.WriteString(`<h4>Условие</h4>`)
 	for i := range 2 {
 		var fields strings.Builder
-		fields.WriteString(fmt.Sprintf(`<select class="bt-select" name="cond_field_%d">`, i))
+		fmt.Fprintf(&fields, `<select class="bt-select" name="cond_field_%d">`, i)
 		fields.WriteString(`<option value="">— нет —</option>`)
 		for _, f := range rules.Fields() {
 			fields.WriteString(`<option value="` + html.EscapeString(string(f)) + `">` +
@@ -298,13 +298,13 @@ func ruleForm(targets []store.TargetRow) string {
 		}
 		fields.WriteString(`</select>`)
 
-		fields.WriteString(fmt.Sprintf(`<select class="bt-select" name="cond_cmp_%d">`, i))
+		fmt.Fprintf(&fields, `<select class="bt-select" name="cond_cmp_%d">`, i)
 		for _, c := range []rules.Cmp{rules.CmpLess, rules.CmpLessOrEq, rules.CmpGreater,
 			rules.CmpGreaterOrEq, rules.CmpEqual, rules.CmpNotEqual} {
 			fields.WriteString(`<option value="` + html.EscapeString(string(c)) + `">` + string(c) + `</option>`)
 		}
 		fields.WriteString(`</select>`)
-		fields.WriteString(fmt.Sprintf(`<input class="bt-input" name="cond_value_%d" type="number" step="any">`, i))
+		fmt.Fprintf(&fields, `<input class="bt-input" name="cond_value_%d" type="number" step="any">`, i)
 
 		b.WriteString(field(fmt.Sprintf("Условие %d", i+1), fields.String(), ""))
 	}
@@ -333,9 +333,9 @@ func ruleForm(targets []store.TargetRow) string {
 		if name == "" {
 			name = t.Address
 		}
-		addressees.WriteString(fmt.Sprintf(
+		fmt.Fprintf(&addressees,
 			`<label class="bt-checkbox"><input type="checkbox" name="targets" value="%d"> %s (%s)</label>`,
-			t.ID, html.EscapeString(name), html.EscapeString(t.Kind)))
+			t.ID, html.EscapeString(name), html.EscapeString(t.Kind))
 	}
 	b.WriteString(field("Кому писать", addressees.String(), ""))
 

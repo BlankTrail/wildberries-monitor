@@ -94,6 +94,7 @@ const (
 // my.telegram.org pair it cannot work without.
 var ErrNoAppCredentials = errors.New("telegram: MTProto needs an api_id and an api_hash from my.telegram.org")
 
+// Name identifies this rung on the settings screen.
 func (m *MTProto) Name() string { return "mtproto" }
 
 // Check brings the session up and asks who this bot is.

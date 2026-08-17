@@ -201,7 +201,7 @@ const helpText = `Что я умею:
 /stop 3 — остановить задание 3
 /export csv — прислать результаты файлом (csv, xlsx, json, jsonl, sqlite)`
 
-func (c *Commands) replyJobs(ctx context.Context, u Update, reply func(string) error) error {
+func (c *Commands) replyJobs(ctx context.Context, _ Update, reply func(string) error) error {
 	if c.Jobs == nil {
 		return reply("Управление заданиями недоступно в этой сборке.")
 	}

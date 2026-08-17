@@ -90,7 +90,9 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 
 	password, generated, err := web.FirstRunPassword(dir)
 	if err != nil {
-		s.Close()
+		// The store was opened a moment ago and is being given up on; the error
+		// worth returning is the one that made us give up.
+		_ = s.Close()
 		return nil, err
 	}
 
@@ -121,7 +123,10 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 		Password: password, GeneratedPassword: generated,
 		TelegramRoute: a.Ladder.Name,
 		Autostart:     osAutostart{},
-		CheckTelegram: func(ctx context.Context, token string) (string, error) {
+		// token is ignored on purpose: the ladder checks with whatever is
+		// configured, and a token typed into the box but not yet saved is not
+		// the one a rule would send with.
+		CheckTelegram: func(ctx context.Context, _ string) (string, error) {
 			// The whole ladder, not one rung: the question a person presses
 			// this for is "can you reach Telegram", and answering it about the
 			// path that happens to be first would say no on exactly the

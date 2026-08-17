@@ -44,6 +44,7 @@ type Transport interface {
 // TransportFunc adapts a function to Transport.
 type TransportFunc func(context.Context, Message) error
 
+// Send calls f.
 func (f TransportFunc) Send(ctx context.Context, m Message) error { return f(ctx, m) }
 
 // ErrPermanent marks a failure that retrying cannot fix — a chat that no
@@ -63,8 +64,8 @@ var ErrPermanent = errors.New("notify: this will not succeed on a retry")
 // later instead sits for days.
 func Backoff(attempts int) time.Duration {
 	const (
-		base = time.Minute
-		cap_ = 6 * time.Hour
+		base    = time.Minute
+		ceiling = 6 * time.Hour
 	)
 	if attempts < 1 {
 		attempts = 1
@@ -72,8 +73,8 @@ func Backoff(attempts int) time.Duration {
 	d := base
 	for range attempts - 1 {
 		d *= 2
-		if d >= cap_ {
-			return cap_
+		if d >= ceiling {
+			return ceiling
 		}
 	}
 	return d

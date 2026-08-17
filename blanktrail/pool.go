@@ -543,10 +543,10 @@ func (p *Pool) exhaustedLocked() error {
 		}
 		pt.mu.Unlock()
 	}
-	switch {
-	case lost == 0:
+	switch lost {
+	case 0:
 		return ErrPoolExhausted
-	case lost == total:
+	case total:
 		return fmt.Errorf("%w: the proxy no longer has any of the %d port(s) this pool opened, "+
 			"so it was restarted or they were closed from outside; nothing here can reopen them safely", ErrPoolExhausted, total)
 	default:

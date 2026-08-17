@@ -36,7 +36,7 @@ func liveServer(t *testing.T) (*httptest.Server, *events.Bus) {
 
 // openStream connects to /live and returns the response, ready to be read
 // message by message.
-func openStream(t *testing.T, ts *httptest.Server, ctx context.Context, run string) *http.Response {
+func openStream(ctx context.Context, t *testing.T, ts *httptest.Server, run string) *http.Response {
 	t.Helper()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ts.URL+"/live?run="+run, nil)
 	if err != nil {
@@ -100,7 +100,7 @@ func TestLive_DeliversARunsProgressWithoutAReload(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
-	res := openStream(t, ts, ctx, "7")
+	res := openStream(ctx, t, ts, "7")
 	if ct := res.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/event-stream") {
 		t.Errorf("content type = %q, want an event stream", ct)
 	}
@@ -127,7 +127,7 @@ func TestLive_IgnoresAnotherRunsEvents(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
-	res := openStream(t, ts, ctx, "7")
+	res := openStream(ctx, t, ts, "7")
 
 	// The other run first, so that receiving the second message is proof the
 	// first was skipped rather than merely slow.
@@ -157,7 +157,7 @@ func TestLive_ReleasesItsSubscriptionWhenTheBrowserLeaves(t *testing.T) {
 	ts, bus := liveServer(t)
 	ctx, cancel := context.WithCancel(context.Background())
 
-	res := openStream(t, ts, ctx, "7")
+	res := openStream(ctx, t, ts, "7")
 	if err := bus.Publish(ctx, events.Event{Kind: events.RunProgress, RunID: 7, Payload: "жив"}); err != nil {
 		t.Fatalf("Publish: %v", err)
 	}
@@ -187,7 +187,7 @@ func TestLive_SaysSoWhenTheServerStops(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
-	res := openStream(t, ts, ctx, "7")
+	res := openStream(ctx, t, ts, "7")
 	if err := bus.Publish(ctx, events.Event{Kind: events.RunProgress, RunID: 7, Payload: "идёт"}); err != nil {
 		t.Fatalf("Publish: %v", err)
 	}
@@ -208,7 +208,7 @@ func TestLive_EndsWhenTheRunDoes(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
-	res := openStream(t, ts, ctx, "7")
+	res := openStream(ctx, t, ts, "7")
 	if err := bus.Publish(ctx, events.Event{
 		Kind: events.RunFinished, RunID: 7, Payload: "готово: 40 из 40",
 	}); err != nil {

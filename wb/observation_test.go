@@ -1082,7 +1082,7 @@ func TestDiffReviews_TwoDifferentCardsAreNotComparable(t *testing.T) {
 // alternative is that the very first comparison, the one every caller starts
 // from, becomes an error.
 func TestDiffReviews_AReadingThatNamesNoCardIsComparableWithAnything(t *testing.T) {
-	real := loadReviews(t)
+	named := loadReviews(t)
 	anonymous := loadReviews(t)
 	anonymous.ImtID = 0
 
@@ -1091,9 +1091,9 @@ func TestDiffReviews_AReadingThatNamesNoCardIsComparableWithAnything(t *testing.
 		before, after  Reviews
 		wantRatingMove bool
 	}{
-		{"a zero earlier reading", Reviews{}, real, true},
-		{"an earlier reading that names no card", anonymous, real, false},
-		{"a later reading that names no card", real, anonymous, false},
+		{"a zero earlier reading", Reviews{}, named, true},
+		{"an earlier reading that names no card", anonymous, named, false},
+		{"a later reading that names no card", named, anonymous, false},
 	} {
 		_, ratingChange, err := DiffReviews(tc.before, tc.after)
 		if err != nil {

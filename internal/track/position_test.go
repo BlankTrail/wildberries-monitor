@@ -138,9 +138,9 @@ func TestDiffPlacement_RefusesTwoDifferentSeries(t *testing.T) {
 	// A rank for "платье" and a rank for "сарафан" are two series. Compared,
 	// they report a move that never happened.
 	for _, c := range []struct {
-		name   string
-		break_ func(*Placement)
-		want   error
+		name    string
+		breakIt func(*Placement)
+		want    error
 	}{
 		{"another product", func(pl *Placement) { pl.NmID = 999 }, ErrIdentityMismatch},
 		{"another phrase", func(pl *Placement) { pl.Phrase = "сарафан" }, ErrContextMismatch},
@@ -149,7 +149,7 @@ func TestDiffPlacement_RefusesTwoDifferentSeries(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			after := placement(200, p(9))
-			c.break_(&after)
+			c.breakIt(&after)
 			changes, err := DiffPlacement(placement(100, p(4)), after)
 			if !errors.Is(err, c.want) {
 				t.Errorf("error = %v, want %v", err, c.want)

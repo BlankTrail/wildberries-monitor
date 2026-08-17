@@ -41,6 +41,7 @@ type Fetcher interface {
 // FetcherFunc adapts a function to Fetcher.
 type FetcherFunc func(context.Context, Item) (int, error)
 
+// Fetch calls f.
 func (f FetcherFunc) Fetch(ctx context.Context, it Item) (int, error) { return f(ctx, it) }
 
 // Planner turns a job into the list of items it will do.

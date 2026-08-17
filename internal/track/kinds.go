@@ -34,6 +34,9 @@ package track
 //     they would each need a "my product" nobody has set.
 type Kind string
 
+// The fifteen kinds this build can emit, grouped by what they are about. The
+// nine spec section 6.1 names that are absent are listed on Kind above, with
+// the reason each of them has no producer here.
 const (
 	// Price and what is left of it.
 	PriceChanged    Kind = "price-changed"

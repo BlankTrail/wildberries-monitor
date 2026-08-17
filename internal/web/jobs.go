@@ -140,8 +140,8 @@ func (s *Server) phraseListField(lists []store.PhraseListRow) string {
 	sel.WriteString(`<select class="bt-select" name="phrase_list_id" data-estimate>`)
 	sel.WriteString(`<option value="0">— не использовать файл —</option>`)
 	for _, l := range lists {
-		sel.WriteString(fmt.Sprintf(`<option value="%d">%s — %d фраз</option>`,
-			l.ID, html.EscapeString(l.Name), l.Count))
+		fmt.Fprintf(&sel, `<option value="%d">%s — %d фраз</option>`,
+			l.ID, html.EscapeString(l.Name), l.Count)
 	}
 	sel.WriteString(`</select>`)
 
@@ -199,9 +199,9 @@ func fieldCheckboxes() string {
 			if f.Group == wb.GroupBase {
 				checked = " checked"
 			}
-			b.WriteString(fmt.Sprintf(
+			fmt.Fprintf(&b,
 				`<label class="bt-checkbox"><input type="checkbox" name="fields" value="%s" data-estimate%s> %s</label>`,
-				html.EscapeString(f.Key), checked, html.EscapeString(f.Name)))
+				html.EscapeString(f.Key), checked, html.EscapeString(f.Name))
 		}
 		b.WriteString(`</fieldset>`)
 	}
@@ -390,7 +390,7 @@ func (s *Server) uploadPhrases(w http.ResponseWriter, r *http.Request) {
 				name = part.FileName()
 			}
 			list, err := s.Store.SavePhraseList(r.Context(), name, phrasesOf(part))
-			part.Close()
+			_ = part.Close()
 			if err != nil {
 				w.Header().Set("Content-Type", "text/html; charset=utf-8")
 				fmt.Fprint(w, `<section class="bt-card"><div class="bt-alert bt-alert--error">`+
@@ -409,7 +409,7 @@ func (s *Server) uploadPhrases(w http.ResponseWriter, r *http.Request) {
 				html.EscapeString(list.Name), list.Count, body)
 			return
 		}
-		part.Close()
+		_ = part.Close()
 	}
 	// Reached only when the request carried no file part at all.
 	http.Error(w, "upload: no file was sent", http.StatusBadRequest)

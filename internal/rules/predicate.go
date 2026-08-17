@@ -23,6 +23,8 @@ import (
 // Op is what a node does.
 type Op string
 
+// The operations a condition tree is built from. Two groupings and one leaf
+// is the whole vocabulary — see Eval for why nothing else may hold.
 const (
 	// OpAnd and OpOr group other nodes. An empty group is true for And and
 	// false for Or, which is what those words mean about nothing — and it
@@ -37,6 +39,8 @@ const (
 // Cmp is a comparison.
 type Cmp string
 
+// The six comparisons a leaf can make. Nothing else may hold — see compare,
+// which refuses an unknown one rather than letting it match everything.
 const (
 	CmpLess        Cmp = "<"
 	CmpLessOrEq    Cmp = "<="
@@ -53,6 +57,9 @@ const (
 // nobody declares cannot be saved into a rule that then never matches.
 type Field string
 
+// The fields a condition can read: four about the move, six about the reading
+// it ended at. Spec section 6.2 evaluates over both, which is what lets one
+// condition say "fell by 5% while stock is under ten".
 const (
 	// The change itself.
 	FieldPercent Field = "change.percent" // how far it moved, in percent

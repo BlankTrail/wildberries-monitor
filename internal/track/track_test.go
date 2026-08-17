@@ -88,9 +88,9 @@ func TestDiff_RefusesReadingsThatCannotBeCompared(t *testing.T) {
 	// is a number with no meaning. And a refusal must never look like "nothing
 	// changed".
 	for _, c := range []struct {
-		name   string
-		break_ func(*Reading)
-		want   error
+		name    string
+		breakIt func(*Reading)
+		want    error
 	}{
 		{"another product", func(r *Reading) { r.NmID = 999 }, ErrIdentityMismatch},
 		{"another region", func(r *Reading) { r.Dest = "12358499" }, ErrContextMismatch},
@@ -98,7 +98,7 @@ func TestDiff_RefusesReadingsThatCannotBeCompared(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			after := reading(200)
-			c.break_(&after)
+			c.breakIt(&after)
 			changes, err := Diff(reading(100), after)
 			if !errors.Is(err, c.want) {
 				t.Errorf("error = %v, want %v", err, c.want)
@@ -302,12 +302,12 @@ func TestPercentChange_RefusesWhatItCannotBeAPercentageOf(t *testing.T) {
 		t.Error("a value that disappeared was given a percentage")
 	}
 
-	real := Change{Was: 100, Now: 75, HadBefore: true, HasNow: true}
-	pct, ok := real.PercentChange()
+	moved := Change{Was: 100, Now: 75, HadBefore: true, HasNow: true}
+	pct, ok := moved.PercentChange()
 	if !ok || pct != -25 {
 		t.Errorf("percent = %v (ok %v), want -25", pct, ok)
 	}
-	if d, ok := real.Delta(); !ok || d != -25 {
+	if d, ok := moved.Delta(); !ok || d != -25 {
 		t.Errorf("delta = %v (ok %v), want -25", d, ok)
 	}
 }

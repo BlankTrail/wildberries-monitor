@@ -42,8 +42,10 @@ type DirectRoute struct {
 	Client *http.Client
 }
 
+// Name identifies this rung on the settings screen.
 func (DirectRoute) Name() string { return "direct" }
 
+// Do sends the request straight out of this machine.
 func (r DirectRoute) Do(ctx context.Context, req *http.Request) (*http.Response, error) {
 	c := r.Client
 	if c == nil {
@@ -67,6 +69,8 @@ type LeasedRoute struct {
 	Label string
 }
 
+// Name identifies this rung, and the gateway behind it when there is more
+// than one.
 func (r LeasedRoute) Name() string {
 	if r.Label != "" {
 		return "blanktrail:" + r.Label
@@ -74,6 +78,8 @@ func (r LeasedRoute) Name() string {
 	return "blanktrail"
 }
 
+// Do borrows a port, sends the request through it, and gives the port back
+// when the response body is closed.
 func (r LeasedRoute) Do(ctx context.Context, req *http.Request) (*http.Response, error) {
 	if r.Lease == nil {
 		return nil, fmt.Errorf("telegram: %s: no way to borrow a port", r.Name())
@@ -147,6 +153,7 @@ func (l *RouteLadder) Forget() {
 	l.mu.Unlock()
 }
 
+// Name is the chosen transport's name, for the settings screen.
 func (l *RouteLadder) Name() string {
 	if c := l.Chosen(); c != nil {
 		return c.Name()

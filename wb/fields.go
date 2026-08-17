@@ -63,6 +63,8 @@ package wb
 // were never meant to line up beyond the three that do.
 type FieldSource string
 
+// The six responses a catalogue field can be read out of. Five are priced per
+// product and one per phrase and region; Cost keeps the two apart.
 const (
 	// FieldSourceSearchResult is one row of a search page. Everything it
 	// carries arrives with the page itself and costs no request of its own.
@@ -96,6 +98,8 @@ const (
 // would hide.
 type FieldGroup string
 
+// The groups, in no particular order here — groupOrder below is what decides
+// the order a person reads them in, and it is free-first.
 const (
 	GroupBase       FieldGroup = "base"
 	GroupStock      FieldGroup = "stock"
@@ -114,6 +118,8 @@ const (
 // plain number loses the currency and the two implied decimal places.
 type FieldType string
 
+// What a value can be. Money is separate from an integer because a writer that
+// formats it as a plain number loses the currency and the two decimal places.
 const (
 	FieldText  FieldType = "text"
 	FieldInt   FieldType = "int"

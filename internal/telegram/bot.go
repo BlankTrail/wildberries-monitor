@@ -106,7 +106,7 @@ func (b *Bot) SendDocument(ctx context.Context, chat, caption, path string) erro
 	if err != nil {
 		return fmt.Errorf("telegram: attachment: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	chatID, thread := splitThread(chat)
 
@@ -174,7 +174,7 @@ func (b *Bot) post(ctx context.Context, method, contentType string, body io.Read
 		// enough, and a test caught exactly that.
 		return b.redact(fmt.Errorf("telegram: %s: %w", method, err))
 	}
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }()
 
 	// Bounded: a route that is actually a captive portal answers every request
 	// with a login page, and reading an unbounded one into memory is how a

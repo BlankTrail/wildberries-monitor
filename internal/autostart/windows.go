@@ -31,7 +31,7 @@ func Enable(c Command) error {
 	if err != nil {
 		return fmt.Errorf("autostart: opening the Run key: %w", err)
 	}
-	defer k.Close()
+	defer func() { _ = k.Close() }()
 
 	if err := k.SetStringValue(Name, commandLine(c)); err != nil {
 		return fmt.Errorf("autostart: writing the Run entry: %w", err)
@@ -48,7 +48,7 @@ func Disable() error {
 		}
 		return fmt.Errorf("autostart: opening the Run key: %w", err)
 	}
-	defer k.Close()
+	defer func() { _ = k.Close() }()
 
 	// A missing value is not an error: "make sure this is off" is the request,
 	// and it is already off.
@@ -67,7 +67,7 @@ func Enabled() (bool, error) {
 		}
 		return false, fmt.Errorf("autostart: opening the Run key: %w", err)
 	}
-	defer k.Close()
+	defer func() { _ = k.Close() }()
 
 	if _, _, err := k.GetStringValue(Name); err != nil {
 		if err == registry.ErrNotExist {

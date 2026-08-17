@@ -9,6 +9,9 @@ import (
 	"fmt"
 	"time"
 
+	// The CGO-free SQLite driver, registered by importing it. It is what
+	// lets one machine cross-compile every release, and nothing here calls it
+	// by name — database/sql finds it by the driver name in Open.
 	_ "modernc.org/sqlite"
 )
 
@@ -85,7 +88,7 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	// failure to "enable WAL", which sends a mistyped-path user chasing a
 	// journal-mode problem that does not exist.
 	if err := db.PingContext(ctx); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, fmt.Errorf("store: open %s: %w", path, err)
 	}
 
@@ -94,13 +97,13 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	// spec §5.2. It is persistent in the file, so one execution configures
 	// every later connection and every later run.
 	if _, err := db.ExecContext(ctx, "PRAGMA journal_mode = WAL"); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, fmt.Errorf("store: enable WAL: %w", err)
 	}
 
 	s := &Store{db: db, path: path, now: time.Now}
 	if err := s.migrate(ctx); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, err
 	}
 	return s, nil

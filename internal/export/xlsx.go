@@ -138,7 +138,7 @@ type xlsxWriter struct {
 // rather than refused: XLSX is XML inside a zip and its encoding is UTF-8 by
 // definition of the format, and a caller that set windows-1251 once for CSV
 // should not be punished for it by a format that has no say in the matter.
-func NewXLSX(w io.Writer, o Options) (Writer, error) {
+func NewXLSX(w io.Writer, _ Options) (Writer, error) {
 	if w == nil {
 		return nil, errors.New("export: xlsx: the destination writer is nil")
 	}
@@ -309,7 +309,7 @@ func (x *xlsxWriter) cell(ref string, f wb.Field, v Value) {
 	default:
 		// Not a fallback to text. The catalogue will gain types, and a guess
 		// here would put them in the file as strings with nothing to say so.
-		x.fail(fmt.Errorf("export: xlsx: column %q has no cell shape for field type %q", f.Key, f.Type))
+		_ = x.fail(fmt.Errorf("export: xlsx: column %q has no cell shape for field type %q", f.Key, f.Type))
 	}
 }
 
@@ -368,7 +368,7 @@ func (x *xlsxWriter) put(s string) {
 		return
 	}
 	if _, err := x.sheet.WriteString(s); err != nil {
-		x.fail(fmt.Errorf("export: xlsx: write the worksheet: %w", err))
+		_ = x.fail(fmt.Errorf("export: xlsx: write the worksheet: %w", err))
 	}
 }
 
@@ -386,7 +386,7 @@ func (x *xlsxWriter) escape(s string) {
 		return
 	}
 	if err := xml.EscapeText(x.sheet, []byte(s)); err != nil {
-		x.fail(fmt.Errorf("export: xlsx: write the worksheet: %w", err))
+		_ = x.fail(fmt.Errorf("export: xlsx: write the worksheet: %w", err))
 	}
 }
 

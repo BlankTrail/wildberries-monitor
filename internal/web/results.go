@@ -94,15 +94,15 @@ func (s *Server) resultsHTML(r *http.Request) (string, error) {
 	}
 	b.WriteString(`</tbody></table></div>`)
 
-	switch {
-	case shown == 0:
+	switch shown {
+	case 0:
 		b.WriteString(`<div class="bt-alert bt-alert--neutral">Под этот фильтр ничего не собрано.</div>`)
-	case shown == tableRows:
+	case tableRows:
 		// Said plainly rather than implied by a truncated table. A person who
 		// thinks they are looking at everything draws conclusions from a
 		// sample.
-		b.WriteString(fmt.Sprintf(
-			`<div class="bt-alert bt-alert--neutral">Показаны первые %d строк. Полностью — выгрузкой.</div>`, tableRows))
+		fmt.Fprintf(&b,
+			`<div class="bt-alert bt-alert--neutral">Показаны первые %d строк. Полностью — выгрузкой.</div>`, tableRows)
 	}
 
 	b.WriteString(exportButtons(q))
@@ -260,7 +260,10 @@ func (s *Server) exportSQLite(w http.ResponseWriter, r *http.Request, name strin
 		http.Error(w, "export: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	defer os.RemoveAll(dir)
+	// Best-effort: a temporary directory the operating system will reclaim
+	// anyway, and a failure here has nobody to tell — the response is already
+	// on its way out.
+	defer func() { _ = os.RemoveAll(dir) }()
 
 	path := filepath.Join(dir, name+".sqlite")
 	writer, err := export.NewSQLite(path, export.Options{Table: "products"})
@@ -269,7 +272,9 @@ func (s *Server) exportSQLite(w http.ResponseWriter, r *http.Request, name strin
 		return
 	}
 	if _, err := export.Export(r.Context(), rows, sel, writer); err != nil {
-		writer.Close()
+		// The export failed; that error is what the user needs, not whatever
+		// closing a half-written file has to say about it.
+		_ = writer.Close()
 		http.Error(w, "export: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -283,7 +288,7 @@ func (s *Server) exportSQLite(w http.ResponseWriter, r *http.Request, name strin
 		http.Error(w, "export: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	w.Header().Set("Content-Type", "application/vnd.sqlite3")
 	w.Header().Set("Content-Disposition", `attachment; filename="`+name+`.sqlite"`)

@@ -7,6 +7,32 @@ linters:
     - staticcheck
     - unused
     - revive
+  settings:
+    errcheck:
+      # Three families of call whose error this codebase deliberately does not
+      # check, each for its own reason. Listed by name rather than suppressed
+      # wholesale, so a fourth family has to be argued for the same way.
+      exclude-functions:
+        # A deferred Rollback after a successful Commit returns sql.ErrTxDone
+        # by design — that is how the idiom works, and checking it means
+        # writing a branch for the happy path. The rollback that matters is
+        # the one on the error path, which is the return the caller sees.
+        - (*database/sql.Tx).Rollback
+        # rows.Close's error is already reported by rows.Err(), which every
+        # read in internal/store checks after the loop — see streamRows, whose
+        # whole point is that a truncated read cannot look complete.
+        - (*database/sql.Rows).Close
+        - (*database/sql.Stmt).Close
+        # Writing to a destination that has already been given up on. For
+        # fmt.Fprint* the destination is either os.Stderr — where a failure
+        # cannot be reported, since reporting it is what just failed — or an
+        # http.ResponseWriter whose status has already been sent, which
+        # internal/web/live.go explains at the one place it matters. errcheck
+        # excludes fmt.Print* by default on the same reasoning; these are the
+        # same calls with the writer named.
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
   exclusions:
     rules:
       - path: _test\.go

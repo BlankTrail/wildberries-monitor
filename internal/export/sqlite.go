@@ -12,6 +12,7 @@ import (
 
 	"github.com/BlankTrail/wildberries-monitor/wb"
 
+	// The same CGO-free driver the store uses, registered by importing it.
 	_ "modernc.org/sqlite"
 )
 
@@ -99,7 +100,11 @@ func NewSQLite(path string, o Options) (Writer, error) {
 		return nil, fmt.Errorf("export: sqlite: create %s: %w", path, err)
 	}
 	if err := f.Close(); err != nil {
-		os.Remove(path)
+		// The remove is best-effort cleanup of a file this call just made. Its
+		// own failure has nowhere useful to go: the error being returned is the
+		// one the caller can act on, and reporting a failed tidy-up instead
+		// would hide it behind a stray zero-length file.
+		_ = os.Remove(path)
 		return nil, fmt.Errorf("export: sqlite: create %s: %w", path, err)
 	}
 
@@ -112,7 +117,7 @@ func NewSQLite(path string, o Options) (Writer, error) {
 	// per-connection, and database/sql hands out a pool.
 	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=synchronous(0)&_pragma=busy_timeout(5000)")
 	if err != nil {
-		os.Remove(path)
+		_ = os.Remove(path)
 		return nil, fmt.Errorf("export: sqlite: open %s: %w", path, err)
 	}
 	// One connection, because there is one writer and it holds a transaction
@@ -121,8 +126,8 @@ func NewSQLite(path string, o Options) (Writer, error) {
 	db.SetMaxOpenConns(1)
 
 	if err := db.Ping(); err != nil {
-		db.Close()
-		os.Remove(path)
+		_ = db.Close()
+		_ = os.Remove(path)
 		return nil, fmt.Errorf("export: sqlite: open %s: %w", path, err)
 	}
 
@@ -234,12 +239,14 @@ func (s *sqliteWriter) Close() error {
 
 	if s.err != nil {
 		s.discardBatch()
-		s.db.Close()
+		// Closing after a failure: s.err is the specific one, and replacing it
+		// with a close error would lose what actually went wrong.
+		_ = s.db.Close()
 		return s.err
 	}
 	if err := s.closeBatch(); err != nil {
 		s.err = err
-		s.db.Close()
+		_ = s.db.Close()
 		return s.err
 	}
 	if s.cols != nil {
@@ -247,7 +254,7 @@ func (s *sqliteWriter) Close() error {
 			`INSERT INTO "export_meta" (key, value) VALUES ('rows', ?), ('complete', '1')`,
 			strconv.FormatInt(s.rows, 10)); err != nil {
 			s.err = fmt.Errorf("export: sqlite: mark the export complete: %w", err)
-			s.db.Close()
+			_ = s.db.Close()
 			return s.err
 		}
 	}
