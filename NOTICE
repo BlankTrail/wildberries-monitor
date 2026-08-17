@@ -15,3 +15,9 @@ internal/web/static/blanktrail.css (added in milestone M3)
     Distributed here under AGPL-3.0-or-later by the copyright holder. The
     upstream design-system repository is separate and is NOT covered by this
     licence; only this vendored copy is.
+
+No third-party Go code is vendored. The module has two direct dependencies,
+modernc.org/sqlite and gopkg.in/yaml.v3, and both are fetched by the go tool
+under their own licences rather than copied into this tree. Everything else
+this program needs — the XLSX writer, the windows-1251 table, the Telegram Bot
+API client — is written here, which is why that list is two entries long.

@@ -1,23 +1,76 @@
 # wildberries-monitor
 
-Open-source Wildberries parser and monitor written in Go: web UI, Telegram
-notifications, exports to spreadsheets and databases.
+Open-source Wildberries parser and monitor written in Go: a web panel, a
+collection engine, change tracking with rules, Telegram notifications, and
+exports to spreadsheets and databases.
 
 **This program only works through [BlankTrail Proxy](https://github.com/BlankTrail).**
 Wildberries is behind a JS challenge, so a BlankTrail licence that includes
 Challenge Breaker is required. Without it, requests will not go through — this
 is a hard requirement, not a degraded mode.
 
-## Status
+## Install and run
 
-Milestone **M1a complete**: the `blanktrail` SDK is usable as a library (M0),
-and the `wb` package reads Wildberries search pages and product cards through
-it — prices per size, per-warehouse stock, rank across pages, and a response
-classifier that tells a challenge from a block from a soft wall. See
-[Reading Wildberries data](#reading-wildberries-data-the-wb-package) below, and
-`examples/wbsearch` for a runnable walk.
+Download the archive for your platform from the releases page, unpack it, and
+run `start.bat` (Windows) or `./start.sh` (macOS, Linux). Or build it yourself:
 
-Storage, web UI, tracking and Telegram land in later milestones.
+```
+go build ./cmd/wbmon
+```
+
+The first start prints the address of the panel and a generated password, and
+writes the same password to `first-run.txt` in the data directory. The panel is
+on `http://127.0.0.1:8760/` by default, and it is closed to the rest of the
+network until you set a password of your own — a generated one anybody can read
+out of a file is not a password once the port is reachable.
+
+Data lives in the platform's own place rather than beside the binary
+(`%LOCALAPPDATA%\BlankTrail\wbmon`, `~/Library/Application Support/BlankTrail/wbmon`,
+`~/.local/share/wbmon`), and `WBMON_DATA` or `-data` moves it.
+
+```
+wbmon -port 8760          panel port
+wbmon -data /some/where   where the database lives
+wbmon -open=false         do not open a browser (for a service)
+wbmon -lan                serve beyond this machine (needs your own password)
+```
+
+Then, in the panel: open **Настройки**, enter the BlankTrail address and API
+key and press **Проверить соединение**. Nothing collects anything until that
+check passes.
+
+## What it does
+
+* **Задачи** — build a collection job: what to enumerate (a phrase, a seller,
+  a brand, a list of article numbers, the paid placements for a phrase), which
+  of 38 fields to collect, over which regions and for which audience. The
+  screen prices the job in requests before you start it, and says which of its
+  numbers is a guess.
+* **Правила** — say what is worth being told about: price and stock moves,
+  places in the results, sizes and warehouses disappearing, ratings and review
+  counts. Conditions combine the change and the state it ended at ("fell more
+  than 5% while stock is under ten"). Thresholds, quiet hours, per-product rate
+  limits and deduplication are all there, and every match is logged — including
+  the ones that were suppressed, with the reason.
+* **Результаты** — a table of what was collected, and the same data as a file:
+  CSV, XLSX, JSON, JSONL or a SQLite database. Four of the five stream; the
+  fifth cannot, because a SQLite file is finished by seeking back to its header.
+* **Telegram** — notifications, and a bot that answers `/jobs`, `/run`, `/stop`
+  and `/export`. It reaches Telegram directly where that works and through your
+  BlankTrail port where it does not, and the settings screen shows which.
+
+## What it does not do
+
+Stated plainly, because the alternative is a checkbox that collects nothing:
+
+* **Promotions.** This build has no source for them, so no promotion fields and
+  no promotion rules exist.
+* **Comparison against competitors.** Every rule of that kind is phrased
+  relative to "my" product, which comes from a seller profile this build does
+  not have yet.
+* **MTProto.** Telegram is reached over the Bot API. If `api.telegram.org` is
+  blocked for you *and* your BlankTrail tariff does not allow it either, there
+  is no path yet — that is the next milestone.
 
 ## Using the SDK
 
@@ -150,6 +203,16 @@ write JSONL, print a summary of what happened — is in `examples/wbsearch`:
 go run ./examples/wbsearch -query "кроссовки женские" -dest 1259570991 -pages 3
 go run ./examples/wbsearch -card 1309449623 -dest -5892277
 ```
+
+## Building from source
+
+```
+go build ./...     # the library and the binary
+go test ./...      # the suite
+```
+
+No CGO, on any platform: `modernc.org/sqlite` was chosen so that one machine
+can cross-compile every release. There are two direct dependencies in total.
 
 ## Licence
 

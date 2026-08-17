@@ -1,0 +1,80 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Builds an archive per platform when a version tag is pushed.
+#
+# Cross-compiled from one Linux runner rather than a matrix of real machines,
+# which is possible only because the whole program is CGO-free — that is what
+# modernc.org/sqlite was chosen for, and this file is where the choice pays.
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+
+      # The suite runs before anything is published. A release that skipped it
+      # to save four minutes is a release nobody can trust to be the tag it
+      # says it is.
+      - run: go vet ./...
+      - run: go test ./...
+
+      - name: build
+        env:
+          CGO_ENABLED: '0'
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME}"
+          mkdir -p dist
+
+          for target in windows/amd64 windows/arm64 linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
+            goos="${target%/*}"
+            goarch="${target#*/}"
+            out="dist/wbmon_${version}_${goos}_${goarch}"
+            mkdir -p "$out"
+
+            ext=""
+            if [ "$goos" = windows ]; then ext=".exe"; fi
+
+            # -s -w strips the symbol table and DWARF: nothing debugs a release
+            # binary from a user's machine, and it is a third off the download.
+            # The version is stamped rather than read from a constant somebody
+            # has to remember to bump.
+            GOOS="$goos" GOARCH="$goarch" go build \
+              -trimpath \
+              -ldflags "-s -w -X github.com/BlankTrail/wildberries-monitor/internal/app.version=${version}" \
+              -o "${out}/wbmon${ext}" ./cmd/wbmon
+
+            cp LICENSE NOTICE README.md "$out/"
+            if [ "$goos" = windows ]; then
+              cp packaging/start.bat "$out/"
+              (cd dist && zip -qr "$(basename "$out").zip" "$(basename "$out")")
+            else
+              cp packaging/start.sh "$out/"
+              chmod +x "${out}/start.sh"
+              (cd dist && tar -czf "$(basename "$out").tar.gz" "$(basename "$out")")
+            fi
+          done
+
+          # Checksums for every archive, in one file. A release without them
+          # gives a user no way to tell a download that was tampered with from
+          # one that was truncated.
+          (cd dist && sha256sum ./*.zip ./*.tar.gz > SHA256SUMS)
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.zip
+            dist/*.tar.gz
+            dist/SHA256SUMS
+          generate_release_notes: true
