@@ -147,6 +147,10 @@ var wantIndexes = map[string][]string{
 	"idx_job_items_run_state":         {"run_id", "state"},
 	"idx_rule_events_rule_fired":      {"rule_id", "fired_at"},
 	"idx_rule_events_dedup":           {"dedup_key", "fired_at"},
+	// Migration 0010: the rate limit's own question — when did this rule last
+	// say something about this product — which had no columns to ask it with
+	// before, let alone an index.
+	"idx_rule_events_rule_product": {"rule_id", "nm_id", "fired_at"},
 	// The worker's only question: what is pending and ready to go.
 	"idx_notify_outbox_due": {"state", "due_at"},
 

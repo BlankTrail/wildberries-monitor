@@ -313,10 +313,11 @@ func TestRules_DeletingARuleTakesItsFirings(t *testing.T) {
 	                                 threshold_pct, threshold_minor, threshold_currency, min_interval_sec, aggregate,
 	                                 targets, enabled, created_at, updated_at)
 	              VALUES (1, 'price drop', 'price-changed', '{}', 'product', 111, '{}', 0, 5, 0, 'RUB', 600, 0, '[]', 1, 10, 10)`)
-	execOK(t, s, `INSERT INTO events (id, kind, observed_at, nm_id, imt_id, dest, confidence)
-	              VALUES (1, 'price-changed', 20, 111, 0, '-1257786', 1.0)`)
-	execOK(t, s, `INSERT INTO rule_events (id, rule_id, event_id, fired_at, suppressed_by, dedup_key)
-	              VALUES (1, 1, 1, 20, '', 'price:111')`)
+	// No events row: migration 0010 dropped the reference. A rule fires on a
+	// computed change, which is not one of the site's own signals and never
+	// was — the column could only ever have been filled by inventing one.
+	execOK(t, s, `INSERT INTO rule_events (id, rule_id, fired_at, kind, nm_id, dest, app_type, suppressed_by, dedup_key)
+	              VALUES (1, 1, 20, 'price-changed', 111, '-1257786', 1, '', 'price:111')`)
 
 	execOK(t, s, `DELETE FROM rules WHERE id = 1`)
 
@@ -352,8 +353,8 @@ func TestNotifyOutbox_KeepsAQueuedMessageWhenItsRuleEventGoes(t *testing.T) {
 	              VALUES (2, 'price drop', 'price-changed', '{}', 'product', 111, '{}', 0, 0, 0, '', 0, 0, '[]', 1, 10, 10)`)
 	execOK(t, s, `INSERT INTO events (id, kind, observed_at, nm_id, imt_id, dest, confidence)
 	              VALUES (2, 'price-changed', 20, 111, 0, '-1257786', 1.0)`)
-	execOK(t, s, `INSERT INTO rule_events (id, rule_id, event_id, fired_at, suppressed_by, dedup_key)
-	              VALUES (2, 2, 2, 20, '', 'price:111')`)
+	execOK(t, s, `INSERT INTO rule_events (id, rule_id, fired_at, kind, nm_id, dest, app_type, suppressed_by, dedup_key)
+	              VALUES (2, 2, 20, 'price-changed', 111, '-1257786', 1, '', 'price:111')`)
 	execOK(t, s, `INSERT INTO notify_targets (id, name, kind, address, enabled, created_at, updated_at)
 	              VALUES (1, 'me', 'telegram', '12345', 1, 10, 10)`)
 	execOK(t, s, `INSERT INTO notify_outbox (id, target_id, rule_event_id, created_at, due_at, attempts, state, body)
