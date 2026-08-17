@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/BlankTrail/wildberries-monitor/internal/chart"
 )
 
 // fakeJobs answers as told and records what it was asked to do.
@@ -361,5 +363,180 @@ func TestPoll_IgnoresAnUpdateWithNothingInIt(t *testing.T) {
 	}
 	if got := sent(api); len(got) != 0 {
 		t.Errorf("the bot answered %v to updates it does not read", got)
+	}
+}
+
+// fakeCharts answers as told and records what it was asked for.
+type fakeCharts struct {
+	path    string
+	caption string
+	err     error
+
+	priceFor    []int64
+	positionFor []string
+}
+
+func (f *fakeCharts) Price(_ context.Context, nmID int64) (string, string, error) {
+	f.priceFor = append(f.priceFor, nmID)
+	return f.path, f.caption, f.err
+}
+
+func (f *fakeCharts) Position(_ context.Context, nmID int64, phrase string) (string, string, error) {
+	f.positionFor = append(f.positionFor, fmt.Sprintf("%d/%s", nmID, phrase))
+	return f.path, f.caption, f.err
+}
+
+// chartsFor wires a bot whose charts are a file that exists, so the send is
+// real as far as the fake API is concerned.
+func chartsFor(t *testing.T, api *fakeAPI, charts *fakeCharts) *Commands {
+	t.Helper()
+	if charts.path == "" && charts.err == nil {
+		charts.path = filepath.Join(t.TempDir(), "chart.png")
+		if err := os.WriteFile(charts.path, []byte("\x89PNG\r\n\x1a\n"), 0o600); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+	}
+	c := commandsFor(t, api, &fakeJobs{})
+	c.Charts = charts
+	return c
+}
+
+func TestPoll_SendsAPriceChartAsAPhotoRatherThanAFile(t *testing.T) {
+	// As a photo, because that is the difference between a chart somebody
+	// glances at and a chart somebody has to decide to open.
+	api := newFakeAPI(t)
+	queueUpdates(api, "/chart 123456789")
+
+	charts := &fakeCharts{caption: "Цена, 30 дней"}
+	c := chartsFor(t, api, charts)
+
+	if _, err := c.Poll(t.Context()); err != nil {
+		t.Fatalf("Poll: %v", err)
+	}
+	if want := []int64{123456789}; len(charts.priceFor) != 1 || charts.priceFor[0] != want[0] {
+		t.Errorf("спросили цену для %v, ожидалось %v", charts.priceFor, want)
+	}
+	if len(charts.positionFor) != 0 {
+		t.Errorf("без фразы спросили позицию: %v", charts.positionFor)
+	}
+	if len(api.paths) < 2 || !strings.HasSuffix(api.paths[1], "sendPhoto") {
+		t.Errorf("график ушёл в %v, ожидался sendPhoto", api.paths)
+	}
+}
+
+func TestPoll_APhraseAfterTheProductAsksForThePositionChart(t *testing.T) {
+	// A position exists only in relation to something searched for, so the
+	// phrase is what turns "how much does it cost" into "where does it come
+	// up" — and a phrase with spaces in it is the normal case.
+	api := newFakeAPI(t)
+	queueUpdates(api, "/chart 123456789 кофемолка ручная")
+
+	charts := &fakeCharts{}
+	c := chartsFor(t, api, charts)
+
+	if _, err := c.Poll(t.Context()); err != nil {
+		t.Fatalf("Poll: %v", err)
+	}
+	if want := "123456789/кофемолка ручная"; len(charts.positionFor) != 1 || charts.positionFor[0] != want {
+		t.Errorf("спросили позицию для %v, ожидалось %q", charts.positionFor, want)
+	}
+	if len(charts.priceFor) != 0 {
+		t.Errorf("с фразой спросили цену: %v", charts.priceFor)
+	}
+}
+
+func TestPoll_TakesALinkWhereItTakesAnArticle(t *testing.T) {
+	// What a person actually has in the clipboard.
+	api := newFakeAPI(t)
+	queueUpdates(api, "/chart https://www.wildberries.ru/catalog/123456789/detail.aspx")
+
+	charts := &fakeCharts{}
+	c := chartsFor(t, api, charts)
+
+	if _, err := c.Poll(t.Context()); err != nil {
+		t.Fatalf("Poll: %v", err)
+	}
+	if len(charts.priceFor) != 1 || charts.priceFor[0] != 123456789 {
+		t.Errorf("из ссылки взяли %v", charts.priceFor)
+	}
+}
+
+func TestPoll_NoHistoryYetIsAnAnswerAndNotAFault(t *testing.T) {
+	// The ordinary answer for a product added an hour ago. Reported as an
+	// error, it sends somebody looking for a broken program.
+	for _, c := range []struct {
+		name    string
+		text    string
+		wantsay string
+	}{
+		{"цена", "/chart 123456789", "истории цены"},
+		{"позиция", "/chart 123456789 кофемолка", "позиций по фразе"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			api := newFakeAPI(t)
+			queueUpdates(api, c.text)
+
+			cmd := chartsFor(t, api, &fakeCharts{err: chart.ErrNoData})
+			if _, err := cmd.Poll(t.Context()); err != nil {
+				t.Fatalf("Poll: %v", err)
+			}
+
+			said := sent(api)
+			if len(said) != 1 {
+				t.Fatalf("ответов: %v", said)
+			}
+			if !strings.Contains(said[0], c.wantsay) {
+				t.Errorf("ответ %q не говорит про %q", said[0], c.wantsay)
+			}
+			if strings.Contains(said[0], "Не удалось") {
+				t.Errorf("отсутствие истории подано как сбой: %q", said[0])
+			}
+		})
+	}
+}
+
+func TestPoll_AChartOfNothingIdentifiableIsRefusedWithTheFormat(t *testing.T) {
+	// "/chart" alone and "/chart кофемолка" are both what a person tries
+	// first. Either way the answer has to say what the command wants.
+	for _, text := range []string{"/chart", "/chart кофемолка", "/chart 0"} {
+		api := newFakeAPI(t)
+		queueUpdates(api, text)
+
+		charts := &fakeCharts{}
+		c := chartsFor(t, api, charts)
+		if _, err := c.Poll(t.Context()); err != nil {
+			t.Fatalf("Poll: %v", err)
+		}
+
+		said := sent(api)
+		if len(said) != 1 || !strings.Contains(said[0], "/chart 123456789") {
+			t.Errorf("%q ответили %v — без примера", text, said)
+		}
+		if len(charts.priceFor)+len(charts.positionFor) != 0 {
+			t.Errorf("%q всё равно пошло рисовать", text)
+		}
+	}
+}
+
+func TestPoll_SaysSoWhenTheBuildHasNoCharts(t *testing.T) {
+	api := newFakeAPI(t)
+	queueUpdates(api, "/chart 123456789")
+
+	c := commandsFor(t, api, &fakeJobs{})
+	if _, err := c.Poll(t.Context()); err != nil {
+		t.Fatalf("Poll: %v", err)
+	}
+	if said := sent(api); len(said) != 1 || !strings.Contains(said[0], "недоступны") {
+		t.Errorf("ответ без графиков: %v", said)
+	}
+}
+
+func TestHelp_MentionsEveryCommandTheBotAnswers(t *testing.T) {
+	// A command nobody is told about is a command nobody uses, and the help is
+	// the only place the bot describes itself.
+	for _, command := range []string{"/jobs", "/run", "/stop", "/export", "/chart"} {
+		if !strings.Contains(helpText, command) {
+			t.Errorf("в справке нет %s", command)
+		}
 	}
 }

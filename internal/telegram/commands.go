@@ -4,11 +4,15 @@ package telegram
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/BlankTrail/wildberries-monitor/internal/chart"
+	"github.com/BlankTrail/wildberries-monitor/wb"
 )
 
 // This file is the incoming half: spec section 8.3's "status and control of
@@ -59,6 +63,21 @@ type Jobs interface {
 	Stop(ctx context.Context, id int64) error
 }
 
+// Charts draws the two pictures spec section 8.3 asks for.
+//
+// Both return the path of a file to send, which is the contract Export already
+// uses: this package does not decide where temporary files live, and the thing
+// that made the file is the thing that knows when to remove it.
+//
+// The caption comes back with the path rather than being composed here, and
+// that is the chart package's doing: it draws no letters at all, so every word
+// about the picture — which product, which region, over what period — belongs
+// to whoever has that knowledge, which is not this package.
+type Charts interface {
+	Price(ctx context.Context, nmID int64) (path, caption string, err error)
+	Position(ctx context.Context, nmID int64, phrase string) (path, caption string, err error)
+}
+
 // Commands answers messages sent to the bot.
 type Commands struct {
 	Bot  *Bot
@@ -67,6 +86,8 @@ type Commands struct {
 	// offers and returns the path of the file to send. The caller deletes it;
 	// this package does not decide where temporary files live.
 	Export func(ctx context.Context, format string) (path string, err error)
+	// Charts is nil in a build without them, which /chart answers plainly.
+	Charts Charts
 
 	// Allowed reports whether this chat may give orders.
 	//
@@ -188,6 +209,9 @@ func (c *Commands) handle(ctx context.Context, u Update) error {
 
 	case "/export":
 		return c.replyExport(ctx, u, argument, reply)
+
+	case "/chart", "/график":
+		return c.replyChart(ctx, u, argument, reply)
 	}
 
 	// An unknown command is answered rather than swallowed. A bot that says
@@ -199,7 +223,9 @@ const helpText = `Что я умею:
 /jobs — список заданий и что сейчас идёт
 /run 3 — запустить задание 3
 /stop 3 — остановить задание 3
-/export csv — прислать результаты файлом (csv, xlsx, json, jsonl, sqlite)`
+/export csv — прислать результаты файлом (csv, xlsx, json, jsonl, sqlite)
+/chart 123456789 — график цены товара (можно вставить ссылку)
+/chart 123456789 кофемолка — график его позиции по фразе`
 
 func (c *Commands) replyJobs(ctx context.Context, _ Update, reply func(string) error) error {
 	if c.Jobs == nil {
@@ -245,6 +271,53 @@ func (c *Commands) replyExport(ctx context.Context, u Update, format string, rep
 		return reply("Не удалось собрать выгрузку: " + err.Error())
 	}
 	return c.Bot.SendDocument(ctx, c.address(u), "Результаты, формат "+format, path)
+}
+
+// replyChart sends one of the two pictures.
+//
+// Which one is decided by whether a phrase follows the product: a position
+// exists only in relation to something searched for, so a phrase is what turns
+// "how much does it cost" into "where does it come up". One command rather than
+// two, because that is one thing to remember and the argument already says
+// which is meant.
+func (c *Commands) replyChart(ctx context.Context, u Update, argument string, reply func(string) error) error {
+	if c.Charts == nil {
+		return reply("Графики недоступны в этой сборке.")
+	}
+
+	// The product first, the rest of the line as the phrase. Split this way
+	// round because a phrase can have spaces in it and a product cannot.
+	head, phrase, _ := strings.Cut(argument, " ")
+	nmID, ok := wb.NmID(head)
+	if !ok {
+		return reply("Нужен артикул или ссылка на товар: /chart 123456789")
+	}
+	phrase = strings.TrimSpace(phrase)
+
+	var (
+		path, caption string
+		err           error
+	)
+	if phrase == "" {
+		path, caption, err = c.Charts.Price(ctx, nmID)
+	} else {
+		path, caption, err = c.Charts.Position(ctx, nmID, phrase)
+	}
+
+	if err != nil {
+		// Having no history yet is the ordinary answer for a product added an
+		// hour ago, not a fault — and reported as one it sends somebody looking
+		// for a broken program.
+		if errors.Is(err, chart.ErrNoData) {
+			if phrase == "" {
+				return reply(fmt.Sprintf("По товару %d пока нет истории цены.", nmID))
+			}
+			return reply(fmt.Sprintf("По товару %d пока нет позиций по фразе «%s».", nmID, phrase))
+		}
+		return reply("Не удалось построить график: " + err.Error())
+	}
+
+	return c.Bot.SendPhoto(ctx, c.address(u), caption, path)
 }
 
 // address is where to answer, keeping a forum topic if the message came from

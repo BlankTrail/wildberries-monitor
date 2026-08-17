@@ -29,9 +29,10 @@ import (
 
 // Sender is one way to deliver a message.
 //
-// The three verbs are exactly what the product needs of Telegram: say
-// something, hand over a file, and prove the path works before committing to
-// it. Anything else a transport can do is that transport's business.
+// The four verbs are exactly what the product needs of Telegram: say
+// something, hand over a file, show a picture, and prove the path works before
+// committing to it. Anything else a transport can do is that transport's
+// business.
 type Sender interface {
 	// Name is what the settings screen shows. "Which path is my Telegram on"
 	// is a question the user asks, and an unnamed rung can only be described
@@ -45,6 +46,11 @@ type Sender interface {
 	Check(ctx context.Context) error
 	SendMessage(ctx context.Context, chat, text string) error
 	SendDocument(ctx context.Context, chat, caption, path string) error
+	// SendPhoto shows an image in the conversation instead of offering it for
+	// download. On this rung the difference is one form field; on the interface
+	// it is the difference between a chart somebody glances at and a chart
+	// somebody has to decide to open.
+	SendPhoto(ctx context.Context, chat, caption, path string) error
 }
 
 // Ladder tries senders in order and remembers the one that worked.
@@ -100,6 +106,11 @@ func (l *Ladder) SendMessage(ctx context.Context, chat, text string) error {
 // SendDocument delivers a file over the remembered rung, or finds one.
 func (l *Ladder) SendDocument(ctx context.Context, chat, caption, path string) error {
 	return l.deliver(ctx, func(s Sender) error { return s.SendDocument(ctx, chat, caption, path) })
+}
+
+// SendPhoto shows an image over the remembered rung, or finds one.
+func (l *Ladder) SendPhoto(ctx context.Context, chat, caption, path string) error {
+	return l.deliver(ctx, func(s Sender) error { return s.SendPhoto(ctx, chat, caption, path) })
 }
 
 // deliver sends over the remembered rung, or finds one.

@@ -62,8 +62,11 @@ check passes.
 * **Результаты** — a table of what was collected, and the same data as a file:
   CSV, XLSX, JSON, JSONL or a SQLite database. Four of the five stream; the
   fifth cannot, because a SQLite file is finished by seeking back to its header.
-* **Telegram** — notifications, and a bot that answers `/jobs`, `/run`, `/stop`
-  and `/export`. It reaches Telegram directly where that works and through your
+* **Telegram** — notifications, and a bot that answers `/jobs`, `/run`, `/stop`,
+  `/export` and `/chart` — the last one sending a price or search-position chart
+  as a photo, drawn without a plotting dependency and captioned rather than
+  labelled, so every word stays selectable text.
+  It reaches Telegram directly where that works and through your
   BlankTrail port where it does not, and the settings screen shows which.
 
 ## What it does not do

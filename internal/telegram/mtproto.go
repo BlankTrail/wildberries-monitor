@@ -88,6 +88,7 @@ const (
 	OpCheck    = "check"
 	OpMessage  = "message"
 	OpDocument = "document"
+	OpPhoto    = "photo"
 )
 
 // ErrNoAppCredentials is returned when this rung has not been given the
@@ -120,13 +121,23 @@ func (m *MTProto) SendMessage(ctx context.Context, chat, text string) error {
 // of an aggregated notification and can be a megabyte of CSV, on a machine
 // already running a scraper.
 func (m *MTProto) SendDocument(ctx context.Context, chat, caption, path string) error {
+	return m.sendFile(ctx, OpDocument, chat, caption, path)
+}
+
+// SendPhoto delivers an image, shown in the conversation rather than as
+// something to download.
+func (m *MTProto) SendPhoto(ctx context.Context, chat, caption, path string) error {
+	return m.sendFile(ctx, OpPhoto, chat, caption, path)
+}
+
+func (m *MTProto) sendFile(ctx context.Context, kind, chat, caption, path string) error {
 	// Checked before the session comes up: logging in to discover the file is
 	// not there spends a rate-limited login on a local mistake.
 	if _, err := os.Stat(path); err != nil {
 		return fmt.Errorf("telegram: attachment: %w", err)
 	}
 	return m.exchange(ctx, Operation{
-		Kind: OpDocument, Chat: chat, Text: truncateCaption(caption), Path: path,
+		Kind: kind, Chat: chat, Text: truncateCaption(caption), Path: path,
 	})
 }
 
@@ -215,6 +226,10 @@ func (m *MTProto) perform(ctx context.Context, api *tg.Client, op Operation) err
 	var captions []message.StyledTextOption
 	if op.Text != "" {
 		captions = append(captions, styling.Plain(op.Text))
+	}
+	if op.Kind == OpPhoto {
+		_, err = sender.To(peer).Media(ctx, message.UploadedPhoto(up, captions...))
+		return err
 	}
 	doc := message.UploadedDocument(up, captions...).Filename(filepath.Base(op.Path))
 	_, err = sender.To(peer).Media(ctx, doc)

@@ -36,6 +36,17 @@ func DefaultRetention() Retention {
 // SetRetention replaces this store's thresholds.
 func (s *Store) SetRetention(r Retention) { s.retention = r }
 
+// Retention is what this store is currently thinning by.
+//
+// Readable because AnchorEvery is not only a writing rule: it is the promise
+// that a series has a row at least that often, and anything drawing a series
+// has to know it to tell a price that held from a stretch nobody collected.
+//
+// The thresholds in force, not the field: a store nobody has configured thins
+// by the defaults, and a getter that answered zero for it would have every
+// caller re-implement the substitution below.
+func (s *Store) Retention() Retention { return s.retentionOrDefault() }
+
 // retentionOrDefault is the thresholds in force, filling in the defaults for
 // any that were left at zero.
 //

@@ -51,6 +51,14 @@ func (s *step) SendMessage(_ context.Context, _, text string) error {
 }
 
 func (s *step) SendDocument(context.Context, string, string, string) error {
+	return s.sendFile()
+}
+
+func (s *step) SendPhoto(context.Context, string, string, string) error {
+	return s.sendFile()
+}
+
+func (s *step) sendFile() error {
 	s.mu.Lock()
 	s.sends++
 	fail := s.sendFail

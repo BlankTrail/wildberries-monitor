@@ -102,6 +102,24 @@ func (b *Bot) SendMessage(ctx context.Context, chat, text string) error {
 // CSV. Read into memory first, that is a megabyte per queued message on a
 // machine that is already running a scraper.
 func (b *Bot) SendDocument(ctx context.Context, chat, caption, path string) error {
+	return b.sendFile(ctx, "sendDocument", "document", chat, caption, path)
+}
+
+// SendPhoto delivers an image to one chat, shown in the conversation rather
+// than as something to download.
+//
+// Which is the whole difference, and it is why charts go this way: spec section
+// 8.3 wants a price chart in the chat, and a chart behind a tap is a chart
+// nobody glances at. The cost is Telegram's own recompression, which is why the
+// chart package draws thick lines and a large font instead of hairlines.
+func (b *Bot) SendPhoto(ctx context.Context, chat, caption, path string) error {
+	return b.sendFile(ctx, "sendPhoto", "photo", chat, caption, path)
+}
+
+// sendFile is the multipart body both of those need. Method and field are all
+// that differ, and writing the pipe out twice would be two places to get the
+// forum-thread suffix wrong.
+func (b *Bot) sendFile(ctx context.Context, method, field, chat, caption, path string) error {
 	f, err := os.Open(path)
 	if err != nil {
 		return fmt.Errorf("telegram: attachment: %w", err)
@@ -131,7 +149,7 @@ func (b *Bot) SendDocument(ctx context.Context, chat, caption, path string) erro
 			}
 		}
 		var part io.Writer
-		if part, err = mw.CreateFormFile("document", filepath.Base(path)); err != nil {
+		if part, err = mw.CreateFormFile(field, filepath.Base(path)); err != nil {
 			return
 		}
 		if _, err = io.Copy(part, f); err != nil {
@@ -140,7 +158,7 @@ func (b *Bot) SendDocument(ctx context.Context, chat, caption, path string) erro
 		err = mw.Close()
 	}()
 
-	return b.post(ctx, "sendDocument", mw.FormDataContentType(), pr, nil)
+	return b.post(ctx, method, mw.FormDataContentType(), pr, nil)
 }
 
 // call posts a form-encoded request.

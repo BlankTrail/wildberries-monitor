@@ -157,7 +157,8 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 	}
 
 	a.Commands = &telegram.Commands{
-		Bot: a.Bot,
+		Bot:    a.Bot,
+		Charts: botCharts{a},
 		LoadOffset: func(ctx context.Context) (int64, error) {
 			// A stored value this cannot read means zero, which replays what
 			// Telegram still holds — noisy but not wrong. Refusing to poll at

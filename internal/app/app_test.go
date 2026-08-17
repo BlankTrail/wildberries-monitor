@@ -183,6 +183,7 @@ func (stubSender) Name() string                                               { 
 func (stubSender) Check(context.Context) error                                { return nil }
 func (stubSender) SendMessage(context.Context, string, string) error          { return nil }
 func (stubSender) SendDocument(context.Context, string, string, string) error { return nil }
+func (stubSender) SendPhoto(context.Context, string, string, string) error    { return nil }
 
 func TestReloadTelegram_NewCredentialsForgetTheRungTheOldOnesUsed(t *testing.T) {
 	// New credentials are a new bot. The rung that worked for the old ones
