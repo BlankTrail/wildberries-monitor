@@ -20,7 +20,12 @@ go build ./cmd/wbmon
 
 On Windows the archive also carries `wbmon-tray.exe`: the same program with no
 console window and an icon in the notification area, whose menu opens the
-panel, pauses collection and quits. It is the one to put in autostart. There is
+panel, pauses collection and quits. Double-clicked, it opens the panel straight
+away — with nothing on screen but an icon, a program that started and showed
+nothing is one you cannot tell from a program that failed; started at login it
+does not, because a browser window appearing by itself every morning is the
+fastest way to make somebody turn the tray off, and the autostart entry passes
+`-open=false` for exactly that. It is the one to put in autostart. There is
 no tray on macOS or Linux — the packages that draw one need CGO there, and CGO
 would end the single-machine cross-compile this project is built around; those
 platforms get the same panel, started by a launchd or systemd unit.

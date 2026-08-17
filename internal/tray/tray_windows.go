@@ -23,6 +23,7 @@ var (
 	user32   = windows.NewLazySystemDLL("user32.dll")
 	shell32  = windows.NewLazySystemDLL("shell32.dll")
 	kernel32 = windows.NewLazySystemDLL("kernel32.dll")
+	gdi32    = windows.NewLazySystemDLL("gdi32.dll")
 
 	procRegisterClassEx     = user32.NewProc("RegisterClassExW")
 	procCreateWindowEx      = user32.NewProc("CreateWindowExW")
@@ -40,6 +41,11 @@ var (
 	procGetCursorPos        = user32.NewProc("GetCursorPos")
 	procSetForegroundWindow = user32.NewProc("SetForegroundWindow")
 	procLoadIcon            = user32.NewProc("LoadIconW")
+	procCreateIconIndirect  = user32.NewProc("CreateIconIndirect")
+	procCreateDIBSection    = gdi32.NewProc("CreateDIBSection")
+	procCreateBitmap        = gdi32.NewProc("CreateBitmap")
+	procDeleteObject        = gdi32.NewProc("DeleteObject")
+	procGetSystemMetrics    = user32.NewProc("GetSystemMetrics")
 	procRegisterWindowMsg   = user32.NewProc("RegisterWindowMessageW")
 	procShellNotifyIcon     = shell32.NewProc("Shell_NotifyIconW")
 	procGetModuleHandle     = kernel32.NewProc("GetModuleHandleW")
@@ -272,23 +278,126 @@ func (i *Icon) remove(window windows.Handle) {
 	procShellNotifyIcon.Call(nimDelete, uintptr(unsafe.Pointer(data)))
 }
 
-// notifyData fills the shell's structure.
+// smallIconSize is what the notification area wants, in pixels.
 //
-// The icon is the stock application one. This program ships no .ico and no
-// resource section: an icon compiled in needs a resource step in the build, and
-// the release workflow cross-compiles six platforms from one Linux runner with
-// nothing but the go tool. A recognisable icon is worth having and is worth
-// having properly, with go-winres in the build — which is a change to the
-// release pipeline, not to this file.
+// Asked rather than assumed: it follows the screen's scaling, so it is sixteen
+// on one machine and twenty-four or thirty-two on another, and an icon made at
+// sixteen and stretched is the blurred one everybody recognises.
+const smCXSmIcon = 49
+
+func smallIconSize() int {
+	n, _, _ := procGetSystemMetrics.Call(smCXSmIcon)
+	if n < 8 || n > 256 {
+		// A metric this far out is a system this program has no picture of.
+		// Sixteen is what the notification area has wanted for thirty years.
+		return 16
+	}
+	return int(n)
+}
+
+// iconInfo is what CreateIconIndirect takes: two bitmaps and the fact that this
+// is an icon rather than a cursor.
+type iconInfo struct {
+	IsIcon   int32
+	XHotspot uint32
+	YHotspot uint32
+	Mask     windows.Handle
+	Colour   windows.Handle
+}
+
+// bitmapInfoHeader describes the colour bitmap to CreateDIBSection.
+type bitmapInfoHeader struct {
+	Size          uint32
+	Width         int32
+	Height        int32
+	Planes        uint16
+	BitCount      uint16
+	Compression   uint32
+	SizeImage     uint32
+	XPelsPerMeter int32
+	YPelsPerMeter int32
+	ClrUsed       uint32
+	ClrImportant  uint32
+}
+
+const dibRGBColors = 0
+
+// makeIcon draws this program's own mark at the size the shell asked for.
+//
+// Through a DIB section and CreateIconIndirect rather than the older
+// CreateIcon, and the difference is the one thing the mark depends on: a 32-bit
+// bitmap handed to CreateIcon has its alpha channel ignored, so the rounded
+// corners come out as black squares and the soft edge as a dark fringe. A DIB
+// section is what the shell blends properly.
+//
+// The pixels come from mark.go rather than from a file — see the reasoning
+// there. Both bitmaps are released as soon as the icon exists: CreateIconIndirect
+// copies them, and the handles are a fixed cost per icon otherwise.
+//
+// A failure is not fatal and is not reported: the caller falls back to the stock
+// application icon, which is worse-looking and entirely functional, and an error
+// box about an icon is worse than an ugly icon.
+func makeIcon() windows.Handle {
+	size := smallIconSize()
+
+	header := bitmapInfoHeader{
+		Width: int32(size),
+		// Negative, which is how a DIB says its first row is the top one. The
+		// alternative is a mark drawn upside down.
+		Height:   -int32(size),
+		Planes:   1,
+		BitCount: 32,
+	}
+	header.Size = uint32(unsafe.Sizeof(header))
+
+	var bits unsafe.Pointer
+	colour, _, _ := procCreateDIBSection.Call(
+		0, uintptr(unsafe.Pointer(&header)), dibRGBColors,
+		uintptr(unsafe.Pointer(&bits)), 0, 0)
+	if colour == 0 || bits == nil {
+		return 0
+	}
+	defer procDeleteObject.Call(colour)
+
+	pixels := markPixels(size)
+	copy(unsafe.Slice((*byte)(bits), len(pixels)), pixels)
+
+	// The mask is required and is all zeroes: with a 32-bit colour bitmap the
+	// alpha channel is what shapes the icon, and a mask of ones would hide it
+	// entirely.
+	mask := markMask(size)
+	maskBitmap, _, _ := procCreateBitmap.Call(
+		uintptr(size), uintptr(size), 1, 1, uintptr(unsafe.Pointer(&mask[0])))
+	if maskBitmap == 0 {
+		return 0
+	}
+	defer procDeleteObject.Call(maskBitmap)
+
+	info := iconInfo{
+		IsIcon: 1,
+		Mask:   windows.Handle(maskBitmap),
+		Colour: windows.Handle(colour),
+	}
+	handle, _, _ := procCreateIconIndirect.Call(uintptr(unsafe.Pointer(&info)))
+	return windows.Handle(handle)
+}
+
+// notifyData fills the shell's structure.
 func (i *Icon) notifyData(window windows.Handle) (*notifyIconData, error) {
-	icon, _, _ := procLoadIcon.Call(0, idiApplication)
+	icon := makeIcon()
+	if icon == 0 {
+		// The stock application icon: recognisable as "a program", which is
+		// better than a gap in the tray where an icon should be.
+		stock, _, _ := procLoadIcon.Call(0, idiApplication)
+		icon = windows.Handle(stock)
+	}
 
 	data := &notifyIconData{
 		Wnd:             window,
 		ID:              1,
 		Flags:           nifMessage | nifIcon | nifTip,
 		CallbackMessage: wmTrayCallback,
-		Icon:            windows.Handle(icon),
+		Icon:            icon,
 	}
 	data.Size = uint32(unsafe.Sizeof(*data))
 

@@ -33,11 +33,15 @@ func main() {
 	flag.IntVar(&cfg.Port, "port", 8760, "порт панели")
 	flag.BoolVar(&cfg.LAN, "lan", false, "открыть панель за пределы этой машины")
 	flag.DurationVar(&cfg.Tick, "tick", time.Minute, "как часто просыпаются фоновые задачи")
-	// The browser is opened from the menu rather than at start. Started at
-	// login — which is what autostart does — a browser window appearing by
-	// itself every morning is the fastest way to make somebody turn the tray
-	// off.
-	open := flag.Bool("open", false, "открыть браузер при запуске")
+	// Opened at start, because that is what double-clicking a program is for:
+	// with no console and nothing but an icon, a person who started it and saw
+	// nothing has no way to tell it from a program that failed.
+	//
+	// Off is one flag away, and autostart passes it — see app.enableAutostart.
+	// Started at login, a browser window appearing by itself every morning is
+	// the fastest way to make somebody turn the tray off, and that is a
+	// different situation from the one above rather than the same one.
+	open := flag.Bool("open", true, "открыть браузер при запуске")
 	flag.Parse()
 	cfg.OpenBrowser = *open
 
