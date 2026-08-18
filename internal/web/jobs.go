@@ -397,32 +397,18 @@ func (s *Server) constructorHTML(r *http.Request) (string, error) {
 
 // kindPicker is the choice of what the job enumerates.
 //
-// Cards with a radio rather than a line in a dropdown: this choice decides
-// which half of the form even applies, and it is the one question here a
-// person cannot answer from a field name. Each card says what will be walked.
+// The one picker in the panel whose radios carry data-estimate: changing what
+// a job walks changes what it will cost, and the price is on the same screen.
 func kindPicker() string {
-	var b strings.Builder
-	b.WriteString(`<fieldset class="bt-fieldset bt-fieldset--inset bt-picker">`)
-	b.WriteString(`<legend>Что перечислять</legend>`)
-	for i, k := range job.Kinds() {
+	picks := make([]pick, 0, len(job.Kinds()))
+	for _, k := range job.Kinds() {
 		label := kindLabels[k]
 		if label == "" {
 			label = string(k)
 		}
-		// The first one is picked, so the form is never a blank that answers
-		// «kind "" is not one this build can run» to somebody who filled in
-		// everything the screen showed them.
-		checked := ""
-		if i == 0 {
-			checked = ` checked`
-		}
-		b.WriteString(`<label class="bt-pick"><input type="radio" name="kind" value="` +
-			html.EscapeString(string(k)) + `"` + checked + ` data-estimate>` +
-			`<span class="bt-pick__name">` + html.EscapeString(label) + `</span>` +
-			`<span class="bt-pick__what">` + html.EscapeString(kindWhat[k]) + `</span></label>`)
+		picks = append(picks, pick{Value: string(k), Label: label, What: kindWhat[k]})
 	}
-	b.WriteString(`</fieldset>`)
-	return b.String()
+	return picker("Что перечислять", "kind", " data-estimate", picks)
 }
 
 // phraseListField is the uploaded-file half of the phrase question.

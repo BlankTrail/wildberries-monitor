@@ -5,10 +5,13 @@ package web
 import (
 	"context"
 	"errors"
+	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/BlankTrail/wildberries-monitor/internal/store"
 )
@@ -319,5 +322,117 @@ func TestChannels_TheTableDoesNotPrintAProxyPassword(t *testing.T) {
 	// own in the query, where nothing can tell it from an ordinary parameter.
 	if strings.Contains(body, "p.example/rotate") {
 		t.Error("ссылка смены адреса напечатана в таблице")
+	}
+}
+
+func TestChannelForm_AsksOnlyForWhatTheChosenKindUses(t *testing.T) {
+	// Four kinds that need four different things: a list needs a path, a
+	// rotating proxy needs an entry point and a change link, a gateway needs
+	// a configuration name, and a direct connection needs nothing at all. All
+	// of it at once was a form where three quarters of the fields did nothing
+	// for whatever the user had picked.
+	srv := newServer(t)
+	body := get(t, srv, "/channels", "correct horse").Body.String()
+
+	if !strings.Contains(body, `data-switch="kind"`) {
+		t.Fatal("форма не сказала, за каким полем следовать")
+	}
+	for _, k := range channelKinds {
+		if !strings.Contains(body, `type="radio" name="kind" value="`+k.Kind+`"`) {
+			t.Errorf("вид %q нельзя выбрать", k.Kind)
+		}
+		// The description used to be one of four lines stacked under a
+		// dropdown. It belongs to its own card now, and a card without one
+		// is a choice made blind.
+		if k.Hint == "" || !strings.Contains(body, k.Hint) {
+			t.Errorf("вид %q без описания", k.Kind)
+		}
+	}
+
+	for _, c := range []struct {
+		name  string
+		kinds []string
+	}{
+		{"source", []string{store.ChannelList, store.ChannelRotating, store.ChannelGateway}},
+		{"default_scheme", []string{store.ChannelList, store.ChannelRotating}},
+		{"rotate_url", []string{store.ChannelRotating}},
+		{"rotate_min_interval", []string{store.ChannelRotating}},
+	} {
+		group := groupAround(body, `name="`+c.name+`"`)
+		if got := strings.Fields(group); !slices.Equal(got, c.kinds) {
+			t.Errorf("поле %q отнесено к %v, ожидалось %v", c.name, got, c.kinds)
+		}
+	}
+
+	// The name and the switch belong to every kind, including the direct
+	// connection, which asks for nothing else.
+	for _, name := range []string{"name", "enabled"} {
+		if group := groupAround(body, `name="`+name+`"`); group != "" {
+			t.Errorf("общее поле %q отнесено к видам %q", name, group)
+		}
+	}
+}
+
+func TestSaveChannel_KeepsOnlyWhatTheChosenKindUses(t *testing.T) {
+	// A hidden field still posts. Somebody fills in a rotation link, changes
+	// their mind and saves a gateway: kept, the link sits on a record nothing
+	// dials it from, on a screen that never shows it again.
+	srv := newServer(t)
+
+	form := channelFormValues(map[string]string{
+		"kind":                store.ChannelGateway,
+		"source":              "моя-конфигурация",
+		"rotate_url":          "https://provider.example/rotate?key=secret",
+		"rotate_min_interval": "90",
+		"default_scheme":      "socks5",
+	})
+	if w := postForm(t, srv, "/channels", form); w.Code != http.StatusOK {
+		t.Fatalf("сохранение = %d", w.Code)
+	}
+
+	saved, err := srv.Store.Channels(t.Context())
+	if err != nil {
+		t.Fatalf("Channels: %v", err)
+	}
+	if len(saved) != 1 {
+		t.Fatalf("сохранено прокси: %d", len(saved))
+	}
+	row := saved[0]
+	if row.Source != "моя-конфигурация" {
+		t.Errorf("имя конфигурации = %q", row.Source)
+	}
+	if row.RotateURL != "" {
+		t.Errorf("шлюз унёс ссылку смены: %q", row.RotateURL)
+	}
+	if row.RotateMinInterval != 0 {
+		t.Errorf("шлюз унёс интервал: %v", row.RotateMinInterval)
+	}
+	if row.DefaultScheme != "" {
+		t.Errorf("шлюз унёс схему: %q", row.DefaultScheme)
+	}
+
+	// And the rotating kind keeps all of it, or the trimming would be a
+	// feature that quietly loses what the user typed.
+	form = channelFormValues(map[string]string{
+		"name":                "ротируемый",
+		"kind":                store.ChannelRotating,
+		"source":              "host:1080",
+		"rotate_url":          "https://provider.example/rotate?key=secret",
+		"rotate_min_interval": "90",
+		"default_scheme":      "socks5",
+	})
+	if w := postForm(t, srv, "/channels", form); w.Code != http.StatusOK {
+		t.Fatalf("сохранение = %d", w.Code)
+	}
+	saved, err = srv.Store.Channels(t.Context())
+	if err != nil {
+		t.Fatalf("Channels: %v", err)
+	}
+	if len(saved) != 2 {
+		t.Fatalf("сохранено прокси: %d", len(saved))
+	}
+	rotating := saved[1]
+	if rotating.RotateURL == "" || rotating.RotateMinInterval != 90*time.Second || rotating.DefaultScheme != "socks5" {
+		t.Errorf("ротируемый потерял свои поля: %+v", rotating)
 	}
 }

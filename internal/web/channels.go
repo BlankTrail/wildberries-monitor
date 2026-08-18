@@ -203,38 +203,29 @@ func maskPassword(source string) string {
 func channelForm() string {
 	var b strings.Builder
 	b.WriteString(`<h3>Новый прокси</h3>`)
-	b.WriteString(`<form class="bt-fieldset" data-post="/channels" data-target="#channels-body">`)
+	b.WriteString(`<form class="bt-fieldset bt-form" data-post="/channels" data-target="#channels-body" data-switch="kind">`)
 
 	b.WriteString(field("Название",
 		`<input class="bt-input" name="name" required placeholder="список провайдера">`,
 		"По нему прокси узнаётся в логе прогона, и по нему же ему считается вес в смеси — так что двум записям одно имя давать не стоит."))
 
-	var kinds strings.Builder
-	kinds.WriteString(`<select class="bt-select" name="kind">`)
+	// The kind, as cards. Each carries its own description, so the four are no
+	// longer a wall of hints under a dropdown — that wall was here because
+	// nothing could swap a hint when the choice changed, and now something can.
+	picks := make([]pick, 0, len(channelKinds))
 	for _, k := range channelKinds {
-		kinds.WriteString(`<option value="` + html.EscapeString(k.Kind) + `">` +
-			html.EscapeString(k.Label) + `</option>`)
+		picks = append(picks, pick{Value: k.Kind, Label: k.Label, What: k.Hint})
 	}
-	kinds.WriteString(`</select>`)
+	b.WriteString(picker("Вид прокси", "kind", "", picks))
 
-	// The four descriptions as four lines rather than one paragraph. Without a
-	// script to swap a hint when the choice changes, all four have to be on
-	// screen at once — and run together they are a wall nobody reads, which is
-	// the same as having written none of them.
-	var hints strings.Builder
-	hints.WriteString(`<span class="bt-form-hint">`)
-	for i, k := range channelKinds {
-		if i > 0 {
-			hints.WriteString(`<br>`)
-		}
-		hints.WriteString(`<b>` + html.EscapeString(k.Label) + `</b> — ` + html.EscapeString(k.Hint))
-	}
-	hints.WriteString(`</span>`)
-	b.WriteString(field("Вид", kinds.String()+hints.String(), ""))
-
-	b.WriteString(field("Источник",
-		`<input class="bt-input" name="source" placeholder="C:\proxies\list.txt, https://provider.example/list.txt, socks5://user:pass@host:1080 или имя шлюза">`,
-		"Для списка — путь или адрес; для ротируемого — точка входа; для шлюза — имя конфигурации; для прямого — пусто."))
+	// Everything below belongs to some of the kinds and not the others. A
+	// direct connection asks for nothing at all: it is the machine's own
+	// address, and that is the whole of it.
+	b.WriteString(whenAny(
+		field("Источник",
+			`<input class="bt-input" name="source" placeholder="C:\proxies\list.txt, https://provider.example/list.txt, socks5://user:pass@host:1080 или имя шлюза">`,
+			"Путь или адрес списка, точка входа ротируемого, имя конфигурации шлюза — смотря что выбрано выше."),
+		store.ChannelList, store.ChannelRotating, store.ChannelGateway))
 
 	var schemes strings.Builder
 	schemes.WriteString(`<select class="bt-select" name="default_scheme">`)
@@ -246,15 +237,22 @@ func channelForm() string {
 		schemes.WriteString(`<option value="` + html.EscapeString(s) + `">` + html.EscapeString(label) + `</option>`)
 	}
 	schemes.WriteString(`</select>`)
-	b.WriteString(field("Схема для строк без неё", schemes.String(),
-		"Из пяти принимаемых написаний четыре схему не называют. Ошибиться здесь — это не ошибка разбора, а список, который весь выглядит мёртвым."))
+	// Asked of the two kinds that parse addresses out of what a person pasted.
+	b.WriteString(whenAny(
+		field("Схема для строк без неё", schemes.String(),
+			"Из пяти принимаемых написаний четыре схему не называют. Ошибиться здесь — это не ошибка разбора, а список, который весь выглядит мёртвым."),
+		store.ChannelList, store.ChannelRotating))
 
-	b.WriteString(field("Ссылка смены адреса",
+	var rotation strings.Builder
+	rotation.WriteString(`<div class="bt-form-grid">`)
+	rotation.WriteString(field("Ссылка смены адреса",
 		`<input class="bt-input" name="rotate_url" placeholder="https://provider.example/rotate?key=...">`,
-		"Только для ротируемого."))
-	b.WriteString(field("Не чаще, секунд",
+		"Без неё это один адрес, который никогда не меняется."))
+	rotation.WriteString(field("Не чаще, секунд",
 		`<input class="bt-input" name="rotate_min_interval" type="number" min="0" placeholder="90">`,
 		"Минимальный интервал, который держит провайдер. Дёрнуть ссылку чаще — потерять прокси, поэтому проверка её не дёргает вовсе."))
+	rotation.WriteString(`</div>`)
+	b.WriteString(whenAny(rotation.String(), store.ChannelRotating))
 
 	b.WriteString(field("Включён",
 		`<label class="bt-checkbox"><input type="checkbox" name="enabled" value="1" checked><span>участвует в сборе</span></label>`,
@@ -273,15 +271,28 @@ func (s *Server) saveChannel(w http.ResponseWriter, r *http.Request) {
 	}
 
 	row := store.ChannelRow{
-		Name:          strings.TrimSpace(r.PostFormValue("name")),
-		Kind:          r.PostFormValue("kind"),
-		Source:        strings.TrimSpace(r.PostFormValue("source")),
-		RotateURL:     strings.TrimSpace(r.PostFormValue("rotate_url")),
-		DefaultScheme: r.PostFormValue("default_scheme"),
-		Enabled:       r.PostFormValue("enabled") != "",
+		Name:    strings.TrimSpace(r.PostFormValue("name")),
+		Kind:    r.PostFormValue("kind"),
+		Enabled: r.PostFormValue("enabled") != "",
 	}
-	if seconds, err := strconv.Atoi(r.PostFormValue("rotate_min_interval")); err == nil && seconds > 0 {
-		row.RotateMinInterval = time.Duration(seconds) * time.Second
+
+	// Only the fields the chosen kind uses. The form shows one set at a time,
+	// and a field nobody can see must not be saved with the record: a rotation
+	// link left over from a kind somebody changed their mind about is a line
+	// nothing dials and the screen never shows again.
+	switch row.Kind {
+	case store.ChannelList:
+		row.Source = strings.TrimSpace(r.PostFormValue("source"))
+		row.DefaultScheme = r.PostFormValue("default_scheme")
+	case store.ChannelRotating:
+		row.Source = strings.TrimSpace(r.PostFormValue("source"))
+		row.DefaultScheme = r.PostFormValue("default_scheme")
+		row.RotateURL = strings.TrimSpace(r.PostFormValue("rotate_url"))
+		if seconds, err := strconv.Atoi(r.PostFormValue("rotate_min_interval")); err == nil && seconds > 0 {
+			row.RotateMinInterval = time.Duration(seconds) * time.Second
+		}
+	case store.ChannelGateway:
+		row.Source = strings.TrimSpace(r.PostFormValue("source"))
 	}
 
 	if _, err := s.Store.SaveChannel(r.Context(), row); err != nil {

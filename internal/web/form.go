@@ -54,3 +54,47 @@ func whenAny[T ~string](inner string, values ...T) string {
 	}
 	return `<div class="bt-when" data-when="` + strings.Join(names, " ") + `">` + inner + `</div>`
 }
+
+// pick is one choice in a picker: what it stores, what it is called, and what
+// choosing it will do.
+type pick struct {
+	Value string
+	Label string
+	What  string
+}
+
+// picker draws a choice as cards.
+//
+// Cards rather than a dropdown wherever the choice decides which of the
+// fields below it even apply: a line in a select cannot say what picking it
+// does, and the alternative — every description on screen at once under the
+// select — is a wall nobody reads, which is the same as having written none
+// of them.
+//
+// One builder for the three screens that have such a choice, because three
+// spellings of this markup are three places for the radio, the class names
+// and the attribute app.js reads to drift apart.
+//
+// attrs goes on every radio. It carries data-estimate on the one screen that
+// prices what it is about to do; the others have nothing to price, and a
+// stray data-estimate there would ask the job estimator about a rule.
+func picker(legend, field, attrs string, picks []pick) string {
+	var b strings.Builder
+	b.WriteString(`<fieldset class="bt-fieldset bt-fieldset--inset bt-picker">`)
+	b.WriteString(`<legend>` + html.EscapeString(legend) + `</legend>`)
+	for i, p := range picks {
+		// The first is picked, so the form is never a blank that refuses
+		// itself for a choice the screen never offered to make.
+		checked := ""
+		if i == 0 {
+			checked = ` checked`
+		}
+		b.WriteString(`<label class="bt-pick"><input type="radio" name="` +
+			html.EscapeString(field) + `" value="` + html.EscapeString(p.Value) + `"` +
+			checked + attrs + `>` +
+			`<span class="bt-pick__name">` + html.EscapeString(p.Label) + `</span>` +
+			`<span class="bt-pick__what">` + html.EscapeString(p.What) + `</span></label>`)
+	}
+	b.WriteString(`</fieldset>`)
+	return b.String()
+}

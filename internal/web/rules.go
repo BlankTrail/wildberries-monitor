@@ -83,21 +83,11 @@ func scopeOrder() []rules.ScopeKind {
 
 // scopePicker is the choice of who the rule watches.
 func scopePicker() string {
-	var b strings.Builder
-	b.WriteString(`<fieldset class="bt-fieldset bt-fieldset--inset bt-picker">`)
-	b.WriteString(`<legend>Кого накрывает</legend>`)
-	for i, sc := range scopeOrder() {
-		checked := ""
-		if i == 0 {
-			checked = ` checked`
-		}
-		b.WriteString(`<label class="bt-pick"><input type="radio" name="scope_kind" value="` +
-			html.EscapeString(string(sc)) + `"` + checked + `>` +
-			`<span class="bt-pick__name">` + html.EscapeString(scopeLabels[sc]) + `</span>` +
-			`<span class="bt-pick__what">` + html.EscapeString(scopeWhat[sc]) + `</span></label>`)
+	picks := make([]pick, 0, 4)
+	for _, sc := range scopeOrder() {
+		picks = append(picks, pick{Value: string(sc), Label: scopeLabels[sc], What: scopeWhat[sc]})
 	}
-	b.WriteString(`</fieldset>`)
-	return b.String()
+	return picker("Кого накрывает", "scope_kind", "", picks)
 }
 
 // rulesPage renders the whole screen.
