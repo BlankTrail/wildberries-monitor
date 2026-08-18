@@ -53,7 +53,7 @@ func TestChannels_SavesWhatWasFilledInAndShowsItBack(t *testing.T) {
 		t.Fatalf("сохранение = %d", w.Code)
 	}
 	body := w.Body.String()
-	if !strings.Contains(body, "Канал сохранён") {
+	if !strings.Contains(body, "Прокси сохранён") {
 		t.Errorf("нет подтверждения:\n%s", body)
 	}
 	for _, want := range []string{"список провайдера", "Список прокси", "provider.example", "socks5"} {
@@ -232,7 +232,12 @@ func TestChannels_TheTabIsThereAndItsScreenAnswers(t *testing.T) {
 
 	body := get(t, srv, "/", "correct horse").Body.String()
 	if !strings.Contains(body, `href="/channels"`) {
-		t.Error("вкладки «Каналы» нет в навигации")
+		t.Error("вкладки «Прокси» нет в навигации")
+	}
+	// Named for what it holds. The address stayed /channels because a link
+	// somebody saved should keep working, but nobody reads the address.
+	if !strings.Contains(body, ">Прокси<") {
+		t.Errorf("вкладка называется не «Прокси»:\n%s", body)
 	}
 	if got := get(t, srv, "/channels", "correct horse").Code; got != 200 {
 		t.Errorf("экран каналов = %d", got)

@@ -463,3 +463,120 @@ dialog.bt-modal > #settings-body {
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
+
+/* ---- конструкторы: выбор и поля под него -------------------------------- */
+
+/* [hidden] has to win. .bt-field and .bt-fieldset both set a display, and a
+   display rule beats the browser's own [hidden] — the same trap that once
+   left an empty dialog stretched across the top of every screen. */
+[hidden] {
+  display: none !important;
+}
+
+/* The type picker. Cards rather than a dropdown: the choice decides which
+   half of the form applies, so it is worth the room. */
+.bt[data-bt-theme="dashboard"] .bt-picker {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: var(--space-2);
+  background: var(--bg-card-2);
+}
+
+.bt[data-bt-theme="dashboard"] .bt-pick {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: var(--space-2);
+  align-items: start;
+  margin: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+  cursor: pointer;
+}
+
+.bt[data-bt-theme="dashboard"] .bt-pick input {
+  grid-row: 1 / span 2;
+  margin: .2rem 0 0;
+  accent-color: var(--accent);
+}
+
+.bt[data-bt-theme="dashboard"] .bt-pick__name {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.bt[data-bt-theme="dashboard"] .bt-pick__what {
+  font-size: .8rem;
+  line-height: 1.4;
+  color: var(--text-muted);
+}
+
+/* The picked card is stated in the card itself, not only in a radio dot six
+   pixels across. */
+.bt[data-bt-theme="dashboard"] .bt-pick:has(input:checked) {
+  border-color: var(--accent);
+  background: #faf5ff;
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.bt[data-bt-theme="dashboard"] .bt-pick:focus-within {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Fields that fit side by side sit side by side. A form of fifteen stacked
+   inputs is a form people scroll past rather than read. */
+.bt[data-bt-theme="dashboard"] .bt-form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 0 var(--space-4);
+  align-items: start;
+}
+
+.bt[data-bt-theme="dashboard"] .bt-form-head {
+  margin: var(--space-5) 0 var(--space-2);
+  padding-bottom: var(--space-2);
+  font-size: .95rem;
+  font-weight: 600;
+  color: var(--text);
+  border-bottom: 1px solid var(--border);
+}
+
+.bt[data-bt-theme="dashboard"] .bt-form-head:first-of-type {
+  margin-top: var(--space-3);
+}
+
+@media (max-width: 720px) {
+  .bt[data-bt-theme="dashboard"] .bt-picker {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* One condition: what to compare, how, and against what — a row, because
+   the three parts are one sentence and stacked they read as three questions. */
+.bt[data-bt-theme="dashboard"] .bt-cond {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 5rem) minmax(0, 1fr);
+  gap: var(--space-2);
+}
+
+/* The upload: a file input and the button that sends it, side by side. A
+   button in a .bt-field is stretched by the column it sits in, and a
+   full-width bar reads as a section rather than as one action. */
+.bt[data-bt-theme="dashboard"] .bt-upload {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.bt[data-bt-theme="dashboard"] .bt-upload .bt-input {
+  flex: 1 1 16rem;
+}
+
+@media (max-width: 720px) {
+  .bt[data-bt-theme="dashboard"] .bt-cond {
+    grid-template-columns: 1fr;
+  }
+}

@@ -183,7 +183,7 @@ func (s *Server) writeSettingsForm(w http.ResponseWriter, r *http.Request, notic
 
 // saveSettings stores what the dialog submitted.
 func (s *Server) saveSettings(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
+	if err := parseForm(r); err != nil {
 		http.Error(w, "settings: "+err.Error(), http.StatusBadRequest)
 		return
 	}

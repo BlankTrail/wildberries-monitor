@@ -43,6 +43,20 @@ var kindLabels = map[job.Kind]string{
 	job.KindPhraseAds: "Реклама в выдаче по фразе",
 }
 
+// kindWhat says what picking a kind will make the job walk.
+//
+// Beside kindLabels rather than folded into it: the label names the kind
+// wherever a job is listed, and this line is what a person needs while
+// choosing. Both are checked against job.Kinds by a test, because a kind
+// added without a card is a kind nobody can pick.
+var kindWhat = map[job.Kind]string{
+	job.KindPhrase:    "Страницы выдачи по каждой фразе: какие товары там стоят и на каком месте.",
+	job.KindSeller:    "Всё, что выставил один продавец — по его артикулу.",
+	job.KindBrand:     "Все товары бренда — по его идентификатору.",
+	job.KindArticles:  "Только перечисленные артикулы, без поиска.",
+	job.KindPhraseAds: "Рекламные полки в выдаче по фразе: чей товар и на каком месте.",
+}
+
 var groupLabels = map[wb.FieldGroup]string{
 	wb.GroupBase:       "Основное",
 	wb.GroupStock:      "Остатки",
@@ -310,43 +324,66 @@ func (s *Server) constructorHTML(r *http.Request) (string, error) {
 
 	var b strings.Builder
 	b.WriteString(`<section class="bt-card"><h2>Новое задание</h2>`)
-	b.WriteString(`<form class="bt-fieldset" data-post="/jobs" data-target="#main">`)
+	// data-switch names the field the rest of the form follows: each group
+	// marked data-when belongs to one kind or a few, and app.js shows the
+	// ones that apply. Without the script they all stay visible, which is
+	// what this form was before, and the server still reads only what the
+	// chosen kind uses.
+	b.WriteString(`<form class="bt-fieldset bt-form" data-post="/jobs" data-target="#main" data-switch="kind">`)
 
-	b.WriteString(field("Название", `<input class="bt-input" name="name" required placeholder="Весенние платья, Москва">`, ""))
+	b.WriteString(field("Название", `<input class="bt-input" name="name" required placeholder="Весенние платья, Москва">`,
+		"Под этим именем задание будет в списке и в отчётах."))
 
-	var kinds strings.Builder
-	kinds.WriteString(`<select class="bt-select" name="kind" data-estimate>`)
-	for _, k := range job.Kinds() {
-		label := kindLabels[k]
-		if label == "" {
-			label = string(k)
-		}
-		kinds.WriteString(`<option value="` + html.EscapeString(string(k)) + `">` + html.EscapeString(label) + `</option>`)
-	}
-	kinds.WriteString(`</select>`)
-	b.WriteString(field("Что собирать", kinds.String(), "Тип решает, что задание перечисляет. Что именно снимать с каждого товара — ниже, галочками."))
+	b.WriteString(kindPicker())
 
-	b.WriteString(field("Фразы",
-		`<textarea class="bt-textarea" name="phrases" rows="4" data-estimate placeholder="по одной в строке"></textarea>`,
-		"Для нескольких фраз. Большой файл — через загрузку ниже."))
+	// The parameters, one group per kind. What a kind does not use is out of
+	// the way rather than sitting empty in a column of fifteen fields.
+	b.WriteString(whenAny(
+		field("Фразы",
+			`<textarea class="bt-textarea" name="phrases" rows="4" data-estimate placeholder="по одной в строке"></textarea>`,
+			"По одной в строке. Большой список — файлом ниже.")+
+			s.phraseListField(lists),
+		job.KindPhrase, job.KindPhraseAds))
 
-	b.WriteString(s.phraseListField(lists))
+	b.WriteString(whenAny(
+		field("Артикул продавца", `<input class="bt-input" name="supplier_id" type="number" min="1" data-estimate>`,
+			"Число из адреса витрины продавца."),
+		job.KindSeller))
 
-	b.WriteString(field("Артикул продавца", `<input class="bt-input" name="supplier_id" type="number" min="1" data-estimate>`, "Для витрины продавца."))
-	b.WriteString(field("Идентификатор бренда", `<input class="bt-input" name="brand_id" type="number" min="1" data-estimate>`, "Для товаров бренда."))
-	b.WriteString(field("Артикулы", `<textarea class="bt-textarea" name="articles" rows="3" data-estimate placeholder="по одному в строке"></textarea>`, "Для списка артикулов."))
+	b.WriteString(whenAny(
+		field("Идентификатор бренда", `<input class="bt-input" name="brand_id" type="number" min="1" data-estimate>`,
+			"Число из адреса страницы бренда."),
+		job.KindBrand))
 
+	b.WriteString(whenAny(
+		field("Артикулы", `<textarea class="bt-textarea" name="articles" rows="3" data-estimate placeholder="по одному в строке"></textarea>`,
+			"По одному в строке. Задание пройдёт ровно по ним."),
+		job.KindArticles))
+
+	b.WriteString(`<h3 class="bt-form-head">Где смотреть</h3>`)
+	b.WriteString(`<div class="bt-form-grid">`)
 	b.WriteString(field("Регионы", `<input class="bt-input bt-input--mono" name="regions" value="-1257786" data-estimate>`,
 		"Коды dest через запятую. Цена, остаток и место в выдаче — все региональные, поэтому регион обязателен."))
 	b.WriteString(field("Аудитория", `<input class="bt-input" name="app_type" type="number" value="1" data-estimate>`,
 		"Код приложения. Одно задание — одна аудитория: место в выдаче для веба и для Android — разные факты."))
-	b.WriteString(field("Страниц выдачи", `<input class="bt-input" name="max_pages" type="number" min="1" value="5" data-estimate>`,
-		"Постраничная выдача сама не кончается, поэтому предел обязателен."))
-	b.WriteString(field("Потоков", `<input class="bt-input" name="threads" type="number" min="1" value="4" data-estimate>`, ""))
-	b.WriteString(field("Пауза, мс", `<input class="bt-input" name="delay_ms" type="number" min="0" value="0" data-estimate>`, ""))
+	// Pages bound a walk that has pages; the kinds without them do not ask.
+	b.WriteString(whenAny(
+		field("Страниц выдачи", `<input class="bt-input" name="max_pages" type="number" min="1" value="5" data-estimate>`,
+			"Постраничная выдача сама не кончается, поэтому предел обязателен."),
+		job.KindPhrase, job.KindSeller, job.KindBrand))
+	b.WriteString(`</div>`)
+
+	b.WriteString(`<h3 class="bt-form-head">Когда и как быстро</h3>`)
+	b.WriteString(`<div class="bt-form-grid">`)
 	b.WriteString(field("Расписание", `<input class="bt-input" name="schedule" placeholder="every 3h">`,
 		"Пусто — задание идёт только когда его запустят руками."))
+	b.WriteString(field("Потоков", `<input class="bt-input" name="threads" type="number" min="1" value="4" data-estimate>`,
+		"Сколько запросов идёт одновременно."))
+	b.WriteString(field("Пауза, мс", `<input class="bt-input" name="delay_ms" type="number" min="0" value="0" data-estimate>`,
+		"Задержка между запросами одного потока."))
+	b.WriteString(`</div>`)
 
+	b.WriteString(`<h3 class="bt-form-head">Что снимать с каждого товара</h3>`)
 	b.WriteString(fieldCheckboxes())
 
 	b.WriteString(`<div id="estimate" class="bt-alert bt-alert--neutral">Отметьте поля — здесь появится оценка.</div>`)
@@ -356,6 +393,36 @@ func (s *Server) constructorHTML(r *http.Request) (string, error) {
 	</div>`)
 	b.WriteString(`</form></section>`)
 	return b.String(), nil
+}
+
+// kindPicker is the choice of what the job enumerates.
+//
+// Cards with a radio rather than a line in a dropdown: this choice decides
+// which half of the form even applies, and it is the one question here a
+// person cannot answer from a field name. Each card says what will be walked.
+func kindPicker() string {
+	var b strings.Builder
+	b.WriteString(`<fieldset class="bt-fieldset bt-fieldset--inset bt-picker">`)
+	b.WriteString(`<legend>Что перечислять</legend>`)
+	for i, k := range job.Kinds() {
+		label := kindLabels[k]
+		if label == "" {
+			label = string(k)
+		}
+		// The first one is picked, so the form is never a blank that answers
+		// «kind "" is not one this build can run» to somebody who filled in
+		// everything the screen showed them.
+		checked := ""
+		if i == 0 {
+			checked = ` checked`
+		}
+		b.WriteString(`<label class="bt-pick"><input type="radio" name="kind" value="` +
+			html.EscapeString(string(k)) + `"` + checked + ` data-estimate>` +
+			`<span class="bt-pick__name">` + html.EscapeString(label) + `</span>` +
+			`<span class="bt-pick__what">` + html.EscapeString(kindWhat[k]) + `</span></label>`)
+	}
+	b.WriteString(`</fieldset>`)
+	return b.String()
 }
 
 // phraseListField is the uploaded-file half of the phrase question.
@@ -374,14 +441,15 @@ func (s *Server) phraseListField(lists []store.PhraseListRow) string {
 	// user is still filling the rest in. Submitting it together with the job
 	// would mean uploading a hundred thousand phrases again on every
 	// correction to the job's name.
-	sel.WriteString(`</div><div class="bt-field">
-	  <label class="bt-label" for="phrase-file">Загрузить файл фраз</label>
+	upload := `<div class="bt-upload">
 	  <input class="bt-input" id="phrase-file" name="file" type="file" accept=".txt,.csv">
-	  <span class="bt-form-hint">По одной фразе в строке. UTF-8 или windows-1251 — определяется само. Повторы отбрасываются.</span>
 	  <button class="bt-btn bt-btn--secondary" type="button"
-	          data-upload="/jobs/phrases" data-file="#phrase-file" data-target="#main">Загрузить</button>`)
+	          data-upload="/jobs/phrases" data-file="#phrase-file" data-target="#main">Загрузить</button>
+	</div>`
 
-	return field("Файл фраз", sel.String(), "Уже загруженные файлы. Выберите один вместо списка фраз выше.")
+	return field("Файл фраз", sel.String(), "Уже загруженные файлы. Выберите один вместо списка фраз выше.") +
+		field("Загрузить файл фраз", upload,
+			"По одной фразе в строке. UTF-8 или windows-1251 — определяется само. Повторы отбрасываются.")
 }
 
 // fieldCheckboxes draws the catalogue, group by group, with each group's
@@ -393,7 +461,9 @@ func (s *Server) phraseListField(lists []store.PhraseListRow) string {
 // promising a price the run does not charge.
 func fieldCheckboxes() string {
 	var b strings.Builder
-	b.WriteString(`<div class="bt-field"><span class="bt-label">Что снимать</span>`)
+	// No label of its own: the heading above this says what it is, and two
+	// headings one under the other read as two different questions.
+	b.WriteString(`<div class="bt-field">`)
 
 	for _, g := range wb.Groups() {
 		fields := wb.FieldsOfGroup(g)
@@ -542,27 +612,44 @@ func (s *Server) saveJobHandler(w http.ResponseWriter, r *http.Request) {
 
 // jobFromForm builds a job out of the constructor's fields.
 func (s *Server) jobFromForm(r *http.Request) (job.Job, error) {
-	if err := r.ParseForm(); err != nil {
+	if err := parseForm(r); err != nil {
 		return job.Job{}, err
 	}
 	f := r.Form
 
 	j := job.Job{
-		Name:         strings.TrimSpace(f.Get("name")),
-		Kind:         job.Kind(f.Get("kind")),
-		Phrases:      splitLines(f.Get("phrases")),
-		PhraseListID: atoi64(f.Get("phrase_list_id")),
-		SupplierID:   atoi64(f.Get("supplier_id")),
-		BrandID:      atoi64(f.Get("brand_id")),
-		Articles:     articleNumbers(f.Get("articles")),
-		Regions:      splitCommas(f.Get("regions")),
-		AppType:      int(atoi64(f.Get("app_type"))),
-		Fields:       wb.Selection(f["fields"]),
-		MaxPages:     int(atoi64(f.Get("max_pages"))),
-		Threads:      int(atoi64(f.Get("threads"))),
-		Delay:        time.Duration(atoi64(f.Get("delay_ms"))) * time.Millisecond,
-		Schedule:     strings.TrimSpace(f.Get("schedule")),
-		Enabled:      f.Get("schedule") != "",
+		Name:     strings.TrimSpace(f.Get("name")),
+		Kind:     job.Kind(f.Get("kind")),
+		Regions:  splitCommas(f.Get("regions")),
+		AppType:  int(atoi64(f.Get("app_type"))),
+		Fields:   wb.Selection(f["fields"]),
+		Threads:  int(atoi64(f.Get("threads"))),
+		Delay:    time.Duration(atoi64(f.Get("delay_ms"))) * time.Millisecond,
+		Schedule: strings.TrimSpace(f.Get("schedule")),
+		Enabled:  f.Get("schedule") != "",
+	}
+
+	// Only the chosen kind's own parameters are read. The constructor shows
+	// one group at a time, and a field nobody can see must not travel with
+	// the job: pick a brand after typing a list of articles and the job would
+	// otherwise carry those articles — invisible on the screen that saved it,
+	// and present in the file it exports to.
+	switch j.Kind {
+	case job.KindPhrase, job.KindPhraseAds:
+		j.Phrases = splitLines(f.Get("phrases"))
+		j.PhraseListID = atoi64(f.Get("phrase_list_id"))
+	case job.KindSeller:
+		j.SupplierID = atoi64(f.Get("supplier_id"))
+	case job.KindBrand:
+		j.BrandID = atoi64(f.Get("brand_id"))
+	case job.KindArticles:
+		j.Articles = articleNumbers(f.Get("articles"))
+	}
+	// Paging bounds a walk that has pages. The article and advert kinds have
+	// none, and a page count stored against them is a number no run reads.
+	switch j.Kind {
+	case job.KindPhrase, job.KindSeller, job.KindBrand:
+		j.MaxPages = int(atoi64(f.Get("max_pages")))
 	}
 
 	// The list's size is read here rather than trusted from the form: the

@@ -9,10 +9,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/BlankTrail/wildberries-monitor/internal/cp1251"
+	"github.com/BlankTrail/wildberries-monitor/internal/job"
 	"github.com/BlankTrail/wildberries-monitor/wb"
 )
 
@@ -414,5 +416,193 @@ func TestUpload_DoesNotLetAByteOrderMarkIntoTheFirstPhrase(t *testing.T) {
 	}
 	if len(got) == 0 || got[0] != "платье" {
 		t.Errorf("the first phrase is %q, want it free of the byte order mark", got)
+	}
+}
+
+func TestConstructor_OffersEveryKindAsAChoiceThatSaysWhatItWalks(t *testing.T) {
+	// The kind decides which half of the form applies, so it is picked from
+	// cards rather than a dropdown line — and a kind added to the build
+	// without a card is a kind nobody can pick at all.
+	srv := newServer(t)
+	body := get(t, srv, "/jobs", "correct horse").Body.String()
+
+	for _, k := range job.Kinds() {
+		if !strings.Contains(body, `type="radio" name="kind" value="`+string(k)+`"`) {
+			t.Errorf("вид %q нельзя выбрать", k)
+		}
+		if kindLabels[k] == "" || !strings.Contains(body, kindLabels[k]) {
+			t.Errorf("вид %q без названия", k)
+		}
+		// The description is the difference between a card and a line in a
+		// dropdown: it is the one thing on this screen a person cannot work
+		// out from the field names.
+		if kindWhat[k] == "" || !strings.Contains(body, kindWhat[k]) {
+			t.Errorf("вид %q не говорит, что он перечислит", k)
+		}
+	}
+	// Something has to be picked from the start, or the first estimate
+	// answers «kind "" is not one this build can run» to a person who filled
+	// in everything the screen showed them.
+	first := job.Kinds()[0]
+	if !strings.Contains(body, `name="kind" value="`+string(first)+`" checked`) {
+		t.Errorf("вид %q не выбран заранее, форма открывается пустой", first)
+	}
+}
+
+func TestConstructor_ShowsOnlyTheFieldsTheChosenKindUses(t *testing.T) {
+	// The whole point of the rework: fifteen fields in one column, most of
+	// them belonging to a kind the user did not pick. Each parameter now
+	// declares whose it is, and app.js follows the picker.
+	srv := newServer(t)
+	body := get(t, srv, "/jobs", "correct horse").Body.String()
+
+	if !strings.Contains(body, `data-switch="kind"`) {
+		t.Fatal("форма не сказала, за каким полем следовать")
+	}
+
+	// Each parameter, and the kinds it belongs to. Written out here on
+	// purpose: this is the claim the screen makes, and it should have to be
+	// restated to change.
+	for _, c := range []struct {
+		name  string
+		kinds []job.Kind
+	}{
+		{"phrases", []job.Kind{job.KindPhrase, job.KindPhraseAds}},
+		{"phrase_list_id", []job.Kind{job.KindPhrase, job.KindPhraseAds}},
+		{"supplier_id", []job.Kind{job.KindSeller}},
+		{"brand_id", []job.Kind{job.KindBrand}},
+		{"articles", []job.Kind{job.KindArticles}},
+		{"max_pages", []job.Kind{job.KindPhrase, job.KindSeller, job.KindBrand}},
+	} {
+		group := groupAround(body, `name="`+c.name+`"`)
+		if group == "" {
+			t.Errorf("поле %q не отнесено ни к одному виду", c.name)
+			continue
+		}
+		want := make([]string, len(c.kinds))
+		for i, k := range c.kinds {
+			want[i] = string(k)
+		}
+		if got := strings.Fields(group); !slices.Equal(got, want) {
+			t.Errorf("поле %q отнесено к %v, ожидалось %v", c.name, got, want)
+		}
+	}
+
+	// And the fields every kind needs are not in any group, or picking a
+	// kind would take the regions away with it.
+	for _, name := range []string{"name", "regions", "app_type", "threads", "delay_ms", "schedule", "fields"} {
+		if group := groupAround(body, `name="`+name+`"`); group != "" {
+			t.Errorf("общее поле %q отнесено к видам %q", name, group)
+		}
+	}
+}
+
+// groupAround returns the data-when list of the group the marker sits inside,
+// or "" when it sits in none.
+//
+// Walked rather than searched backwards: the nearest data-when before a
+// marker is often a group that already closed, and taking it would report
+// every common field as belonging to whichever kind happened to be drawn
+// above it.
+func groupAround(body, marker string) string {
+	at := strings.Index(body, marker)
+	if at < 0 {
+		return "не найдено"
+	}
+	const open = `<div class="bt-when" data-when="`
+
+	for i := 0; ; {
+		rel := strings.Index(body[i:], open)
+		if rel < 0 {
+			return ""
+		}
+		from := i + rel
+
+		list := body[from+len(open):]
+		list = list[:strings.Index(list, `"`)]
+
+		// Forward to this group's own closing tag, counting the nested ones.
+		depth, j := 0, from
+		for j < len(body) {
+			nextOpen := strings.Index(body[j:], "<div")
+			nextClose := strings.Index(body[j:], "</div>")
+			if nextClose < 0 {
+				j = len(body)
+				break
+			}
+			if nextOpen >= 0 && nextOpen < nextClose {
+				depth++
+				j += nextOpen + len("<div")
+				continue
+			}
+			depth--
+			j += nextClose + len("</div>")
+			if depth == 0 {
+				break
+			}
+		}
+		if at >= from && at < j {
+			return list
+		}
+		i = j
+	}
+}
+
+func TestSaveJob_KeepsOnlyWhatTheChosenKindUses(t *testing.T) {
+	// A hidden field still posts. Somebody types a list of articles, changes
+	// their mind and picks a brand: without this, the job is stored carrying
+	// the articles — invisible on the screen that saved it, and there in
+	// every file it exports to.
+	srv := newServer(t)
+	ctx := t.Context()
+
+	form := goodForm()
+	form.Set("kind", string(job.KindBrand))
+	form.Set("brand_id", "9876")
+	form.Set("articles", "141504066\n141504067")
+	form.Set("supplier_id", "4321")
+	form.Set("phrases", "платье")
+
+	if w := postForm(t, srv, "/jobs", form); w.Code != http.StatusOK {
+		t.Fatalf("сохранение = %d: %s", w.Code, firstLines(w.Body.String()))
+	}
+
+	// The first job in a store made for this test, so the identifier is 1.
+	j, err := job.Load(ctx, srv.Store, 1)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if j.BrandID != 9876 {
+		t.Errorf("бренд = %d, ожидалось 9876", j.BrandID)
+	}
+	if len(j.Articles) != 0 {
+		t.Errorf("задание бренда унесло артикулы: %v", j.Articles)
+	}
+	if len(j.Phrases) != 0 {
+		t.Errorf("задание бренда унесло фразы: %v", j.Phrases)
+	}
+	if j.SupplierID != 0 {
+		t.Errorf("задание бренда унесло продавца: %d", j.SupplierID)
+	}
+
+	// And a kind that has no pages keeps no page count. The articles job
+	// walks exactly the numbers given to it; a limit of five stored beside
+	// them is a number nothing reads and everything shows.
+	articles := goodForm()
+	articles.Set("kind", string(job.KindArticles))
+	articles.Set("articles", "141504066")
+	articles.Set("max_pages", "5")
+	if w := postForm(t, srv, "/jobs", articles); w.Code != http.StatusOK {
+		t.Fatalf("сохранение = %d: %s", w.Code, firstLines(w.Body.String()))
+	}
+	second, err := job.Load(ctx, srv.Store, 2)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if second.MaxPages != 0 {
+		t.Errorf("задание по артикулам унесло предел страниц: %d", second.MaxPages)
+	}
+	if len(second.Articles) != 1 {
+		t.Errorf("артикулы задания = %v", second.Articles)
 	}
 }

@@ -333,7 +333,7 @@ func (s *Server) tabs(current string) []Tab {
 		{Label: "Задачи", Href: "/jobs"},
 		{Label: "Отслеживание", Href: "/track"},
 		{Label: "Правила", Href: "/rules"},
-		{Label: "Каналы", Href: "/channels"},
+		{Label: "Прокси", Href: "/channels"},
 		{Label: "Результаты", Href: "/results"},
 	}
 	for i := range all {

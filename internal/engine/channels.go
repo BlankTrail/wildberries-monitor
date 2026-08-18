@@ -51,7 +51,7 @@ func (e *Engine) Channels(ctx context.Context) ([]blanktrail.Channel, func(), er
 			// their own address is never the one the site sees, and finding out
 			// afterwards is finding out too late.
 			closeAll()
-			return nil, nil, fmt.Errorf("engine: канал %q не собрался: %w", row.Name, err)
+			return nil, nil, fmt.Errorf("engine: прокси %q не собрался: %w", row.Name, err)
 		}
 		built = append(built, ch)
 	}
@@ -150,7 +150,7 @@ func singleUpstream(raw, defaultScheme string) (blanktrail.Upstream, error) {
 	// nineteen would never be dialled and nothing anywhere would explain why.
 	if len(ups) > 1 {
 		return blanktrail.Upstream{}, fmt.Errorf(
-			"здесь один адрес, а их %d — для списка заведите канал вида «список прокси»", len(ups))
+			"здесь один адрес, а их %d — для списка заведите запись вида «список прокси»", len(ups))
 	}
 	return ups[0], nil
 }
@@ -204,7 +204,7 @@ func (e *Engine) TestChannel(ctx context.Context, id int64) (string, error) {
 			return "", fmt.Errorf("не указана ссылка смены адреса")
 		}
 		return fmt.Sprintf("Точка входа разобрана: %s://%s. Ссылка смены не дёргается при проверке — "+
-			"у провайдера свой минимальный интервал, и лишний вызов стоит канала.",
+			"у провайдера свой минимальный интервал, и лишний вызов стоит прокси.",
 			up.Scheme, up.Host), nil
 
 	case store.ChannelGateway:

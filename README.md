@@ -87,10 +87,10 @@ check passes.
   than 5% while stock is under ten"). Thresholds, quiet hours, per-product rate
   limits and deduplication are all there, and every match is logged — including
   the ones that were suppressed, with the reason.
-* **Каналы** — how the collection reaches the site: a proxy list from a file or
+* **Прокси** — how the collection reaches the site: a proxy list from a file or
   a URL, a rotating address with its change link, a BlankTrail gateway, and the
   host's own address, in any mix. Ports are spread over whatever is ticked, and
-  a channel that starts producing blocks loses weight on its own. Each one has
+  an entry that starts producing blocks loses weight on its own. Each one has
   a test that costs nothing: a list is read and counted with the first bad line
   quoted, a gateway name is checked against the ones BlankTrail actually has,
   and a rotating channel's change link is deliberately **not** pulled — the

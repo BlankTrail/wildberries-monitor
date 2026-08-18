@@ -3,8 +3,10 @@
 package web
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -13,6 +15,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/BlankTrail/wildberries-monitor/internal/rules"
 	"github.com/BlankTrail/wildberries-monitor/internal/store"
 )
 
@@ -424,4 +427,101 @@ func firstLines(s string) string {
 		return s[:300] + "…"
 	}
 	return s
+}
+
+// postMultipart posts a form the way the panel's own script posts it.
+//
+// app.js submits every form as FormData, and FormData goes out as
+// multipart/form-data. A test that posts urlencoded proves nothing about the
+// panel as it is actually used — see parseForm.
+func postMultipart(t *testing.T, srv *Server, path string, form url.Values) *httptest.ResponseRecorder {
+	t.Helper()
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	for name, values := range form {
+		for _, v := range values {
+			if err := mw.WriteField(name, v); err != nil {
+				t.Fatalf("WriteField: %v", err)
+			}
+		}
+	}
+	if err := mw.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	r := httptest.NewRequest(http.MethodPost, path, &body)
+	r.Header.Set("Content-Type", mw.FormDataContentType())
+	r.SetBasicAuth("monitor", "correct horse")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, r)
+	return w
+}
+
+func TestForms_ReadTheEncodingABrowserActuallySends(t *testing.T) {
+	// Not one screen in the panel could be saved from a browser: the forms go
+	// out as multipart, and every handler read them with r.ParseForm, which
+	// ignores a multipart body and says nothing about it. The user saw their
+	// filled-in form refused for being empty.
+	//
+	// Every screen that takes a form is here, because the defect was not in
+	// any one of them — it was in the one line they all copied.
+	t.Run("задание", func(t *testing.T) {
+		srv := newServer(t)
+		w := postMultipart(t, srv, "/jobs", goodForm())
+		if !strings.Contains(w.Body.String(), "сохранено") {
+			t.Fatalf("задание не сохранено: %s", firstLines(w.Body.String()))
+		}
+	})
+
+	t.Run("оценка задания", func(t *testing.T) {
+		// The estimate is what the user sees first, on every keystroke, and
+		// it was answering «kind "" is not one this build can run» to a form
+		// with a kind picked in it.
+		srv := newServer(t)
+		w := postMultipart(t, srv, "/jobs/estimate", goodForm())
+		if !strings.Contains(w.Body.String(), "запрос") {
+			t.Fatalf("оценка не посчитана: %s", firstLines(w.Body.String()))
+		}
+	})
+
+	t.Run("правило", func(t *testing.T) {
+		srv, target := withTarget(t)
+		if w := postMultipart(t, srv, "/rules", ruleFormValues(target)); w.Code != http.StatusOK {
+			t.Fatalf("сохранение = %d: %s", w.Code, firstLines(w.Body.String()))
+		}
+		all, err := rules.All(t.Context(), srv.Store)
+		if err != nil {
+			t.Fatalf("All: %v", err)
+		}
+		if len(all) != 1 {
+			t.Fatalf("сохранено правил: %d, ожидалось одно", len(all))
+		}
+	})
+
+	t.Run("канал", func(t *testing.T) {
+		srv := newServer(t)
+		if w := postMultipart(t, srv, "/channels", channelFormValues(nil)); w.Code != http.StatusOK {
+			t.Fatalf("сохранение = %d: %s", w.Code, firstLines(w.Body.String()))
+		}
+		list, err := srv.Store.Channels(t.Context())
+		if err != nil {
+			t.Fatalf("Channels: %v", err)
+		}
+		if len(list) != 1 {
+			t.Fatalf("сохранено каналов: %d, ожидался один", len(list))
+		}
+	})
+
+	t.Run("настройки", func(t *testing.T) {
+		srv := newServer(t)
+		w := postMultipart(t, srv, "/settings", url.Values{
+			"url":           {"http://127.0.0.1:8891"},
+			"telegram_chat": {"-1001234:57"},
+		})
+		if w.Code != http.StatusOK {
+			t.Fatalf("сохранение = %d: %s", w.Code, firstLines(w.Body.String()))
+		}
+		if got, _ := srv.Store.Setting(t.Context(), store.SettingTelegramChat); got != "-1001234:57" {
+			t.Errorf("настройка не доехала: %q", got)
+		}
+	})
 }

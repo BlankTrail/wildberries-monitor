@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"html"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -64,6 +65,39 @@ var scopeLabels = map[rules.ScopeKind]string{
 	rules.ScopeSeller:  "Продавец",
 	rules.ScopeJob:     "Задание",
 	rules.ScopeFilter:  "Фильтр",
+}
+
+// scopeWhat says who a scope covers, and it is what the card is for: the
+// four labels are one word each, and one word is not enough to choose by.
+var scopeWhat = map[rules.ScopeKind]string{
+	rules.ScopeProduct: "Один товар — по его артикулу.",
+	rules.ScopeSeller:  "Всё, что собрано по одному продавцу.",
+	rules.ScopeJob:     "Всё, что собирает одно задание.",
+	rules.ScopeFilter:  "Всё, что подходит под бренд и вилку цены.",
+}
+
+// scopeOrder is the order the scopes are offered in, narrowest first.
+func scopeOrder() []rules.ScopeKind {
+	return []rules.ScopeKind{rules.ScopeProduct, rules.ScopeSeller, rules.ScopeJob, rules.ScopeFilter}
+}
+
+// scopePicker is the choice of who the rule watches.
+func scopePicker() string {
+	var b strings.Builder
+	b.WriteString(`<fieldset class="bt-fieldset bt-fieldset--inset bt-picker">`)
+	b.WriteString(`<legend>Кого накрывает</legend>`)
+	for i, sc := range scopeOrder() {
+		checked := ""
+		if i == 0 {
+			checked = ` checked`
+		}
+		b.WriteString(`<label class="bt-pick"><input type="radio" name="scope_kind" value="` +
+			html.EscapeString(string(sc)) + `"` + checked + `>` +
+			`<span class="bt-pick__name">` + html.EscapeString(scopeLabels[sc]) + `</span>` +
+			`<span class="bt-pick__what">` + html.EscapeString(scopeWhat[sc]) + `</span></label>`)
+	}
+	b.WriteString(`</fieldset>`)
+	return b.String()
 }
 
 // rulesPage renders the whole screen.
@@ -256,9 +290,11 @@ func (s *Server) ruleLog(w http.ResponseWriter, r *http.Request) {
 func ruleForm(targets []store.TargetRow) string {
 	var b strings.Builder
 	b.WriteString(`<h3>Новое правило</h3>`)
-	b.WriteString(`<form class="bt-fieldset" data-post="/rules" data-target="#rules-body">`)
+	// data-switch names the field the fields below follow — see whenAny.
+	b.WriteString(`<form class="bt-fieldset bt-form" data-post="/rules" data-target="#rules-body" data-switch="scope_kind">`)
 
-	b.WriteString(field("Название", `<input class="bt-input" name="name" required placeholder="Цена упала больше чем на 5%">`, ""))
+	b.WriteString(field("Название", `<input class="bt-input" name="name" required placeholder="Цена упала больше чем на 5%">`,
+		"Под этим именем правило будет в списке и в журнале срабатываний."))
 
 	var kinds strings.Builder
 	kinds.WriteString(`<select class="bt-select" name="kind">`)
@@ -270,24 +306,31 @@ func ruleForm(targets []store.TargetRow) string {
 	b.WriteString(field("Изменение", kinds.String(),
 		"Список — то, что эта сборка действительно умеет замечать. Того, чего в нём нет, она не отследит."))
 
-	var scopes strings.Builder
-	scopes.WriteString(`<select class="bt-select" name="scope_kind">`)
-	for _, sc := range []rules.ScopeKind{rules.ScopeProduct, rules.ScopeSeller, rules.ScopeJob, rules.ScopeFilter} {
-		scopes.WriteString(`<option value="` + string(sc) + `">` + scopeLabels[sc] + `</option>`)
-	}
-	scopes.WriteString(`</select>`)
-	b.WriteString(field("Область", scopes.String(), "Кого правило накрывает."))
-	b.WriteString(field("Идентификатор", `<input class="bt-input" name="scope_id" type="number" min="1">`,
-		"Артикул, продавец или задание — смотря что выбрано выше."))
-	b.WriteString(field("Бренд", `<input class="bt-input" name="filter_brand">`, "Только для области «Фильтр»."))
-	b.WriteString(field("Цена от, ₽", `<input class="bt-input" name="filter_price_min" type="number" min="0">`, ""))
-	b.WriteString(field("Цена до, ₽", `<input class="bt-input" name="filter_price_max" type="number" min="0">`, ""))
+	b.WriteString(scopePicker())
+
+	// The scope decides which of these is even asked for: an identifier, or a
+	// brand and a price range. Both at once was the old form, and it left the
+	// user to work out which three of the five fields their choice used.
+	b.WriteString(whenAny(
+		field("Идентификатор", `<input class="bt-input" name="scope_id" type="number" min="1">`,
+			"Артикул товара, продавца или задания — смотря что выбрано выше."),
+		rules.ScopeProduct, rules.ScopeSeller, rules.ScopeJob))
+
+	var filter strings.Builder
+	filter.WriteString(`<div class="bt-form-grid">`)
+	filter.WriteString(field("Бренд", `<input class="bt-input" name="filter_brand">`,
+		"Пусто — любой бренд."))
+	filter.WriteString(field("Цена от, ₽", `<input class="bt-input" name="filter_price_min" type="number" min="0">`, ""))
+	filter.WriteString(field("Цена до, ₽", `<input class="bt-input" name="filter_price_max" type="number" min="0">`,
+		"Ноль — без верхней границы."))
+	filter.WriteString(`</div>`)
+	b.WriteString(whenAny(filter.String(), rules.ScopeFilter))
 
 	// The condition, as one row of blocks. Spec section 6.2 draws a tree; this
 	// screen draws the one level of it people actually write, and the storage
 	// underneath is the full tree — so a deeper condition written by hand or
 	// by a later screen round-trips through here without being flattened.
-	b.WriteString(`<h4>Условие</h4>`)
+	b.WriteString(`<h3 class="bt-form-head">Когда срабатывать</h3>`)
 	for i := range 2 {
 		var fields strings.Builder
 		fmt.Fprintf(&fields, `<select class="bt-select" name="cond_field_%d">`, i)
@@ -306,20 +349,23 @@ func ruleForm(targets []store.TargetRow) string {
 		fields.WriteString(`</select>`)
 		fmt.Fprintf(&fields, `<input class="bt-input" name="cond_value_%d" type="number" step="any">`, i)
 
-		b.WriteString(field(fmt.Sprintf("Условие %d", i+1), fields.String(), ""))
+		b.WriteString(field(fmt.Sprintf("Условие %d", i+1), `<div class="bt-cond">`+fields.String()+`</div>`, ""))
 	}
 	b.WriteString(field("Соединить условия", `<select class="bt-select" name="cond_op">`+
 		`<option value="and">все сразу (И)</option><option value="or">любое (ИЛИ)</option></select>`,
 		"Пустые условия не учитываются. Без условий правило срабатывает на каждое такое изменение."))
 
-	b.WriteString(`<h4>Чтобы не заваливало</h4>`)
-	b.WriteString(field("Порог, %", `<input class="bt-input" name="threshold_pct" type="number" min="0" value="0">`, ""))
+	b.WriteString(`<h3 class="bt-form-head">Чтобы не заваливало</h3>`)
+	b.WriteString(`<div class="bt-form-grid">`)
+	b.WriteString(field("Порог, %", `<input class="bt-input" name="threshold_pct" type="number" min="0" value="0">`,
+		"Ноль — любое движение."))
 	b.WriteString(field("Порог, ₽", `<input class="bt-input" name="threshold_rub" type="number" min="0" value="0">`,
 		"Оба порога должны быть пройдены: так одно правило отсекает и мелочь на дешёвом товаре, и копейки на дорогом."))
 	b.WriteString(field("Не чаще, мин", `<input class="bt-input" name="min_interval_min" type="number" min="0" value="0">`,
 		"По одному товару."))
-	b.WriteString(`<label class="bt-checkbox"><input type="checkbox" name="urgent" value="1"> Срочное — приходит и в тихие часы</label>`)
-	b.WriteString(`<label class="bt-checkbox"><input type="checkbox" name="aggregate" value="1"> Собирать в одно сообщение</label>`)
+	b.WriteString(`</div>`)
+	b.WriteString(`<div class="bt-field"><label class="bt-checkbox"><input type="checkbox" name="urgent" value="1"> Срочное — приходит и в тихие часы</label>` +
+		`<label class="bt-checkbox"><input type="checkbox" name="aggregate" value="1"> Собирать в одно сообщение</label></div>`)
 
 	var addressees strings.Builder
 	if len(targets) == 0 {
@@ -337,7 +383,8 @@ func ruleForm(targets []store.TargetRow) string {
 			`<label class="bt-checkbox"><input type="checkbox" name="targets" value="%d"> %s (%s)</label>`,
 			t.ID, html.EscapeString(name), html.EscapeString(t.Kind))
 	}
-	b.WriteString(field("Кому писать", addressees.String(), ""))
+	b.WriteString(`<h3 class="bt-form-head">Кому писать</h3>`)
+	b.WriteString(field("Адресаты", addressees.String(), ""))
 
 	b.WriteString(`<div class="bt-form-actions"><button class="bt-btn bt-btn--primary" type="submit">Сохранить правило</button></div>`)
 	b.WriteString(`</form>`)
@@ -346,7 +393,7 @@ func ruleForm(targets []store.TargetRow) string {
 
 // saveRule stores what the constructor submitted.
 func (s *Server) saveRule(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
+	if err := parseForm(r); err != nil {
 		http.Error(w, "rules: "+err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -362,24 +409,37 @@ func (s *Server) saveRule(w http.ResponseWriter, r *http.Request) {
 	s.rulesFragment(w, r, `<div class="bt-alert bt-alert--success">Правило сохранено.</div>`)
 }
 
+// scopeFromForm reads the half of the scope the chosen kind actually uses.
+//
+// The constructor shows one half at a time, and a field nobody can see must
+// not travel with the rule: switch from a filter to a single product and the
+// brand would stay on the rule, narrowing it in a way its owner cannot see
+// on the screen that saved it.
+func scopeFromForm(f url.Values) rules.Scope {
+	sc := rules.Scope{Kind: rules.ScopeKind(f.Get("scope_kind"))}
+	switch sc.Kind {
+	case rules.ScopeProduct, rules.ScopeSeller, rules.ScopeJob:
+		sc.ID = atoi64(f.Get("scope_id"))
+	case rules.ScopeFilter:
+		sc.Filter = rules.Filter{
+			Brand: strings.TrimSpace(f.Get("filter_brand")),
+			// Entered in roubles and stored in kopecks. The form asks for
+			// what a person says out loud; everything below the interface
+			// counts in minor units, and doing the conversion anywhere later
+			// would mean a hundredfold threshold.
+			PriceMinMinor: atoi64(f.Get("filter_price_min")) * 100,
+			PriceMaxMinor: atoi64(f.Get("filter_price_max")) * 100,
+		}
+	}
+	return sc
+}
+
 func ruleFromForm(r *http.Request) rules.Rule {
 	f := r.Form
 	rule := rules.Rule{
-		Name: strings.TrimSpace(f.Get("name")),
-		Kind: track.Kind(f.Get("kind")),
-		Scope: rules.Scope{
-			Kind: rules.ScopeKind(f.Get("scope_kind")),
-			ID:   atoi64(f.Get("scope_id")),
-			Filter: rules.Filter{
-				Brand: strings.TrimSpace(f.Get("filter_brand")),
-				// Entered in roubles and stored in kopecks. The form asks for
-				// what a person says out loud; everything below the interface
-				// counts in minor units, and doing the conversion anywhere
-				// later would mean a hundredfold threshold.
-				PriceMinMinor: atoi64(f.Get("filter_price_min")) * 100,
-				PriceMaxMinor: atoi64(f.Get("filter_price_max")) * 100,
-			},
-		},
+		Name:           strings.TrimSpace(f.Get("name")),
+		Kind:           track.Kind(f.Get("kind")),
+		Scope:          scopeFromForm(f),
 		Urgent:         f.Get("urgent") != "",
 		Aggregate:      f.Get("aggregate") != "",
 		ThresholdPct:   int(atoi64(f.Get("threshold_pct"))),

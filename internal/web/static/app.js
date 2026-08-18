@@ -9,9 +9,10 @@
 // fetch are native, the swap is four lines, and a reader auditing what this
 // page does to their machine can read all of it in a minute.
 //
-// What it does: swaps fragments the server renders, opens and closes the
-// settings dialog, follows a run over server-sent events, and streams a file
-// upload without reading it into memory first.
+// What it does: swaps fragments the server renders, shows the fields that
+// belong to whatever a form's picker is set to, opens and closes the settings
+// dialog, follows a run over server-sent events, and streams a file upload
+// without reading it into memory first.
 
 (() => {
   "use strict";
@@ -134,6 +135,40 @@
           });
         }, 300);
       });
+    });
+
+    // A form whose picker decides which of its own fields apply. The groups
+    // for the choices not made are hidden and their inputs disabled —
+    // disabled because a hidden field still posts: pick a brand after typing
+    // a list of articles and the articles would ride along, invisible on the
+    // screen that sent them.
+    //
+    // data-switch names the field to follow, data-when lists the values a
+    // group belongs to. Nothing here knows what a job or a rule is, so a new
+    // kind needs no line in this file. Without the script every group stays
+    // visible and the server reads only what the choice uses, so the form
+    // still works — it is just longer.
+    root.querySelectorAll("form[data-switch]").forEach((form) => {
+      if (form.dataset.switchWired) return;
+      form.dataset.switchWired = "1";
+      const name = form.dataset.switch;
+      const apply = () => {
+        const picked =
+          form.querySelector(`[name="${name}"]:checked`) ||
+          form.querySelector(`select[name="${name}"], input[name="${name}"]`);
+        const value = picked ? picked.value : "";
+        form.querySelectorAll("[data-when]").forEach((group) => {
+          const applies = group.dataset.when.split(" ").includes(value);
+          group.hidden = !applies;
+          group
+            .querySelectorAll("input, select, textarea")
+            .forEach((c) => (c.disabled = !applies));
+        });
+      };
+      form.addEventListener("change", (ev) => {
+        if (ev.target.name === name) apply();
+      });
+      apply();
     });
 
     // A filter form that reads rather than writes: its fields go into the

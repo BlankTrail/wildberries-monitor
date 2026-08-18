@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -296,5 +297,104 @@ func TestScopeText_ReadsAsSomethingAPersonWrote(t *testing.T) {
 		if got := scopeText(c.scope); !strings.Contains(got, c.want) {
 			t.Errorf("scope %+v reads as %q, want it to mention %q", c.scope, got, c.want)
 		}
+	}
+}
+
+func TestRuleForm_AsksOnlyForWhatTheChosenScopeUses(t *testing.T) {
+	// The scope decides whether the rule is aimed by an identifier or by a
+	// brand and a price range. Asking for both at once left the user to work
+	// out which three of the five fields their own choice used.
+	srv, _ := withTarget(t)
+	body := get(t, srv, "/rules", "correct horse").Body.String()
+
+	if !strings.Contains(body, `data-switch="scope_kind"`) {
+		t.Fatal("форма не сказала, за каким полем следовать")
+	}
+	for _, sc := range scopeOrder() {
+		if !strings.Contains(body, `type="radio" name="scope_kind" value="`+string(sc)+`"`) {
+			t.Errorf("область %q нельзя выбрать", sc)
+		}
+		if scopeWhat[sc] == "" || !strings.Contains(body, scopeWhat[sc]) {
+			t.Errorf("область %q не говорит, кого накрывает", sc)
+		}
+	}
+
+	for _, c := range []struct {
+		name   string
+		scopes []rules.ScopeKind
+	}{
+		{"scope_id", []rules.ScopeKind{rules.ScopeProduct, rules.ScopeSeller, rules.ScopeJob}},
+		{"filter_brand", []rules.ScopeKind{rules.ScopeFilter}},
+		{"filter_price_min", []rules.ScopeKind{rules.ScopeFilter}},
+		{"filter_price_max", []rules.ScopeKind{rules.ScopeFilter}},
+	} {
+		group := groupAround(body, `name="`+c.name+`"`)
+		want := make([]string, len(c.scopes))
+		for i, sc := range c.scopes {
+			want[i] = string(sc)
+		}
+		if got := strings.Fields(group); !slices.Equal(got, want) {
+			t.Errorf("поле %q отнесено к %v, ожидалось %v", c.name, got, want)
+		}
+	}
+
+	// What every rule needs stays outside the groups, or picking a scope
+	// would take the thresholds with it.
+	for _, name := range []string{"name", "kind", "threshold_pct", "threshold_rub", "min_interval_min", "targets"} {
+		if group := groupAround(body, `name="`+name+`"`); group != "" {
+			t.Errorf("общее поле %q отнесено к областям %q", name, group)
+		}
+	}
+}
+
+func TestSaveRule_KeepsOnlyTheHalfOfTheScopeItUses(t *testing.T) {
+	// A hidden field still posts: somebody fills in a brand, changes their
+	// mind and aims the rule at one product. Kept, the brand would narrow
+	// the rule in a way its owner cannot see on the screen that saved it.
+	srv, target := withTarget(t)
+
+	form := ruleFormValues(target)
+	form.Set("scope_kind", string(rules.ScopeProduct))
+	form.Set("scope_id", "141504066")
+	form.Set("filter_brand", "Nike")
+	form.Set("filter_price_min", "1000")
+	form.Set("filter_price_max", "5000")
+
+	if w := postForm(t, srv, "/rules", form); w.Code != http.StatusOK {
+		t.Fatalf("сохранение = %d: %s", w.Code, firstLines(w.Body.String()))
+	}
+	all, err := rules.All(t.Context(), srv.Store)
+	if err != nil {
+		t.Fatalf("All: %v", err)
+	}
+	if len(all) != 1 {
+		t.Fatalf("сохранено правил: %d", len(all))
+	}
+	sc := all[0].Scope
+	if sc.ID != 141504066 {
+		t.Errorf("артикул = %d", sc.ID)
+	}
+	if sc.Filter.Brand != "" || sc.Filter.PriceMinMinor != 0 || sc.Filter.PriceMaxMinor != 0 {
+		t.Errorf("правило на товар унесло фильтр: %+v", sc.Filter)
+	}
+
+	// And the other way round: a filter rule does not keep an identifier.
+	form.Set("scope_kind", string(rules.ScopeFilter))
+	if w := postForm(t, srv, "/rules", form); w.Code != http.StatusOK {
+		t.Fatalf("сохранение = %d: %s", w.Code, firstLines(w.Body.String()))
+	}
+	all, err = rules.All(t.Context(), srv.Store)
+	if err != nil {
+		t.Fatalf("All: %v", err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("сохранено правил: %d", len(all))
+	}
+	filtered := all[1].Scope
+	if filtered.ID != 0 {
+		t.Errorf("правило по фильтру унесло артикул: %d", filtered.ID)
+	}
+	if filtered.Filter.Brand != "Nike" || filtered.Filter.PriceMinMinor != 100000 {
+		t.Errorf("фильтр не сохранился: %+v", filtered.Filter)
 	}
 }

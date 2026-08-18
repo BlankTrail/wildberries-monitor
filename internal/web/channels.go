@@ -39,7 +39,7 @@ var channelKinds = []struct {
 	{store.ChannelGateway, "Шлюз BlankTrail",
 		"Имя конфигурации из BlankTrail — то же, что показывает список шлюзов."},
 	{store.ChannelDirect, "Прямое соединение",
-		"Собственный адрес машины. Имеет смысл в смеси с другими каналами."},
+		"Собственный адрес машины. Имеет смысл в смеси с другими выходами."},
 }
 
 func channelLabel(kind string) string {
@@ -63,7 +63,7 @@ func (s *Server) channelsPage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "channels: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	s.render(w, r, page{Title: "Каналы", Body: rawHTML(body)})
+	s.render(w, r, page{Title: "Прокси", Body: rawHTML(body)})
 }
 
 // channelsFragment renders the same thing without the page around it, for a
@@ -85,7 +85,7 @@ func (s *Server) channelsHTML(r *http.Request) (string, error) {
 	}
 
 	var b strings.Builder
-	b.WriteString(`<section id="channels-body" class="bt-card"><h2>Каналы выхода</h2>`)
+	b.WriteString(`<section id="channels-body" class="bt-card"><h2>Прокси выхода</h2>`)
 	b.WriteString(channelList(list))
 	b.WriteString(channelForm())
 	b.WriteString(`</section>`)
@@ -98,7 +98,7 @@ func channelList(list []store.ChannelRow) string {
 
 	// The state of a fresh install, said plainly rather than left as an empty
 	// table: collection works with no channels at all, and somebody who reads
-	// "каналов нет" as "ничего не соберётся" would go looking for a fault.
+	// "прокси нет" as "ничего не соберётся" would go looking for a fault.
 	enabled := 0
 	for _, c := range list {
 		if c.Enabled {
@@ -107,13 +107,13 @@ func channelList(list []store.ChannelRow) string {
 	}
 	if enabled == 0 {
 		b.WriteString(`<div class="bt-alert bt-alert--neutral">` +
-			`Включённых каналов нет — сбор идёт с собственного адреса машины. ` +
+			`Включённых прокси нет — сбор идёт с собственного адреса машины. ` +
 			`Это рабочее состояние, а не поломка.</div>`)
 	}
 
 	if len(list) > 0 {
 		b.WriteString(`<div class="bt-table-wrap"><table class="bt-table"><thead><tr>` +
-			`<th>Канал</th><th>Вид</th><th>Источник</th><th>Состояние</th><th></th>` +
+			`<th>Прокси</th><th>Вид</th><th>Источник</th><th>Состояние</th><th></th>` +
 			`</tr></thead><tbody>`)
 		for _, c := range list {
 			state := `<span class="bt-badge bt-badge--success bt-badge--sm">включён</span>`
@@ -202,12 +202,12 @@ func maskPassword(source string) string {
 
 func channelForm() string {
 	var b strings.Builder
-	b.WriteString(`<h3>Новый канал</h3>`)
+	b.WriteString(`<h3>Новый прокси</h3>`)
 	b.WriteString(`<form class="bt-fieldset" data-post="/channels" data-target="#channels-body">`)
 
 	b.WriteString(field("Название",
 		`<input class="bt-input" name="name" required placeholder="список провайдера">`,
-		"По нему канал узнаётся в логе прогона, и по нему же ему считается вес в смеси — так что двум каналам одно имя давать не стоит."))
+		"По нему прокси узнаётся в логе прогона, и по нему же ему считается вес в смеси — так что двум записям одно имя давать не стоит."))
 
 	var kinds strings.Builder
 	kinds.WriteString(`<select class="bt-select" name="kind">`)
@@ -254,20 +254,20 @@ func channelForm() string {
 		"Только для ротируемого."))
 	b.WriteString(field("Не чаще, секунд",
 		`<input class="bt-input" name="rotate_min_interval" type="number" min="0" placeholder="90">`,
-		"Минимальный интервал, который держит провайдер. Дёрнуть ссылку чаще — потерять канал, поэтому проверка её не дёргает вовсе."))
+		"Минимальный интервал, который держит провайдер. Дёрнуть ссылку чаще — потерять прокси, поэтому проверка её не дёргает вовсе."))
 
 	b.WriteString(field("Включён",
 		`<label class="bt-checkbox"><input type="checkbox" name="enabled" value="1" checked><span>участвует в сборе</span></label>`,
-		"Выключенный канал остаётся сохранённым — список, который чинят, не надо набирать заново."))
+		"Выключенный прокси остаётся сохранённым — список, который чинят, не надо набирать заново."))
 
-	b.WriteString(`<div class="bt-form-actions"><button class="bt-btn bt-btn--primary" type="submit">Сохранить канал</button></div>`)
+	b.WriteString(`<div class="bt-form-actions"><button class="bt-btn bt-btn--primary" type="submit">Сохранить прокси</button></div>`)
 	b.WriteString(`</form>`)
 	return b.String()
 }
 
 // saveChannel takes the form.
 func (s *Server) saveChannel(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
+	if err := parseForm(r); err != nil {
 		http.Error(w, "channels: "+err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -293,7 +293,7 @@ func (s *Server) saveChannel(w http.ResponseWriter, r *http.Request) {
 			html.EscapeString(err.Error())+`</div>`)
 		return
 	}
-	s.channelsFragment(w, r, `<div class="bt-alert bt-alert--success">Канал сохранён.</div>`)
+	s.channelsFragment(w, r, `<div class="bt-alert bt-alert--success">Прокси сохранён.</div>`)
 }
 
 func (s *Server) deleteChannel(w http.ResponseWriter, r *http.Request) {
@@ -306,7 +306,7 @@ func (s *Server) deleteChannel(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "channels: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	s.channelsFragment(w, r, `<div class="bt-alert bt-alert--success">Канал удалён.</div>`)
+	s.channelsFragment(w, r, `<div class="bt-alert bt-alert--success">Прокси удалён.</div>`)
 }
 
 // testChannel is spec section 7.9's "tests".
@@ -319,7 +319,7 @@ func (s *Server) testChannel(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if s.CheckChannel == nil {
-		fmt.Fprint(w, `<div class="bt-alert bt-alert--neutral">Проверка каналов недоступна в этой сборке.</div>`)
+		fmt.Fprint(w, `<div class="bt-alert bt-alert--neutral">Проверка прокси недоступна в этой сборке.</div>`)
 		return
 	}
 
