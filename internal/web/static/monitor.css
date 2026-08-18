@@ -410,7 +410,20 @@ dialog.bt-modal {
 
 dialog.bt-modal::backdrop {
   background: rgba(27, 18, 38, 0.45);
-  backdrop-filter: blur(3px);
+}
+
+/* No backdrop-filter here, and that is the fix rather than an omission: the
+   backdrop covers the viewport, so blurring it makes the browser re-render
+   and re-blur the whole page underneath on every frame. On the job
+   constructor — a long page with forty checkboxes — the tab crawled and the
+   scroll went in steps for as long as the dialog was open. A flat scrim
+   costs nothing and says the same thing.
+
+   The page behind also stops scrolling while the dialog is open. showModal
+   makes the rest inert but leaves it scrollable, so a wheel over the scrim
+   moved a page nobody could touch. */
+html:has(dialog.bt-modal[open]) {
+  overflow: hidden;
 }
 
 dialog.bt-modal > #settings-body {

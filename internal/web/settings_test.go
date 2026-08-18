@@ -276,3 +276,35 @@ func TestSaveSettings_KeepsTheStoredAppHashBehindItsMask(t *testing.T) {
 		t.Errorf("the api_id was not saved: %q", got)
 	}
 }
+
+func TestSettings_FillsInTheAddressBothProgramsUseByDefault(t *testing.T) {
+	// A field whose only answer on a default install is already known should
+	// not be an empty box: BlankTrail's control API is on this machine, on
+	// the port it always uses.
+	srv := newServer(t)
+
+	// Spelled out rather than read from the constant: the address is a fact
+	// about where BlankTrail listens, not about what this file happens to say,
+	// and a test that reads the constant agrees with whatever is put in it.
+	const local = "http://127.0.0.1:8891"
+
+	body := get(t, srv, "/settings", "correct horse").Body.String()
+	if !strings.Contains(body, `value="`+local+`"`) {
+		t.Errorf("адрес не предзаполнен:\n%s", body)
+	}
+
+	// And what somebody typed is what comes back. Filling in a default is
+	// helpful once; overwriting an address the user chose is a defect they
+	// would find out about the next time collection went out the wrong way.
+	form := url.Values{"url": {"http://10.0.0.5:9000"}}
+	if w := postForm(t, srv, "/settings", form); w.Code != http.StatusOK {
+		t.Fatalf("сохранение = %d", w.Code)
+	}
+	body = get(t, srv, "/settings", "correct horse").Body.String()
+	if !strings.Contains(body, `value="http://10.0.0.5:9000"`) {
+		t.Error("сохранённый адрес подменён умолчанием")
+	}
+	if strings.Contains(body, `value="`+local+`"`) {
+		t.Error("умолчание всё ещё в поле")
+	}
+}

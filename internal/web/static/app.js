@@ -211,14 +211,20 @@
     dlg.addEventListener("click", (ev) => {
       // Clicking the backdrop closes it. The dialog element itself is the
       // event target only when the click landed outside the panel.
-      if (ev.target === dlg) dlg.close();
-    });
-    document.querySelectorAll("[data-close-settings]").forEach((el) =>
-      el.addEventListener("click", (ev) => {
+      if (ev.target === dlg) {
+        dlg.close();
+        return;
+      }
+      // And so does the close button. Delegated to the dialog rather than
+      // bound to the button: the dialog is empty at start and its contents
+      // arrive from the server every time it opens, so a listener bound at
+      // load time is bound to a button that does not exist yet — which is
+      // why the panel could only be closed by clicking beside it.
+      if (ev.target.closest("[data-close-settings]")) {
         ev.preventDefault();
         dlg.close();
-      })
-    );
+      }
+    });
   }
 
   // ---- live run ----------------------------------------------------------

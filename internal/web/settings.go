@@ -28,6 +28,14 @@ func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// defaultBlankTrailURL is where the proxy's control API listens when both run
+// on the same machine, which is the ordinary case.
+//
+// Filled in rather than only hinted at: a placeholder is grey text somebody
+// has to retype, and the one answer this field has on a default install is
+// already known. Typed over, what the user typed is what comes back.
+const defaultBlankTrailURL = "http://127.0.0.1:8891"
+
 // settingsForm renders the settings dialog's contents.
 //
 // A fragment rather than a page: the dialog is opened over whatever the user
@@ -49,6 +57,9 @@ func (s *Server) writeSettingsForm(w http.ResponseWriter, r *http.Request, notic
 		return
 	}
 	url, key := shown[0], shown[1]
+	if url.Value == "" {
+		url.Value = defaultBlankTrailURL
+	}
 	tgToken, tgChat := shown[2], shown[3]
 	tgAppID, tgAppHash := shown[4], shown[5]
 
