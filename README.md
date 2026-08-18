@@ -262,8 +262,16 @@ go run ./examples/wbsearch -card 1309449623 -dest -5892277
 ## Building from source
 
 ```
-go build ./...     # the library and the binary
+go build ./...     # the library and the binaries
 go test ./...      # the suite
+```
+
+The tray binary needs one flag of its own, and it is not decoration: without
+`-H windowsgui` a console window opens behind the icon, which is the one thing
+a tray program is for not having.
+
+```
+go build -ldflags "-H windowsgui" -o wbmon-tray.exe ./cmd/wbmon-tray
 ```
 
 No CGO, on any platform: `modernc.org/sqlite` was chosen so that one machine
