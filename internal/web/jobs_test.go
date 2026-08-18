@@ -632,3 +632,47 @@ func TestField_PutsItsExplanationUnderAnInfoMark(t *testing.T) {
 		t.Error("нет значка, из-под которого читается пояснение")
 	}
 }
+
+func TestFieldCheckboxes_EachGroupIsLaidOutInColumns(t *testing.T) {
+	// Forty-odd boxes in one column was a screen and a half of scrolling to
+	// reach the button under them. The columns are CSS, but the container the
+	// CSS needs is markup — without it the rule matches nothing and the list
+	// goes back to one column with nobody the wiser.
+	srv := newServer(t)
+	body := get(t, srv, "/jobs", "correct horse").Body.String()
+
+	groups := 0
+	for _, g := range wb.Groups() {
+		if len(wb.FieldsOfGroup(g)) > 0 {
+			groups++
+		}
+	}
+	if got := strings.Count(body, `<div class="bt-checks">`); got != groups {
+		t.Errorf("групп в колонках %d, а групп с полями %d", got, groups)
+	}
+
+	// And every box is inside one, or a group would be laid out around
+	// checkboxes that are not in it.
+	for _, part := range strings.Split(body, `<div class="bt-checks">`)[:1] {
+		if strings.Contains(part, `name="fields"`) {
+			t.Error("галочки есть до первой колоночной группы")
+		}
+	}
+}
+
+func TestPages_CloseEveryDivTheyOpen(t *testing.T) {
+	// A missing </div> does not fail anything: the browser nests what follows
+	// inside what came before, and a form quietly grows a second column or a
+	// group swallows the next one. Cheap to check on every screen at once,
+	// and the only kind of markup fault this project's tests kept missing.
+	srv := newServer(t)
+
+	for _, path := range []string{"/", "/jobs", "/rules", "/channels", "/track", "/results", "/settings"} {
+		body := get(t, srv, path, "correct horse").Body.String()
+		opened := strings.Count(body, "<div")
+		closed := strings.Count(body, "</div>")
+		if opened != closed {
+			t.Errorf("%s: открыто %d <div>, закрыто %d", path, opened, closed)
+		}
+	}
+}

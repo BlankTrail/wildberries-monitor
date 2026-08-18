@@ -470,6 +470,12 @@ func fieldCheckboxes() string {
 			` <span class="bt-badge bt-badge--sm ` + priceTone(keys.Cost()) + `">` +
 			html.EscapeString(priceLabel(keys.Cost())) + `</span></legend>`)
 
+		// The boxes in a container of their own so they can be laid out in
+		// columns. A fieldset cannot be the grid itself: a legend inside a
+		// grid container is placed by rules browsers disagree about, and the
+		// heading that says what a group costs is not a thing to gamble on.
+		b.WriteString(`<div class="bt-checks">`)
+
 		for _, f := range fields {
 			// The base group is pre-ticked. Every field in it rides on the
 			// search page the job pays for regardless, and three of them —
@@ -483,7 +489,7 @@ func fieldCheckboxes() string {
 				`<label class="bt-checkbox"><input type="checkbox" name="fields" value="%s" data-estimate%s> %s</label>`,
 				html.EscapeString(f.Key), checked, html.EscapeString(f.Name))
 		}
-		b.WriteString(`</fieldset>`)
+		b.WriteString(`</div></fieldset>`)
 	}
 
 	b.WriteString(`</div>`)

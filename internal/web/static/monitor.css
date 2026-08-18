@@ -702,3 +702,37 @@ dialog.bt-modal > #settings-body {
     grid-template-columns: 1fr;
   }
 }
+
+/* ---- the field catalogue, in columns ------------------------------------ */
+
+/* Forty-odd boxes in one column is a screen and a half of scrolling to reach
+   the button underneath. Laid out by width rather than by a fixed count, so
+   the same rule gives three columns on a desktop and one on a phone without
+   a breakpoint per group. */
+.bt[data-bt-theme="dashboard"] .bt-checks {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-1) var(--space-4);
+}
+
+/* A count rather than a minimum width: sized by width, forty short labels
+   spread into five thin columns, and a row of five is read as a table with
+   headings missing rather than as a list. */
+@media (min-width: 900px) {
+  .bt[data-bt-theme="dashboard"] .bt-checks {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 560px) {
+  .bt[data-bt-theme="dashboard"] .bt-checks {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* The rows are read down a column, and a checkbox is a line of text: the
+   space between them belongs between the lines, not around each box. */
+.bt[data-bt-theme="dashboard"] .bt-checks .bt-checkbox {
+  margin: 0;
+  padding: .15rem 0;
+}
