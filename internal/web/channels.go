@@ -218,9 +218,10 @@ func channelForm() string {
 	}
 	b.WriteString(picker("Вид прокси", "kind", "", picks))
 
-	// Everything below belongs to some of the kinds and not the others. A
-	// direct connection asks for nothing at all: it is the machine's own
-	// address, and that is the whole of it.
+	// Everything below belongs to some of the kinds and not the others, and it
+	// is laid out side by side. A direct connection asks for nothing at all:
+	// it is the machine's own address, and that is the whole of it.
+	b.WriteString(`<div class="bt-form-grid">`)
 	b.WriteString(whenAny(
 		field("Источник",
 			`<input class="bt-input" name="source" placeholder="C:\proxies\list.txt, https://provider.example/list.txt, socks5://user:pass@host:1080 или имя шлюза">`,
@@ -237,22 +238,23 @@ func channelForm() string {
 		schemes.WriteString(`<option value="` + html.EscapeString(s) + `">` + html.EscapeString(label) + `</option>`)
 	}
 	schemes.WriteString(`</select>`)
+
 	// Asked of the two kinds that parse addresses out of what a person pasted.
 	b.WriteString(whenAny(
 		field("Схема для строк без неё", schemes.String(),
 			"Из пяти принимаемых написаний четыре схему не называют. Ошибиться здесь — это не ошибка разбора, а список, который весь выглядит мёртвым."),
 		store.ChannelList, store.ChannelRotating))
-
-	var rotation strings.Builder
-	rotation.WriteString(`<div class="bt-form-grid">`)
-	rotation.WriteString(field("Ссылка смены адреса",
-		`<input class="bt-input" name="rotate_url" placeholder="https://provider.example/rotate?key=...">`,
-		"Без неё это один адрес, который никогда не меняется."))
-	rotation.WriteString(field("Не чаще, секунд",
-		`<input class="bt-input" name="rotate_min_interval" type="number" min="0" placeholder="90">`,
-		"Минимальный интервал, который держит провайдер. Дёрнуть ссылку чаще — потерять прокси, поэтому проверка её не дёргает вовсе."))
-	rotation.WriteString(`</div>`)
-	b.WriteString(whenAny(rotation.String(), store.ChannelRotating))
+	b.WriteString(whenAny(
+		field("Ссылка смены адреса",
+			`<input class="bt-input" name="rotate_url" placeholder="https://provider.example/rotate?key=...">`,
+			"Без неё это один адрес, который никогда не меняется."),
+		store.ChannelRotating))
+	b.WriteString(whenAny(
+		field("Не чаще, секунд",
+			`<input class="bt-input" name="rotate_min_interval" type="number" min="0" placeholder="90">`,
+			"Минимальный интервал, который держит провайдер. Дёрнуть ссылку чаще — потерять прокси, поэтому проверка её не дёргает вовсе."),
+		store.ChannelRotating))
+	b.WriteString(`</div>`)
 
 	b.WriteString(field("Включён",
 		`<label class="bt-checkbox"><input type="checkbox" name="enabled" value="1" checked><span>участвует в сборе</span></label>`,
