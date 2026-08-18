@@ -350,7 +350,7 @@ func (s *Server) constructorHTML(r *http.Request) (string, error) {
 	b.WriteString(fieldCheckboxes())
 
 	b.WriteString(`<div id="estimate" class="bt-alert bt-alert--neutral">Отметьте поля — здесь появится оценка.</div>`)
-	b.WriteString(`<div class="bt-field">
+	b.WriteString(`<div class="bt-form-actions">
 	  <button class="bt-btn bt-btn--primary" type="submit">Сохранить задание</button>
 	  <button class="bt-btn bt-btn--secondary" type="button" data-post-form="/jobs/estimate" data-target="#estimate">Пересчитать оценку</button>
 	</div>`)

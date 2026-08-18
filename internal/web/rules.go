@@ -339,7 +339,7 @@ func ruleForm(targets []store.TargetRow) string {
 	}
 	b.WriteString(field("Кому писать", addressees.String(), ""))
 
-	b.WriteString(`<div class="bt-field"><button class="bt-btn bt-btn--primary" type="submit">Сохранить правило</button></div>`)
+	b.WriteString(`<div class="bt-form-actions"><button class="bt-btn bt-btn--primary" type="submit">Сохранить правило</button></div>`)
 	b.WriteString(`</form>`)
 	return b.String()
 }

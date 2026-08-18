@@ -67,6 +67,20 @@ func (s *Server) writeSettingsForm(w http.ResponseWriter, r *http.Request, notic
   <span class="bt-form-hint">Управляющий API прокси-сервиса. Обычно на этой же машине.</span>
 </div>`)
 
+	// The panel's own gate, and it is off unless somebody says otherwise. The
+	// server listens on this machine only, so what a password keeps out is
+	// another account or another program here — worth having on a shared
+	// machine, worth nothing on a personal one.
+	checked := ""
+	if s.RequireAuth(r.Context()) {
+		checked = " checked"
+	}
+	b.WriteString(`<h3>Доступ к панели</h3>`)
+	b.WriteString(`<div class="bt-field">
+  <label class="bt-checkbox"><input type="checkbox" name="require_auth" value="1"` + checked + `><span>требовать пароль</span></label>
+  <span class="bt-form-hint">` + accessHint(s.Password, s.GeneratedPassword) + `</span>
+</div>`)
+
 	// The key field starts holding the mask, not the key. A field that
 	// pre-filled the real value would put it in the page source, and the
 	// point of masking it in the store would be lost at the last step.
@@ -151,7 +165,7 @@ func (s *Server) writeSettingsForm(w http.ResponseWriter, r *http.Request, notic
   <span class="bt-form-hint">Выбирается сам при первой отправке: сначала напрямую, затем через BlankTrail.</span>
 </div>`)
 
-	b.WriteString(`<div class="bt-field">
+	b.WriteString(`<div class="bt-form-actions">
   <button class="bt-btn bt-btn--primary" type="submit">Сохранить</button>
   <button class="bt-btn bt-btn--secondary" type="button"
           data-get="/settings/check" data-target="#settings-body"
@@ -176,6 +190,11 @@ func (s *Server) saveSettings(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	url := strings.TrimSpace(r.FormValue("url"))
+	if err := s.Store.SetSetting(ctx, store.SettingRequireAuth,
+		boolSetting(r.FormValue("require_auth") != ""), store.SettingBool); err != nil {
+		http.Error(w, "settings: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 	if err := s.Store.SetSetting(ctx, store.SettingBlankTrailURL, url, store.SettingText); err != nil {
 		http.Error(w, "settings: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -311,4 +330,30 @@ func (s *Server) setAutostart(on bool) error {
 		return s.Autostart.Disable()
 	}
 	return s.Autostart.Enable()
+}
+
+// boolSetting is how a tick is stored.
+func boolSetting(on bool) string {
+	if on {
+		return "1"
+	}
+	return "0"
+}
+
+// accessHint says what the tick means here and now.
+//
+// Three sentences for three states, because "требовать пароль" on its own
+// leaves the two questions a person actually has: which password, and why it
+// is off to begin with.
+func accessHint(password string, generated bool) string {
+	switch {
+	case password == "":
+		return "Пароля нет вовсе — включать нечего. Он появляется в first-run.txt " +
+			"рядом с базой при первом запуске."
+	case generated:
+		return "Сейчас выключено: панель слушает только эту машину. Пароль — тот, " +
+			"что записан в first-run.txt рядом с базой. Пока он сгенерированный, " +
+			"панель не открывается за пределы машины даже с флагом -lan."
+	}
+	return "Пароль задан. Логин monitor."
 }

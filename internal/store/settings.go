@@ -20,6 +20,16 @@ const (
 	SettingDataDir          = "data.dir"
 	SettingListenLAN        = "web.listen_lan"
 
+	// SettingRequireAuth turns the panel's password on. Off by default, and
+	// that is the decision rather than an oversight: the server listens on
+	// the loopback interface, so what a password keeps out is another program
+	// or another account on this same machine — and on a personal machine
+	// running a scraper that is a login prompt every morning for nothing.
+	//
+	// It becomes necessary the moment the port stops being local, which is why
+	// the two are tied together where the port is opened rather than here.
+	SettingRequireAuth = "web.require_auth"
+
 	// SettingTelegramToken is the bot token, and it is a secret in the strong
 	// sense: whoever holds it holds the bot, including every chat it is in.
 	SettingTelegramToken = "telegram.token"

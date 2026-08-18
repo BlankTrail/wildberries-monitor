@@ -161,10 +161,17 @@ func FirstRunPassword(dataDir string) (password string, generated bool, err erro
 	return password, true, nil
 }
 
-// ErrWouldExposeDefaultPassword is returned when a server carrying a
-// generated password is asked to listen beyond the loopback interface.
-var ErrWouldExposeDefaultPassword = errors.New(
-	"web: refusing to listen beyond localhost while the password is the generated one")
+// ErrWouldExposeUnprotectedPanel is returned when a panel that anyone could
+// walk into is asked to listen beyond the loopback interface.
+//
+// Which is either of two states: no password asked for at all, or one this
+// program generated and wrote to a file beside the database. Both are fine
+// while the only way in is from this machine, and neither is a thing to put on
+// a network — the panel holds a proxy key, a bot token and everything the
+// monitor has collected.
+var ErrWouldExposeUnprotectedPanel = errors.New(
+	"web: панель без своего пароля не открывается за пределы этой машины: " +
+		"включите в настройках «требовать пароль» и задайте свой")
 
 // ListenAddress decides where to listen.
 //
@@ -172,9 +179,9 @@ var ErrWouldExposeDefaultPassword = errors.New(
 // than in the settings screen because a setting can be written by anything —
 // a hand-edited database, a restored backup, a future importer — and the only
 // place that reliably sees the combination is the one about to open the port.
-func (s *Server) ListenAddress(port int, lan bool) (string, error) {
-	if lan && s.GeneratedPassword {
-		return "", ErrWouldExposeDefaultPassword
+func (s *Server) ListenAddress(ctx context.Context, port int, lan bool) (string, error) {
+	if lan && (!s.RequireAuth(ctx) || s.GeneratedPassword) {
+		return "", ErrWouldExposeUnprotectedPanel
 	}
 	host := "127.0.0.1"
 	if lan {
@@ -226,14 +233,31 @@ func (s *Server) Handler() http.Handler {
 	return mux
 }
 
-// auth is the password gate.
+// RequireAuth reports whether the panel asks for a password.
 //
-// Basic authentication because the alternative — a login form and a session
-// cookie — buys nothing here: there is one user, the server is on their own
-// machine, and a cookie would add a store, an expiry and a logout button to
-// get to the same place.
+// Read per request rather than at start, so that ticking the box takes effect
+// on the next page instead of on the next restart — a setting that needs a
+// restart is a setting people believe they changed.
+func (s *Server) RequireAuth(ctx context.Context) bool {
+	return s.Store.SettingOr(ctx, store.SettingRequireAuth, "") == "1"
+}
+
+// auth is the password gate, when there is one.
+//
+// Off by default. The server listens on the loopback interface, so what a
+// password keeps out here is another program or another account on this same
+// machine — worth having on a shared machine, worth nothing on a personal one,
+// and not something to decide on somebody's behalf.
+//
+// Basic authentication when it is on, because the alternative — a login form
+// and a session cookie — buys nothing: there is one user, and a cookie would
+// add a store, an expiry and a logout button to get to the same place.
 func (s *Server) auth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !s.RequireAuth(r.Context()) {
+			next.ServeHTTP(w, r)
+			return
+		}
 		if s.Password == "" {
 			// Not a 401: there is nothing to authenticate against, and
 			// prompting for a password that does not exist teaches the user

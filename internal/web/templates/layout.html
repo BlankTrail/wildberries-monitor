@@ -6,6 +6,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{.Title}} — BlankTrail Monitor</title>
 <link rel="stylesheet" href="/static/blanktrail.css">
+<link rel="stylesheet" href="/static/monitor.css">
 <script src="/static/app.js" defer></script>
 </head>
 <body class="bt-dashboard-shell"{{if .FollowRun}} data-follow-run="{{.FollowRun}}"{{end}}>
@@ -18,8 +19,9 @@
 
     <nav class="bt-filter-tabs" aria-label="Разделы">
       {{range .Tabs}}
-        <a href="{{.Href}}" data-tab="{{.Href}}"
-           class="bt-filter-tab{{if .Active}} bt-filter-tab--active{{end}}">{{.Label}}</a>
+        <a href="{{.Href}}"
+           class="bt-filter-tab{{if .Active}} bt-filter-tab--active{{end}}"
+           {{if .Active}}aria-current="page"{{end}}>{{.Label}}</a>
       {{end}}
     </nav>
 

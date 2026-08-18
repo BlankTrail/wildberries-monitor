@@ -1,0 +1,465 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later
+ *
+ * The monitor's own layer over the BlankTrail design system.
+ *
+ * Two jobs, kept apart below. The first is a theme: the design system ships a
+ * dark dashboard, and this panel watches Wildberries, so it is set in the
+ * violet Wildberries itself is set in. That is a token swap and nothing more —
+ * the 73 kB of design system underneath is untouched, so it can be replaced
+ * wholesale on the day it is updated.
+ *
+ * The second is the handful of rules this product needs that a general design
+ * system has no reason to carry: a header row, a table of forty columns that
+ * has to stay readable, a chart that has to fit its card.
+ *
+ * One idea runs through the type: every number in this program is a reading
+ * taken at a moment, and the moment matters as much as the number. So figures
+ * are tabular everywhere they are compared — prices, ranks, counts, times —
+ * and the moment a reading was taken is set as a thing in its own right rather
+ * than as small grey text at the end of a sentence.
+ */
+
+/* ---- theme ------------------------------------------------------------- */
+
+.bt[data-bt-theme="dashboard"] {
+  /* A ground with violet in it rather than white: Wildberries sets its own
+     surfaces on a faint lilac, and pure white next to this accent reads cold. */
+  --bg: #f6f3fb;
+  --bg-card: #ffffff;
+  --bg-card-2: #fbf9fe;
+  --bg-input: #fdfcff;
+
+  --border: #e7dff4;
+  --border-bright: #cbb2e8;
+  --border-focus: #a855f7;
+
+  --text: #1b1226;
+  --text-muted: #6a6280;
+  --text-link: #8b24b6;
+
+  --accent: #8b24b6;
+  --accent-teal: #8b24b6;
+  --accent-indigo: #7b2ff7;
+  --accent-indigo-light: #a855f7;
+
+  /* The one gradient, and it appears in exactly two places: the primary button
+     and the active tab. Spread over cards and headers it stops being a mark
+     and becomes wallpaper. */
+  --accent-grad: linear-gradient(135deg, #7b2ff7 0%, #cb11ab 100%);
+
+  --success: #0f8a5f;
+  --error: #c62828;
+  --info: #2563eb;
+  --warning: #b45309;
+  --success-text: #0f6f4d;
+  --error-text: #a31f1f;
+  --info-text: #1d4ed8;
+  --warning-text: #8a4308;
+
+  --row-hover: rgba(139, 36, 182, 0.05);
+  --row-zebra: rgba(139, 36, 182, 0.025);
+
+  --radius: 12px;
+  --radius-sm: 8px;
+
+  color-scheme: light;
+}
+
+/* The design system draws its dashboard chrome for a dark ground; on a light
+   one the same rules leave white text on white. These are the places that
+   inherited a colour rather than a token. */
+.bt[data-bt-theme="dashboard"] .bt-card,
+.bt[data-bt-theme="dashboard"] .bt-modal {
+  border: 1px solid var(--border);
+  box-shadow: 0 1px 2px rgba(27, 18, 38, 0.04), 0 8px 24px rgba(27, 18, 38, 0.06);
+}
+
+.bt[data-bt-theme="dashboard"] .bt-btn--primary {
+  background: var(--accent-grad);
+  border-color: transparent;
+  color: #fff;
+}
+
+.bt[data-bt-theme="dashboard"] .bt-btn--secondary,
+.bt[data-bt-theme="dashboard"] .bt-btn--ghost {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+
+.bt[data-bt-theme="dashboard"] .bt-btn--secondary:hover:not(:disabled),
+.bt[data-bt-theme="dashboard"] .bt-btn--ghost:hover:not(:disabled) {
+  border-color: var(--border-bright);
+  color: var(--accent);
+}
+
+/* ---- type -------------------------------------------------------------- */
+
+.bt h1,
+.bt h2,
+.bt h3,
+.bt h4,
+.bt h5 {
+  letter-spacing: -0.02em;
+  color: var(--text);
+}
+
+.bt h2 {
+  font-size: 1.35rem;
+  font-weight: 650;
+}
+
+.bt h3 {
+  margin-top: var(--space-6);
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+
+.bt h4 {
+  margin-top: var(--space-4);
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+/* Every figure that is compared with another figure. A column of prices in
+   proportional digits does not line up, and a table of prices that does not
+   line up is a table nobody reads down. */
+.bt-table,
+.bt-code,
+.bt input[type="number"],
+.bt .bt-tabular {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+/* ---- header ------------------------------------------------------------ */
+
+/* The design system makes .bt-dash-header a flex row, but this page puts a
+   container inside it, so the row had one child and everything inside that
+   child ran together inline. The row is the container. */
+.bt-dash-header {
+  margin-bottom: 0;
+  padding: var(--space-3) 0;
+  background: var(--bg-card);
+  border-bottom: 1px solid var(--border);
+}
+
+.bt-dash-header > .bt-container {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.bt-dash-header strong {
+  font-size: 1.05rem;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+
+/* The nav takes the room, which pushes the state badge and the settings button
+   to the far end where controls belong. */
+.bt-dash-header .bt-filter-tabs {
+  flex: 1 1 auto;
+  margin-left: var(--space-4);
+}
+
+/* Tabs as an underline rather than as boxes: six boxed tabs beside two badges
+   and a button is eight bordered things in one row, and none of them reads as
+   the navigation. */
+.bt-filter-tab {
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  padding: var(--space-2) var(--space-1);
+  color: var(--text-muted);
+  text-decoration: none;
+  background: transparent;
+}
+
+.bt-filter-tab:hover {
+  color: var(--text);
+  border-bottom-color: var(--border-bright);
+}
+
+.bt-filter-tab--active {
+  color: var(--text);
+  font-weight: 600;
+  background: transparent;
+  /* The second and last place the gradient appears. */
+  border-image: var(--accent-grad) 1;
+  border-bottom: 2px solid;
+}
+
+.bt-dash-header .bt-badge {
+  flex: 0 0 auto;
+}
+
+/* ---- shell ------------------------------------------------------------- */
+
+.bt-dashboard-shell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.bt-dashboard-shell > main {
+  flex: 1 0 auto;
+  padding-top: var(--space-6);
+  padding-bottom: var(--space-8);
+}
+
+.bt-dashboard-shell > footer {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-4) var(--space-8);
+  color: var(--text-muted);
+}
+
+/* ---- tables ------------------------------------------------------------ */
+
+/* The results table is forty columns wide and will not fit any screen. It
+   scrolls sideways inside its own box rather than stretching the page — a
+   horizontally scrolling document loses the header and the footer with it. */
+.bt-table-wrap {
+  overflow-x: auto;
+  overflow-y: visible;
+  max-width: 100%;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-card);
+}
+
+.bt-table-wrap .bt-table {
+  margin: 0;
+  border: 0;
+  min-width: max-content;
+}
+
+/* Headers on one line each. Wrapped, "Срок доставки, ч (до покупателя)" is
+   four stacked lines that push every other header out of alignment and make
+   the row four times as tall as it needs to be. */
+.bt-table thead th {
+  white-space: nowrap;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bg-card-2);
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.bt-table th,
+.bt-table td {
+  padding: var(--space-2) var(--space-3);
+}
+
+/* One cell per screen may hold an address or a phrase; it wraps rather than
+   pushing the table another six hundred pixels wide. */
+.bt-cell-wrap {
+  white-space: normal;
+  min-width: 14rem;
+  max-width: 26rem;
+  overflow-wrap: anywhere;
+}
+
+/* ---- fields and actions ------------------------------------------------ */
+
+/* A .bt-field is a column: label above control. The export links are neither —
+   they are a row of choices, and stacked they became five full-width bars. */
+.bt-field--row {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.bt-field--row > .bt-label {
+  flex: 0 0 100%;
+}
+
+.bt-form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+}
+
+/* Buttons that sit in a table cell are one row of small controls, not a
+   column: the actions column was as tall as three rows on every line. */
+.bt-table td .bt-btn {
+  margin-right: var(--space-1);
+}
+
+.bt-link {
+  color: var(--text-link);
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+}
+
+.bt-link:hover {
+  border-bottom-color: currentColor;
+}
+
+.bt-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  cursor: pointer;
+}
+
+/* ---- charts ------------------------------------------------------------ */
+
+/* Drawn at nine hundred pixels and shown at whatever the card allows. The
+   border matters: the chart's own ground is white, and without one it bleeds
+   into the card it sits in. */
+.bt-chart {
+  display: block;
+  width: 100%;
+  max-width: 900px;
+  height: auto;
+  margin: var(--space-2) 0 var(--space-6);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: #fff;
+}
+
+/* ---- the moment a reading was taken ------------------------------------ */
+
+/* The one thing this program says that most dashboards do not: a number here
+   is a reading, and it has a date. Set as its own object rather than as grey
+   text trailing a sentence, so that a page of current-looking figures cannot
+   be mistaken for one.
+ */
+.bt-read-at {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding-left: var(--space-3);
+  border-left: 2px solid;
+  border-image: var(--accent-grad) 1;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.bt-read-at__value {
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* ---- small screens ----------------------------------------------------- */
+
+@media (max-width: 720px) {
+  .bt-dash-header > .bt-container {
+    gap: var(--space-2);
+  }
+
+  .bt-dash-header .bt-filter-tabs {
+    order: 3;
+    flex-basis: 100%;
+    margin-left: 0;
+    overflow-x: auto;
+    flex-wrap: nowrap;
+  }
+
+  .bt-chart {
+    max-width: 100%;
+  }
+}
+
+/* ---- motion ------------------------------------------------------------ */
+
+@media (prefers-reduced-motion: reduce) {
+  .bt *,
+  .bt *::before,
+  .bt *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ---- the settings dialog ----------------------------------------------- */
+
+/* The design system's .bt-modal is a div meant to sit inside a scrim it also
+   provides, so it sets display:flex unconditionally. On a native <dialog> that
+   beats the browser's own "closed means hidden", and the panel rendered an
+   empty white box across the header on every screen.
+   
+   Native is still the right element — focus, Escape and the backdrop come from
+   the browser rather than from code here that would get them subtly wrong — so
+   the rule is corrected rather than the element replaced. */
+dialog.bt-modal:not([open]) {
+  display: none;
+}
+
+dialog.bt-modal {
+  margin: auto;
+  max-height: min(85vh, 60rem);
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-card);
+  color: var(--text);
+  overflow: auto;
+}
+
+dialog.bt-modal::backdrop {
+  background: rgba(27, 18, 38, 0.45);
+  backdrop-filter: blur(3px);
+}
+
+dialog.bt-modal > #settings-body {
+  padding: var(--space-6);
+}
+
+/* ---- badges on a light ground ------------------------------------------ */
+
+/* The soft badges are drawn for a dark dashboard: a 10% wash of the accent
+   over near-black. On white the same wash is invisible, and the one badge that
+   explains why nothing is collecting was the palest thing on the page. */
+.bt[data-bt-theme="dashboard"] .bt-badge--soft.bt-badge--warning {
+  background: #fdf3e3;
+  color: #8a4308;
+  border: 1px solid #f0d9b0;
+}
+
+.bt[data-bt-theme="dashboard"] .bt-badge--soft.bt-badge--success {
+  background: #e8f6f0;
+  color: #0f6f4d;
+  border: 1px solid #bfe5d6;
+}
+
+.bt[data-bt-theme="dashboard"] .bt-badge--soft.bt-badge--accent {
+  background: #f3e9fb;
+  color: #7b2ff7;
+  border: 1px solid #e2cdf6;
+}
+
+.bt[data-bt-theme="dashboard"] .bt-badge--neutral {
+  background: var(--bg-card-2);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+}
+
+/* ---- table alignment --------------------------------------------------- */
+
+/* Left, all of them. The design system centres a header whose column has no
+   stated alignment, so a table of forty columns had its labels wandering
+   between centred and left depending on what was in the cells below. */
+.bt-table th,
+.bt-table td {
+  text-align: left;
+}
+
+/* Except the numbers, which line up on the right where they can be compared
+   digit against digit — the reason the figures are tabular in the first place. */
+.bt-table td.bt-num,
+.bt-table th.bt-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}

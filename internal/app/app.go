@@ -30,8 +30,8 @@ import (
 type Config struct {
 	DataDir string
 	Port    int
-	// LAN opens the port beyond loopback. Refused while the password is the
-	// generated one — see web.Server.ListenAddress, which is where that
+	// LAN opens the port beyond loopback. Refused while the panel has no
+	// password of its own — see web.Server.ListenAddress, which is where that
 	// refusal lives because a setting can arrive from a restored backup.
 	LAN bool
 	// OpenBrowser shows the panel on start. The flag exists so a service
@@ -252,7 +252,7 @@ func (a *App) reloadTelegram(ctx context.Context) {
 
 // Run starts the background loops and serves until the context ends.
 func (a *App) Run(ctx context.Context) error {
-	addr, err := a.Server.ListenAddress(a.Config.Port, a.Config.LAN)
+	addr, err := a.Server.ListenAddress(ctx, a.Config.Port, a.Config.LAN)
 	if err != nil {
 		return err
 	}
@@ -263,7 +263,14 @@ func (a *App) Run(ctx context.Context) error {
 
 	url := fmt.Sprintf("http://127.0.0.1:%d/", listener.Addr().(*net.TCPAddr).Port)
 	a.Log.Printf("панель: %s", url)
-	if a.Generated {
+	// What to say about getting in depends on whether there is anything to get
+	// past. Printing a password nobody will be asked for is how people come to
+	// believe they need one.
+	switch {
+	case !a.Server.RequireAuth(ctx):
+		a.Log.Printf("вход без пароля: панель слушает только эту машину. " +
+			"Пароль включается в настройках, галочка «требовать пароль»")
+	case a.Generated:
 		// Printed, not only written to the file: a person starting this by
 		// hand should not have to go looking for a file to get in.
 		a.Log.Printf("логин monitor, пароль %s (он же в %s)",

@@ -169,7 +169,7 @@ func filterForm(q url.Values) string {
 	}
 	b.WriteString(`<label class="bt-checkbox"><input type="checkbox" name="latest" value="1"` + checked +
 		`> Только последнее чтение каждого товара</label>`)
-	b.WriteString(`<button class="bt-btn bt-btn--primary" type="submit">Показать</button>`)
+	b.WriteString(`<div class="bt-form-actions"><button class="bt-btn bt-btn--primary" type="submit">Показать</button></div>`)
 	b.WriteString(`</form>`)
 	return b.String()
 }
@@ -190,7 +190,9 @@ func exportButtons(q url.Values) string {
 	// the worst kind of wrong: right in shape, wrong in content.
 	base := "/results/export?" + q.Encode()
 	var b strings.Builder
-	b.WriteString(`<div class="bt-field"><span class="bt-label">Выгрузить</span>`)
+	// A row, not a column: a .bt-field stacks what it holds, and five stacked
+	// links became five full-width bars where a row of five choices belongs.
+	b.WriteString(`<div class="bt-field bt-field--row"><span class="bt-label">Выгрузить</span>`)
 	for _, f := range exportFormats {
 		sep := "&"
 		if q.Encode() == "" {

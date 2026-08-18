@@ -35,8 +35,15 @@ no tray on macOS or Linux — the packages that draw one need CGO there, and CGO
 would end the single-machine cross-compile this project is built around; those
 platforms get the same panel, started by a launchd or systemd unit.
 
-The first start prints the address of the panel and a generated password, and
-writes the same password to `first-run.txt` in the data directory. The panel is
+The panel asks for no password by default, and that is a decision rather than
+an oversight: it listens on `127.0.0.1` only, so what a password keeps out is
+another account or another program on the same machine. On a shared machine
+that is worth having — tick **требовать пароль** in the settings, and the login
+is `monitor` with the password in `first-run.txt` beside the database. Opening
+the port beyond this machine is refused until that tick is on and the password
+is one you chose rather than the one generated on the first start.
+
+The panel is
 on `http://127.0.0.1:8760/` by default, and it is closed to the rest of the
 network until you set a password of your own — a generated one anybody can read
 out of a file is not a password once the port is reachable.

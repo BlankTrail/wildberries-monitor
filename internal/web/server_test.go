@@ -47,35 +47,37 @@ func postForm(t *testing.T, srv *Server, path string, form url.Values) *httptest
 	return w
 }
 
-func TestAuth_RefusesWithoutThePassword(t *testing.T) {
+func TestAuth_RefusesWithoutThePasswordOnceItIsAskedFor(t *testing.T) {
 	// The monitor holds the user's proxy credentials and a year of what they
-	// collected. An open port with no gate is those things handed to anything
-	// that can reach the machine.
+	// collected. Turned on, the gate has to be a gate: a wrong password is as
+	// good as none.
 	srv := newServer(t)
+	requireAuth(t, srv, true)
 
 	if got := get(t, srv, "/", "").Code; got != http.StatusUnauthorized {
-		t.Errorf("no password = %d, want 401", got)
+		t.Errorf("без пароля = %d, ожидалось 401", got)
 	}
 	if got := get(t, srv, "/", "wrong").Code; got != http.StatusUnauthorized {
-		t.Errorf("wrong password = %d, want 401", got)
+		t.Errorf("с неверным = %d, ожидалось 401", got)
 	}
 	if got := get(t, srv, "/", "correct horse").Code; got != http.StatusOK {
-		t.Errorf("right password = %d, want 200", got)
+		t.Errorf("с верным = %d, ожидалось 200", got)
 	}
 }
 
-func TestAuth_SaysSoWhenThereIsNoPasswordAtAll(t *testing.T) {
+func TestAuth_TurnedOnWithNoPasswordSaysWhereToFindOne(t *testing.T) {
 	// Prompting for a password that does not exist teaches the user to type
 	// anything and wonder why nothing works.
 	srv := newServer(t)
 	srv.Password = ""
+	requireAuth(t, srv, true)
 
 	w := get(t, srv, "/", "anything")
 	if w.Code != http.StatusServiceUnavailable {
-		t.Errorf("code = %d, want 503 when no password is configured", w.Code)
+		t.Errorf("код %d, ожидалось 503", w.Code)
 	}
 	if !strings.Contains(w.Body.String(), "first-run.txt") {
-		t.Errorf("the message does not say where to find the password: %q", w.Body.String())
+		t.Errorf("не сказано, где взять пароль: %q", w.Body.String())
 	}
 }
 
@@ -125,33 +127,142 @@ func TestFirstRunPassword_IsGeneratedOnceAndKept(t *testing.T) {
 	}
 }
 
-func TestListenAddress_RefusesTheNetworkWhileThePasswordIsTheGeneratedOne(t *testing.T) {
-	// A password anybody can read out of a file in the data directory is not
-	// a password once the port is reachable from the network.
+// requireAuth turns the panel's gate on for a test.
+func requireAuth(t *testing.T, srv *Server, on bool) {
+	t.Helper()
+	value := "0"
+	if on {
+		value = "1"
+	}
+	if err := srv.Store.SetSetting(context.Background(), store.SettingRequireAuth, value, store.SettingBool); err != nil {
+		t.Fatalf("SetSetting: %v", err)
+	}
+}
+
+func TestListenAddress_RefusesTheNetworkWhileAnybodyCouldWalkIn(t *testing.T) {
+	// Two states let anybody in: no password asked for at all, and one this
+	// program generated into a file beside the database. Both are fine while
+	// the only way in is from this machine. Neither is a thing to put on a
+	// network — the panel holds a proxy key, a bot token and everything
+	// collected.
+	ctx := context.Background()
+
+	for _, c := range []struct {
+		name      string
+		auth      bool
+		generated bool
+	}{
+		{"без пароля вовсе", false, false},
+		{"пароль сгенерирован", true, true},
+		{"и то и другое", false, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			srv := newServer(t)
+			requireAuth(t, srv, c.auth)
+			srv.GeneratedPassword = c.generated
+
+			if _, err := srv.ListenAddress(ctx, 8080, true); !errors.Is(err, ErrWouldExposeUnprotectedPanel) {
+				t.Errorf("выход в сеть = %v, ожидался отказ", err)
+			}
+			// Loopback is still fine, and that is the whole point: refusing it
+			// too would leave the user with no way in at all.
+			addr, err := srv.ListenAddress(ctx, 8080, false)
+			if err != nil {
+				t.Fatalf("локально: %v", err)
+			}
+			if !strings.HasPrefix(addr, "127.0.0.1:") {
+				t.Errorf("адрес %q, ожидался локальный", addr)
+			}
+		})
+	}
+
+	// Once a password is asked for and it is the person's own, the network is
+	// theirs to open.
 	srv := newServer(t)
-	srv.GeneratedPassword = true
-
-	if _, err := srv.ListenAddress(8080, true); !errors.Is(err, ErrWouldExposeDefaultPassword) {
-		t.Errorf("listening on the network with a generated password = %v, want a refusal", err)
-	}
-	// Loopback is still fine: the generated password is meant for exactly
-	// this, and refusing it would leave the user with no way in at all.
-	addr, err := srv.ListenAddress(8080, false)
-	if err != nil {
-		t.Fatalf("loopback: %v", err)
-	}
-	if !strings.HasPrefix(addr, "127.0.0.1:") {
-		t.Errorf("address = %q, want loopback", addr)
-	}
-
-	// Once a person has chosen their own, the network is theirs to open.
+	requireAuth(t, srv, true)
 	srv.GeneratedPassword = false
-	addr, err = srv.ListenAddress(8080, true)
+
+	addr, err := srv.ListenAddress(ctx, 8080, true)
 	if err != nil {
-		t.Fatalf("network with a chosen password: %v", err)
+		t.Fatalf("сеть со своим паролем: %v", err)
 	}
 	if strings.HasPrefix(addr, "127.0.0.1:") {
-		t.Errorf("address = %q, want every interface", addr)
+		t.Errorf("адрес %q, ожидались все интерфейсы", addr)
+	}
+}
+
+func TestAuth_IsOffUntilSomebodyAsksForIt(t *testing.T) {
+	// The default, and the reason for it: the server listens on this machine
+	// only, so what a password keeps out is another account or another program
+	// here — a login prompt every morning for nothing on a personal machine.
+	srv := newServer(t)
+
+	if got := get(t, srv, "/", "").Code; got != http.StatusOK {
+		t.Errorf("без пароля = %d, ожидалось 200", got)
+	}
+	// And a password offered anyway is not a reason to refuse.
+	if got := get(t, srv, "/", "что угодно").Code; got != http.StatusOK {
+		t.Errorf("со случайным паролем = %d, ожидалось 200", got)
+	}
+}
+
+func TestAuth_AsksOnceItIsTurnedOn(t *testing.T) {
+	// And takes effect on the next page rather than on the next restart: a
+	// setting that needs a restart is a setting people believe they changed.
+	srv := newServer(t)
+	requireAuth(t, srv, true)
+
+	if got := get(t, srv, "/", "").Code; got != http.StatusUnauthorized {
+		t.Errorf("без пароля = %d, ожидалось 401", got)
+	}
+	if got := get(t, srv, "/", "wrong").Code; got != http.StatusUnauthorized {
+		t.Errorf("с неверным = %d, ожидалось 401", got)
+	}
+	if got := get(t, srv, "/", "correct horse").Code; got != http.StatusOK {
+		t.Errorf("с верным = %d, ожидалось 200", got)
+	}
+}
+
+func TestSettings_OffersTheGateAndRemembersTheChoice(t *testing.T) {
+	srv := newServer(t)
+
+	body := get(t, srv, "/settings", "").Body.String()
+	if !strings.Contains(body, "require_auth") {
+		t.Errorf("на экране настроек нет переключателя:\n%s", body)
+	}
+	if !strings.Contains(body, "требовать пароль") {
+		t.Error("переключатель без названия")
+	}
+	// And under a heading of its own. Loose among the BlankTrail address and
+	// the bot token, a tick called "требовать пароль" reads as being about one
+	// of them.
+	if !strings.Contains(body, "Доступ к панели") {
+		t.Error("переключатель не отнесён к разделу")
+	}
+	// The hint says which password, because the switch on its own leaves the
+	// two questions a person actually has: which one, and why it is off. This
+	// server carries a password somebody chose, so the hint names the login.
+	if !strings.Contains(body, "monitor") {
+		t.Errorf("не сказано, каким логином входить:\n%s", body)
+	}
+
+	form := url.Values{"url": {"http://127.0.0.1:8891"}, "require_auth": {"1"}}
+	if got := postForm(t, srv, "/settings", form).Code; got != http.StatusOK {
+		t.Fatalf("сохранение = %d", got)
+	}
+	if !srv.RequireAuth(context.Background()) {
+		t.Error("галочка не сохранилась")
+	}
+
+	// Unticked posts nothing at all, which is the one field a form parser gets
+	// wrong by doing nothing — and here doing nothing would leave the panel
+	// asking for a password the user just turned off.
+	form.Del("require_auth")
+	if got := postForm(t, srv, "/settings", form).Code; got != http.StatusOK {
+		t.Fatalf("сохранение = %d", got)
+	}
+	if srv.RequireAuth(context.Background()) {
+		t.Error("галочка не снялась")
 	}
 }
 

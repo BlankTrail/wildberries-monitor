@@ -149,17 +149,13 @@
       });
     });
 
-    root.querySelectorAll("[data-tab]").forEach((el) => {
-      if (el.dataset.wired) return;
-      el.dataset.wired = "1";
-      el.addEventListener("click", (ev) => {
-        ev.preventDefault();
-        document.querySelectorAll("[data-tab]").forEach((t) =>
-          t.classList.toggle("bt-filter-tab--active", t === el)
-        );
-        swap("#main", el.dataset.tab);
-      });
-    });
+    // The tabs are left alone deliberately. They used to be swapped into
+    // #main, and every screen behind them renders a whole page — so the
+    // header, the nav and the footer arrived inside the region below the
+    // header, twice over. Swapping a page into a part of itself is the bug;
+    // the fix is not a fragment endpoint per screen but letting a link be a
+    // link. A local server costs nothing to reload, and the address bar,
+    // the back button and a bookmarkable URL come back for free.
   }
 
   // ---- settings dialog ---------------------------------------------------
