@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -301,9 +300,9 @@ func TestScopeText_ReadsAsSomethingAPersonWrote(t *testing.T) {
 }
 
 func TestRuleForm_AsksOnlyForWhatTheChosenScopeUses(t *testing.T) {
-	// The scope decides whether the rule is aimed by an identifier or by a
-	// brand and a price range. Asking for both at once left the user to work
-	// out which three of the five fields their own choice used.
+	// The scope decides what the rule is aimed by, and each scope asks for it
+	// in its own words: «Идентификатор» left the user to work out which number
+	// was wanted, and for a job the answer was one they had to go and look up.
 	srv, _ := withTarget(t)
 	body := get(t, srv, "/rules", "correct horse").Body.String()
 
@@ -320,21 +319,23 @@ func TestRuleForm_AsksOnlyForWhatTheChosenScopeUses(t *testing.T) {
 	}
 
 	for _, c := range []struct {
-		name   string
-		scopes []rules.ScopeKind
+		scope rules.ScopeKind
+		holds []string
 	}{
-		{"scope_id", []rules.ScopeKind{rules.ScopeProduct, rules.ScopeSeller, rules.ScopeJob}},
-		{"filter_brand", []rules.ScopeKind{rules.ScopeFilter}},
-		{"filter_price_min", []rules.ScopeKind{rules.ScopeFilter}},
-		{"filter_price_max", []rules.ScopeKind{rules.ScopeFilter}},
+		{rules.ScopeProduct, []string{`name="scope_id"`, "Артикул товара"}},
+		{rules.ScopeSeller, []string{`name="scope_id"`, "Идентификатор продавца"}},
+		{rules.ScopeJob, []string{`name="scope_id"`, "Задание"}},
+		{rules.ScopeFilter, []string{`name="filter_brand"`, `name="filter_price_min"`, `name="filter_price_max"`}},
 	} {
-		group := groupAround(body, `name="`+c.name+`"`)
-		want := make([]string, len(c.scopes))
-		for i, sc := range c.scopes {
-			want[i] = string(sc)
+		group := groupHTML(body, string(c.scope))
+		if group == "" {
+			t.Errorf("для области %q нет своей группы полей", c.scope)
+			continue
 		}
-		if got := strings.Fields(group); !slices.Equal(got, want) {
-			t.Errorf("поле %q отнесено к %v, ожидалось %v", c.name, got, want)
+		for _, want := range c.holds {
+			if !strings.Contains(group, want) {
+				t.Errorf("в группе %q нет %q", c.scope, want)
+			}
 		}
 	}
 
@@ -344,6 +345,131 @@ func TestRuleForm_AsksOnlyForWhatTheChosenScopeUses(t *testing.T) {
 		if group := groupAround(body, `name="`+name+`"`); group != "" {
 			t.Errorf("общее поле %q отнесено к областям %q", name, group)
 		}
+	}
+}
+
+// groupHTML returns what one data-when group holds, or "" when there is none
+// with exactly that list.
+func groupHTML(body, when string) string {
+	const open = `<div class="bt-when" data-when="`
+	from := strings.Index(body, open+when+`">`)
+	if from < 0 {
+		return ""
+	}
+	depth, j := 0, from
+	for j < len(body) {
+		nextOpen := strings.Index(body[j:], "<div")
+		nextClose := strings.Index(body[j:], "</div>")
+		if nextClose < 0 {
+			break
+		}
+		if nextOpen >= 0 && nextOpen < nextClose {
+			depth++
+			j += nextOpen + len("<div")
+			continue
+		}
+		depth--
+		j += nextClose + len("</div>")
+		if depth == 0 {
+			break
+		}
+	}
+	return body[from:j]
+}
+
+func TestRuleForm_OffersTheJobsThatExistRatherThanTheirNumbers(t *testing.T) {
+	// Aiming a rule at a job meant knowing its number. The number is still
+	// the field — it is what gets stored, and somebody pasting from elsewhere
+	// already has it — with the list beside it so that nobody has to remember.
+	srv, _ := withTarget(t)
+	ctx := t.Context()
+
+	form := goodForm()
+	form.Set("name", "весенние платья")
+	if w := postForm(t, srv, "/jobs", form); w.Code != http.StatusOK {
+		t.Fatalf("задание не сохранилось: %d", w.Code)
+	}
+	saved, err := srv.Store.Jobs(ctx)
+	if err != nil || len(saved) != 1 {
+		t.Fatalf("Jobs: %v, %d", err, len(saved))
+	}
+
+	group := groupHTML(get(t, srv, "/rules", "correct horse").Body.String(), string(rules.ScopeJob))
+	if !strings.Contains(group, `data-fill="#rule-job-id"`) {
+		t.Errorf("списка заданий нет:\n%s", group)
+	}
+	if !strings.Contains(group, "весенние платья") {
+		t.Errorf("в списке нет сохранённого задания:\n%s", group)
+	}
+	if !strings.Contains(group, fmt.Sprintf(`value="%d"`, saved[0].ID)) {
+		t.Errorf("в списке нет номера задания:\n%s", group)
+	}
+}
+
+func TestRuleForm_StartsWithOneConditionAndCanGrow(t *testing.T) {
+	// Two rows were drawn whether or not anybody wanted a second, and there
+	// was no way to a third. One to start with, and a template the button
+	// stamps out — the markup stays the server's, so there is no second copy
+	// of the row in the script to drift from this one.
+	srv, _ := withTarget(t)
+	body := get(t, srv, "/rules", "correct horse").Body.String()
+
+	form := body[strings.Index(body, `<form`):]
+	list := form[strings.Index(form, `<div id="conditions"`):]
+	list = list[:strings.Index(list, `<template`)]
+	if n := strings.Count(list, `name="cond_field_`); n != 1 {
+		t.Errorf("условий на форме %d, ожидалось одно", n)
+	}
+	if strings.Contains(list, condIndexMark) {
+		t.Error("шаблонный номер попал в рабочую строку")
+	}
+
+	if !strings.Contains(body, `<template id="condition-template">`) {
+		t.Error("нет заготовки для следующего условия")
+	}
+	if !strings.Contains(body, `data-add-condition="#conditions"`) {
+		t.Error("нечем добавить условие")
+	}
+	// The И/ИЛИ belongs between two conditions, so the one in the template is
+	// the only one on a form that has a single condition.
+	if strings.Count(body, `name="cond_op"`) != 1 {
+		t.Error("выбор И/ИЛИ есть при единственном условии или отсутствует в заготовке")
+	}
+}
+
+func TestSaveRule_TakesAsManyConditionsAsWereSent(t *testing.T) {
+	// The reader stopped at two because the form drew two. It now reads until
+	// the numbering stops, or a third condition would be typed, saved and
+	// quietly dropped.
+	srv, target := withTarget(t)
+
+	form := ruleFormValues(target)
+	form.Set("cond_op", string(rules.OpOr))
+	for i, cond := range []struct{ field, cmp, value string }{
+		{string(rules.FieldPercent), string(rules.CmpLess), "-5"},
+		{string(rules.FieldPercent), string(rules.CmpGreater), "5"},
+		{string(rules.FieldPriceSale), string(rules.CmpGreater), "1000"},
+	} {
+		form.Set(fmt.Sprintf("cond_field_%d", i), cond.field)
+		form.Set(fmt.Sprintf("cond_cmp_%d", i), cond.cmp)
+		form.Set(fmt.Sprintf("cond_value_%d", i), cond.value)
+	}
+
+	if w := postForm(t, srv, "/rules", form); w.Code != http.StatusOK {
+		t.Fatalf("сохранение = %d: %s", w.Code, firstLines(w.Body.String()))
+	}
+	all, err := rules.All(t.Context(), srv.Store)
+	if err != nil {
+		t.Fatalf("All: %v", err)
+	}
+	if len(all) != 1 {
+		t.Fatalf("сохранено правил: %d", len(all))
+	}
+	if got := len(all[0].Condition.Nodes); got != 3 {
+		t.Errorf("условий в правиле %d, ожидалось 3", got)
+	}
+	if all[0].Condition.Op != rules.OpOr {
+		t.Errorf("условия соединены как %q", all[0].Condition.Op)
 	}
 }
 
@@ -396,5 +522,49 @@ func TestSaveRule_KeepsOnlyTheHalfOfTheScopeItUses(t *testing.T) {
 	}
 	if filtered.Filter.Brand != "Nike" || filtered.Filter.PriceMinMinor != 100000 {
 		t.Errorf("фильтр не сохранился: %+v", filtered.Filter)
+	}
+}
+
+func TestRules_TheTabIsNamedForWhatItProduces(t *testing.T) {
+	// «Правила» is the mechanism; what a person comes to this screen for is
+	// the message at the end of it. The address stays /rules so that a saved
+	// link keeps working — nobody reads the address.
+	srv, _ := withTarget(t)
+	body := get(t, srv, "/", "correct horse").Body.String()
+
+	if !strings.Contains(body, ">Уведомления<") {
+		t.Errorf("вкладка называется не «Уведомления»:\n%s", body)
+	}
+	if !strings.Contains(body, `href="/rules"`) {
+		t.Error("вкладка никуда не ведёт")
+	}
+	if !strings.Contains(get(t, srv, "/rules", "correct horse").Body.String(), "<h2>Уведомления</h2>") {
+		t.Error("экран назван иначе, чем вкладка, которая его открывает")
+	}
+}
+
+func TestSaveRule_TakesTheIdentifierFromWhicheverScopeFieldWasFilled(t *testing.T) {
+	// Each scope asks for its number in its own words, so three fields carry
+	// this name and the script leaves one of them enabled. With no script all
+	// three are posted and only one is filled — reading the first would store
+	// a rule aimed at nothing while telling the user it was saved.
+	srv, target := withTarget(t)
+
+	form := ruleFormValues(target)
+	form.Set("scope_kind", string(rules.ScopeJob))
+	form["scope_id"] = []string{"", "", "77"}
+
+	if w := postForm(t, srv, "/rules", form); w.Code != http.StatusOK {
+		t.Fatalf("сохранение = %d: %s", w.Code, firstLines(w.Body.String()))
+	}
+	all, err := rules.All(t.Context(), srv.Store)
+	if err != nil {
+		t.Fatalf("All: %v", err)
+	}
+	if len(all) != 1 {
+		t.Fatalf("сохранено правил: %d", len(all))
+	}
+	if all[0].Scope.ID != 77 {
+		t.Errorf("номер задания = %d, ожидалось 77", all[0].Scope.ID)
 	}
 }

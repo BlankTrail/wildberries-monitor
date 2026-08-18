@@ -606,3 +606,29 @@ func TestSaveJob_KeepsOnlyWhatTheChosenKindUses(t *testing.T) {
 		t.Errorf("артикулы задания = %v", second.Articles)
 	}
 }
+
+func TestField_PutsItsExplanationUnderAnInfoMark(t *testing.T) {
+	// Every field here has something worth saying, and said all at once the
+	// sentences doubled the height of a form somebody is trying to read past.
+	// The text is still in the page — a title attribute would be invisible to
+	// a touch screen and skipped by some screen readers — it is just behind
+	// the ⓘ until asked for.
+	const hint = "Постраничная выдача сама не кончается, поэтому предел обязателен."
+
+	srv := newServer(t)
+	body := get(t, srv, "/jobs", "correct horse").Body.String()
+
+	at := strings.Index(body, hint)
+	if at < 0 {
+		t.Fatal("пояснение пропало со страницы")
+	}
+	before := body[:at]
+	if !strings.HasSuffix(before, `<span class="bt-tip" role="note">`) {
+		t.Errorf("пояснение не в подсказке, а в %q", before[max(0, len(before)-60):])
+	}
+	// And the mark it hangs on, focusable so that a keyboard and a tap reach
+	// it rather than a mouse alone.
+	if !strings.Contains(body, `<span class="bt-info" tabindex="0">`) {
+		t.Error("нет значка, из-под которого читается пояснение")
+	}
+}

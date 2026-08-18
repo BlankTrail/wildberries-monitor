@@ -5,6 +5,8 @@ package app
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -359,24 +361,34 @@ func TestStopJob_ReachesTheRunAndSaysSoWhenThereIsNone(t *testing.T) {
 	settled(t, "остановка не дошла до прогона", func() bool { return !a.Scheduler.Running(id) })
 }
 
-func TestBotJobs_ARunThisProgramIsWorkingOnCountsAsRunning(t *testing.T) {
-	// Two sources that can disagree: the run rows know which plans are
-	// unfinished, including one a crash interrupted; the scheduler knows what
-	// this process is working on. A list showing only the first would call an
-	// interrupted run finished.
-	a := newApp(t)
-	configured(t, a)
+// blockingPlanner holds a plan back, and with it the run row that planning
+// produces.
+type blockingPlanner struct {
+	release <-chan struct{}
+}
+
+func (p blockingPlanner) Plan(j job.Job) ([]job.Item, error) {
+	<-p.release
+	return job.StaticPlanner{}.Plan(j)
+}
+
+// takenButNotPlannedYet leaves a job in the moment these two tests are about:
+// the scheduler has taken it, and the plan — the thing that puts a run row in
+// the database — has not been written.
+//
+// Held open on purpose rather than raced for. With a blocking fetcher instead
+// of a blocking planner the row is already there by the time anything looks,
+// and both lists answer correctly for the wrong reason: they read the
+// database, the database knows, and the merge they exist to check is never
+// exercised. The precondition below is what says so out loud.
+func takenButNotPlannedYet(t *testing.T, a *App) int64 {
+	t.Helper()
 
 	release := make(chan struct{})
 	a.Scheduler = job.NewScheduler(&job.Runner{
-		Store: a.Store, Bus: a.Bus, Planner: job.StaticPlanner{},
-		Fetcher: job.FetcherFunc(func(ctx context.Context, _ job.Item) (int, error) {
-			select {
-			case <-release:
-			case <-ctx.Done():
-			}
-			return 1, nil
-		}),
+		Store: a.Store, Bus: a.Bus,
+		Planner: blockingPlanner{release: release},
+		Fetcher: job.FetcherFunc(func(context.Context, job.Item) (int, error) { return 1, nil }),
 	})
 	id := collectible(t, a, "")
 
@@ -384,10 +396,30 @@ func TestBotJobs_ARunThisProgramIsWorkingOnCountsAsRunning(t *testing.T) {
 		t.Fatalf("StartJob: %v", err)
 	}
 	settled(t, "запуск не начался", func() bool { return a.Scheduler.Running(id) })
-	defer func() {
+	t.Cleanup(func() {
 		close(release)
 		settled(t, "прогон не закончился", func() bool { return !a.Scheduler.Running(id) })
-	}()
+	})
+
+	stored, err := a.Store.Jobs(t.Context())
+	if err != nil {
+		t.Fatalf("Jobs: %v", err)
+	}
+	if len(stored) != 1 || stored[0].Running {
+		t.Fatalf("прогон уже в базе — окно, ради которого написан тест, закрыто: %+v", stored)
+	}
+	return id
+}
+
+func TestBotJobs_ARunThisProgramIsWorkingOnCountsAsRunning(t *testing.T) {
+	// Two sources that can disagree: the run rows know which plans are
+	// unfinished, including one a crash interrupted; the scheduler knows what
+	// this process is working on. A list showing only the first calls a job
+	// somebody just started «не запускалось» — at the one moment they are
+	// looking at it — and calls an interrupted run finished.
+	a := newApp(t)
+	configured(t, a)
+	takenButNotPlannedYet(t, a)
 
 	list, err := botJobs{a}.List(t.Context())
 	if err != nil {
@@ -398,6 +430,26 @@ func TestBotJobs_ARunThisProgramIsWorkingOnCountsAsRunning(t *testing.T) {
 	}
 }
 
+func TestPanelJobs_ShowsARunAsSoonAsItIsTaken(t *testing.T) {
+	// The same gap on the screen where it is actually seen: somebody presses
+	// «Запустить», the list comes back, and the row says «не запускалось».
+	a := newApp(t)
+	configured(t, a)
+	takenButNotPlannedYet(t, a)
+
+	w := httptest.NewRecorder()
+	a.Server.Handler().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/jobs", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("экран заданий = %d", w.Code)
+	}
+	// The badge, not the word: «идёт» also occurs in the hint under the
+	// schedule field, and an assertion matching that would pass happily with
+	// the row right above it saying «не запускалось».
+	const badge = `<span class="bt-badge bt-badge--success bt-badge--sm">идёт</span>`
+	if !strings.Contains(w.Body.String(), badge) {
+		t.Errorf("идущее задание на экране не отмечено:\n%s", w.Body.String())
+	}
+}
 func TestLoadEndpoints_TheDefaultsUnlessAFileSaysOtherwise(t *testing.T) {
 	// Spec section 4.1's promise: when Wildberries moves a path, the user edits
 	// a file and keeps working instead of waiting for a release.

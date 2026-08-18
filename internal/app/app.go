@@ -146,6 +146,7 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 		Password: password, GeneratedPassword: generated,
 		TelegramRoute: a.Ladder.Name,
 		Autostart:     osAutostart{},
+		JobList:       func(ctx context.Context) ([]store.JobStatus, error) { return a.JobList(ctx) },
 		StartJob:      func(ctx context.Context, id int64) error { return a.StartJob(ctx, id) },
 		StopJob:       func(id int64) error { return a.StopJob(id) },
 		CheckChannel: func(ctx context.Context, id int64) (string, error) {

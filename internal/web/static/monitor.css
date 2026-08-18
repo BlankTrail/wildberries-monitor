@@ -593,3 +593,112 @@ dialog.bt-modal > #settings-body {
     grid-template-columns: 1fr;
   }
 }
+
+/* ---- the ⓘ beside a label ----------------------------------------------- */
+
+.bt[data-bt-theme="dashboard"] .bt-info {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1rem;
+  height: 1rem;
+  margin-left: .3rem;
+  vertical-align: middle;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--bg-card-2);
+  color: var(--text-muted);
+  font-size: .68rem;
+  font-style: italic;
+  font-weight: 600;
+  line-height: 1;
+  cursor: help;
+}
+
+.bt[data-bt-theme="dashboard"] .bt-info:hover,
+.bt[data-bt-theme="dashboard"] .bt-info:focus-visible {
+  border-color: var(--accent);
+  color: var(--accent);
+  outline: none;
+}
+
+/* The text is in the page rather than in a title attribute: a title waits a
+   second, cannot be styled, never appears on a touch screen and is skipped by
+   some screen readers. Shown on focus as well as on hover, so a keyboard
+   reaches it and a tap opens it. */
+.bt[data-bt-theme="dashboard"] .bt-tip {
+  position: absolute;
+  bottom: calc(100% + .4rem);
+  left: -.5rem;
+  z-index: 30;
+  width: max-content;
+  max-width: min(24rem, 70vw);
+  padding: .5rem .625rem;
+  border-radius: var(--radius-sm);
+  background: #2a1f38;
+  color: #fff;
+  font-size: .78rem;
+  font-style: normal;
+  font-weight: 400;
+  line-height: 1.45;
+  text-align: left;
+  white-space: normal;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity .12s ease;
+}
+
+.bt[data-bt-theme="dashboard"] .bt-info:hover .bt-tip,
+.bt[data-bt-theme="dashboard"] .bt-info:focus .bt-tip,
+.bt[data-bt-theme="dashboard"] .bt-info:focus-visible .bt-tip {
+  opacity: 1;
+  visibility: visible;
+}
+
+/* ---- conditions, as many as somebody needs ------------------------------ */
+
+.bt[data-bt-theme="dashboard"] .bt-cond-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: var(--space-2);
+  align-items: center;
+  margin-bottom: var(--space-3);
+}
+
+/* The И/ИЛИ sits between the rows it joins, on its own line, so the pairing
+   is visible rather than declared in a field at the bottom of the form. */
+.bt[data-bt-theme="dashboard"] .bt-cond-join {
+  grid-column: 1 / -1;
+  width: 8.5rem;
+}
+
+.bt[data-bt-theme="dashboard"] .bt-cond-drop {
+  padding: 0 .5rem;
+  color: var(--text-muted);
+  font-size: 1.1rem;
+  line-height: 1;
+}
+
+.bt[data-bt-theme="dashboard"] .bt-cond-drop:hover {
+  color: var(--error);
+}
+
+.bt[data-bt-theme="dashboard"] .bt-form-actions--tight {
+  margin-top: 0;
+  margin-bottom: var(--space-4);
+}
+
+/* A field with a list beside it: the number is what gets stored, the list is
+   so that nobody has to remember it. */
+.bt[data-bt-theme="dashboard"] .bt-with-picker {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr);
+  gap: var(--space-2);
+}
+
+@media (max-width: 720px) {
+  .bt[data-bt-theme="dashboard"] .bt-with-picker {
+    grid-template-columns: 1fr;
+  }
+}

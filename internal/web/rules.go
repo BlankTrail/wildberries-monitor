@@ -97,7 +97,7 @@ func (s *Server) rulesPage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "rules: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	s.render(w, r, page{Title: "Правила", Body: rawHTML(body)})
+	s.render(w, r, page{Title: "Уведомления", Body: rawHTML(body)})
 }
 
 // rulesFragment renders the same thing without the page around it, for a save
@@ -122,11 +122,20 @@ func (s *Server) rulesHTML(r *http.Request) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// The jobs are here so that a rule aimed at one can be picked from a list
+	// rather than by an identifier somebody has to go and look up.
+	jobs, err := s.Store.Jobs(ctx)
+	if err != nil {
+		return "", err
+	}
 
 	var b strings.Builder
-	b.WriteString(`<section id="rules-body" class="bt-card"><h2>Правила</h2>`)
+	// Named for what it does rather than for what it is made of: every one of
+	// these ends in a message somebody gets, and «Правила» is the mechanism.
+	// The address stays /rules — a saved link keeps working.
+	b.WriteString(`<section id="rules-body" class="bt-card"><h2>Уведомления</h2>`)
 	b.WriteString(s.ruleList(all))
-	b.WriteString(ruleForm(targets))
+	b.WriteString(ruleForm(targets, jobs))
 	b.WriteString(`</section>`)
 	return b.String(), nil
 }
@@ -134,12 +143,12 @@ func (s *Server) rulesHTML(r *http.Request) (string, error) {
 // ruleList shows what exists, and under each rule what it has been doing.
 func (s *Server) ruleList(all []rules.Rule) string {
 	if len(all) == 0 {
-		return `<div class="bt-alert bt-alert--neutral">Правил пока нет. Первое — ниже.</div>`
+		return `<div class="bt-alert bt-alert--neutral">Уведомлений пока нет. Первое — ниже.</div>`
 	}
 
 	var b strings.Builder
 	b.WriteString(`<div class="bt-table-wrap"><table class="bt-table"><thead><tr>` +
-		`<th>Правило</th><th>Изменение</th><th>Область</th><th>Порог</th><th>Состояние</th><th></th>` +
+		`<th>Уведомление</th><th>Изменение</th><th>Область</th><th>Порог</th><th>Состояние</th><th></th>` +
 		`</tr></thead><tbody>`)
 
 	for _, rule := range all {
@@ -244,7 +253,7 @@ func (s *Server) ruleLog(w http.ResponseWriter, r *http.Request) {
 	var b strings.Builder
 	b.WriteString(`<h3>Журнал срабатываний</h3>`)
 	if len(log) == 0 {
-		b.WriteString(`<div class="bt-alert bt-alert--neutral">Это правило ещё ни разу не совпало.</div>`)
+		b.WriteString(`<div class="bt-alert bt-alert--neutral">Это уведомление ещё ни разу не совпало.</div>`)
 	} else {
 		b.WriteString(`<div class="bt-table-wrap"><table class="bt-table"><thead><tr>` +
 			`<th>Когда</th><th>Изменение</th><th>Товар</th><th>Результат</th></tr></thead><tbody>`)
@@ -277,14 +286,87 @@ func (s *Server) ruleLog(w http.ResponseWriter, r *http.Request) {
 }
 
 // ruleForm is the constructor.
-func ruleForm(targets []store.TargetRow) string {
+// condIndexMark is where a condition's number goes in the template the browser
+// stamps out. A word rather than a digit, so that the template can never be
+// mistaken for a working row if the script never runs.
+const condIndexMark = "__i__"
+
+// conditionRow is one condition: what to compare, how, and against what.
+//
+// join draws the И/ИЛИ in front of it. The first row has nothing in front of
+// it to join to.
+func conditionRow(index string, join bool) string {
 	var b strings.Builder
-	b.WriteString(`<h3>Новое правило</h3>`)
+	b.WriteString(`<div class="bt-cond-row">`)
+
+	if join {
+		// Every gap carries the same control, and the script keeps them equal,
+		// because the rule joins all of its conditions the same way — there is
+		// one operator underneath, not one per gap. Showing it only once would
+		// leave the third condition attached to the others by nothing a person
+		// can see.
+		b.WriteString(`<div class="bt-cond-join"><select class="bt-select bt-select--sm" name="cond_op" data-join>` +
+			`<option value="and">И — все сразу</option><option value="or">ИЛИ — любое</option></select></div>`)
+	}
+
+	var fields strings.Builder
+	fields.WriteString(`<select class="bt-select" name="cond_field_` + index + `">`)
+	fields.WriteString(`<option value="">— нет —</option>`)
+	for _, f := range rules.Fields() {
+		fields.WriteString(`<option value="` + html.EscapeString(string(f)) + `">` +
+			html.EscapeString(rules.FieldLabel(f)) + `</option>`)
+	}
+	fields.WriteString(`</select>`)
+
+	fields.WriteString(`<select class="bt-select" name="cond_cmp_` + index + `">`)
+	for _, c := range []rules.Cmp{rules.CmpLess, rules.CmpLessOrEq, rules.CmpGreater,
+		rules.CmpGreaterOrEq, rules.CmpEqual, rules.CmpNotEqual} {
+		fields.WriteString(`<option value="` + html.EscapeString(string(c)) + `">` + string(c) + `</option>`)
+	}
+	fields.WriteString(`</select>`)
+	fields.WriteString(`<input class="bt-input" name="cond_value_` + index + `" type="number" step="any">`)
+
+	b.WriteString(`<div class="bt-cond">` + fields.String() + `</div>`)
+	b.WriteString(`<button class="bt-btn bt-btn--ghost bt-btn--sm bt-cond-drop" type="button" data-drop-condition` +
+		` title="Убрать условие">×</button>`)
+	b.WriteString(`</div>`)
+	return b.String()
+}
+
+// jobChooser is the identifier of a job, and the list it can be picked from.
+//
+// Both, not one: the number is what gets stored and what somebody pasting from
+// elsewhere already has, and the list is so that nobody has to remember it.
+// The select fills the field and is not submitted itself — with no script it
+// simply does nothing, and the number still works.
+func jobChooser(jobs []store.JobStatus) string {
+	var b strings.Builder
+	b.WriteString(`<div class="bt-with-picker">`)
+	b.WriteString(`<input class="bt-input" id="rule-job-id" name="scope_id" type="number" min="1" placeholder="номер задания">`)
+	if len(jobs) > 0 {
+		b.WriteString(`<select class="bt-select" data-fill="#rule-job-id">`)
+		b.WriteString(`<option value="">— выбрать из списка —</option>`)
+		for _, j := range jobs {
+			name := j.Name
+			if name == "" {
+				name = "без названия"
+			}
+			fmt.Fprintf(&b, `<option value="%d">№%d — %s</option>`, j.ID, j.ID, html.EscapeString(name))
+		}
+		b.WriteString(`</select>`)
+	}
+	b.WriteString(`</div>`)
+	return b.String()
+}
+
+func ruleForm(targets []store.TargetRow, jobs []store.JobStatus) string {
+	var b strings.Builder
+	b.WriteString(`<h3>Новое уведомление</h3>`)
 	// data-switch names the field the fields below follow — see whenAny.
 	b.WriteString(`<form class="bt-fieldset bt-form" data-post="/rules" data-target="#rules-body" data-switch="scope_kind">`)
 
 	b.WriteString(field("Название", `<input class="bt-input" name="name" required placeholder="Цена упала больше чем на 5%">`,
-		"Под этим именем правило будет в списке и в журнале срабатываний."))
+		"Под этим именем уведомление будет в списке и в журнале срабатываний."))
 
 	var kinds strings.Builder
 	kinds.WriteString(`<select class="bt-select" name="kind">`)
@@ -298,59 +380,58 @@ func ruleForm(targets []store.TargetRow) string {
 
 	b.WriteString(scopePicker())
 
-	// The scope decides which of these is even asked for: an identifier, or a
-	// brand and a price range. Both at once was the old form, and it left the
-	// user to work out which three of the five fields their choice used.
+	// One field per scope rather than one field for all of them: «Идентификатор»
+	// left the user to work out which number was wanted, and for a job the
+	// answer was a number they had to go and look up.
 	b.WriteString(whenAny(
-		field("Идентификатор", `<input class="bt-input" name="scope_id" type="number" min="1">`,
-			"Артикул товара, продавца или задания — смотря что выбрано выше."),
-		rules.ScopeProduct, rules.ScopeSeller, rules.ScopeJob))
+		field("Артикул товара", `<input class="bt-input" name="scope_id" type="number" min="1" placeholder="141504066">`,
+			"Номер товара на Wildberries — то же, что в адресе его карточки."),
+		rules.ScopeProduct))
+	b.WriteString(whenAny(
+		field("Идентификатор продавца", `<input class="bt-input" name="scope_id" type="number" min="1" placeholder="1234567">`,
+			"Номер продавца — то же, что в адресе его витрины."),
+		rules.ScopeSeller))
+	b.WriteString(whenAny(
+		field("Задание", jobChooser(jobs),
+			"Уведомление накроет всё, что собирает это задание."),
+		rules.ScopeJob))
 
 	var filter strings.Builder
 	filter.WriteString(`<div class="bt-form-grid">`)
 	filter.WriteString(field("Бренд", `<input class="bt-input" name="filter_brand">`,
 		"Пусто — любой бренд."))
-	filter.WriteString(field("Цена от, ₽", `<input class="bt-input" name="filter_price_min" type="number" min="0">`, ""))
+	filter.WriteString(field("Цена от, ₽", `<input class="bt-input" name="filter_price_min" type="number" min="0">`,
+		"Ноль — без нижней границы."))
 	filter.WriteString(field("Цена до, ₽", `<input class="bt-input" name="filter_price_max" type="number" min="0">`,
 		"Ноль — без верхней границы."))
 	filter.WriteString(`</div>`)
 	b.WriteString(whenAny(filter.String(), rules.ScopeFilter))
 
-	// The condition, as one row of blocks. Spec section 6.2 draws a tree; this
-	// screen draws the one level of it people actually write, and the storage
-	// underneath is the full tree — so a deeper condition written by hand or
-	// by a later screen round-trips through here without being flattened.
-	b.WriteString(`<h3 class="bt-form-head">Когда срабатывать</h3>`)
-	for i := range 2 {
-		var fields strings.Builder
-		fmt.Fprintf(&fields, `<select class="bt-select" name="cond_field_%d">`, i)
-		fields.WriteString(`<option value="">— нет —</option>`)
-		for _, f := range rules.Fields() {
-			fields.WriteString(`<option value="` + html.EscapeString(string(f)) + `">` +
-				html.EscapeString(rules.FieldLabel(f)) + `</option>`)
-		}
-		fields.WriteString(`</select>`)
-
-		fmt.Fprintf(&fields, `<select class="bt-select" name="cond_cmp_%d">`, i)
-		for _, c := range []rules.Cmp{rules.CmpLess, rules.CmpLessOrEq, rules.CmpGreater,
-			rules.CmpGreaterOrEq, rules.CmpEqual, rules.CmpNotEqual} {
-			fields.WriteString(`<option value="` + html.EscapeString(string(c)) + `">` + string(c) + `</option>`)
-		}
-		fields.WriteString(`</select>`)
-		fmt.Fprintf(&fields, `<input class="bt-input" name="cond_value_%d" type="number" step="any">`, i)
-
-		b.WriteString(field(fmt.Sprintf("Условие %d", i+1), `<div class="bt-cond">`+fields.String()+`</div>`, ""))
-	}
-	b.WriteString(field("Соединить условия", `<select class="bt-select" name="cond_op">`+
-		`<option value="and">все сразу (И)</option><option value="or">любое (ИЛИ)</option></select>`,
-		"Пустые условия не учитываются. Без условий правило срабатывает на каждое такое изменение."))
+	// The conditions, as many as somebody needs. Spec section 6.2 draws a tree;
+	// this screen draws the one level of it people actually write, and the
+	// storage underneath is the full tree — so a deeper condition written by
+	// hand or by a later screen round-trips through here without being
+	// flattened.
+	//
+	// One to start with, because one is what most rules have and an empty
+	// second row is a question nobody asked. The rest are added by the button,
+	// which stamps out the template below — the markup is still the server's.
+	b.WriteString(`<h3 class="bt-form-head">Когда срабатывать` +
+		info("Пустые условия не учитываются. Без условий уведомление приходит на каждое такое изменение.") + `</h3>`)
+	b.WriteString(`<div id="conditions" class="bt-conds" data-next="1">`)
+	b.WriteString(conditionRow("0", false))
+	b.WriteString(`</div>`)
+	b.WriteString(`<template id="condition-template">` + conditionRow(condIndexMark, true) + `</template>`)
+	b.WriteString(`<div class="bt-form-actions bt-form-actions--tight">` +
+		`<button class="bt-btn bt-btn--secondary bt-btn--sm" type="button" ` +
+		`data-add-condition="#conditions" data-template="condition-template">+ условие</button></div>`)
 
 	b.WriteString(`<h3 class="bt-form-head">Чтобы не заваливало</h3>`)
 	b.WriteString(`<div class="bt-form-grid">`)
 	b.WriteString(field("Порог, %", `<input class="bt-input" name="threshold_pct" type="number" min="0" value="0">`,
 		"Ноль — любое движение."))
 	b.WriteString(field("Порог, ₽", `<input class="bt-input" name="threshold_rub" type="number" min="0" value="0">`,
-		"Оба порога должны быть пройдены: так одно правило отсекает и мелочь на дешёвом товаре, и копейки на дорогом."))
+		"Оба порога должны быть пройдены: так одно уведомление отсекает и мелочь на дешёвом товаре, и копейки на дорогом."))
 	b.WriteString(field("Не чаще, мин", `<input class="bt-input" name="min_interval_min" type="number" min="0" value="0">`,
 		"По одному товару."))
 	b.WriteString(`</div>`)
@@ -362,7 +443,7 @@ func ruleForm(targets []store.TargetRow) string {
 		// Said plainly rather than shown as an empty list. A rule cannot be
 		// saved without one, and a person staring at an empty select has no
 		// way to know that is the problem.
-		addressees.WriteString(`<div class="bt-alert bt-alert--warning">Сначала добавьте адресата — правилу некому писать.</div>`)
+		addressees.WriteString(`<div class="bt-alert bt-alert--warning">Сначала добавьте адресата — уведомлению некому писать.</div>`)
 	}
 	for _, t := range targets {
 		name := t.Name
@@ -374,9 +455,9 @@ func ruleForm(targets []store.TargetRow) string {
 			t.ID, html.EscapeString(name), html.EscapeString(t.Kind))
 	}
 	b.WriteString(`<h3 class="bt-form-head">Кому писать</h3>`)
-	b.WriteString(field("Адресаты", addressees.String(), ""))
+	b.WriteString(field("Адресаты", addressees.String(), "Кому уйдёт сообщение. Можно отметить нескольких."))
 
-	b.WriteString(`<div class="bt-form-actions"><button class="bt-btn bt-btn--primary" type="submit">Сохранить правило</button></div>`)
+	b.WriteString(`<div class="bt-form-actions"><button class="bt-btn bt-btn--primary" type="submit">Сохранить уведомление</button></div>`)
 	b.WriteString(`</form>`)
 	return b.String()
 }
@@ -396,7 +477,7 @@ func (s *Server) saveRule(w http.ResponseWriter, r *http.Request) {
 			html.EscapeString(err.Error())+`</div>`)
 		return
 	}
-	s.rulesFragment(w, r, `<div class="bt-alert bt-alert--success">Правило сохранено.</div>`)
+	s.rulesFragment(w, r, `<div class="bt-alert bt-alert--success">Уведомление сохранено.</div>`)
 }
 
 // scopeFromForm reads the half of the scope the chosen kind actually uses.
@@ -409,7 +490,11 @@ func scopeFromForm(f url.Values) rules.Scope {
 	sc := rules.Scope{Kind: rules.ScopeKind(f.Get("scope_kind"))}
 	switch sc.Kind {
 	case rules.ScopeProduct, rules.ScopeSeller, rules.ScopeJob:
-		sc.ID = atoi64(f.Get("scope_id"))
+		// Three fields carry this name — one per scope that asks for a number,
+		// each labelled for the number it wants. The script leaves only the
+		// chosen one enabled; without it all three are on screen, and the one
+		// somebody filled in is the one that counts.
+		sc.ID = atoi64(firstNonEmpty(f["scope_id"]))
 	case rules.ScopeFilter:
 		sc.Filter = rules.Filter{
 			Brand: strings.TrimSpace(f.Get("filter_brand")),
@@ -422,6 +507,16 @@ func scopeFromForm(f url.Values) rules.Scope {
 		}
 	}
 	return sc
+}
+
+// firstNonEmpty is the first value that somebody actually typed.
+func firstNonEmpty(values []string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 func ruleFromForm(r *http.Request) rules.Rule {
@@ -447,8 +542,11 @@ func ruleFromForm(r *http.Request) rules.Rule {
 	if f.Get("cond_op") == string(rules.OpOr) {
 		op = rules.OpOr
 	}
+	// As many conditions as the form carried. Bounded by the form itself
+	// rather than by a number written here: the rows are numbered from zero
+	// without gaps, so the first missing one is the end.
 	var leaves []rules.Node
-	for i := range 2 {
+	for i := 0; f.Has(fmt.Sprintf("cond_field_%d", i)); i++ {
 		field := f.Get(fmt.Sprintf("cond_field_%d", i))
 		if field == "" {
 			// An empty row is a row the user did not fill in. Kept, it would
@@ -481,5 +579,5 @@ func (s *Server) deleteRule(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "rules: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	s.rulesFragment(w, r, `<div class="bt-alert bt-alert--success">Правило удалено.</div>`)
+	s.rulesFragment(w, r, `<div class="bt-alert bt-alert--success">Уведомление удалено.</div>`)
 }

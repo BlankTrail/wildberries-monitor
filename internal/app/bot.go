@@ -31,7 +31,7 @@ type botJobs struct{ a *App }
 // is exactly how section 10 recognises one to resume, and a list that asked
 // only this process would call it finished.
 func (b botJobs) List(ctx context.Context) ([]telegram.JobSummary, error) {
-	list, err := b.a.Store.Jobs(ctx)
+	list, err := b.a.JobList(ctx)
 	if err != nil {
 		return nil, err
 	}

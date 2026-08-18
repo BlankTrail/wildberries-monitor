@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/BlankTrail/wildberries-monitor/internal/job"
+	"github.com/BlankTrail/wildberries-monitor/internal/store"
 	"github.com/BlankTrail/wildberries-monitor/wb"
 )
 
@@ -58,6 +59,28 @@ func loadEndpoints(dataDir string) (wb.Endpoints, error) {
 // finished reads as confirmation that something was interrupted, and the person
 // who sent it goes looking for what they lost.
 var ErrNotRunning = errors.New("это задание сейчас не идёт")
+
+// JobList is what every surface shows: the stored view of the jobs, with the
+// ones this process is working on marked as running.
+//
+// Two sources, because either alone is wrong for a moment. A run row appears
+// when its plan is stored, which is a little after the scheduler takes the
+// job — a list built from rows alone answers «не запускалось» about a job
+// somebody just started, which is the one moment they are looking. And the
+// scheduler alone forgets a run that an earlier process left unfinished.
+func (a *App) JobList(ctx context.Context) ([]store.JobStatus, error) {
+	list, err := a.Store.Jobs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if a.Scheduler == nil {
+		return list, nil
+	}
+	for i := range list {
+		list[i].Running = list[i].Running || a.Scheduler.Running(list[i].ID)
+	}
+	return list, nil
+}
 
 // StartJob begins a run and returns as soon as it is under way.
 //

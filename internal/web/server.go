@@ -101,6 +101,13 @@ type Server struct {
 	// StartJob returns as soon as the run is under way, having already answered
 	// what can be answered at once — no proxy configured, no such job, already
 	// going. StopJob asks a run to stop and says so when there is none.
+	// JobList is the list with the runs this process is working on already
+	// marked, which the store alone cannot know for the moment between a job
+	// being taken and its plan being written. Optional: with nothing wired the
+	// store's own view is used, which is right for a build that cannot run
+	// anything anyway.
+	JobList func(ctx context.Context) ([]store.JobStatus, error)
+
 	StartJob func(ctx context.Context, id int64) error
 	StopJob  func(id int64) error
 
@@ -332,7 +339,7 @@ func (s *Server) tabs(current string) []Tab {
 		{Label: "Обзор", Href: "/"},
 		{Label: "Задачи", Href: "/jobs"},
 		{Label: "Отслеживание", Href: "/track"},
-		{Label: "Правила", Href: "/rules"},
+		{Label: "Уведомления", Href: "/rules"},
 		{Label: "Прокси", Href: "/channels"},
 		{Label: "Результаты", Href: "/results"},
 	}
@@ -357,4 +364,12 @@ func (s *Server) now() time.Time {
 		return s.Now()
 	}
 	return time.Now()
+}
+
+// jobList is the job list this panel draws.
+func (s *Server) jobList(ctx context.Context) ([]store.JobStatus, error) {
+	if s.JobList != nil {
+		return s.JobList(ctx)
+	}
+	return s.Store.Jobs(ctx)
 }

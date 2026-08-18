@@ -10,9 +10,10 @@
 // page does to their machine can read all of it in a minute.
 //
 // What it does: swaps fragments the server renders, shows the fields that
-// belong to whatever a form's picker is set to, opens and closes the settings
-// dialog, follows a run over server-sent events, and streams a file upload
-// without reading it into memory first.
+// belong to whatever a form's picker is set to, adds and removes a rule's
+// conditions, opens and closes the settings dialog, follows a run over
+// server-sent events, and streams a file upload without reading it into
+// memory first.
 
 (() => {
   "use strict";
@@ -171,6 +172,73 @@
       apply();
     });
 
+    // A select that fills a field instead of being submitted itself. The
+    // field is what gets stored — a job's number — and the list is only so
+    // that nobody has to remember which number that was. With no script the
+    // select does nothing and the field still works, which is why the number
+    // is the field and not the other way round.
+    root.querySelectorAll("[data-fill]").forEach((el) => {
+      if (el.dataset.wired) return;
+      el.dataset.wired = "1";
+      el.addEventListener("change", () => {
+        const target = document.querySelector(el.dataset.fill);
+        if (!target || !el.value) return;
+        target.value = el.value;
+        target.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+    });
+
+    // Conditions, added one at a time. The markup comes from a <template> the
+    // server rendered, so this only stamps out a number — there is no second
+    // copy of the row's HTML living in this file to drift from the first.
+    root.querySelectorAll("[data-add-condition]").forEach((btn) => {
+      if (btn.dataset.wired) return;
+      btn.dataset.wired = "1";
+      btn.addEventListener("click", () => {
+        const list = document.querySelector(btn.dataset.addCondition);
+        const tpl = document.getElementById(btn.dataset.template);
+        if (!list || !tpl) return;
+        const n = Number(list.dataset.next || "1");
+        list.insertAdjacentHTML("beforeend", tpl.innerHTML.replaceAll("__i__", String(n)));
+        list.dataset.next = String(n + 1);
+        joinsInStep(list);
+        wire(list);
+      });
+    });
+
+    // Removing one. The numbering is left alone: the server reads rows from
+    // zero until one is missing, so a gap would drop everything after it —
+    // renumbering on the client and renumbering on the server would be the
+    // same rule written twice.
+    root.querySelectorAll("[data-drop-condition]").forEach((btn) => {
+      if (btn.dataset.wired) return;
+      btn.dataset.wired = "1";
+      btn.addEventListener("click", () => {
+        const row = btn.closest(".bt-cond-row");
+        const list = row && row.parentElement;
+        if (!row || !list || list.querySelectorAll(".bt-cond-row").length < 2) return;
+        // Clearing rather than removing when it is the row the numbering
+        // starts from, so the rows that follow keep their numbers.
+        if (!row.previousElementSibling) {
+          row.querySelectorAll("select, input").forEach((c) => (c.value = ""));
+          return;
+        }
+        row.remove();
+      });
+    });
+
+    // The И/ИЛИ in every gap is the same operator: a rule joins all of its
+    // conditions one way. Shown in each gap so the third condition is not
+    // attached to the others by nothing a person can see, and kept in step so
+    // that what is shown is what is stored.
+    root.querySelectorAll(".bt-conds").forEach((list) => {
+      if (list.dataset.joinWired) return;
+      list.dataset.joinWired = "1";
+      list.addEventListener("change", (ev) => {
+        if (ev.target.matches("[data-join]")) joinsInStep(list, ev.target.value);
+      });
+    });
+
     // A filter form that reads rather than writes: its fields go into the
     // query string, so the resulting view has a URL a person can bookmark or
     // send to somebody, which a POST would take away.
@@ -191,6 +259,13 @@
     // the fix is not a fragment endpoint per screen but letting a link be a
     // link. A local server costs nothing to reload, and the address bar,
     // the back button and a bookmarkable URL come back for free.
+  }
+
+  function joinsInStep(list, value) {
+    const joins = list.querySelectorAll("[data-join]");
+    if (!joins.length) return;
+    const want = value !== undefined ? value : joins[0].value;
+    joins.forEach((sel) => (sel.value = want));
   }
 
   // ---- settings dialog ---------------------------------------------------

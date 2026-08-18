@@ -93,7 +93,7 @@ func (s *Server) jobsPage(w http.ResponseWriter, r *http.Request) {
 // removed from anywhere but the bot — the screen offered only the form that
 // made it.
 func (s *Server) jobsHTML(r *http.Request) (string, error) {
-	list, err := s.Store.Jobs(r.Context())
+	list, err := s.jobList(r.Context())
 	if err != nil {
 		return "", err
 	}
@@ -781,13 +781,29 @@ func firstColumn(line string) string {
 // field wraps one control in the design system's field markup.
 func field(label, control, hint string) string {
 	var b strings.Builder
-	b.WriteString(`<div class="bt-field"><span class="bt-label">` + html.EscapeString(label) + `</span>`)
+	b.WriteString(`<div class="bt-field"><span class="bt-label">` + html.EscapeString(label) + info(hint) + `</span>`)
 	b.WriteString(control)
-	if hint != "" {
-		b.WriteString(`<span class="bt-form-hint">` + html.EscapeString(hint) + `</span>`)
-	}
 	b.WriteString(`</div>`)
 	return b.String()
+}
+
+// info is the ⓘ that carries a field's explanation.
+//
+// Beside the label rather than as a line under the control: every field here
+// has something worth saying, and said all at once the sentences doubled the
+// height of a form somebody is trying to read past. The one a person wants is
+// the one for the field they are filling in.
+//
+// Not the title attribute: it waits a second, cannot be styled, is invisible
+// to a touch screen and is skipped by some screen readers. This is text in the
+// page, shown on hover and on focus — so a keyboard reaches it, and a tap
+// opens it.
+func info(hint string) string {
+	if hint == "" {
+		return ""
+	}
+	return `<span class="bt-info" tabindex="0"><span class="bt-info__mark" aria-hidden="true">i</span>` +
+		`<span class="bt-tip" role="note">` + html.EscapeString(hint) + `</span></span>`
 }
 
 func splitLines(s string) []string {
