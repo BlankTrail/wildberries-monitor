@@ -28,14 +28,6 @@ func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// defaultBlankTrailURL is where the proxy's control API listens when both run
-// on the same machine, which is the ordinary case.
-//
-// Filled in rather than only hinted at: a placeholder is grey text somebody
-// has to retype, and the one answer this field has on a default install is
-// already known. Typed over, what the user typed is what comes back.
-const defaultBlankTrailURL = "http://127.0.0.1:8891"
-
 // settingsForm renders the settings dialog's contents.
 //
 // A fragment rather than a page: the dialog is opened over whatever the user
@@ -57,8 +49,10 @@ func (s *Server) writeSettingsForm(w http.ResponseWriter, r *http.Request, notic
 		return
 	}
 	url, key := shown[0], shown[1]
+	// Shown filled in because it is filled in: with nothing saved this is the
+	// address the engine dials — see store.DefaultBlankTrailURL.
 	if url.Value == "" {
-		url.Value = defaultBlankTrailURL
+		url.Value = store.DefaultBlankTrailURL
 	}
 	tgToken, tgChat := shown[2], shown[3]
 	tgAppID, tgAppHash := shown[4], shown[5]
@@ -273,16 +267,16 @@ func (s *Server) saveSettings(w http.ResponseWriter, r *http.Request) {
 // without anyone noticing.
 func (s *Server) checkSettings(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	url := s.Store.SettingOr(ctx, store.SettingBlankTrailURL, "")
+	url := s.Store.SettingOr(ctx, store.SettingBlankTrailURL, store.DefaultBlankTrailURL)
 	key := s.Store.SettingOr(ctx, store.SettingBlankTrailAPIKey, "")
 
 	switch {
-	case url == "" || key == "":
-		s.writeSettingsForm(w, r, `<div class="bt-alert bt-alert--warning">Сначала укажите адрес и ключ, затем проверьте.</div>`)
+	case key == "":
+		s.writeSettingsForm(w, r, `<div class="bt-alert bt-alert--warning">Сначала сохраните ключ API, затем проверяйте.</div>`)
 	case s.CheckBlankTrail == nil:
 		s.writeSettingsForm(w, r, `<div class="bt-alert bt-alert--neutral">Проверка недоступна в этой сборке.</div>`)
 	default:
-		if err := s.CheckBlankTrail(url, key); err != nil {
+		if err := s.CheckBlankTrail(ctx, url, key); err != nil {
 			// The error is shown as text the user can act on. It comes from
 			// the SDK's preflight, which was built to say what is wrong
 			// rather than that something is.

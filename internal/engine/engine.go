@@ -163,7 +163,7 @@ const requestTimeout = 300 * time.Second
 
 // control builds the API client from what the settings screen saved.
 func (e *Engine) control(ctx context.Context) (*blanktrail.Client, error) {
-	addr := strings.TrimSpace(e.Store.SettingOr(ctx, store.SettingBlankTrailURL, ""))
+	addr := strings.TrimSpace(e.Store.SettingOr(ctx, store.SettingBlankTrailURL, store.DefaultBlankTrailURL))
 	key := strings.TrimSpace(e.Store.SettingOr(ctx, store.SettingBlankTrailAPIKey, ""))
 	if addr == "" || key == "" {
 		return nil, ErrNotConfigured

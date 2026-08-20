@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/BlankTrail/wildberries-monitor/blanktrail"
 	"github.com/BlankTrail/wildberries-monitor/internal/autostart"
 	"github.com/BlankTrail/wildberries-monitor/internal/engine"
 	"github.com/BlankTrail/wildberries-monitor/internal/events"
@@ -149,6 +150,20 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 		JobList:       func(ctx context.Context) ([]store.JobStatus, error) { return a.JobList(ctx) },
 		StartJob:      func(ctx context.Context, id int64) error { return a.StartJob(ctx, id) },
 		StopJob:       func(id int64) error { return a.StopJob(id) },
+		// Wired here and nowhere else: the SDK is what knows how to reach a
+		// BlankTrail, and web must not need one to run its tests. Health is
+		// the whole of «проверить соединение» — the control API answered and
+		// took the key. What a run additionally needs, the run's own
+		// preflight says in the SDK's words.
+		CheckBlankTrail: func(ctx context.Context, url, apiKey string) error {
+			client, err := blanktrail.NewClient(url, apiKey)
+			if err != nil {
+				return err
+			}
+			ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			defer cancel()
+			return client.Health(ctx)
+		},
 		CheckChannel: func(ctx context.Context, id int64) (string, error) {
 			// Read when pressed, not captured: the engine is built a few lines
 			// below this literal, and a half-built App in a test may never get

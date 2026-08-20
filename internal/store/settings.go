@@ -15,7 +15,16 @@ import (
 // as unset — which for the BlankTrail address means a monitor that quietly
 // stops being able to fetch anything.
 const (
-	SettingBlankTrailURL    = "blanktrail.url"
+	SettingBlankTrailURL = "blanktrail.url"
+
+	// DefaultBlankTrailURL is where the proxy's control API listens when both
+	// programs are on one machine, which is the ordinary case.
+	//
+	// A default rather than a placeholder in the settings form. A field that
+	// shows an address it does not actually use is worse than an empty one:
+	// the panel said «не настроен» over a box with the right address in it,
+	// and there was nothing on the screen to explain the disagreement.
+	DefaultBlankTrailURL    = "http://127.0.0.1:8891"
 	SettingBlankTrailAPIKey = "blanktrail.api_key"
 	SettingDataDir          = "data.dir"
 	SettingListenLAN        = "web.listen_lan"

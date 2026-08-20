@@ -281,3 +281,30 @@ func TestFirstBlocking_NamesOneThingToFix(t *testing.T) {
 		t.Error("отказ без находок остался без объяснения вовсе")
 	}
 }
+
+func TestCheck_AnAddressNobodyChangedIsTheLocalOne(t *testing.T) {
+	// Both programs on one machine is the ordinary install, and the panel
+	// shows that address filled in. It has to be the address this actually
+	// dials, or the settings screen is describing somewhere the engine has
+	// never been.
+	e := openEngine(t)
+	if err := e.Store.SetSetting(t.Context(), store.SettingBlankTrailAPIKey, "secret", store.SettingSecret); err != nil {
+		t.Fatalf("SetSetting: %v", err)
+	}
+
+	if err := e.Check(t.Context()); err != nil {
+		t.Errorf("Check = %v, ожидалось, что адрес по умолчанию сойдёт", err)
+	}
+}
+
+func TestCheck_AnAddressSomebodyClearedIsNotTheDefault(t *testing.T) {
+	// Cleared on purpose is a choice, not an absence: falling back to the
+	// local address there would dial somewhere the user just told this
+	// program not to.
+	e := openEngine(t)
+	configure(t, e, "", "secret")
+
+	if err := e.Check(t.Context()); !errors.Is(err, ErrNotConfigured) {
+		t.Errorf("Check = %v, ожидался ErrNotConfigured", err)
+	}
+}

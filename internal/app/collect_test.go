@@ -494,3 +494,50 @@ func TestLoadEndpoints_AFileThatWillNotParseIsAnErrorAndNotAShrug(t *testing.T) 
 		t.Fatal("испорченный endpoints.yaml принят молча")
 	}
 }
+
+func TestPanelCheck_ActuallyAsksTheProxy(t *testing.T) {
+	// The panel had the button, the route and the handler, and nothing at all
+	// behind them: App never filled in Server.CheckBlankTrail, so pressing
+	// «Проверить соединение» answered «Проверка недоступна в этой сборке» on
+	// a build that collects perfectly well. Wiring is exactly what a package
+	// cannot test about itself, so it is tested here, where it is done.
+	var asked []string
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		asked = append(asked, r.URL.Path)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer proxy.Close()
+
+	a := newApp(t)
+	ctx := t.Context()
+	if err := a.Store.SetSetting(ctx, store.SettingBlankTrailURL, proxy.URL, store.SettingText); err != nil {
+		t.Fatalf("SetSetting: %v", err)
+	}
+	if err := a.Store.SetSetting(ctx, store.SettingBlankTrailAPIKey, "secret", store.SettingSecret); err != nil {
+		t.Fatalf("SetSetting: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	a.Server.Handler().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/settings/check", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("проверка = %d", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "Соединение установлено") {
+		t.Errorf("проверка не подтвердила связь:\n%s", firstLines(w.Body.String()))
+	}
+	if len(asked) == 0 {
+		t.Fatal("прокси никто не спросил")
+	}
+	if !strings.Contains(asked[0], "health") {
+		t.Errorf("спрошено %q, ожидался health", asked[0])
+	}
+}
+
+// firstLines is the head of a page, for a failure message that has to fit on
+// a screen.
+func firstLines(s string) string {
+	if len(s) > 400 {
+		return s[:400] + "…"
+	}
+	return s
+}

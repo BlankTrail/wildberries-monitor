@@ -289,13 +289,18 @@ func TestPage_SaysWhetherBlankTrailIsConfigured(t *testing.T) {
 	srv := newServer(t)
 	ctx := context.Background()
 
-	if body := get(t, srv, "/", "correct horse").Body.String(); !strings.Contains(body, "не настроен") {
-		t.Error("a fresh install does not say BlankTrail is unconfigured")
+	// Named for what is actually missing. The address has a default and the
+	// key cannot have one, so on a fresh install the key is the whole answer
+	// — and «укажите адрес и ключ» over a form already showing the address is
+	// how somebody comes to believe they filled it in and the panel disagreed.
+	body := get(t, srv, "/", "correct horse").Body.String()
+	if !strings.Contains(body, "нет ключа") {
+		t.Error("a fresh install does not say what is missing")
+	}
+	if strings.Contains(body, "укажите адрес") {
+		t.Error("the badge asks for an address that is already defaulted")
 	}
 
-	if err := srv.Store.SetSetting(ctx, store.SettingBlankTrailURL, "http://127.0.0.1:8891", store.SettingText); err != nil {
-		t.Fatalf("SetSetting: %v", err)
-	}
 	if err := srv.Store.SetSetting(ctx, store.SettingBlankTrailAPIKey, "abc", store.SettingSecret); err != nil {
 		t.Fatalf("SetSetting: %v", err)
 	}
@@ -382,44 +387,67 @@ func TestSaveSettings_ATypedKeyReplacesTheStoredOne(t *testing.T) {
 func TestCheckSettings_ReportsWhatThePreflightSaid(t *testing.T) {
 	srv := newServer(t)
 	ctx := context.Background()
-	_ = srv.Store.SetSetting(ctx, store.SettingBlankTrailURL, "http://127.0.0.1:8891", store.SettingText)
 	_ = srv.Store.SetSetting(ctx, store.SettingBlankTrailAPIKey, "abc", store.SettingSecret)
 
-	srv.CheckBlankTrail = func(string, string) error { return errors.New("license expired") }
-	body := postCheck(t, srv)
+	srv.CheckBlankTrail = func(context.Context, string, string) error { return errors.New("license expired") }
+	body := check(t, srv)
 	if !strings.Contains(body, "license expired") {
 		t.Errorf("the dialog does not show what the preflight said: %q", firstLines(body))
 	}
 
-	srv.CheckBlankTrail = func(string, string) error { return nil }
-	if body := postCheck(t, srv); !strings.Contains(body, "установлено") {
+	srv.CheckBlankTrail = func(context.Context, string, string) error { return nil }
+	if body := check(t, srv); !strings.Contains(body, "установлено") {
 		t.Errorf("a successful check does not say so: %q", firstLines(body))
 	}
 }
 
-func TestCheckSettings_AsksForTheSettingsBeforeCheckingThem(t *testing.T) {
-	// Checking an empty address would report a network failure for a
-	// situation that is not one, and send the user looking at their firewall.
+func TestCheckSettings_ChecksTheAddressItWouldActuallyDial(t *testing.T) {
+	// The panel dials the default address when nothing is saved, so a check
+	// that refused to run without a saved one would refuse the case it exists
+	// for: a fresh install with BlankTrail on this machine.
+	srv := newServer(t)
+	_ = srv.Store.SetSetting(context.Background(), store.SettingBlankTrailAPIKey, "abc", store.SettingSecret)
+
+	var asked string
+	srv.CheckBlankTrail = func(_ context.Context, url, _ string) error {
+		asked = url
+		return nil
+	}
+	check(t, srv)
+	if asked != store.DefaultBlankTrailURL {
+		t.Errorf("проверен адрес %q, ожидался %q", asked, store.DefaultBlankTrailURL)
+	}
+
+	// And a saved address is the one checked, or the check would be about
+	// somewhere else entirely.
+	_ = srv.Store.SetSetting(context.Background(), store.SettingBlankTrailURL, "http://10.0.0.5:9000", store.SettingText)
+	check(t, srv)
+	if asked != "http://10.0.0.5:9000" {
+		t.Errorf("проверен адрес %q, ожидался сохранённый", asked)
+	}
+}
+
+func TestCheckSettings_AsksForTheKeyBeforeChecking(t *testing.T) {
+	// Checking without a key would report a rejection for a situation that is
+	// not one, and send the user looking at their proxy. The address needs no
+	// such question — it has a default.
 	srv := newServer(t)
 	var called bool
-	srv.CheckBlankTrail = func(string, string) error { called = true; return nil }
+	srv.CheckBlankTrail = func(context.Context, string, string) error { called = true; return nil }
 
-	body := postCheck(t, srv)
+	body := check(t, srv)
 	if called {
-		t.Error("the preflight ran with nothing configured")
+		t.Error("the preflight ran with no key")
 	}
-	if !strings.Contains(body, "укажите адрес") {
+	if !strings.Contains(body, "ключ") {
 		t.Errorf("the dialog does not say what is missing: %q", firstLines(body))
 	}
 }
 
-func postCheck(t *testing.T, srv *Server) string {
+// check presses «Проверить соединение» the way the dialog does.
+func check(t *testing.T, srv *Server) string {
 	t.Helper()
-	r := httptest.NewRequest(http.MethodPost, "/settings/check", nil)
-	r.SetBasicAuth("monitor", "correct horse")
-	w := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(w, r)
-	return w.Body.String()
+	return get(t, srv, "/settings/check", "correct horse").Body.String()
 }
 
 func firstLines(s string) string {
@@ -524,4 +552,78 @@ func TestForms_ReadTheEncodingABrowserActuallySends(t *testing.T) {
 			t.Errorf("настройка не доехала: %q", got)
 		}
 	})
+}
+
+func TestPages_PointOnlyAtRoutesThatAnswer(t *testing.T) {
+	// «Проверить соединение» sent a GET to a route registered for POST alone
+	// and got Go's own 404 in the dialog. Nothing failed: the button was
+	// right, the handler was right, and the two were never introduced. Its
+	// test posted to the route, which is the one thing no caller does.
+	//
+	// So every address a rendered page points at is asked for here, with the
+	// method the script will use, and has to answer something other than «not
+	// found». What it answers is each screen's own tests' business.
+	srv := newServer(t)
+
+	// The attribute names are app.js's, and the method is what it sends.
+	kinds := []struct {
+		attr   string
+		method string
+	}{
+		{"data-get", http.MethodGet},
+		{"data-get-form", http.MethodGet},
+		{"data-post", http.MethodPost},
+		{"data-post-form", http.MethodPost},
+		{"data-upload", http.MethodPost},
+		{"href", http.MethodGet},
+	}
+
+	seen := map[string]bool{}
+	for _, page := range []string{"/", "/jobs", "/rules", "/channels", "/track", "/results", "/settings"} {
+		body := get(t, srv, page, "correct horse").Body.String()
+		for _, k := range kinds {
+			for _, target := range attrValues(body, k.attr) {
+				// Only this panel's own addresses: the footer's licence link
+				// goes to the source repository.
+				if !strings.HasPrefix(target, "/") || strings.HasPrefix(target, "/static/") {
+					continue
+				}
+				if seen[k.method+" "+target] {
+					continue
+				}
+				seen[k.method+" "+target] = true
+
+				r := httptest.NewRequest(k.method, target, nil)
+				r.SetBasicAuth("monitor", "correct horse")
+				w := httptest.NewRecorder()
+				srv.Handler().ServeHTTP(w, r)
+				if w.Code == http.StatusNotFound {
+					t.Errorf("%s: %s %s — такого маршрута нет", page, k.method, target)
+				}
+			}
+		}
+	}
+	if len(seen) < 10 {
+		// A regex that stopped matching would make this test pass by looking
+		// at nothing at all.
+		t.Errorf("проверено адресов: %d — слишком мало, чтобы это что-то значило", len(seen))
+	}
+}
+
+// attrValues pulls every value of one attribute out of rendered HTML.
+func attrValues(body, attr string) []string {
+	var out []string
+	for rest := body; ; {
+		at := strings.Index(rest, attr+`="`)
+		if at < 0 {
+			return out
+		}
+		rest = rest[at+len(attr)+2:]
+		end := strings.Index(rest, `"`)
+		if end < 0 {
+			return out
+		}
+		out = append(out, rest[:end])
+		rest = rest[end:]
+	}
 }

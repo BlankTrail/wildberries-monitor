@@ -85,7 +85,7 @@ type Server struct {
 	// live control API — the preflight itself is the SDK's and was measured
 	// in M0, and re-implementing it here would be a second opinion nobody
 	// asked for.
-	CheckBlankTrail func(url, apiKey string) error
+	CheckBlankTrail func(ctx context.Context, url, apiKey string) error
 
 	// CheckTelegram asks Telegram who this bot is, over whatever ladder the
 	// wiring built. A field for the same reason CheckBlankTrail is one: the
@@ -210,8 +210,11 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /", s.auth(http.HandlerFunc(s.overview)))
 	mux.Handle("GET /settings", s.auth(http.HandlerFunc(s.settingsForm)))
 	mux.Handle("POST /settings", s.auth(http.HandlerFunc(s.saveSettings)))
-	mux.Handle("POST /settings/check", s.auth(http.HandlerFunc(s.checkSettings)))
-	mux.Handle("POST /settings/telegram", s.auth(http.HandlerFunc(s.checkTelegram)))
+	// Both checks read: they ask the other side who it is and re-render the
+	// dialog. GET because that is what the buttons send — the connection
+	// check was registered for POST alone and answered 404 to the only
+	// caller there is, while its test posted to it and passed.
+	mux.Handle("GET /settings/check", s.auth(http.HandlerFunc(s.checkSettings)))
 	mux.Handle("GET /settings/telegram", s.auth(http.HandlerFunc(s.checkTelegram)))
 
 	mux.Handle("GET /rules", s.auth(http.HandlerFunc(s.rulesPage)))
@@ -351,10 +354,14 @@ func (s *Server) tabs(current string) []Tab {
 
 // blankTrailState summarises the integration for the header badge.
 func (s *Server) blankTrailState(r *http.Request) (ok bool, state, note string) {
-	url := s.Store.SettingOr(r.Context(), store.SettingBlankTrailURL, "")
+	url := s.Store.SettingOr(r.Context(), store.SettingBlankTrailURL, store.DefaultBlankTrailURL)
 	key := s.Store.SettingOr(r.Context(), store.SettingBlankTrailAPIKey, "")
-	if url == "" || key == "" {
-		return false, "не настроен", "Откройте настройки и укажите адрес и ключ."
+	if key == "" {
+		// The address has a default and the key cannot have one, so the key
+		// is the whole question. Saying «укажите адрес и ключ» over a form
+		// already showing the address is how somebody comes to believe they
+		// filled it in and the panel disagreed.
+		return false, "нет ключа", "Откройте настройки и вставьте ключ API из BlankTrail."
 	}
 	return true, "настроен", url
 }
