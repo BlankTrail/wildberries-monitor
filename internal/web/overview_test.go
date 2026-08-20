@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/BlankTrail/wildberries-monitor/internal/chart"
 	"github.com/BlankTrail/wildberries-monitor/internal/rules"
 	"github.com/BlankTrail/wildberries-monitor/internal/store"
 	"github.com/BlankTrail/wildberries-monitor/internal/track"
@@ -105,5 +106,28 @@ func TestOverview_AFreshInstallSaysWhatToDoNext(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("на чистой установке нет строки %q:\n%s", want, firstLines(body))
 		}
+	}
+}
+
+func TestCharts_AreDrawnInTheColourTheScreenUses(t *testing.T) {
+	// A chart is a picture inside a page. Drawn in a colour the page does not
+	// use it looks like it came from somewhere else — and the two live in
+	// different languages, one in Go and one in CSS, so nothing but this
+	// stops them drifting the next time either is repainted.
+	css, err := staticFS.ReadFile("static/monitor.css")
+	if err != nil {
+		t.Fatalf("monitor.css: %v", err)
+	}
+
+	at := strings.Index(string(css), "--accent:")
+	if at < 0 {
+		t.Fatal("в теме нет токена --accent")
+	}
+	rest := string(css)[at+len("--accent:"):]
+	accent := strings.TrimSpace(rest[:strings.Index(rest, ";")])
+
+	want := fmt.Sprintf("#%02x%02x%02x", chart.Accent.R, chart.Accent.G, chart.Accent.B)
+	if !strings.EqualFold(accent, want) {
+		t.Errorf("панель красит акцент в %s, а графики рисуются в %s", accent, want)
 	}
 }

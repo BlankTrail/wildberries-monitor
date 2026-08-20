@@ -91,7 +91,10 @@ func (s *Server) trackHTML(r *http.Request) (string, error) {
 // trackForm is where a person says which product, and over how long.
 func trackForm(nm string, days int) string {
 	var b strings.Builder
-	b.WriteString(`<form class="bt-fieldset" method="get" action="/track">`)
+	b.WriteString(`<form class="bt-fieldset bt-form" method="get" action="/track">`)
+	// The two of them side by side: an article and a window are one question,
+	// and stacked they were two full-width rows above the answer.
+	b.WriteString(`<div class="bt-form-grid">`)
 	b.WriteString(field("Товар",
 		`<input class="bt-input" name="nm" value="`+html.EscapeString(nm)+
 			`" placeholder="123456789 или ссылка на карточку">`,
@@ -107,7 +110,9 @@ func trackForm(nm string, days int) string {
 		fmt.Fprintf(&windows, `<option value="%d"%s>%s</option>`, w.Days, selected, html.EscapeString(w.Label))
 	}
 	windows.WriteString(`</select>`)
-	b.WriteString(field("За какой срок", windows.String(), ""))
+	b.WriteString(field("За какой срок", windows.String(),
+		"Сколько истории показать. Дальше неё чтения есть, но график их не берёт."))
+	b.WriteString(`</div>`)
 
 	b.WriteString(`<div class="bt-form-actions"><button class="bt-btn bt-btn--primary" type="submit">Показать</button></div>`)
 	b.WriteString(`</form>`)

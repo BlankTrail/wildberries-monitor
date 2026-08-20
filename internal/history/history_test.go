@@ -5,6 +5,7 @@ package history
 import (
 	"errors"
 	"math"
+	"strconv"
 	"testing"
 	"time"
 
@@ -101,6 +102,18 @@ func TestPosition_IsDrawnUpsideDownBecauseRankOneIsTheBest(t *testing.T) {
 	}
 	if !line.Y.Invert {
 		t.Error("ось позиции не перевёрнута")
+	}
+	// And the scale is in whole places: «2.5-я позиция» is not a thing that
+	// can be measured, and a tick saying so makes the reader doubt the ones
+	// that are right.
+	if line.Y.Format == nil {
+		t.Fatal("шкала мест размечается как обычные числа")
+	}
+	if got := line.Y.Format(2.5); got != "" {
+		t.Errorf("дробное место подписано как %q", got)
+	}
+	if got := line.Y.Format(3); got != "3" {
+		t.Errorf("целое место подписано как %q", got)
 	}
 	if facts.Best == 0 || facts.LastRank == 0 {
 		t.Errorf("места не собраны: последнее %d, лучшее %d", facts.LastRank, facts.Best)
@@ -254,3 +267,24 @@ func contains(s, sub string) bool {
 type discard struct{}
 
 func (discard) Write(p []byte) (int, error) { return len(p), nil }
+
+func TestPosition_LabelsTheScaleInWholePlaces(t *testing.T) {
+	// A place in a search result is a count of the products above this one.
+	// The scale drew «2.5» between rank 2 and rank 3 — a measurement that
+	// cannot exist, printed beside ones that can, which is how a reader comes
+	// to doubt the whole picture.
+	for _, c := range []struct{ in, want string }{
+		{"1", "1"},
+		{"12", "12"},
+		{"2.5", ""},
+		{"0.5", ""},
+	} {
+		v, err := strconv.ParseFloat(c.in, 64)
+		if err != nil {
+			t.Fatalf("ParseFloat: %v", err)
+		}
+		if got := wholeRank(v); got != c.want {
+			t.Errorf("wholeRank(%s) = %q, ожидалось %q", c.in, got, c.want)
+		}
+	}
+}

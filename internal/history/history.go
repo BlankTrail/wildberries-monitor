@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strconv"
 	"time"
 
 	"github.com/BlankTrail/wildberries-monitor/internal/chart"
@@ -137,7 +138,12 @@ func (r Reader) Position(ctx context.Context, nmID int64, phrase string, window 
 		// Rank 1 is the best result and belongs at the top. Drawn the usual way
 		// up, a product falling out of the first page draws a rising line, which
 		// reads as good news.
-		Y:      chart.Axis{Invert: true},
+		//
+		// Whole numbers on the scale, because a place in a search result is a
+		// count of products above this one: «2.5-я позиция» is not a thing
+		// that can be measured, and a tick that says so makes the reader
+		// doubt the ones that are right.
+		Y:      chart.Axis{Invert: true, Format: wholeRank},
 		Series: []chart.Series{{Points: points}},
 	}, facts, nil
 }
@@ -194,4 +200,15 @@ func minorToFloat(minor *int64) float64 {
 		return math.NaN()
 	}
 	return float64(*minor) / 100
+}
+
+// wholeRank labels a place in the search results.
+//
+// A rank has no fractional part, so a tick between two of them is dropped
+// rather than rounded: two ticks reading «2» would be worse than one.
+func wholeRank(v float64) string {
+	if v != math.Trunc(v) {
+		return ""
+	}
+	return strconv.FormatFloat(v, 'f', 0, 64)
 }

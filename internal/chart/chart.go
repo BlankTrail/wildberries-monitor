@@ -303,11 +303,18 @@ func timeLayout(span int64) string {
 	}
 }
 
+// Accent is the colour of the first line, and the panel's own accent.
+//
+// Exported so that the two can be checked against each other: a chart drawn
+// in a colour the screen around it does not use looks like it came from
+// somewhere else, and that drifts the moment either side is repainted.
+var Accent = color.RGBA{0x8b, 0x24, 0xb6, 0xff}
+
 // palette is the line colours, in the order they are handed out. Distinct in
 // hue rather than in lightness, because the first thing a chat client does to
 // a photo is scale it.
 var palette = []color.RGBA{
-	{0x1f, 0x6f, 0xeb, 0xff}, // blue
+	Accent,
 	{0xd9, 0x77, 0x06, 0xff}, // amber
 	{0x0f, 0x76, 0x6e, 0xff}, // teal
 	{0xb9, 0x1c, 0x1c, 0xff}, // red
