@@ -151,7 +151,10 @@ func cellText(row store.ProductRow, col wb.Field) string {
 // filterForm is the narrowing a person actually does.
 func filterForm(q url.Values) string {
 	var b strings.Builder
-	b.WriteString(`<form class="bt-fieldset bt-fieldset--inline" data-get-form="/results/table" data-target="#results-body">`)
+	b.WriteString(`<form class="bt-fieldset bt-form" data-get-form="/results/table" data-target="#results-body">`)
+	// The five of them side by side. Stacked, the filter was half a screen of
+	// empty boxes above the thing somebody came to look at.
+	b.WriteString(`<div class="bt-form-grid">`)
 	b.WriteString(field("Артикулы", `<input class="bt-input bt-input--mono" name="nm_ids" value="`+
 		html.EscapeString(q.Get("nm_ids"))+`" placeholder="через запятую">`, ""))
 	b.WriteString(field("Бренд", `<input class="bt-input" name="brand" value="`+
@@ -162,6 +165,8 @@ func filterForm(q url.Values) string {
 		html.EscapeString(q.Get("from"))+`">`, ""))
 	b.WriteString(field("По дату", `<input class="bt-input" name="to" type="date" value="`+
 		html.EscapeString(q.Get("to"))+`">`, ""))
+
+	b.WriteString(`</div>`)
 
 	checked := ""
 	if q.Get("latest") != "" {

@@ -751,3 +751,13 @@ dialog.bt-modal > #settings-body {
   gap: var(--space-1);
   align-items: center;
 }
+
+/* One number, said large enough to be read across a room — the front screen's
+   three figures are the answer to «работает ли это», not a table cell. */
+.bt[data-bt-theme="dashboard"] .bt-figure {
+  font-size: 1.5rem;
+  font-weight: 600;
+  line-height: 1.2;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}

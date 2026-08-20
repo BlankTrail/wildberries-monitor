@@ -5,28 +5,11 @@ package web
 import (
 	"fmt"
 	"html"
-	"html/template"
 	"net/http"
 	"strings"
 
 	"github.com/BlankTrail/wildberries-monitor/internal/store"
 )
-
-// overview is the front screen.
-func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/" {
-		http.NotFound(w, r)
-		return
-	}
-	s.render(w, r, page{
-		Title: "Обзор",
-		Body: template.HTML(`
-<section class="bt-card">
-  <h2>Обзор</h2>
-  <p class="bt-form-hint">Здесь появится, что идёт сейчас и что произошло за последнее время.</p>
-</section>`),
-	})
-}
 
 // settingsForm renders the settings dialog's contents.
 //

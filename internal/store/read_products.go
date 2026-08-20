@@ -359,3 +359,28 @@ func (s *Store) Product(ctx context.Context, nmID int64) (ProductRow, error) {
 	}
 	return r, nil
 }
+
+// Collected is what has been gathered so far, for the screen somebody opens
+// first.
+//
+// Three numbers rather than a page of them: how many readings there are, how
+// many distinct products they are of, and when the last one was taken. The
+// third is the one that answers «идёт ли сбор вообще» — a count that has not
+// moved since yesterday says more than any status badge.
+type Collected struct {
+	Readings int64
+	Products int64
+	LastAt   int64
+}
+
+// Collection counts what has been collected.
+func (s *Store) Collection(ctx context.Context) (Collected, error) {
+	var c Collected
+	err := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*), COUNT(DISTINCT nm_id), COALESCE(MAX(ts), 0) FROM snapshots`).
+		Scan(&c.Readings, &c.Products, &c.LastAt)
+	if err != nil {
+		return Collected{}, fmt.Errorf("store: collection: %w", err)
+	}
+	return c, nil
+}

@@ -100,6 +100,26 @@ func (s *Store) LastRuleFiring(ctx context.Context, ruleID, nmID int64) (int64, 
 	return at, true, nil
 }
 
+// RecentEvents returns the newest firings of every rule.
+//
+// Beside RuleEvents rather than a flag on it: one asks «what did this rule
+// do», the other asks «what has happened lately», and a single function with
+// a magic zero for «any rule» would answer the wrong one to whoever forgot
+// which it was.
+func (s *Store) RecentEvents(ctx context.Context, limit int) ([]RuleEventRow, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, rule_id, fired_at, kind, nm_id, dest, app_type, subject, suppressed_by, dedup_key
+		FROM rule_events ORDER BY fired_at DESC, id DESC LIMIT ?`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("store: recent events: %w", err)
+	}
+	defer rows.Close()
+	return scanRuleEvents(rows)
+}
+
 // RuleEvents returns a rule's recent firings, newest first — the log the
 // interface shows when somebody asks why they were or were not told.
 func (s *Store) RuleEvents(ctx context.Context, ruleID int64, limit int) ([]RuleEventRow, error) {
@@ -113,7 +133,12 @@ func (s *Store) RuleEvents(ctx context.Context, ruleID int64, limit int) ([]Rule
 		return nil, fmt.Errorf("store: rule events: %w", err)
 	}
 	defer rows.Close()
+	return scanRuleEvents(rows)
+}
 
+// scanRuleEvents reads what both event queries select, in the order they
+// select it.
+func scanRuleEvents(rows *sql.Rows) ([]RuleEventRow, error) {
 	var out []RuleEventRow
 	for rows.Next() {
 		var r RuleEventRow

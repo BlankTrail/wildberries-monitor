@@ -703,3 +703,51 @@ func TestSaveEvents_AnEmptyBatchIsNotAnError(t *testing.T) {
 		t.Errorf("events holds %d rows, want 0", got)
 	}
 }
+
+func TestRecentEvents_AcrossEveryRuleNewestFirst(t *testing.T) {
+	// The per-rule log answers «что делало это правило». This answers
+	// «случилось ли вообще что-нибудь», which the front screen asks and no
+	// per-rule log can.
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	// Two rules to fire, because an event references the rule it came from
+	// and the schema means it.
+	var ids []int64
+	for _, name := range []string{"первое", "второе"} {
+		id, err := s.SaveRule(ctx, RuleRow{
+			Name: name, EventKind: "price-changed", ScopeKind: "product", ScopeID: 141504066,
+			Targets: "[]", Enabled: true,
+		}, 0)
+		if err != nil {
+			t.Fatalf("SaveRule: %v", err)
+		}
+		ids = append(ids, id)
+	}
+
+	for i, e := range []RuleEventRow{
+		{RuleID: ids[0], FiredAt: 100, Kind: "price-changed", NmID: 11},
+		{RuleID: ids[1], FiredAt: 300, Kind: "stock-changed", NmID: 22},
+		{RuleID: ids[0], FiredAt: 200, Kind: "price-changed", NmID: 33},
+	} {
+		if _, err := s.SaveRuleEvent(ctx, e); err != nil {
+			t.Fatalf("SaveRuleEvent %d: %v", i, err)
+		}
+	}
+
+	got, err := s.RecentEvents(ctx, 10)
+	if err != nil {
+		t.Fatalf("RecentEvents: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("вернулось %d срабатываний, ожидалось 3", len(got))
+	}
+	if got[0].FiredAt != 300 || got[1].FiredAt != 200 || got[2].FiredAt != 100 {
+		t.Errorf("порядок %d, %d, %d — ожидались новые первыми",
+			got[0].FiredAt, got[1].FiredAt, got[2].FiredAt)
+	}
+	// And the limit is a limit, or the front screen grows without bound.
+	if few, err := s.RecentEvents(ctx, 2); err != nil || len(few) != 2 {
+		t.Errorf("с пределом 2 вернулось %d (%v)", len(few), err)
+	}
+}

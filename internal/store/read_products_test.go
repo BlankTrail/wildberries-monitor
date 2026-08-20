@@ -802,3 +802,49 @@ func TestProduct_ReportsAnUnknownProduct(t *testing.T) {
 		t.Errorf("Product(12345) error = %v, want one wrapping sql.ErrNoRows", err)
 	}
 }
+
+func TestCollection_CountsWhatIsThereAndWhenItLanded(t *testing.T) {
+	// The front screen's three figures. The last one is the one that answers
+	// «работает ли это»: a total that has not moved since yesterday says more
+	// than any status badge.
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	empty, err := s.Collection(ctx)
+	if err != nil {
+		t.Fatalf("Collection: %v", err)
+	}
+	if empty.Readings != 0 || empty.Products != 0 || empty.LastAt != 0 {
+		t.Errorf("на пустой базе %+v, ожидались нули", empty)
+	}
+
+	base := time.Date(2026, 8, 17, 9, 0, 0, 0, time.UTC)
+	for i := range 4 {
+		p := wb.Product{
+			ID: int64(100 + i%2), Name: "Платье", Brand: "BrandCo",
+			Dest: "-1257786", AppType: 1, Rank: i + 1, Page: 1,
+			FetchedAt: base.Add(time.Duration(i) * time.Hour),
+			Sizes: []wb.Size{{
+				Name: "M", PriceProduct: ptrTo(int64(129900 + i)),
+			}},
+		}
+		if _, err := s.SaveProduct(ctx, p, ""); err != nil {
+			t.Fatalf("SaveProduct: %v", err)
+		}
+	}
+
+	got, err := s.Collection(ctx)
+	if err != nil {
+		t.Fatalf("Collection: %v", err)
+	}
+	if got.Products != 2 {
+		t.Errorf("товаров %d, ожидалось 2", got.Products)
+	}
+	if got.Readings < 2 {
+		t.Errorf("чтений %d — их записали четыре, часть могло проредить, но не всё", got.Readings)
+	}
+	// The newest reading, not the first one written.
+	if want := base.Add(3 * time.Hour).Unix(); got.LastAt != want {
+		t.Errorf("последнее чтение %d, ожидалось %d", got.LastAt, want)
+	}
+}
