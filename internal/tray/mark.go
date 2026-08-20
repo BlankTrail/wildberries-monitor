@@ -17,13 +17,14 @@ package tray
 // recognises.
 //
 // What it shows is what the program does: a price line inside a rounded square.
-// White on the blue the charts draw with, because a tray sits on a taskbar that
-// may be light or dark and a mark that relies on either disappears on the
-// other.
+// White on the panel's own violet, because a tray sits on a taskbar that may be
+// light or dark and a mark that relies on either disappears on the other.
 
-// markBlue is the same blue the charts use for their first series. Written as
-// BGRA because that is the order a Windows DIB stores.
-var markBlue = [4]byte{0xeb, 0x6f, 0x1f, 0xff}
+// markTile is the colour the charts draw in and the panel accents with —
+// chart.Accent, the same three bytes. Written as BGRA rather than as that
+// constant because a DIB stores them backwards and this package draws bytes;
+// a test holds the two together.
+var markTile = [4]byte{0xb6, 0x24, 0x8b, 0xff}
 
 // markLine is what the chart line is drawn in.
 var markLine = [4]byte{0xff, 0xff, 0xff, 0xff}
@@ -88,7 +89,7 @@ func markPixels(size int) []byte {
 					line = c
 				}
 			}
-			setPixel(out, size, x, y, blend(markBlue, markLine, fill, line))
+			setPixel(out, size, x, y, blend(markTile, markLine, fill, line))
 		}
 	}
 	return out
@@ -107,7 +108,7 @@ func coverage(inside float64) float64 {
 	return inside + 0.5
 }
 
-// blend puts the white line over the blue tile and premultiplies the result.
+// blend puts the white line over the tile and premultiplies the result.
 //
 // Two coverages rather than two draws: the tile decides the pixel's own alpha,
 // the line decides how much of what is visible is white, and doing it in one

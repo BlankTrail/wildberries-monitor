@@ -2,7 +2,11 @@
 
 package tray
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/BlankTrail/wildberries-monitor/internal/chart"
+)
 
 // The mark is pixels, so the tests read pixels. What they hold it to is what
 // Windows will not forgive: a buffer of exactly the size the bitmap was
@@ -102,13 +106,13 @@ func TestMarkPixels_TheLineStaysInsideTheTile(t *testing.T) {
 	}
 }
 
-func TestMarkPixels_IsBlueWithAWhiteLineThroughIt(t *testing.T) {
-	// What the mark is: the chart's own blue, and a line light enough to read
-	// against it at sixteen pixels.
+func TestMarkPixels_IsTheProductsColourWithAWhiteLineThroughIt(t *testing.T) {
+	// What the mark is: the colour the panel and the charts use, and a line
+	// light enough to read against it at sixteen pixels.
 	const size = 32
 	px := markPixels(size)
 
-	blue, white := 0, 0
+	tile, white := 0, 0
 	for y := range size {
 		for x := range size {
 			b, g, r, a := pixelAt(px, size, x, y)
@@ -116,23 +120,42 @@ func TestMarkPixels_IsBlueWithAWhiteLineThroughIt(t *testing.T) {
 				continue
 			}
 			switch {
-			case b > 0xc0 && r < 0x60:
-				blue++
+			case b == markTile[0] && g == markTile[1] && r == markTile[2]:
+				tile++
 			case b > 0xc0 && g > 0xc0 && r > 0xc0:
 				white++
 			}
 		}
 	}
-	if blue == 0 {
-		t.Error("плитка не синяя")
+	if tile == 0 {
+		t.Error("плитка не того цвета, которым нарисована")
 	}
 	if white == 0 {
 		t.Error("линии на плитке нет")
 	}
 	// The line is a line and not a wash: it takes a part of the tile, not most
 	// of it.
-	if white > blue {
-		t.Errorf("белого (%d) больше синего (%d) — это уже не линия", white, blue)
+	if white > tile {
+		t.Errorf("белого (%d) больше плитки (%d) — это уже не линия", white, tile)
+	}
+}
+
+func TestMarkPixels_IsPaintedInTheSameColourAsEverythingElse(t *testing.T) {
+	// The icon, the charts and the panel are one product. Three places hold
+	// this colour — a DIB's backwards bytes here, a Go value in chart, a hex
+	// token in the theme's CSS — and the CSS is checked against chart by the
+	// web tests, so this ties in the third.
+	if got, want := markTile[2], chart.Accent.R; got != want {
+		t.Errorf("красный %#02x, у графиков %#02x", got, want)
+	}
+	if got, want := markTile[1], chart.Accent.G; got != want {
+		t.Errorf("зелёный %#02x, у графиков %#02x", got, want)
+	}
+	if got, want := markTile[0], chart.Accent.B; got != want {
+		t.Errorf("синий %#02x, у графиков %#02x", got, want)
+	}
+	if markTile[3] != 0xff {
+		t.Error("плитка не непрозрачна")
 	}
 }
 
