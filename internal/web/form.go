@@ -98,3 +98,17 @@ func picker(legend, field, attrs string, picks []pick) string {
 	b.WriteString(`</fieldset>`)
 	return b.String()
 }
+
+// action is one button that posts.
+//
+// A form around it rather than a button carrying data-post, because the
+// script binds forms: the bare buttons were drawn, their routes answered, and
+// clicking them did nothing whatsoever. One mechanism leaves nothing to get
+// wrong, and lets a test here say «everything that posts is a form» — which
+// is what nobody could check while there were two.
+func action(url, target, label string) string {
+	return `<form class="bt-inline" data-post="` + html.EscapeString(url) +
+		`" data-target="` + html.EscapeString(target) + `">` +
+		`<button class="bt-btn bt-btn--ghost bt-btn--sm" type="submit">` +
+		html.EscapeString(label) + `</button></form>`
+}

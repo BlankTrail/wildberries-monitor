@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -155,6 +156,16 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 		// the whole of «проверить соединение» — the control API answered and
 		// took the key. What a run additionally needs, the run's own
 		// preflight says in the SDK's words.
+		// The keys of the transport map, which is the only thing that knows
+		// what this build can carry a message through.
+		NotifyKinds: func() []string {
+			kinds := make([]string, 0, len(a.Worker.Transports))
+			for kind := range a.Worker.Transports {
+				kinds = append(kinds, kind)
+			}
+			slices.Sort(kinds)
+			return kinds
+		},
 		CheckBlankTrail: func(ctx context.Context, url, apiKey string) error {
 			client, err := blanktrail.NewClient(url, apiKey)
 			if err != nil {

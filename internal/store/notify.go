@@ -271,6 +271,19 @@ func (s *Store) SaveTarget(ctx context.Context, t TargetRow) (int64, error) {
 	return res.LastInsertId()
 }
 
+// DeleteTarget removes an addressee.
+//
+// Queued messages for it go with it — the outbox cascades — and that is the
+// right answer rather than a loss: a message waiting for an addressee nobody
+// can reach any more is one nothing will ever deliver, and the worker would
+// give up on it the moment it looked.
+func (s *Store) DeleteTarget(ctx context.Context, id int64) error {
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM notify_targets WHERE id = ?`, id); err != nil {
+		return fmt.Errorf("store: deleting an addressee: %w", err)
+	}
+	return nil
+}
+
 // Targets returns every addressee.
 func (s *Store) Targets(ctx context.Context) ([]TargetRow, error) {
 	rows, err := s.db.QueryContext(ctx,

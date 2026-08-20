@@ -3,10 +3,12 @@
 package web
 
 import (
+	"context"
 	"fmt"
 	"html"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -135,6 +137,7 @@ func (s *Server) rulesHTML(r *http.Request) (string, error) {
 	// The address stays /rules — a saved link keeps working.
 	b.WriteString(`<section id="rules-body" class="bt-card"><h2>Уведомления</h2>`)
 	b.WriteString(s.ruleList(all))
+	b.WriteString(s.targetsSection(ctx, targets))
 	b.WriteString(ruleForm(targets, jobs))
 	b.WriteString(`</section>`)
 	return b.String(), nil
@@ -174,9 +177,8 @@ func (s *Server) ruleList(all []rules.Rule) string {
 		b.WriteString(`<td>` + html.EscapeString(thresholdText(rule)) + `</td>`)
 		b.WriteString(`<td>` + state + `</td>`)
 		fmt.Fprintf(&b,
-			`<td><button class="bt-btn bt-btn--ghost bt-btn--sm" data-get="/rules/log?id=%d" data-target="#rule-log">Журнал</button>`+
-				`<button class="bt-btn bt-btn--ghost bt-btn--sm" data-post="/rules/delete?id=%d" data-target="#rules-body">Удалить</button></td>`,
-			rule.ID, rule.ID)
+			`<td class="bt-row-actions"><button class="bt-btn bt-btn--ghost bt-btn--sm" data-get="/rules/log?id=%d" data-target="#rule-log">Журнал</button>%s</td>`,
+			rule.ID, action("/rules/delete?id="+fmt.Sprint(rule.ID), "#rules-body", "Удалить"))
 		b.WriteString(`</tr>`)
 	}
 	b.WriteString(`</tbody></table></div>`)
@@ -443,7 +445,7 @@ func ruleForm(targets []store.TargetRow, jobs []store.JobStatus) string {
 		// Said plainly rather than shown as an empty list. A rule cannot be
 		// saved without one, and a person staring at an empty select has no
 		// way to know that is the problem.
-		addressees.WriteString(`<div class="bt-alert bt-alert--warning">Сначала добавьте адресата — уведомлению некому писать.</div>`)
+		addressees.WriteString(`<div class="bt-alert bt-alert--warning">Сначала добавьте адресата — форма «Кому уходят уведомления» выше.</div>`)
 	}
 	for _, t := range targets {
 		name := t.Name
@@ -580,4 +582,184 @@ func (s *Server) deleteRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.rulesFragment(w, r, `<div class="bt-alert bt-alert--success">Уведомление удалено.</div>`)
+}
+
+// targetKindLabels names a way of delivering a message.
+var targetKindLabels = map[string]string{"telegram": "Telegram"}
+
+func targetKindLabel(kind string) string {
+	if label, ok := targetKindLabels[kind]; ok {
+		return label
+	}
+	return kind
+}
+
+// targetsSection is where addressees are added, switched off and removed.
+//
+// On this screen rather than in the settings dialog: an addressee is what a
+// notification is for, a rule cannot be saved without one, and until this
+// existed the panel asked for one it gave nobody any way to create. Every
+// rule on the screen above points at addressees listed here.
+func (s *Server) targetsSection(ctx context.Context, targets []store.TargetRow) string {
+	var b strings.Builder
+	b.WriteString(`<h3>Кому уходят уведомления</h3>`)
+
+	if len(targets) == 0 {
+		b.WriteString(`<div class="bt-alert bt-alert--neutral">Адресатов пока нет. ` +
+			`Первый — в форме ниже; без него уведомление некуда отправлять.</div>`)
+	} else {
+		b.WriteString(`<div class="bt-table-wrap"><table class="bt-table"><thead><tr>` +
+			`<th>Адресат</th><th>Куда</th><th>Адрес</th><th>Состояние</th><th></th>` +
+			`</tr></thead><tbody>`)
+		for _, t := range targets {
+			name := t.Name
+			if name == "" {
+				name = "без названия"
+			}
+			state := `<span class="bt-badge bt-badge--success bt-badge--sm">получает</span>`
+			switchLabel := "Выключить"
+			if !t.Enabled {
+				state = `<span class="bt-badge bt-badge--neutral bt-badge--sm">выключен</span>`
+				switchLabel = "Включить"
+			}
+			fmt.Fprintf(&b, `<tr><td>%s</td><td>%s</td><td class="bt-code">%s</td><td>%s</td><td class="bt-row-actions">%s%s</td></tr>`,
+				html.EscapeString(name), html.EscapeString(targetKindLabel(t.Kind)),
+				html.EscapeString(t.Address), state,
+				action("/rules/targets/toggle?id="+fmt.Sprint(t.ID), "#rules-body", switchLabel),
+				action("/rules/targets/delete?id="+fmt.Sprint(t.ID), "#rules-body", "Удалить"))
+		}
+		b.WriteString(`</tbody></table></div>`)
+	}
+
+	b.WriteString(s.targetForm(ctx))
+	return b.String()
+}
+
+// targetForm adds one addressee.
+func (s *Server) targetForm(ctx context.Context) string {
+	kinds := s.notifyKinds()
+	if len(kinds) == 0 {
+		// Not an empty select: an addressee of a kind nothing carries is an
+		// addressee that never hears anything, and a form that offers one is
+		// a promise this build cannot keep.
+		return `<div class="bt-alert bt-alert--warning">Эта сборка не умеет доставлять сообщения — адресата добавить некуда.</div>`
+	}
+
+	var b strings.Builder
+	b.WriteString(`<form class="bt-fieldset bt-form" data-post="/rules/targets" data-target="#rules-body">`)
+	b.WriteString(`<div class="bt-form-grid">`)
+	b.WriteString(field("Название", `<input class="bt-input" name="name" placeholder="я в телеграме">`,
+		"Как адресат будет называться в списке. Можно оставить пустым."))
+
+	if len(kinds) == 1 {
+		// One way to deliver is not a choice. Said out loud and posted as a
+		// hidden field, so the form does not ask a question with one answer.
+		b.WriteString(field("Куда",
+			`<input type="hidden" name="kind" value="`+html.EscapeString(kinds[0])+`">`+
+				`<span class="bt-badge bt-badge--soft bt-badge--accent">`+html.EscapeString(targetKindLabel(kinds[0]))+`</span>`,
+			"Единственный путь доставки, который есть в этой сборке."))
+	} else {
+		var sel strings.Builder
+		sel.WriteString(`<select class="bt-select" name="kind">`)
+		for _, k := range kinds {
+			sel.WriteString(`<option value="` + html.EscapeString(k) + `">` +
+				html.EscapeString(targetKindLabel(k)) + `</option>`)
+		}
+		sel.WriteString(`</select>`)
+		b.WriteString(field("Куда", sel.String(), "Чем доставлять сообщение."))
+	}
+
+	// Prefilled from the settings dialog: the chat is usually already there,
+	// and retyping a numeric id from memory is how a notification goes to the
+	// wrong group.
+	chat := s.Store.SettingOr(ctx, store.SettingTelegramChat, "")
+	b.WriteString(field("Адрес",
+		`<input class="bt-input bt-input--mono" name="address" required placeholder="123456789 или @канал" value="`+
+			html.EscapeString(chat)+`">`,
+		"Числовой идентификатор чата, @имя канала или «чат:тема» для темы в форуме."))
+	b.WriteString(`</div>`)
+
+	b.WriteString(`<div class="bt-form-actions"><button class="bt-btn bt-btn--secondary" type="submit">Добавить адресата</button></div>`)
+	b.WriteString(`</form>`)
+	return b.String()
+}
+
+// saveTarget stores an addressee.
+func (s *Server) saveTarget(w http.ResponseWriter, r *http.Request) {
+	if err := parseForm(r); err != nil {
+		http.Error(w, "targets: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	row := store.TargetRow{
+		Name:    strings.TrimSpace(r.PostFormValue("name")),
+		Kind:    strings.TrimSpace(r.PostFormValue("kind")),
+		Address: strings.TrimSpace(r.PostFormValue("address")),
+		Enabled: true,
+	}
+
+	// Checked here rather than left to the database: a kind this build cannot
+	// carry would be saved happily and then never deliver anything, which is
+	// the failure this screen exists to prevent.
+	if !slices.Contains(s.notifyKinds(), row.Kind) {
+		s.rulesFragment(w, r, `<div class="bt-alert bt-alert--error">Такой путь доставки эта сборка не умеет.</div>`)
+		return
+	}
+	if row.Address == "" {
+		s.rulesFragment(w, r, `<div class="bt-alert bt-alert--error">Без адреса сообщению некуда идти.</div>`)
+		return
+	}
+
+	if _, err := s.Store.SaveTarget(r.Context(), row); err != nil {
+		s.rulesFragment(w, r, `<div class="bt-alert bt-alert--error">`+html.EscapeString(err.Error())+`</div>`)
+		return
+	}
+	s.rulesFragment(w, r, `<div class="bt-alert bt-alert--success">Адресат добавлен.</div>`)
+}
+
+// toggleTarget switches an addressee on or off.
+func (s *Server) toggleTarget(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.URL.Query().Get("id"), 10, 64)
+	if err != nil {
+		http.Error(w, "targets: which addressee?", http.StatusBadRequest)
+		return
+	}
+	rows, err := s.Store.Targets(r.Context())
+	if err != nil {
+		http.Error(w, "targets: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	for _, t := range rows {
+		if t.ID != id {
+			continue
+		}
+		t.Enabled = !t.Enabled
+		if _, err := s.Store.SaveTarget(r.Context(), t); err != nil {
+			http.Error(w, "targets: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		// Switched off rather than removed: what is queued for this addressee
+		// waits instead of being given up on, and comes out when it is
+		// switched back on.
+		note := "Адресат выключен — сообщения ему подождут."
+		if t.Enabled {
+			note = "Адресат снова получает сообщения."
+		}
+		s.rulesFragment(w, r, `<div class="bt-alert bt-alert--success">`+note+`</div>`)
+		return
+	}
+	s.rulesFragment(w, r, `<div class="bt-alert bt-alert--error">Такого адресата нет.</div>`)
+}
+
+// deleteTarget removes an addressee.
+func (s *Server) deleteTarget(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.URL.Query().Get("id"), 10, 64)
+	if err != nil {
+		http.Error(w, "targets: which addressee?", http.StatusBadRequest)
+		return
+	}
+	if err := s.Store.DeleteTarget(r.Context(), id); err != nil {
+		http.Error(w, "targets: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.rulesFragment(w, r, `<div class="bt-alert bt-alert--success">Адресат удалён.</div>`)
 }

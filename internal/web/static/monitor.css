@@ -736,3 +736,18 @@ dialog.bt-modal > #settings-body {
   margin: 0;
   padding: .15rem 0;
 }
+
+/* ---- a row's actions ---------------------------------------------------- */
+
+/* Each action is a form of its own — the script binds forms — so the cell
+   needs to put them back on one line. */
+.bt[data-bt-theme="dashboard"] .bt-inline {
+  display: inline;
+}
+
+.bt[data-bt-theme="dashboard"] .bt-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  align-items: center;
+}

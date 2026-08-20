@@ -204,18 +204,18 @@ func scheduleText(j store.JobStatus) string {
 func jobActionsHTML(j store.JobStatus) string {
 	var b strings.Builder
 	if j.Running {
-		fmt.Fprintf(&b, `<button class="bt-btn bt-btn--ghost bt-btn--sm" data-post="/jobs/stop?id=%d" data-target="#jobs-body">Остановить</button>`, j.ID)
+		b.WriteString(action("/jobs/stop?id="+fmt.Sprint(j.ID), "#jobs-body", "Остановить"))
 	} else {
-		fmt.Fprintf(&b, `<button class="bt-btn bt-btn--ghost bt-btn--sm" data-post="/jobs/run?id=%d" data-target="#jobs-body">Запустить</button>`, j.ID)
+		b.WriteString(action("/jobs/run?id="+fmt.Sprint(j.ID), "#jobs-body", "Запустить"))
 	}
 	if strings.TrimSpace(j.Schedule) != "" {
 		label := "Выключить"
 		if !j.Enabled {
 			label = "Включить"
 		}
-		fmt.Fprintf(&b, `<button class="bt-btn bt-btn--ghost bt-btn--sm" data-post="/jobs/toggle?id=%d" data-target="#jobs-body">%s</button>`, j.ID, label)
+		b.WriteString(action("/jobs/toggle?id="+fmt.Sprint(j.ID), "#jobs-body", label))
 	}
-	fmt.Fprintf(&b, `<button class="bt-btn bt-btn--ghost bt-btn--sm" data-post="/jobs/delete?id=%d" data-target="#jobs-body">Удалить</button>`, j.ID)
+	b.WriteString(action("/jobs/delete?id="+fmt.Sprint(j.ID), "#jobs-body", "Удалить"))
 	return b.String()
 }
 

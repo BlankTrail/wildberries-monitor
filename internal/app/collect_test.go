@@ -5,8 +5,11 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,7 +19,9 @@ import (
 
 	"github.com/BlankTrail/wildberries-monitor/internal/engine"
 	"github.com/BlankTrail/wildberries-monitor/internal/job"
+	"github.com/BlankTrail/wildberries-monitor/internal/rules"
 	"github.com/BlankTrail/wildberries-monitor/internal/store"
+	"github.com/BlankTrail/wildberries-monitor/internal/track"
 	"github.com/BlankTrail/wildberries-monitor/wb"
 )
 
@@ -540,4 +545,71 @@ func firstLines(s string) string {
 		return s[:400] + "…"
 	}
 	return s
+}
+
+func TestPanelRules_ANotificationCanBeMadeFromNothing(t *testing.T) {
+	// The whole screen was a dead end: a rule needs an addressee, the panel
+	// asked for one, and nothing in the program wrote that table — not the
+	// panel, not the bot, not the wiring. Nobody could save a single
+	// notification. This walks the path a person walks, on a fresh install.
+	a := newApp(t)
+	panel := a.Server.Handler()
+
+	press := func(method, path string, form url.Values) string {
+		t.Helper()
+		var body io.Reader
+		if form != nil {
+			body = strings.NewReader(form.Encode())
+		}
+		r := httptest.NewRequest(method, path, body)
+		if form != nil {
+			r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		}
+		w := httptest.NewRecorder()
+		panel.ServeHTTP(w, r)
+		if w.Code != http.StatusOK {
+			t.Fatalf("%s %s = %d: %s", method, path, w.Code, firstLines(w.Body.String()))
+		}
+		return w.Body.String()
+	}
+
+	// The build carries Telegram, so the screen offers an addressee of that
+	// kind — this is the wiring the panel cannot supply itself.
+	if got := press(http.MethodGet, "/rules", nil); !strings.Contains(got, `data-post="/rules/targets"`) {
+		t.Fatal("на экране нет формы адресата")
+	}
+
+	press(http.MethodPost, "/rules/targets", url.Values{
+		"name": {"я"}, "kind": {"telegram"}, "address": {"123456789"},
+	})
+	targets, err := a.Store.Targets(t.Context())
+	if err != nil || len(targets) != 1 {
+		t.Fatalf("Targets: %v, %d", err, len(targets))
+	}
+
+	press(http.MethodPost, "/rules", url.Values{
+		"name":             {"цена упала"},
+		"kind":             {string(track.PriceChanged)},
+		"scope_kind":       {string(rules.ScopeProduct)},
+		"scope_id":         {"141504066"},
+		"threshold_pct":    {"5"},
+		"threshold_rub":    {"100"},
+		"min_interval_min": {"30"},
+		"cond_field_0":     {string(rules.FieldPercent)},
+		"cond_cmp_0":       {string(rules.CmpLess)},
+		"cond_value_0":     {"-5"},
+		"cond_op":          {"and"},
+		"targets":          {fmt.Sprint(targets[0].ID)},
+	})
+
+	all, err := rules.All(t.Context(), a.Store)
+	if err != nil {
+		t.Fatalf("All: %v", err)
+	}
+	if len(all) != 1 {
+		t.Fatalf("сохранено уведомлений: %d", len(all))
+	}
+	if len(all[0].Targets) != 1 || all[0].Targets[0] != targets[0].ID {
+		t.Errorf("уведомление адресовано %v, ожидался %d", all[0].Targets, targets[0].ID)
+	}
 }

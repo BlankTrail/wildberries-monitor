@@ -90,6 +90,12 @@ type Server struct {
 	// CheckTelegram asks Telegram who this bot is, over whatever ladder the
 	// wiring built. A field for the same reason CheckBlankTrail is one: the
 	// suite must not need a live Telegram.
+	// NotifyKinds lists the ways this build can actually deliver a message.
+	// A field for the same reason the checks are: the transports are wired in
+	// app, and an addressee of a kind nothing carries is an addressee that
+	// silently never hears anything.
+	NotifyKinds func() []string
+
 	CheckTelegram func(ctx context.Context, token string) (username string, err error)
 	// TelegramRoute names the rung currently in use, for the settings screen.
 	TelegramRoute func() string
@@ -221,6 +227,9 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /rules", s.auth(http.HandlerFunc(s.saveRule)))
 	mux.Handle("GET /rules/log", s.auth(http.HandlerFunc(s.ruleLog)))
 	mux.Handle("POST /rules/delete", s.auth(http.HandlerFunc(s.deleteRule)))
+	mux.Handle("POST /rules/targets", s.auth(http.HandlerFunc(s.saveTarget)))
+	mux.Handle("POST /rules/targets/toggle", s.auth(http.HandlerFunc(s.toggleTarget)))
+	mux.Handle("POST /rules/targets/delete", s.auth(http.HandlerFunc(s.deleteTarget)))
 	mux.Handle("GET /results", s.auth(http.HandlerFunc(s.resultsPage)))
 	mux.Handle("GET /results/table", s.auth(http.HandlerFunc(s.resultsFragment)))
 	mux.Handle("GET /results/export", s.auth(http.HandlerFunc(s.exportHandler)))
@@ -379,4 +388,12 @@ func (s *Server) jobList(ctx context.Context) ([]store.JobStatus, error) {
 		return s.JobList(ctx)
 	}
 	return s.Store.Jobs(ctx)
+}
+
+// notifyKinds is what this build can deliver a message through.
+func (s *Server) notifyKinds() []string {
+	if s.NotifyKinds == nil {
+		return nil
+	}
+	return s.NotifyKinds()
 }

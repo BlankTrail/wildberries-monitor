@@ -627,3 +627,95 @@ func attrValues(body, attr string) []string {
 		rest = rest[end:]
 	}
 }
+
+func TestPages_PostOnlyFromForms(t *testing.T) {
+	// Every action in a row — run, stop, delete, switch a schedule off, an
+	// addressee on — used to be a bare button carrying data-post, and the
+	// script binds data-post on forms. So the routes answered, the buttons
+	// were drawn, and every one of those clicks went nowhere. Nothing could
+	// notice: the markup was right, the handler was right, and the two were
+	// never introduced.
+	//
+	// One mechanism now — a form posts — which makes this checkable here
+	// instead of only in a browser somebody remembered to open.
+	srv := populated(t)
+
+	found := 0
+	for _, path := range []string{"/", "/jobs", "/rules", "/channels", "/track", "/results", "/settings"} {
+		body := get(t, srv, path, "correct horse").Body.String()
+		for _, at := range indexesOf(body, ` data-post="`) {
+			found++
+			// The tag this attribute sits in, from its own «<» forward.
+			open := strings.LastIndex(body[:at], "<")
+			if open < 0 || !strings.HasPrefix(body[open:], "<form") {
+				tag := body[open:min(open+70, len(body))]
+				t.Errorf("%s: data-post не на форме, а на %q — по такой кнопке ничего не уйдёт", path, tag)
+				continue
+			}
+			// And it says where its answer goes. Without that the script
+			// swaps into #main, and a fragment meant for one card replaces
+			// the whole screen — the list comes back and the form under it
+			// disappears until somebody reloads.
+			tag := body[open:min(open+400, len(body))]
+			if end := strings.Index(tag, ">"); end >= 0 {
+				tag = tag[:end]
+			}
+			if !strings.Contains(tag, ` data-target="#`) {
+				t.Errorf("%s: форма %q не говорит, куда положить ответ", path, tag)
+			}
+		}
+	}
+	// The screens have to have been full, or this looked at an empty panel
+	// and said everything was fine.
+	if found < 6 {
+		t.Errorf("найдено кнопок, которые постят: %d — экраны отрисовались пустыми", found)
+	}
+}
+
+// indexesOf lists every place a substring occurs.
+func indexesOf(s, sub string) []int {
+	var out []int
+	for from := 0; ; {
+		at := strings.Index(s[from:], sub)
+		if at < 0 {
+			return out
+		}
+		out = append(out, from+at)
+		from += at + len(sub)
+	}
+}
+
+// populated is a panel with one of everything on it, so that the screens
+// render the rows and the buttons that only exist beside data.
+func populated(t *testing.T) *Server {
+	t.Helper()
+	srv := srvWithDelivery(t)
+	ctx := t.Context()
+
+	if w := postForm(t, srv, "/jobs", goodForm()); w.Code != http.StatusOK {
+		t.Fatalf("задание: %d", w.Code)
+	}
+	if w := postForm(t, srv, "/channels", channelFormValues(nil)); w.Code != http.StatusOK {
+		t.Fatalf("прокси: %d", w.Code)
+	}
+	if w := postForm(t, srv, "/rules/targets",
+		url.Values{"kind": {"telegram"}, "address": {"123456789"}}); w.Code != http.StatusOK {
+		t.Fatalf("адресат: %d", w.Code)
+	}
+	targets, err := srv.Store.Targets(ctx)
+	if err != nil || len(targets) != 1 {
+		t.Fatalf("Targets: %v, %d", err, len(targets))
+	}
+	if w := postForm(t, srv, "/rules", ruleFormValues(targets[0].ID)); w.Code != http.StatusOK {
+		t.Fatalf("уведомление: %d", w.Code)
+	}
+	return srv
+}
+
+// srvWithDelivery is a panel whose build can deliver a message, so that every
+// screen renders in full.
+func srvWithDelivery(t *testing.T) *Server {
+	srv := newServer(t)
+	srv.NotifyKinds = func() []string { return []string{"telegram"} }
+	return srv
+}

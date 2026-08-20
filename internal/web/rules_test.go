@@ -568,3 +568,126 @@ func TestSaveRule_TakesTheIdentifierFromWhicheverScopeFieldWasFilled(t *testing.
 		t.Errorf("номер задания = %d, ожидалось 77", all[0].Scope.ID)
 	}
 }
+
+// delivering gives the panel a build that can actually carry a message.
+func delivering(srv *Server) {
+	srv.NotifyKinds = func() []string { return []string{"telegram"} }
+}
+
+func TestTargets_TheScreenHasSomewhereToAddOne(t *testing.T) {
+	// The screen asked for an addressee, refused to save a rule without one,
+	// and gave nobody anywhere to create one: nothing in the whole program
+	// wrote that table. Every rule on this screen was unreachable.
+	srv := newServer(t)
+	delivering(srv)
+	ctx := t.Context()
+
+	body := get(t, srv, "/rules", "correct horse").Body.String()
+	if !strings.Contains(body, `data-post="/rules/targets"`) {
+		t.Fatalf("адресата некуда добавить:\n%s", body)
+	}
+
+	form := url.Values{"name": {"я в телеграме"}, "kind": {"telegram"}, "address": {"123456789"}}
+	if w := postForm(t, srv, "/rules/targets", form); w.Code != http.StatusOK {
+		t.Fatalf("добавление = %d: %s", w.Code, firstLines(w.Body.String()))
+	}
+
+	saved, err := srv.Store.Targets(ctx)
+	if err != nil {
+		t.Fatalf("Targets: %v", err)
+	}
+	if len(saved) != 1 {
+		t.Fatalf("сохранено адресатов: %d", len(saved))
+	}
+	if saved[0].Address != "123456789" || saved[0].Kind != "telegram" || !saved[0].Enabled {
+		t.Errorf("адресат сохранён как %+v", saved[0])
+	}
+
+	// And the rule form can now point at it.
+	body = get(t, srv, "/rules", "correct horse").Body.String()
+	if !strings.Contains(body, `name="targets" value="`+fmt.Sprint(saved[0].ID)+`"`) {
+		t.Error("новый адресат не предлагается уведомлению")
+	}
+}
+
+func TestTargets_OffersOnlyWhatThisBuildCanDeliver(t *testing.T) {
+	// An addressee of a kind nothing carries is an addressee that never hears
+	// anything: the queue holds its messages for a transport that does not
+	// exist, and the owner watches a rule that fires and never arrives.
+	srv := newServer(t)
+	delivering(srv)
+
+	form := url.Values{"kind": {"carrier-pigeon"}, "address": {"123"}}
+	if w := postForm(t, srv, "/rules/targets", form); !strings.Contains(w.Body.String(), "не умеет") {
+		t.Errorf("чужой путь доставки принят: %s", firstLines(w.Body.String()))
+	}
+	if saved, _ := srv.Store.Targets(t.Context()); len(saved) != 0 {
+		t.Errorf("сохранено адресатов: %d", len(saved))
+	}
+
+	// And an addressee with no address at all: the database would take it —
+	// the column has a default — and the rule pointing at it would fire into
+	// nothing every time, which is the failure this screen exists to prevent.
+	form = url.Values{"kind": {"telegram"}, "address": {"   "}}
+	if w := postForm(t, srv, "/rules/targets", form); !strings.Contains(w.Body.String(), "некуда идти") {
+		t.Errorf("адресат без адреса принят: %s", firstLines(w.Body.String()))
+	}
+	if saved, _ := srv.Store.Targets(t.Context()); len(saved) != 0 {
+		t.Errorf("сохранено адресатов без адреса: %d", len(saved))
+	}
+
+	// A build with no transports at all says so instead of drawing a form
+	// whose every answer is wrong.
+	bare := newServer(t)
+	if body := get(t, bare, "/rules", "correct horse").Body.String(); !strings.Contains(body, "не умеет доставлять") {
+		t.Error("сборка без доставки не говорит об этом")
+	}
+}
+
+func TestTargets_AreSwitchedOffAndRemoved(t *testing.T) {
+	srv, id := withTarget(t)
+	delivering(srv)
+	ctx := t.Context()
+
+	// Off, and the queue keeps what is waiting — see the worker: a switched
+	// off addressee is a pause, a deleted one is a giving up.
+	if w := postForm(t, srv, "/rules/targets/toggle?id="+fmt.Sprint(id), nil); w.Code != http.StatusOK {
+		t.Fatalf("выключение = %d", w.Code)
+	}
+	saved, err := srv.Store.Targets(ctx)
+	if err != nil || len(saved) != 1 {
+		t.Fatalf("Targets: %v, %d", err, len(saved))
+	}
+	if saved[0].Enabled {
+		t.Error("адресат остался включённым")
+	}
+
+	if w := postForm(t, srv, "/rules/targets/toggle?id="+fmt.Sprint(id), nil); w.Code != http.StatusOK {
+		t.Fatalf("включение = %d", w.Code)
+	}
+	if saved, _ = srv.Store.Targets(ctx); !saved[0].Enabled {
+		t.Error("адресат не включился обратно")
+	}
+
+	if w := postForm(t, srv, "/rules/targets/delete?id="+fmt.Sprint(id), nil); w.Code != http.StatusOK {
+		t.Fatalf("удаление = %d", w.Code)
+	}
+	if saved, _ = srv.Store.Targets(ctx); len(saved) != 0 {
+		t.Errorf("после удаления адресатов: %d", len(saved))
+	}
+}
+
+func TestTargets_TheAddressIsFilledInFromTheSettings(t *testing.T) {
+	// The chat is usually already in the settings dialog, and retyping a
+	// numeric id from memory is how a notification goes to the wrong group.
+	srv := newServer(t)
+	delivering(srv)
+	if err := srv.Store.SetSetting(t.Context(), store.SettingTelegramChat, "-1001234567", store.SettingText); err != nil {
+		t.Fatalf("SetSetting: %v", err)
+	}
+
+	body := get(t, srv, "/rules", "correct horse").Body.String()
+	if !strings.Contains(body, `name="address" required placeholder="123456789 или @канал" value="-1001234567"`) {
+		t.Errorf("адрес не подставлен из настроек:\n%s", body)
+	}
+}

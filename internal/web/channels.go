@@ -127,9 +127,8 @@ func channelList(list []store.ChannelRow) string {
 			b.WriteString(`<td class="bt-cell-wrap">` + html.EscapeString(sourceText(c)) + `</td>`)
 			b.WriteString(`<td>` + state + `</td>`)
 			fmt.Fprintf(&b,
-				`<td><button class="bt-btn bt-btn--ghost bt-btn--sm" data-get="/channels/test?id=%d" data-target="#channel-test">Проверить</button>`+
-					`<button class="bt-btn bt-btn--ghost bt-btn--sm" data-post="/channels/delete?id=%d" data-target="#channels-body">Удалить</button></td>`,
-				c.ID, c.ID)
+				`<td class="bt-row-actions"><button class="bt-btn bt-btn--ghost bt-btn--sm" data-get="/channels/test?id=%d" data-target="#channel-test">Проверить</button>%s</td>`,
+				c.ID, action("/channels/delete?id="+fmt.Sprint(c.ID), "#channels-body", "Удалить"))
 			b.WriteString(`</tr>`)
 		}
 		b.WriteString(`</tbody></table></div>`)

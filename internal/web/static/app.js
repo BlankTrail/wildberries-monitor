@@ -68,6 +68,12 @@
       });
     });
 
+    // Every post in this panel is a form, including the row actions — run,
+    // stop, delete, switch a schedule off. They used to be bare buttons
+    // carrying data-post, which this bound on forms alone, so the click went
+    // nowhere while the route answered and the button looked fine. One
+    // mechanism instead of two, and «anything that posts is a form» is a
+    // thing the server's own tests can check.
     root.querySelectorAll("form[data-post]").forEach((form) => {
       if (form.dataset.wired) return;
       form.dataset.wired = "1";
