@@ -235,12 +235,14 @@ func TestEstimate_AFieldThatCostsNothingChangesNothing(t *testing.T) {
 }
 
 func TestKinds_AreOnlyTheOnesWithASource(t *testing.T) {
-	// The design lists fourteen job types. Nine name sources this product
-	// cannot fetch, and declaring one would let a user schedule a job that
-	// collects nothing — the same mistake the field catalogue refuses.
+	// The design lists fourteen job types. Eight of them name sources this
+	// build cannot fetch — a catalogue node, promotions, the main page's
+	// shelves, a product's recommendation shelves — and declaring one would
+	// let a user schedule a job that collects nothing, the same mistake the
+	// field catalogue refuses.
 	got := Kinds()
-	if len(got) != 5 {
-		t.Fatalf("Kinds() has %d entries, want 5", len(got))
+	if len(got) != 6 {
+		t.Fatalf("Kinds() has %d entries, want 6", len(got))
 	}
 	seen := map[Kind]bool{}
 	for _, k := range got {
@@ -279,5 +281,75 @@ func TestEstimate_TheFieldCostItselfMultipliesByRegion(t *testing.T) {
 	}
 	if got, want := three.Estimate(0).Requests, 15; got != want {
 		t.Errorf("three regions = %d requests, want %d — the field cost is paid once per region", got, want)
+	}
+}
+
+func TestPositions_NeedsBothHalvesOfItsQuestion(t *testing.T) {
+	// Spec section 4.6's type 5 is a pair: which products, and which searches
+	// to look for them in. Either half alone is a different job that already
+	// exists — a list of articles, or a phrase walk.
+	base := Job{
+		Kind: KindPositions, Regions: []string{"-1257786"},
+		Fields: wb.Selection{"nm_id"}, MaxPages: 5,
+	}
+
+	withPhrases := base
+	withPhrases.Phrases = []string{"кроссовки"}
+	if err := withPhrases.Validate(); err == nil || !strings.Contains(err.Error(), "article") {
+		t.Errorf("без артикулов: %v", err)
+	}
+
+	withArticles := base
+	withArticles.Articles = []int64{141504066}
+	if err := withArticles.Validate(); err == nil || !strings.Contains(err.Error(), "phrases") {
+		t.Errorf("без фраз: %v", err)
+	}
+
+	both := base
+	both.Phrases, both.Articles = []string{"кроссовки"}, []int64{141504066}
+	if err := both.Validate(); err != nil {
+		t.Errorf("с обеими половинами: %v", err)
+	}
+
+	// And a page bound, for the same reason a phrase job needs one: search
+	// paging does not end on its own.
+	unbounded := both
+	unbounded.MaxPages = 0
+	if err := unbounded.Validate(); err == nil || !strings.Contains(err.Error(), "page limit") {
+		t.Errorf("без предела страниц: %v", err)
+	}
+}
+
+func TestPositions_WalksTheSearchAndKnowsItsOwnSize(t *testing.T) {
+	// The same requests a phrase job makes — a rank is a place among all of
+	// them, so the pages are walked whole — and a size that is known before
+	// it starts, because the products are the ones named.
+	j := Job{
+		Kind: KindPositions, Phrases: []string{"кроссовки", "платье"},
+		Articles: []int64{1, 2, 3}, Regions: []string{"-1257786", "-2133463"},
+		Fields: wb.Selection{"nm_id"}, MaxPages: 4,
+	}
+
+	plan, err := StaticPlanner{}.Plan(j)
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	// Two phrases × two regions × four pages.
+	if len(plan) != 16 {
+		t.Errorf("в плане %d позиций, ожидалось 16", len(plan))
+	}
+	for _, it := range plan {
+		if !strings.HasPrefix(it.Key, ItemPage) {
+			t.Errorf("позиция плана %q — не страница выдачи", it.Key)
+			break
+		}
+	}
+
+	e := j.Estimate(0)
+	if !e.Exact || e.Items != 3 {
+		t.Errorf("товаров в оценке %d (точно: %v), ожидалось 3 точно", e.Items, e.Exact)
+	}
+	if e.Requests < 16 {
+		t.Errorf("запросов в оценке %d — обход выдачи не посчитан", e.Requests)
 	}
 }

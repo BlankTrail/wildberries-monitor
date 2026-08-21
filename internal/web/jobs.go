@@ -42,6 +42,7 @@ var kindLabels = map[job.Kind]string{
 	job.KindBrand:     "Товары бренда",
 	job.KindArticles:  "Список артикулов",
 	job.KindPhraseAds: "Реклама в выдаче по фразе",
+	job.KindPositions: "Позиции товаров по фразам",
 }
 
 // kindWhat says what picking a kind will make the job walk.
@@ -56,6 +57,7 @@ var kindWhat = map[job.Kind]string{
 	job.KindBrand:     "Все товары бренда — по его идентификатору.",
 	job.KindArticles:  "Только перечисленные артикулы, без поиска.",
 	job.KindPhraseAds: "Рекламные полки в выдаче по фразе: чей товар и на каком месте.",
+	job.KindPositions: "Где перечисленные артикулы стоят в выдаче по каждой фразе. Чужие товары со страниц не сохраняются.",
 }
 
 var groupLabels = map[wb.FieldGroup]string{
@@ -352,7 +354,7 @@ func (s *Server) constructorHTML(r *http.Request) (string, error) {
 			`<textarea class="bt-textarea" name="phrases" rows="4" data-estimate placeholder="по одной в строке"></textarea>`,
 			"По одной в строке. Большой список — файлом ниже.")+
 			s.phraseListField(lists),
-		job.KindPhrase, job.KindPhraseAds))
+		job.KindPhrase, job.KindPhraseAds, job.KindPositions))
 
 	b.WriteString(whenAny(
 		field("Артикул продавца", `<input class="bt-input" name="supplier_id" type="number" min="1" data-estimate>`,
@@ -367,7 +369,7 @@ func (s *Server) constructorHTML(r *http.Request) (string, error) {
 	b.WriteString(whenAny(
 		field("Артикулы", `<textarea class="bt-textarea" name="articles" rows="3" data-estimate placeholder="по одному в строке"></textarea>`,
 			"По одному в строке. Задание пройдёт ровно по ним."),
-		job.KindArticles))
+		job.KindArticles, job.KindPositions))
 
 	b.WriteString(`<h3 class="bt-form-head">Где смотреть</h3>`)
 	// The regions across the whole width: it is a list to tick, and squeezed
@@ -381,7 +383,7 @@ func (s *Server) constructorHTML(r *http.Request) (string, error) {
 	b.WriteString(whenAny(
 		field("Страниц выдачи", `<input class="bt-input" name="max_pages" type="number" min="1" value="5" data-estimate>`,
 			"Постраничная выдача сама не кончается, поэтому предел обязателен."),
-		job.KindPhrase, job.KindSeller, job.KindBrand))
+		job.KindPhrase, job.KindSeller, job.KindBrand, job.KindPositions))
 	b.WriteString(`</div>`)
 
 	b.WriteString(`<h3 class="bt-form-head">Когда и как быстро</h3>`)
@@ -586,6 +588,11 @@ func assumedItems(j job.Job) int {
 		return max(phrases, 1) * max(j.MaxPages, 1) * productsPerPage
 	case job.KindSeller, job.KindBrand:
 		return max(j.MaxPages, 1) * productsPerPage
+	case job.KindPositions:
+		// The products are named, so the count is known — Estimate uses its
+		// own and ignores this, but a caller reading the assumption should
+		// not see a hundred products per page here.
+		return len(j.Articles)
 	}
 	return 0
 }
@@ -638,6 +645,12 @@ func (s *Server) jobFromForm(r *http.Request) (job.Job, error) {
 	// otherwise carry those articles — invisible on the screen that saved it,
 	// and present in the file it exports to.
 	switch j.Kind {
+	case job.KindPositions:
+		// The one kind that is a pair: which products, and which searches to
+		// look for them in.
+		j.Phrases = splitLines(f.Get("phrases"))
+		j.PhraseListID = atoi64(f.Get("phrase_list_id"))
+		j.Articles = articleNumbers(f.Get("articles"))
 	case job.KindPhrase, job.KindPhraseAds:
 		j.Phrases = splitLines(f.Get("phrases"))
 		j.PhraseListID = atoi64(f.Get("phrase_list_id"))
@@ -651,7 +664,7 @@ func (s *Server) jobFromForm(r *http.Request) (job.Job, error) {
 	// Paging bounds a walk that has pages. The article and advert kinds have
 	// none, and a page count stored against them is a number no run reads.
 	switch j.Kind {
-	case job.KindPhrase, job.KindSeller, job.KindBrand:
+	case job.KindPhrase, job.KindSeller, job.KindBrand, job.KindPositions:
 		j.MaxPages = int(atoi64(f.Get("max_pages")))
 	}
 

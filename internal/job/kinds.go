@@ -169,7 +169,7 @@ func (StaticPlanner) Plan(j Job) ([]Item, error) {
 	var out []Item
 	for _, dest := range regions {
 		switch j.Kind {
-		case KindPhrase:
+		case KindPhrase, KindPositions:
 			for _, phrase := range phrases {
 				for page := 1; page <= j.MaxPages; page++ {
 					out = append(out, Item{Kind: ItemPage, Key: Key{

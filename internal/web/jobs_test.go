@@ -467,12 +467,14 @@ func TestConstructor_ShowsOnlyTheFieldsTheChosenKindUses(t *testing.T) {
 		name  string
 		kinds []job.Kind
 	}{
-		{"phrases", []job.Kind{job.KindPhrase, job.KindPhraseAds}},
-		{"phrase_list_id", []job.Kind{job.KindPhrase, job.KindPhraseAds}},
+		{"phrases", []job.Kind{job.KindPhrase, job.KindPhraseAds, job.KindPositions}},
+		{"phrase_list_id", []job.Kind{job.KindPhrase, job.KindPhraseAds, job.KindPositions}},
 		{"supplier_id", []job.Kind{job.KindSeller}},
 		{"brand_id", []job.Kind{job.KindBrand}},
-		{"articles", []job.Kind{job.KindArticles}},
-		{"max_pages", []job.Kind{job.KindPhrase, job.KindSeller, job.KindBrand}},
+		// Positions is the one kind that is a pair: which products, and which
+		// searches to look for them in.
+		{"articles", []job.Kind{job.KindArticles, job.KindPositions}},
+		{"max_pages", []job.Kind{job.KindPhrase, job.KindSeller, job.KindBrand, job.KindPositions}},
 	} {
 		group := groupAround(body, `name="`+c.name+`"`)
 		if group == "" {

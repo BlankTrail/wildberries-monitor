@@ -463,3 +463,64 @@ func TestSources_IsTheSameArithmeticTheEstimateUsed(t *testing.T) {
 			len(got), len(f.Job.Fields.Sources()))
 	}
 }
+
+// watching is a fetcher for a job that watches particular articles.
+func watching(t *testing.T, site *fakeSite, kind job.Kind, articles ...int64) (*Fetcher, *store.Store) {
+	t.Helper()
+	st := openStore(t)
+	return &Fetcher{
+		Site: site, Store: st,
+		Job: job.Job{Kind: kind, Articles: articles, Fields: wb.Selection{"nm_id", "rank"}},
+	}, st
+}
+
+// savedIDs is which products ended up in the database.
+func savedIDs(t *testing.T, s *store.Store) map[int64]bool {
+	t.Helper()
+	out := map[int64]bool{}
+	for row, err := range s.Products(t.Context(), store.ProductFilter{Latest: true}) {
+		if err != nil {
+			t.Fatalf("Products: %v", err)
+		}
+		out[row.NmID] = true
+	}
+	return out
+}
+
+func TestPage_APositionJobKeepsOnlyTheProductsItWatches(t *testing.T) {
+	// Spec section 4.6's type 5. The page is walked whole — a rank is a place
+	// among all of them — but storing the other ninety-nine products of every
+	// page to find out where one stands fills a database with somebody else's
+	// goods, and the answer is the same either way.
+	site := &fakeSite{products: []wb.Product{product(100), product(200), product(300)}}
+	f, st := watching(t, site, job.KindPositions, 100, 300)
+
+	if _, err := f.Fetch(t.Context(), job.Item{Key: job.Key{
+		Kind: job.ItemPage, Phrase: "кроссовки", Dest: "-1257786", AppType: 1, Page: 1,
+	}.String()}); err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+
+	got := savedIDs(t, st)
+	if len(got) != 2 || !got[100] || !got[300] {
+		t.Errorf("сохранено %v, ожидались только наблюдаемые 100 и 300", got)
+	}
+}
+
+func TestPage_EveryOtherKindKeepsThePageItWalked(t *testing.T) {
+	// The filter belongs to one kind. A phrase job is «что в этой выдаче», and
+	// keeping only some of it would answer a different question than the one
+	// that was asked.
+	site := &fakeSite{products: []wb.Product{product(100), product(200)}}
+	f, st := watching(t, site, job.KindPhrase, 100)
+
+	if _, err := f.Fetch(t.Context(), job.Item{Key: job.Key{
+		Kind: job.ItemPage, Phrase: "кроссовки", Dest: "-1257786", AppType: 1, Page: 1,
+	}.String()}); err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+
+	if got := savedIDs(t, st); len(got) != 2 {
+		t.Errorf("сохранено %v, ожидалась вся страница", got)
+	}
+}

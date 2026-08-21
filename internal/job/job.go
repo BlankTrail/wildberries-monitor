@@ -42,11 +42,21 @@ const (
 	// KindPhraseAds reads the paid placements mixed into a search result.
 	// Priced per phrase and region rather than per product — see Estimate.
 	KindPhraseAds Kind = "phrase-ads"
+
+	// KindPositions walks a search for each phrase and writes down where the
+	// watched articles landed — spec section 4.6's type 5.
+	//
+	// The same requests a phrase job makes, and a different thing kept: a
+	// phrase job stores every product it meets, which is what you want when
+	// the question is «what is in this search». Here the question is «where
+	// am I», and storing the other ninety-nine products of every page to
+	// answer it fills a database with other people's goods.
+	KindPositions Kind = "positions"
 )
 
 // Kinds lists every kind this build can run, in a stable order.
 func Kinds() []Kind {
-	return []Kind{KindPhrase, KindSeller, KindBrand, KindArticles, KindPhraseAds}
+	return []Kind{KindPhrase, KindSeller, KindBrand, KindArticles, KindPhraseAds, KindPositions}
 }
 
 // Job is what to collect.
@@ -158,6 +168,19 @@ func (j Job) Validate() error {
 		if len(j.Articles) == 0 {
 			bad = append(bad, "no article numbers")
 		}
+	case KindPositions:
+		// Both halves, because the question is a pair: this is «where does
+		// this product stand for this phrase», and either half alone is a
+		// different job that already exists.
+		if len(j.Articles) == 0 {
+			bad = append(bad, "no article numbers: a position job needs the products to look for")
+		}
+		if j.phraseCount() == 0 {
+			bad = append(bad, "no phrases: a position job needs the searches to look in")
+		}
+		if len(nonEmpty(j.Phrases)) > 0 && j.PhraseListID != 0 {
+			bad = append(bad, "both typed phrases and an uploaded list: pick one")
+		}
 	}
 
 	if len(nonEmpty(j.Regions)) == 0 {
@@ -172,7 +195,7 @@ func (j Job) Validate() error {
 	if _, unknown := columnsUnknown(j.Fields); len(unknown) > 0 {
 		bad = append(bad, fmt.Sprintf("fields this build does not declare: %s", strings.Join(unknown, ", ")))
 	}
-	if j.Kind == KindPhrase && j.MaxPages <= 0 {
+	if (j.Kind == KindPhrase || j.Kind == KindPositions) && j.MaxPages <= 0 {
 		// Search paging did not end during live measurement in M1a. A phrase
 		// job without a page bound is a job with no end, and the place to say
 		// so is before it starts spending requests.
@@ -255,6 +278,10 @@ func (j Job) Estimate(items int) Estimate {
 		// Priced per phrase and region, not per product: this is the one
 		// group whose cost does not multiply by the size of the result.
 		e.Items, e.Exact = 0, true
+	case KindPositions:
+		// Known before it starts, like an article list: the products are the
+		// ones named, however many pages have to be walked to find them.
+		e.Items, e.Exact = len(j.Articles), true
 	}
 
 	regions := len(nonEmpty(j.Regions))
@@ -272,7 +299,7 @@ func (j Job) Estimate(items int) Estimate {
 		pages = 1
 	}
 	switch j.Kind {
-	case KindPhrase:
+	case KindPhrase, KindPositions:
 		e.Requests += pages * regions * max(phrases, 1)
 	case KindSeller, KindBrand:
 		e.Requests += pages * regions

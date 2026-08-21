@@ -112,14 +112,28 @@ func (f *Fetcher) page(ctx context.Context, key job.Key) (int, error) {
 	}
 	requests := 1
 
+	// A position job keeps only the products it is about. The page is walked
+	// whole either way — a rank is a place among all of them — but storing
+	// the other ninety-nine of every page to find out where one product
+	// stands fills a database with somebody else's goods.
+	kept := env
+	if watched := f.watched(); watched != nil {
+		kept.Products = nil
+		for _, p := range env.Products {
+			if watched[p.ID] {
+				kept.Products = append(kept.Products, p)
+			}
+		}
+	}
+
 	// The query is passed on, so the page earns organic positions. Left out,
 	// every rank this product exists to watch would be silently absent — and
 	// the rows would look complete.
-	if _, err := f.Store.SaveSearchPage(ctx, env, key.Phrase); err != nil {
+	if _, err := f.Store.SaveSearchPage(ctx, kept, key.Phrase); err != nil {
 		return requests, fmt.Errorf("collect: saving search %q page %d: %w", key.Phrase, key.Page, err)
 	}
 
-	extra, err := f.enrich(ctx, env.Products, key)
+	extra, err := f.enrich(ctx, kept.Products, key)
 	return requests + extra, err
 }
 
@@ -282,6 +296,19 @@ func (f *Fetcher) signals(ctx context.Context, imtID, nmID int64) (int, error) {
 // Computed from wb.Selection.Sources, which is the same call the cost estimate
 // used. Two spellings of "what does this selection cost" is how a screen ends
 // up quoting a price the run does not charge.
+// watched is the set of articles a position job is about, or nil for every
+// other kind — which keeps everything the page returned.
+func (f *Fetcher) watched() map[int64]bool {
+	if f.Job.Kind != job.KindPositions || len(f.Job.Articles) == 0 {
+		return nil
+	}
+	set := make(map[int64]bool, len(f.Job.Articles))
+	for _, id := range f.Job.Articles {
+		set[id] = true
+	}
+	return set
+}
+
 func (f *Fetcher) sources() map[wb.FieldSource]bool {
 	out := map[wb.FieldSource]bool{}
 	for _, s := range f.Job.Fields.Sources() {
