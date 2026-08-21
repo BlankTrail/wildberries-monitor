@@ -359,6 +359,97 @@ func (s *Store) StartRun(ctx context.Context, jobID int64, plan []ItemRow) (int6
 	return runID, nil
 }
 
+// FailedStart records an attempt that never became a run.
+//
+// A collection can refuse before there is anything to write a plan against:
+// no proxy, a licence that will not open ports, a preflight that says the
+// site is unreachable. Logged and nowhere else, that attempt left the job
+// showing «не запускалось» — which is not what happened, and sends its owner
+// looking for the button they think they failed to press.
+func (s *Store) FailedStart(ctx context.Context, jobID int64, reason string) error {
+	now := s.now().UTC().Unix()
+	if _, err := s.db.ExecContext(ctx,
+		`INSERT INTO job_runs (job_id, started_at, finished_at, state, error)
+		 VALUES (?, ?, ?, ?, ?)`,
+		jobID, now, now, RunFailed, reason); err != nil {
+		return fmt.Errorf("store: recording a refused start for job %d: %w", jobID, err)
+	}
+	return nil
+}
+
+// Runs is a job's attempts, newest first — the history the details screen
+// shows when somebody asks what happened.
+func (s *Store) Runs(ctx context.Context, jobID int64, limit int) ([]RunRow, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, job_id, started_at, finished_at, state, requests, items, errors, error
+		FROM job_runs WHERE job_id = ? ORDER BY started_at DESC, id DESC LIMIT ?`, jobID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("store: runs of job %d: %w", jobID, err)
+	}
+	defer rows.Close()
+
+	var out []RunRow
+	for rows.Next() {
+		var r RunRow
+		if err := rows.Scan(&r.ID, &r.JobID, &r.StartedAt, &r.FinishedAt, &r.State,
+			&r.Requests, &r.Items, &r.Errors, &r.Error); err != nil {
+			return nil, fmt.Errorf("store: runs of job %d: %w", jobID, err)
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: runs of job %d: %w", jobID, err)
+	}
+	return out, nil
+}
+
+// FailedItems are the items of one run that did not finish, with what went
+// wrong on each.
+//
+// Only the failures, and only some of them: a run of a hundred thousand items
+// that all failed the same way is answered by the first few and a count. The
+// screen says how many there were.
+func (s *Store) FailedItems(ctx context.Context, runID int64, limit int) ([]ItemRow, int64, error) {
+	var total int64
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM job_items WHERE run_id = ? AND state = ?`,
+		runID, ItemFailed).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("store: failures of run %d: %w", runID, err)
+	}
+	if total == 0 {
+		return nil, 0, nil
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT position, kind, item_key, state, attempts, error, started_at, finished_at
+		FROM job_items WHERE run_id = ? AND state = ? ORDER BY position LIMIT ?`,
+		runID, ItemFailed, limit)
+	if err != nil {
+		return nil, 0, fmt.Errorf("store: failures of run %d: %w", runID, err)
+	}
+	defer rows.Close()
+
+	var out []ItemRow
+	for rows.Next() {
+		var it ItemRow
+		if err := rows.Scan(&it.Position, &it.Kind, &it.Key, &it.State,
+			&it.Attempts, &it.Error, &it.StartedAt, &it.FinishedAt); err != nil {
+			return nil, 0, fmt.Errorf("store: failures of run %d: %w", runID, err)
+		}
+		out = append(out, it)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("store: failures of run %d: %w", runID, err)
+	}
+	return out, total, nil
+}
+
 // FinishItem records how one item ended.
 //
 // state must be a terminal one; a caller that passed "running" would leave a

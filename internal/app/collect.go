@@ -149,6 +149,12 @@ func (a *App) runJob(ctx context.Context, j job.Job) {
 		a.Log.Printf("задание %d (%s) остановлено", j.ID, j.Name)
 	case err != nil:
 		a.Log.Printf("задание %d (%s): %v", j.ID, j.Name, err)
+		// And on the screen, not only in a log nobody has open. A refusal
+		// before the plan exists leaves no run row of its own, so the job read
+		// as «не запускалось» right after somebody pressed «Запустить».
+		if err := a.Store.FailedStart(ctx, j.ID, err.Error()); err != nil {
+			a.Log.Printf("задание %d: отказ не записан: %v", j.ID, err)
+		}
 	default:
 		a.Log.Printf("задание %d (%s): %d позиций, %d запросов, %d отказов, за %s",
 			j.ID, j.Name, res.Items, res.Requests, res.Failed,

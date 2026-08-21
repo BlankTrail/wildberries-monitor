@@ -4,6 +4,7 @@ package web
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"html"
 	"io"
@@ -101,7 +102,10 @@ func (s *Server) jobsHTML(r *http.Request) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return s.jobListHTML(list) + constructor, nil
+	// Between the list and the constructor: the details of a job are about the
+	// row somebody just clicked, and a region at the bottom would put the
+	// answer off the screen the question was asked from.
+	return s.jobListHTML(list) + `<div id="job-detail"></div>` + constructor, nil
 }
 
 // jobsFragment re-renders the screen after an action, without the page around
@@ -215,6 +219,7 @@ func jobActionsHTML(j store.JobStatus) string {
 		}
 		b.WriteString(action("/jobs/toggle?id="+fmt.Sprint(j.ID), "#jobs-body", label))
 	}
+	fmt.Fprintf(&b, `<button class="bt-btn bt-btn--ghost bt-btn--sm" data-get="/jobs/detail?id=%d" data-target="#job-detail">Подробнее</button>`, j.ID)
 	b.WriteString(action("/jobs/delete?id="+fmt.Sprint(j.ID), "#jobs-body", "Удалить"))
 	return b.String()
 }
@@ -887,4 +892,143 @@ func humanDuration(d time.Duration) string {
 	default:
 		return fmt.Sprintf("%d сут %d ч", int(d.Hours())/24, int(d.Hours())%24)
 	}
+}
+
+// runsShown and failuresShown are how much history one screen answers with.
+// The rest is in the database for anybody who asks it a question this screen
+// does not.
+const (
+	runsShown     = 10
+	failuresShown = 20
+)
+
+// jobDetail is what happened when this job ran.
+//
+// The list says whether a job is going and when it last finished; that leaves
+// the question people actually have — what happened — with no answer anywhere
+// in the panel. Every number here was already being written down.
+func (s *Server) jobDetail(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.URL.Query().Get("id"), 10, 64)
+	if err != nil {
+		http.Error(w, "jobs: which job?", http.StatusBadRequest)
+		return
+	}
+	ctx := r.Context()
+
+	row, err := s.Store.Job(ctx, id)
+	if err != nil {
+		http.Error(w, "jobs: "+err.Error(), http.StatusNotFound)
+		return
+	}
+	runs, err := s.Store.Runs(ctx, id, runsShown)
+	if err != nil {
+		http.Error(w, "jobs: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	var b strings.Builder
+	b.WriteString(`<section class="bt-card"><h3>Как шёл сбор: ` + html.EscapeString(jobRowTitle(row)) + `</h3>`)
+
+	if len(runs) == 0 {
+		b.WriteString(`<div class="bt-alert bt-alert--neutral">Это задание ещё ни разу не запускали.</div></section>`)
+		s.writeHTML(w, b.String())
+		return
+	}
+
+	b.WriteString(`<div class="bt-table-wrap"><table class="bt-table"><thead><tr>` +
+		`<th>Начало</th><th>Длилось</th><th>Чем кончилось</th><th class="bt-num">Позиций</th>` +
+		`<th class="bt-num">Запросов</th><th class="bt-num">Отказов</th>` +
+		`</tr></thead><tbody>`)
+	for _, run := range runs {
+		fmt.Fprintf(&b, `<tr><td>%s</td><td>%s</td><td>%s</td>`+
+			`<td class="bt-num">%d</td><td class="bt-num">%d</td><td class="bt-num">%d</td></tr>`,
+			html.EscapeString(readAtText(run.StartedAt)), html.EscapeString(runLength(run)),
+			runStateHTML(run), run.Items, run.Requests, run.Errors)
+
+		// The reason under the row it belongs to, because a failure and the
+		// run it ended is one fact, and a column would truncate it.
+		if run.Error != "" {
+			fmt.Fprintf(&b, `<tr><td colspan="6"><div class="bt-alert bt-alert--error">%s</div></td></tr>`,
+				html.EscapeString(run.Error))
+		}
+	}
+	b.WriteString(`</tbody></table></div>`)
+
+	b.WriteString(s.failuresHTML(ctx, runs[0]))
+	b.WriteString(`</section>`)
+	s.writeHTML(w, b.String())
+}
+
+// failuresHTML is what went wrong inside the newest run.
+func (s *Server) failuresHTML(ctx context.Context, run store.RunRow) string {
+	items, total, err := s.Store.FailedItems(ctx, run.ID, failuresShown)
+	if err != nil {
+		return `<div class="bt-alert bt-alert--error">` + html.EscapeString(err.Error()) + `</div>`
+	}
+	if total == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, `<h4 class="bt-form-head">Что не собралось в последнем прогоне: %d</h4>`, total)
+	b.WriteString(`<div class="bt-table-wrap"><table class="bt-table"><thead><tr>` +
+		`<th>Что</th><th class="bt-num">Попыток</th><th>Почему</th>` +
+		`</tr></thead><tbody>`)
+	for _, it := range items {
+		reason := it.Error
+		if reason == "" {
+			reason = "причина не записана"
+		}
+		fmt.Fprintf(&b, `<tr><td class="bt-code">%s</td><td class="bt-num">%d</td><td class="bt-cell-wrap">%s</td></tr>`,
+			html.EscapeString(it.Key), it.Attempts, html.EscapeString(reason))
+	}
+	b.WriteString(`</tbody></table></div>`)
+	if int64(len(items)) < total {
+		fmt.Fprintf(&b, `<div class="bt-alert bt-alert--neutral">Показаны первые %d из %d.</div>`,
+			len(items), total)
+	}
+	return b.String()
+}
+
+// runStateHTML says how one attempt ended.
+func runStateHTML(run store.RunRow) string {
+	switch run.State {
+	case store.RunRunning:
+		return `<span class="bt-badge bt-badge--success bt-badge--sm">идёт</span>`
+	case store.RunFailed:
+		return `<span class="bt-badge bt-badge--error bt-badge--sm">с ошибкой</span>`
+	case store.RunStopped:
+		return `<span class="bt-badge bt-badge--warning bt-badge--sm">остановлено</span>`
+	default:
+		return `<span class="bt-badge bt-badge--neutral bt-badge--sm">завершено</span>`
+	}
+}
+
+// runLength is how long an attempt took, or that it is still going.
+func runLength(run store.RunRow) string {
+	if run.FinishedAt == nil {
+		return "идёт"
+	}
+	d := time.Duration(*run.FinishedAt-run.StartedAt) * time.Second
+	if d < time.Second {
+		// Not «0s»: a run that opened and refused took no time, and saying so
+		// as a duration reads like a measurement.
+		return "меньше секунды"
+	}
+	return d.Round(time.Second).String()
+}
+
+// jobRowTitle names a job that came from the database rather than from the
+// list, where the same question is answered by jobTitle.
+func jobRowTitle(row store.JobRow) string {
+	if strings.TrimSpace(row.Name) != "" {
+		return row.Name
+	}
+	return fmt.Sprintf("задание №%d", row.ID)
+}
+
+// writeHTML sends a fragment.
+func (s *Server) writeHTML(w http.ResponseWriter, body string) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	fmt.Fprint(w, body)
 }
