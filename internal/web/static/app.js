@@ -318,6 +318,16 @@
       readBack();
     });
 
+    // A region the server sent that wants the live stream. Everything below
+    // this — the events, the endpoint, the reader — existed already; nothing
+    // ever asked for it, so a run said «запущено» and then went quiet until
+    // it finished.
+    root.querySelectorAll("[data-follow]").forEach((el) => {
+      if (el.dataset.wired) return;
+      el.dataset.wired = "1";
+      follow(el.dataset.follow);
+    });
+
     // A filter form that reads rather than writes: its fields go into the
     // query string, so the resulting view has a URL a person can bookmark or
     // send to somebody, which a POST would take away.

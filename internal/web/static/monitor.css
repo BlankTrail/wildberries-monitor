@@ -788,3 +788,19 @@ dialog.bt-modal > #settings-body {
   flex-direction: column;
   gap: var(--space-2);
 }
+
+/* ---- the live log ------------------------------------------------------- */
+
+/* Bounded and scrolling: a run of a million items would otherwise grow the
+   page until the tab dies — app.js drops the oldest lines, and this keeps the
+   rest inside a box instead of pushing the screen down. */
+.bt[data-bt-theme="dashboard"] .bt-log {
+  max-height: 18rem;
+  overflow-y: auto;
+  padding: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card-2);
+  font-size: .8rem;
+  line-height: 1.5;
+}

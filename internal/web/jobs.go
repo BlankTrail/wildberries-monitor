@@ -241,7 +241,11 @@ func (s *Server) runJobHandler(w http.ResponseWriter, r *http.Request) {
 		s.jobsFragment(w, r, alert("error", err.Error()))
 		return
 	}
-	s.jobsFragment(w, r, alert("success", fmt.Sprintf("Задание %d запущено.", id)))
+	// And what it does from here is on the screen. The events, the endpoint
+	// and the client that reads them were all built — nothing ever asked the
+	// page to start listening, so a run showed a line saying it had started
+	// and then nothing at all until it was over.
+	s.jobsFragment(w, r, alert("success", fmt.Sprintf("Задание %d запущено.", id))+runLiveHTML(id))
 }
 
 func (s *Server) stopJobHandler(w http.ResponseWriter, r *http.Request) {
@@ -1145,4 +1149,22 @@ func destUseText(d store.DestUse) string {
 	default:
 		return fmt.Sprintf("— чтений %d", d.Readings)
 	}
+}
+
+// runLiveHTML is the panel a run fills in while it goes: spec section 7's
+// «Запуск» screen, on the page the run was started from rather than on one of
+// its own — a person who presses «Запустить» is looking at the list, and
+// taking them somewhere else to watch it is taking away the button that stops
+// it.
+//
+// data-follow is what starts the listening. The stream carries every event
+// this program emits, so the id is what the panel says it is watching rather
+// than a filter.
+func runLiveHTML(jobID int64) string {
+	return fmt.Sprintf(`<section class="bt-card" id="run-live" data-follow="%d">`+
+		`<h3>Идёт сбор: задание №%d</h3>`+
+		`<div id="run-progress"><div class="bt-alert bt-alert--neutral">План составляется…</div></div>`+
+		`<h4 class="bt-form-head">Живой лог</h4>`+
+		`<div id="run-log" class="bt-log"></div>`+
+		`</section>`, jobID, jobID)
 }

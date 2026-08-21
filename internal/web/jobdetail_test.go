@@ -3,6 +3,8 @@
 package web
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -201,5 +203,43 @@ func TestScheduleControl_BuildsTheStringItSaves(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("нет интервала %q", want)
 		}
+	}
+}
+
+func TestRunHandler_TheRunSaysWhatItIsDoingWhileItDoesIt(t *testing.T) {
+	// The events, the SSE endpoint and the client that reads them were all
+	// built and nothing ever asked the page to listen: a run answered
+	// «запущено» and then went silent until it was over. Section 7's «Запуск»
+	// screen, on the page the run was started from — taking somebody
+	// elsewhere to watch it takes away the button that stops it.
+	srv := newServer(t)
+	id := oneJob(t, srv)
+	srv.StartJob = func(context.Context, int64) error { return nil }
+
+	body := postForm(t, srv, fmt.Sprintf("/jobs/run?id=%d", id), nil).Body.String()
+
+	if !strings.Contains(body, fmt.Sprintf(`data-follow="%d"`, id)) {
+		t.Fatalf("страница не начинает слушать прогон:\n%s", firstLines(body))
+	}
+	for _, want := range []string{`id="run-progress"`, `id="run-log"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("нет области %q — событиям некуда приходить", want)
+		}
+	}
+}
+
+func TestRunHandler_ARefusalDoesNotPretendSomethingIsRunning(t *testing.T) {
+	srv := newServer(t)
+	id := oneJob(t, srv)
+	srv.StartJob = func(context.Context, int64) error {
+		return errors.New("engine: BlankTrail не настроен")
+	}
+
+	body := postForm(t, srv, fmt.Sprintf("/jobs/run?id=%d", id), nil).Body.String()
+	if !strings.Contains(body, "BlankTrail не настроен") {
+		t.Errorf("отказ не показан:\n%s", firstLines(body))
+	}
+	if strings.Contains(body, "data-follow=") {
+		t.Error("после отказа страница всё равно слушает прогон")
 	}
 }
