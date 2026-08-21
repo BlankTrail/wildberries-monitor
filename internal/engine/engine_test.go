@@ -29,6 +29,20 @@ func openEngine(t *testing.T) *Engine {
 		t.Fatalf("store.Open: %v", err)
 	}
 	t.Cleanup(func() { s.Close() })
+
+	// A fresh database comes with one channel: the machine's own address, so
+	// that the proxy screen has something to show on a first run. The tests
+	// below count what they saved themselves, so it goes.
+	list, err := s.Channels(t.Context())
+	if err != nil {
+		t.Fatalf("Channels: %v", err)
+	}
+	for _, c := range list {
+		if err := s.DeleteChannel(t.Context(), c.ID); err != nil {
+			t.Fatalf("DeleteChannel: %v", err)
+		}
+	}
+
 	return &Engine{Store: s, Endpoints: wb.DefaultEndpoints()}
 }
 

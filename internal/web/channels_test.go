@@ -33,23 +33,57 @@ func channelFormValues(over map[string]string) url.Values {
 	return form
 }
 
-func TestChannels_TheScreenSaysAFreshInstallIsWorkingAndNotBroken(t *testing.T) {
-	// Collection works with no channels at all — the pool reads an empty mix as
-	// the host's own address. A screen showing an empty table sends somebody
-	// looking for the fault that is not there.
+func TestChannels_AFreshInstallShowsTheExitItCollectsThrough(t *testing.T) {
+	// Collection works with no channels at all — the pool reads an empty mix
+	// as the host's own address — but that was a state nobody could see, and
+	// an empty table sends somebody looking for the fault that is not there.
+	// The first row says what is actually happening.
 	srv := newServer(t)
 
 	body := get(t, srv, "/channels", "correct horse").Body.String()
+	if !strings.Contains(body, "Прямое соединение") {
+		t.Errorf("на свежей установке не показан выход по умолчанию:\n%s", firstLines(body))
+	}
+	// And it is a row like any other: switchable and removable.
+	if !strings.Contains(body, "/channels/delete?id=") {
+		t.Error("выход по умолчанию нельзя удалить")
+	}
+}
+
+func TestChannels_WithEverythingRemovedTheScreenSaysThatIsFine(t *testing.T) {
+	// What is left after somebody deletes the default exit: collection still
+	// works, and the screen has to say so rather than show an empty table.
+	srv := clearedChannels(t)
+
+	body := get(t, srv, "/channels", "correct horse").Body.String()
 	if !strings.Contains(body, "собственного адреса") {
-		t.Errorf("пустой экран не объясняет, что происходит:\n%s", body)
+		t.Errorf("пустой экран не объясняет, что происходит:\n%s", firstLines(body))
 	}
 	if !strings.Contains(body, "не поломка") {
 		t.Error("пустой экран не говорит, что это рабочее состояние")
 	}
 }
 
-func TestChannels_SavesWhatWasFilledInAndShowsItBack(t *testing.T) {
+// clearedChannels is a panel whose channel table is empty, for the tests that
+// count what they saved themselves. A fresh database comes with the direct
+// exit — see migration 0012.
+func clearedChannels(t *testing.T) *Server {
+	t.Helper()
 	srv := newServer(t)
+	list, err := srv.Store.Channels(t.Context())
+	if err != nil {
+		t.Fatalf("Channels: %v", err)
+	}
+	for _, c := range list {
+		if err := srv.Store.DeleteChannel(t.Context(), c.ID); err != nil {
+			t.Fatalf("DeleteChannel: %v", err)
+		}
+	}
+	return srv
+}
+
+func TestChannels_SavesWhatWasFilledInAndShowsItBack(t *testing.T) {
+	srv := clearedChannels(t)
 
 	w := postForm(t, srv, "/channels", channelFormValues(nil))
 	if w.Code != 200 {
@@ -81,7 +115,7 @@ func TestChannels_TheRotatingIntervalIsSecondsAndNotNanoseconds(t *testing.T) {
 	// The form asks for seconds and the row holds a duration. Ninety that came
 	// back as ninety nanoseconds would let the change link be pulled far more
 	// often than the provider allows — which costs the channel.
-	srv := newServer(t)
+	srv := clearedChannels(t)
 
 	postForm(t, srv, "/channels", channelFormValues(map[string]string{
 		"kind":                store.ChannelRotating,
@@ -106,7 +140,7 @@ func TestChannels_AnUntickedSwitchIsOffAndTheChannelStaysSaved(t *testing.T) {
 	// An unticked checkbox posts nothing at all, so this is the one field a
 	// form parser gets wrong by doing nothing. And off has to keep the row: a
 	// list being repaired should not have to be retyped.
-	srv := newServer(t)
+	srv := clearedChannels(t)
 	form := channelFormValues(nil)
 	form.Del("enabled")
 
@@ -137,7 +171,7 @@ func TestChannels_ARefusalComesBackAsSomethingToRead(t *testing.T) {
 		{"схема с опечаткой", map[string]string{"default_scheme": "sock5"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			srv := newServer(t)
+			srv := clearedChannels(t)
 			w := postForm(t, srv, "/channels", channelFormValues(c.over))
 
 			if w.Code != 200 {
@@ -154,7 +188,7 @@ func TestChannels_ARefusalComesBackAsSomethingToRead(t *testing.T) {
 }
 
 func TestChannels_DeleteRemovesItFromTheScreenAndTheStore(t *testing.T) {
-	srv := newServer(t)
+	srv := clearedChannels(t)
 	id, err := srv.Store.SaveChannel(context.Background(), store.ChannelRow{
 		Name: "лишний", Kind: store.ChannelDirect, Enabled: true,
 	})
@@ -178,7 +212,7 @@ func TestChannels_TheTestButtonReportsWhatWasFoundAndWhatFailed(t *testing.T) {
 	// The part that earns the screen. "Twelve addresses" and "nothing parsed,
 	// the first bad line was this one" are the two answers somebody presses it
 	// for, and both have to arrive as text they can act on.
-	srv := newServer(t)
+	srv := clearedChannels(t)
 	id, err := srv.Store.SaveChannel(context.Background(), store.ChannelRow{
 		Name: "список", Kind: store.ChannelList, Source: "list.txt", Enabled: true,
 	})
@@ -214,7 +248,7 @@ func TestChannels_TheTestButtonReportsWhatWasFoundAndWhatFailed(t *testing.T) {
 func TestChannels_TheTestButtonSaysSoWhenTheBuildCannotCheck(t *testing.T) {
 	// Silence would read as a button that does nothing, which is the one thing
 	// worse than a button that says it cannot.
-	srv := newServer(t)
+	srv := clearedChannels(t)
 	id, err := srv.Store.SaveChannel(context.Background(), store.ChannelRow{
 		Name: "список", Kind: store.ChannelDirect, Enabled: true,
 	})
@@ -231,7 +265,7 @@ func TestChannels_TheTestButtonSaysSoWhenTheBuildCannotCheck(t *testing.T) {
 func TestChannels_TheTabIsThereAndItsScreenAnswers(t *testing.T) {
 	// A tab that opens onto nothing is the same promise a field with no source
 	// makes, and this project has refused that three times for the same reason.
-	srv := newServer(t)
+	srv := clearedChannels(t)
 
 	body := get(t, srv, "/", "correct horse").Body.String()
 	if !strings.Contains(body, `href="/channels"`) {
@@ -252,7 +286,7 @@ func TestChannels_EveryKindTheFormOffersIsOneTheStoreAccepts(t *testing.T) {
 	// save, which is the worst place to find out.
 	for _, k := range channelKinds {
 		t.Run(k.Kind, func(t *testing.T) {
-			srv := newServer(t)
+			srv := clearedChannels(t)
 			w := postForm(t, srv, "/channels", channelFormValues(map[string]string{
 				"kind":   k.Kind,
 				"source": "берлин",
@@ -266,7 +300,7 @@ func TestChannels_EveryKindTheFormOffersIsOneTheStoreAccepts(t *testing.T) {
 
 func TestChannels_EverySchemeTheFormOffersIsOneTheStoreAccepts(t *testing.T) {
 	for _, scheme := range proxySchemes {
-		srv := newServer(t)
+		srv := clearedChannels(t)
 		w := postForm(t, srv, "/channels", channelFormValues(map[string]string{
 			"default_scheme": scheme,
 		}))
@@ -302,7 +336,7 @@ func TestMaskPassword_HidesTheCredentialAndKeepsTheAddressReadable(t *testing.T)
 }
 
 func TestChannels_TheTableDoesNotPrintAProxyPassword(t *testing.T) {
-	srv := newServer(t)
+	srv := clearedChannels(t)
 	if _, err := srv.Store.SaveChannel(context.Background(), store.ChannelRow{
 		Name: "ротируемый", Kind: store.ChannelRotating,
 		Source: "socks5://u:sekret@10.0.0.1:1080", RotateURL: "https://p.example/rotate",
@@ -331,7 +365,7 @@ func TestChannelForm_AsksOnlyForWhatTheChosenKindUses(t *testing.T) {
 	// a configuration name, and a direct connection needs nothing at all. All
 	// of it at once was a form where three quarters of the fields did nothing
 	// for whatever the user had picked.
-	srv := newServer(t)
+	srv := clearedChannels(t)
 	body := get(t, srv, "/channels", "correct horse").Body.String()
 
 	if !strings.Contains(body, `data-switch="kind"`) {
@@ -377,7 +411,7 @@ func TestSaveChannel_KeepsOnlyWhatTheChosenKindUses(t *testing.T) {
 	// A hidden field still posts. Somebody fills in a rotation link, changes
 	// their mind and saves a gateway: kept, the link sits on a record nothing
 	// dials it from, on a screen that never shows it again.
-	srv := newServer(t)
+	srv := clearedChannels(t)
 
 	form := channelFormValues(map[string]string{
 		"kind":                store.ChannelGateway,

@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -150,6 +151,18 @@ func TestChannels_ListsWhatWasSavedOldestFirst(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 
+	// Out of the way first: a fresh database comes with the direct exit, and
+	// this test is about the order things were saved in.
+	seeded, err := s.Channels(ctx)
+	if err != nil {
+		t.Fatalf("Channels: %v", err)
+	}
+	for _, c := range seeded {
+		if err := s.DeleteChannel(ctx, c.ID); err != nil {
+			t.Fatalf("DeleteChannel: %v", err)
+		}
+	}
+
 	var ids []int64
 	for _, name := range []string{"первый", "второй", "третий"} {
 		c := sampleChannel()
@@ -175,16 +188,120 @@ func TestChannels_ListsWhatWasSavedOldestFirst(t *testing.T) {
 	}
 }
 
-func TestChannels_NoneIsAnEmptyListAndNotAnError(t *testing.T) {
-	// The state of every fresh install, and the one the engine reads as "the
-	// host's own address".
+func TestChannels_AFreshInstallStartsWithTheMachinesOwnAddress(t *testing.T) {
+	// It was already the behaviour — with no channels the pool goes out
+	// directly — but behaviour nobody could see, and the screen said
+	// «включённых прокси нет» about a program collecting perfectly well. A row
+	// makes the same thing visible, switchable and removable.
 	s := openTestStore(t)
-	list, err := s.Channels(context.Background())
+	ctx := context.Background()
+
+	list, err := s.Channels(ctx)
+	if err != nil {
+		t.Fatalf("Channels: %v", err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("на свежей базе каналов %d, ожидался один", len(list))
+	}
+	if list[0].Kind != ChannelDirect {
+		t.Errorf("вид %q, ожидалось прямое соединение", list[0].Kind)
+	}
+	if !list[0].Enabled {
+		t.Error("выход по умолчанию выключен — собирать будет нечем")
+	}
+	if list[0].Name == "" {
+		t.Error("у выхода по умолчанию нет названия")
+	}
+}
+
+func TestChannels_NoneIsAnEmptyListAndNotAnError(t *testing.T) {
+	// What is left after somebody removes the default one, and the state the
+	// engine reads as "the host's own address" anyway.
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	list, err := s.Channels(ctx)
+	if err != nil {
+		t.Fatalf("Channels: %v", err)
+	}
+	for _, c := range list {
+		if err := s.DeleteChannel(ctx, c.ID); err != nil {
+			t.Fatalf("DeleteChannel: %v", err)
+		}
+	}
+
+	list, err = s.Channels(ctx)
 	if err != nil {
 		t.Fatalf("Channels: %v", err)
 	}
 	if len(list) != 0 {
-		t.Errorf("на пустой базе каналов %d", len(list))
+		t.Errorf("после удаления каналов %d", len(list))
+	}
+}
+
+func TestChannels_TheDefaultOneStaysDeleted(t *testing.T) {
+	// «С возможностью его удаления» means it does not come back on the next
+	// start. The insert is a migration, which runs once per database — so this
+	// is what says the row is not seeded on every open.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "wbmon.db")
+	ctx := context.Background()
+
+	first, err := Open(ctx, path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	list, err := first.Channels(ctx)
+	if err != nil || len(list) != 1 {
+		t.Fatalf("Channels: %v, %d", err, len(list))
+	}
+	if err := first.DeleteChannel(ctx, list[0].ID); err != nil {
+		t.Fatalf("DeleteChannel: %v", err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	again, err := Open(ctx, path)
+	if err != nil {
+		t.Fatalf("повторное открытие: %v", err)
+	}
+	defer again.Close()
+
+	if list, err := again.Channels(ctx); err != nil || len(list) != 0 {
+		t.Errorf("после перезапуска каналов %d (%v) — удалённый вернулся", len(list), err)
+	}
+}
+
+func TestChannels_TheDefaultIsNotAddedToADatabaseThatHasSome(t *testing.T) {
+	// A database with channels belongs to somebody who chose them, and adding
+	// a direct exit to a mix of proxies would send part of their collection
+	// out from their own address — the one thing proxies are there to avoid.
+	//
+	// The migration's own text is run a second time here, against a table that
+	// is not empty, because that is the case its guard exists for and a
+	// migration cannot be replayed any other way.
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	sql, err := migrationFS.ReadFile("migrations/0012_default_direct_channel.sql")
+	if err != nil {
+		t.Fatalf("миграция не читается: %v", err)
+	}
+	before, err := s.Channels(ctx)
+	if err != nil {
+		t.Fatalf("Channels: %v", err)
+	}
+	if _, err := s.db.ExecContext(ctx, string(sql)); err != nil {
+		t.Fatalf("повторный прогон миграции: %v", err)
+	}
+	after, err := s.Channels(ctx)
+	if err != nil {
+		t.Fatalf("Channels: %v", err)
+	}
+	if len(after) != len(before) {
+		t.Errorf("каналов стало %d вместо %d — выход добавлен туда, где уже есть свои",
+			len(after), len(before))
 	}
 }
 
@@ -194,6 +311,11 @@ func TestDeleteChannel_RemovesItAndForgivesOneThatIsAlreadyGone(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 
+	before, err := s.Channels(ctx)
+	if err != nil {
+		t.Fatalf("Channels: %v", err)
+	}
+
 	id, err := s.SaveChannel(ctx, sampleChannel())
 	if err != nil {
 		t.Fatalf("SaveChannel: %v", err)
@@ -201,8 +323,8 @@ func TestDeleteChannel_RemovesItAndForgivesOneThatIsAlreadyGone(t *testing.T) {
 	if err := s.DeleteChannel(ctx, id); err != nil {
 		t.Fatalf("DeleteChannel: %v", err)
 	}
-	if list, _ := s.Channels(ctx); len(list) != 0 {
-		t.Errorf("после удаления каналов %d", len(list))
+	if list, _ := s.Channels(ctx); len(list) != len(before) {
+		t.Errorf("после удаления каналов %d, было %d", len(list), len(before))
 	}
 	if err := s.DeleteChannel(ctx, id); err != nil {
 		t.Errorf("повторное удаление: %v", err)

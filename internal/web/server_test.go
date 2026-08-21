@@ -525,8 +525,10 @@ func TestForms_ReadTheEncodingABrowserActuallySends(t *testing.T) {
 		}
 	})
 
-	t.Run("канал", func(t *testing.T) {
-		srv := newServer(t)
+	t.Run("прокси", func(t *testing.T) {
+		// From an empty table: a fresh database comes with the direct exit,
+		// and this is about the one the form posts.
+		srv := clearedChannels(t)
 		if w := postMultipart(t, srv, "/channels", channelFormValues(nil)); w.Code != http.StatusOK {
 			t.Fatalf("сохранение = %d: %s", w.Code, firstLines(w.Body.String()))
 		}
@@ -535,7 +537,7 @@ func TestForms_ReadTheEncodingABrowserActuallySends(t *testing.T) {
 			t.Fatalf("Channels: %v", err)
 		}
 		if len(list) != 1 {
-			t.Fatalf("сохранено каналов: %d, ожидался один", len(list))
+			t.Fatalf("сохранено прокси: %d, ожидался один", len(list))
 		}
 	})
 
