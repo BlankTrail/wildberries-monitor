@@ -130,3 +130,32 @@ func TestTestEgress_ReturnsPerCheckVerdicts(t *testing.T) {
 		t.Errorf("http check OK=false, detail=%q", got.Detail)
 	}
 }
+
+func TestGateways_KeepsTheThreeStatesOfAMeasurement(t *testing.T) {
+	// Never measured is not slow, and unreachable is not nought. Read as a
+	// plain number, an unmeasured gateway is drawn as the fastest one on the
+	// list — which is exactly backwards for choosing one.
+	c, fake := newTestClient(t)
+	fake.SetGateways([]fakebt.Gateway{
+		{Name: "не мерили", Kind: "vless"},
+		{Name: "не ответил", Kind: "vless", Pinged: true},
+		{Name: "42 мс", Kind: "vless", Pinged: true, PingMS: 42},
+	})
+
+	list, err := c.Gateways(context.Background())
+	if err != nil {
+		t.Fatalf("Gateways: %v", err)
+	}
+	if len(list.Gateways) != 3 {
+		t.Fatalf("шлюзов %d", len(list.Gateways))
+	}
+	if p := list.Gateways[0].Ping; p.Tried || p.Answered || p.MS != 0 {
+		t.Errorf("неизмеренный шлюз пришёл как %+v", p)
+	}
+	if p := list.Gateways[1].Ping; !p.Tried || p.Answered || p.MS != 0 {
+		t.Errorf("не ответивший шлюз пришёл как %+v", p)
+	}
+	if p := list.Gateways[2].Ping; !p.Tried || !p.Answered || p.MS != 42 {
+		t.Errorf("измеренный шлюз пришёл как %+v", p)
+	}
+}

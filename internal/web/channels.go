@@ -3,13 +3,16 @@
 package web
 
 import (
+	"context"
 	"fmt"
 	"html"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/BlankTrail/wildberries-monitor/blanktrail"
 	"github.com/BlankTrail/wildberries-monitor/internal/store"
 )
 
@@ -79,7 +82,8 @@ func (s *Server) channelsFragment(w http.ResponseWriter, r *http.Request, notice
 }
 
 func (s *Server) channelsHTML(r *http.Request) (string, error) {
-	list, err := s.Store.Channels(r.Context())
+	ctx := r.Context()
+	list, err := s.Store.Channels(ctx)
 	if err != nil {
 		return "", err
 	}
@@ -87,7 +91,7 @@ func (s *Server) channelsHTML(r *http.Request) (string, error) {
 	var b strings.Builder
 	b.WriteString(`<section id="channels-body" class="bt-card"><h2>Прокси выхода</h2>`)
 	b.WriteString(channelList(list))
-	b.WriteString(channelForm())
+	b.WriteString(s.channelForm(ctx))
 	b.WriteString(`</section>`)
 	return b.String(), nil
 }
@@ -199,7 +203,7 @@ func maskPassword(source string) string {
 	return prefix + userinfo[:colon] + ":***" + host + tail
 }
 
-func channelForm() string {
+func (s *Server) channelForm(ctx context.Context) string {
 	var b strings.Builder
 	b.WriteString(`<h3>Новый прокси</h3>`)
 	b.WriteString(`<form class="bt-fieldset bt-form" data-post="/channels" data-target="#channels-body" data-switch="kind">`)
@@ -221,9 +225,13 @@ func channelForm() string {
 	// is laid out side by side. A direct connection asks for nothing at all:
 	// it is the machine's own address, and that is the whole of it.
 	b.WriteString(`<div class="bt-form-grid">`)
+	// The gateways the service has, for the kind whose source is one of their
+	// names. Inside the group, so it is asked for only when it applies.
+	b.WriteString(whenAny(s.gatewayPicker(ctx), store.ChannelGateway))
+
 	b.WriteString(whenAny(
 		field("Источник",
-			`<input class="bt-input" name="source" placeholder="C:\proxies\list.txt, https://provider.example/list.txt, socks5://user:pass@host:1080 или имя шлюза">`,
+			`<input class="bt-input" id="channel-source" name="source" placeholder="C:\proxies\list.txt, https://provider.example/list.txt, socks5://user:pass@host:1080 или имя шлюза">`,
 			"Путь или адрес списка, точка входа ротируемого, имя конфигурации шлюза — смотря что выбрано выше."),
 		store.ChannelList, store.ChannelRotating, store.ChannelGateway))
 
@@ -341,4 +349,124 @@ func (s *Server) testChannel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	fmt.Fprint(w, `<div class="bt-alert bt-alert--success">`+html.EscapeString(summary)+`</div>`)
+}
+
+// gatewayPicker offers the gateways the licensed service has, with what it
+// knows about each.
+//
+// Read from the service rather than typed: a gateway is named by whoever set
+// it up, the names come and go, and a name typed from memory is a channel
+// that fails at the first port it tries to open. The numbers beside each are
+// the ones a choice actually turns on — whether it is up, how many ports are
+// already on it, and how far away it answers from.
+//
+// Grouped by what each one routes through, because that is what a chain is:
+// a gateway going through another inherits its exit, and picking one without
+// seeing that is picking a country by accident.
+func (s *Server) gatewayPicker(ctx context.Context) string {
+	if s.Gateways == nil {
+		return `<div class="bt-alert bt-alert--neutral">Список шлюзов недоступен в этой сборке — имя можно ввести вручную.</div>`
+	}
+
+	list, err := s.Gateways(ctx)
+	if err != nil {
+		// The service's own words. «Не настроен» and «не отвечает» are two
+		// different things to do next, and only it knows which this is.
+		return `<div class="bt-alert bt-alert--warning">Шлюзы не спросить: ` +
+			html.EscapeString(err.Error()) + `. Имя можно ввести вручную.</div>`
+	}
+	if !list.Available {
+		reason := list.Reason
+		if reason == "" {
+			reason = "служба не сказала, почему"
+		}
+		return `<div class="bt-alert bt-alert--warning">Шлюзы у этой службы недоступны: ` +
+			html.EscapeString(reason) + `</div>`
+	}
+	if len(list.Gateways) == 0 {
+		return `<div class="bt-alert bt-alert--neutral">У службы нет ни одного шлюза — их заводят в самой BlankTrail.</div>`
+	}
+
+	var sel strings.Builder
+	sel.WriteString(`<select class="bt-select" data-fill="#channel-source">`)
+	sel.WriteString(`<option value="">— выбрать из списка —</option>`)
+	for _, group := range groupGateways(list.Gateways) {
+		sel.WriteString(`<optgroup label="` + html.EscapeString(group.Label) + `">`)
+		for _, g := range group.Gateways {
+			sel.WriteString(`<option value="` + html.EscapeString(g.Name) + `">` +
+				html.EscapeString(gatewayLine(g)) + `</option>`)
+		}
+		sel.WriteString(`</optgroup>`)
+	}
+	sel.WriteString(`</select>`)
+
+	return field("Шлюзы службы", sel.String(),
+		"Что настроено в BlankTrail прямо сейчас: состояние, занятые порты и время отклика. Выбор подставляется в «Источник».")
+}
+
+// gatewayGroup is one heading in the picker and what belongs under it.
+type gatewayGroup struct {
+	Label    string
+	Gateways []blanktrail.Gateway
+}
+
+// groupGateways puts the direct ones first and each chain under its own
+// heading, in a stable order.
+func groupGateways(all []blanktrail.Gateway) []gatewayGroup {
+	const direct = "Напрямую"
+
+	order := []string{}
+	byLabel := map[string][]blanktrail.Gateway{}
+	for _, g := range all {
+		label := direct
+		if g.Via != "" {
+			label = "Через " + g.Via
+		}
+		if _, seen := byLabel[label]; !seen {
+			order = append(order, label)
+		}
+		byLabel[label] = append(byLabel[label], g)
+	}
+	// Direct first when it is there at all: it is the shortest path, and the
+	// one somebody choosing without a reason should land on.
+	slices.SortStableFunc(order, func(a, b string) int {
+		switch {
+		case a == direct:
+			return -1
+		case b == direct:
+			return 1
+		}
+		return strings.Compare(a, b)
+	})
+
+	out := make([]gatewayGroup, 0, len(order))
+	for _, label := range order {
+		out = append(out, gatewayGroup{Label: label, Gateways: byLabel[label]})
+	}
+	return out
+}
+
+// gatewayLine is one gateway said in a line: what it is, whether it is up, how
+// busy, and how far.
+func gatewayLine(g blanktrail.Gateway) string {
+	parts := []string{g.Name}
+	if g.Kind != "" {
+		parts = append(parts, g.Kind)
+	}
+	if g.Running {
+		parts = append(parts, fmt.Sprintf("запущен, портов %d", g.Ports))
+	} else {
+		parts = append(parts, "остановлен")
+	}
+	switch {
+	case !g.Ping.Tried:
+		// Not «0 мс»: never measured is not instant, and a list sorted by eye
+		// would put every unmeasured gateway first.
+		parts = append(parts, "отклик не мерили")
+	case !g.Ping.Answered:
+		parts = append(parts, "не отвечает")
+	default:
+		parts = append(parts, fmt.Sprintf("%d мс", g.Ping.MS))
+	}
+	return strings.Join(parts, " · ")
 }

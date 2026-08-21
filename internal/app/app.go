@@ -175,6 +175,17 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 			defer cancel()
 			return client.Health(ctx)
 		},
+		Gateways: func(ctx context.Context) (blanktrail.GatewayList, error) {
+			if a.Engine == nil {
+				return blanktrail.GatewayList{}, errors.New("сбор не собран в этой сборке")
+			}
+			// Bounded: this is asked while a person waits for a screen, and a
+			// control API that has stopped answering must cost them three
+			// seconds, not the browser's own patience.
+			ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+			defer cancel()
+			return a.Engine.Gateways(ctx)
+		},
 		CheckChannel: func(ctx context.Context, id int64) (string, error) {
 			// Read when pressed, not captured: the engine is built a few lines
 			// below this literal, and a half-built App in a test may never get

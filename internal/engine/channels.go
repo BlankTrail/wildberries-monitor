@@ -155,6 +155,20 @@ func singleUpstream(raw, defaultScheme string) (blanktrail.Upstream, error) {
 	return ups[0], nil
 }
 
+// Gateways is what the licensed service has configured, for the screen where
+// somebody picks one.
+//
+// A read of the service rather than of our database: the gateways are its
+// property, they come and go without this program being told, and a copy kept
+// here would be a list of names that no longer open.
+func (e *Engine) Gateways(ctx context.Context) (blanktrail.GatewayList, error) {
+	client, err := e.control(ctx)
+	if err != nil {
+		return blanktrail.GatewayList{}, err
+	}
+	return client.Gateways(ctx)
+}
+
 // TestChannel says whether one channel could be used, and what it holds.
 //
 // Spec section 7.9 asks for tests beside the proxies and gateways, and this is

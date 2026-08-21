@@ -30,6 +30,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/BlankTrail/wildberries-monitor/blanktrail"
 	"github.com/BlankTrail/wildberries-monitor/internal/events"
 	"github.com/BlankTrail/wildberries-monitor/internal/store"
 )
@@ -122,6 +123,12 @@ type Server struct {
 	// proxy list is the engine's business and asking BlankTrail which gateways
 	// exist needs a live one, and this package's tests must need neither.
 	CheckChannel func(ctx context.Context, id int64) (summary string, err error)
+
+	// Gateways lists what the licensed proxy has configured, so that a gateway
+	// channel is picked from what exists rather than typed from memory. A
+	// field for the same reason the checks are: this package's tests must not
+	// need a licensed service.
+	Gateways func(ctx context.Context) (blanktrail.GatewayList, error)
 
 	// Autostart is the operating system's own start-at-login mechanism, or
 	// nil in a build that has none. An interface rather than the package, so
