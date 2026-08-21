@@ -229,11 +229,26 @@ func (s *Server) channelForm(ctx context.Context) string {
 	// names. Inside the group, so it is asked for only when it applies.
 	b.WriteString(whenAny(s.gatewayPicker(ctx), store.ChannelGateway))
 
+	// One field per kind rather than one field for all of them. «Источник» left
+	// the user to work out which of three things was wanted, and for a
+	// rotating proxy the answer is not a source at all: that kind is one
+	// address with a link that changes what is behind it, which is what a
+	// provider hands over — a host, a port and usually a login.
 	b.WriteString(whenAny(
-		field("Источник",
-			`<input class="bt-input" id="channel-source" name="source" placeholder="C:\proxies\list.txt, https://provider.example/list.txt, socks5://user:pass@host:1080 или имя шлюза">`,
-			"Путь или адрес списка, точка входа ротируемого, имя конфигурации шлюза — смотря что выбрано выше."),
-		store.ChannelList, store.ChannelRotating, store.ChannelGateway))
+		field("Список прокси",
+			`<input class="bt-input" id="channel-source" name="source" placeholder="C:\proxies\list.txt или https://provider.example/list.txt">`,
+			"Путь к файлу или адрес списка. Читается там, где лежит, и перечитывается сам."),
+		store.ChannelList))
+	b.WriteString(whenAny(
+		field("Прокси",
+			`<input class="bt-input" id="channel-upstream" name="source" placeholder="socks5://user:pass@host:1080 или host:1080:user:pass">`,
+			"Один адрес, который меняется по ссылке ниже. Принимаются пять написаний: со схемой и без, с логином и без."),
+		store.ChannelRotating))
+	b.WriteString(whenAny(
+		field("Имя конфигурации",
+			`<input class="bt-input" id="channel-gateway" name="source" placeholder="имя из BlankTrail">`,
+			"Как шлюз называется в BlankTrail. Выбор из списка выше подставляет его сюда."),
+		store.ChannelGateway))
 
 	var schemes strings.Builder
 	schemes.WriteString(`<select class="bt-select" name="default_scheme">`)
@@ -289,19 +304,25 @@ func (s *Server) saveChannel(w http.ResponseWriter, r *http.Request) {
 	// and a field nobody can see must not be saved with the record: a rotation
 	// link left over from a kind somebody changed their mind about is a line
 	// nothing dials and the screen never shows again.
+	// Three fields carry this name — one per kind that asks for something,
+	// each labelled for what it wants. The script leaves only the chosen one
+	// enabled; without it all three are on screen, and the one somebody filled
+	// in is the one that counts.
+	source := strings.TrimSpace(firstNonEmpty(r.PostForm["source"]))
+
 	switch row.Kind {
 	case store.ChannelList:
-		row.Source = strings.TrimSpace(r.PostFormValue("source"))
+		row.Source = source
 		row.DefaultScheme = r.PostFormValue("default_scheme")
 	case store.ChannelRotating:
-		row.Source = strings.TrimSpace(r.PostFormValue("source"))
+		row.Source = source
 		row.DefaultScheme = r.PostFormValue("default_scheme")
 		row.RotateURL = strings.TrimSpace(r.PostFormValue("rotate_url"))
 		if seconds, err := strconv.Atoi(r.PostFormValue("rotate_min_interval")); err == nil && seconds > 0 {
 			row.RotateMinInterval = time.Duration(seconds) * time.Second
 		}
 	case store.ChannelGateway:
-		row.Source = strings.TrimSpace(r.PostFormValue("source"))
+		row.Source = source
 	}
 
 	if _, err := s.Store.SaveChannel(r.Context(), row); err != nil {
@@ -388,7 +409,7 @@ func (s *Server) gatewayPicker(ctx context.Context) string {
 	}
 
 	var sel strings.Builder
-	sel.WriteString(`<select class="bt-select" data-fill="#channel-source">`)
+	sel.WriteString(`<select class="bt-select" data-fill="#channel-gateway">`)
 	sel.WriteString(`<option value="">— выбрать из списка —</option>`)
 	for _, group := range groupGateways(list.Gateways) {
 		sel.WriteString(`<optgroup label="` + html.EscapeString(group.Label) + `">`)

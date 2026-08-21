@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/BlankTrail/wildberries-monitor/internal/store"
+	"github.com/BlankTrail/wildberries-monitor/wb"
 )
 
 // oneJob saves the constructor's own example and returns its id.
@@ -57,6 +58,11 @@ func TestJobDetail_SaysWhatHappenedWhenItRan(t *testing.T) {
 	// everything is one nobody reads when something is wrong.
 	if strings.Contains(body, "кроссовки|-1257786|1") {
 		t.Error("в списке отказов есть то, что собралось")
+	}
+	// And the count is of failures, not of items: «не собралось 2» over a run
+	// where one thing failed is a number that sends somebody hunting.
+	if !strings.Contains(body, "не собралось в последнем прогоне: 1") {
+		t.Errorf("посчитаны не отказы: %s", firstLines(body))
 	}
 }
 
@@ -112,5 +118,88 @@ func TestJobList_OffersTheDetailsOfEveryJob(t *testing.T) {
 	}
 	if !strings.Contains(body, `id="job-detail"`) {
 		t.Error("подробностям некуда открыться")
+	}
+}
+
+func TestRegionControl_OffersTheCodesThisInstallationUses(t *testing.T) {
+	// There is no catalogue of region codes in this program — the spec plans
+	// one and it is not built — so the list is what the installation itself
+	// has met. A list typed from memory would be worse than none: a wrong
+	// dest does not fail, it quietly returns another city's prices.
+	srv := newServer(t)
+	oneJob(t, srv) // its regions are the constructor's own default
+	seedReadings(t, srv.Store, 3)
+
+	// A reading from a region no job collects for: the second group is about
+	// exactly that — a code that has been seen and may be one nobody watches
+	// any more.
+	if _, err := srv.Store.SaveProduct(t.Context(), wb.Product{
+		ID: 141504099, Name: "Платье", Brand: "BrandCo",
+		Dest: "-2133463", AppType: 1, Rank: 1, Page: 1,
+		Sizes: []wb.Size{{Name: "M", PriceProduct: ptrTo(int64(100000))}},
+	}, ""); err != nil {
+		t.Fatalf("SaveProduct: %v", err)
+	}
+
+	body := get(t, srv, "/jobs", "correct horse").Body.String()
+
+	if !strings.Contains(body, `data-picklist="#job-regions"`) {
+		t.Fatalf("регионы нечем отметить:\n%s", firstLines(body))
+	}
+	if !strings.Contains(body, "отметить все") {
+		t.Error("нет выбора всех разом")
+	}
+	// The job's own region, and the one the readings came back with, under
+	// headings that say why each is on the list.
+	for _, want := range []string{"В заданиях", "Встречалось в собранном", "-1257786", "-2133463"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("в списке регионов нет %q", want)
+		}
+	}
+	// And the field is still a field: a code nobody has collected for yet has
+	// to be typeable.
+	if !strings.Contains(body, `id="job-regions"`) {
+		t.Error("поле регионов пропало вместе со списком")
+	}
+}
+
+func TestRegionControl_AFreshInstallStillHasAField(t *testing.T) {
+	// Nothing collected and no jobs: the list has nothing to offer, and an
+	// empty box of checkboxes would be a control that does nothing.
+	srv := newServer(t)
+	body := get(t, srv, "/jobs", "correct horse").Body.String()
+
+	if strings.Contains(body, `data-picklist="#job-regions"`) {
+		t.Error("пустой список регионов всё равно нарисован")
+	}
+	if !strings.Contains(body, `id="job-regions"`) {
+		t.Error("регионы негде указать")
+	}
+	if !strings.Contains(body, "появятся здесь списком") {
+		t.Error("не сказано, откуда возьмётся список")
+	}
+}
+
+func TestScheduleControl_BuildsTheStringItSaves(t *testing.T) {
+	// «every 3h» is what gets stored and what the parser takes. The composer
+	// writes it; the field stays visible and editable, because a schedule
+	// hidden behind a builder is one nobody can read off the screen.
+	srv := newServer(t)
+	body := get(t, srv, "/jobs", "correct horse").Body.String()
+
+	for _, want := range []string{
+		`data-compose="#job-schedule"`, "data-compose-off", "data-compose-count",
+		"data-compose-unit", `id="job-schedule"`, "по запросу",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("в конструкторе расписания нет %q:\n%s", want, firstLines(body))
+		}
+	}
+	// The units are the ones ParseSchedule takes — a day is 24h, because that
+	// is what a duration knows.
+	for _, want := range []string{`value="1m"`, `value="1h"`, `value="24h"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("нет интервала %q", want)
+		}
 	}
 }

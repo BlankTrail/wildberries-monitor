@@ -5,8 +5,10 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"iter"
+	"slices"
 	"strings"
 )
 
@@ -383,4 +385,93 @@ func (s *Store) Collection(ctx context.Context) (Collected, error) {
 		return Collected{}, fmt.Errorf("store: collection: %w", err)
 	}
 	return c, nil
+}
+
+// DestUse is one region code this installation has something to say about.
+//
+// There is no catalogue of Wildberries region codes in this program — spec
+// section 4 plans one as wb/region.go and it is not built — so the list a
+// person picks from is what their own installation has met: the codes their
+// jobs collect for, and the codes their data came back with. Invented codes
+// would be worse than none: a wrong dest does not fail, it quietly returns
+// another city's prices.
+type DestUse struct {
+	Code     string
+	Readings int64 // how many readings came back with it
+	Jobs     int   // how many saved jobs collect for it
+}
+
+// Dests lists the region codes this installation uses, the busiest first.
+func (s *Store) Dests(ctx context.Context) ([]DestUse, error) {
+	byCode := map[string]*DestUse{}
+	use := func(code string) *DestUse {
+		if _, ok := byCode[code]; !ok {
+			byCode[code] = &DestUse{Code: code}
+		}
+		return byCode[code]
+	}
+
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT dest, COUNT(*) FROM snapshots GROUP BY dest`)
+	if err != nil {
+		return nil, fmt.Errorf("store: dests: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var code string
+		var n int64
+		if err := rows.Scan(&code, &n); err != nil {
+			return nil, fmt.Errorf("store: dests: %w", err)
+		}
+		use(code).Readings = n
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: dests: %w", err)
+	}
+
+	// The jobs' own regions, which is where a code appears before anything has
+	// been collected for it — the case a fresh install is entirely made of.
+	jobRows, err := s.db.QueryContext(ctx, `SELECT regions FROM jobs`)
+	if err != nil {
+		return nil, fmt.Errorf("store: dests: %w", err)
+	}
+	defer jobRows.Close()
+	for jobRows.Next() {
+		var raw string
+		if err := jobRows.Scan(&raw); err != nil {
+			return nil, fmt.Errorf("store: dests: %w", err)
+		}
+		var codes []string
+		if err := json.Unmarshal([]byte(raw), &codes); err != nil {
+			// A job whose regions will not parse is one this build did not
+			// write. Skipped rather than refused: the picker is a convenience,
+			// and failing it would take the whole screen down with it.
+			continue
+		}
+		for _, code := range codes {
+			if code = strings.TrimSpace(code); code != "" {
+				use(code).Jobs++
+			}
+		}
+	}
+	if err := jobRows.Err(); err != nil {
+		return nil, fmt.Errorf("store: dests: %w", err)
+	}
+
+	out := make([]DestUse, 0, len(byCode))
+	for _, d := range byCode {
+		out = append(out, *d)
+	}
+	// Busiest first, and by code where that ties, so the list does not move
+	// about between renders.
+	slices.SortFunc(out, func(a, b DestUse) int {
+		switch {
+		case a.Jobs != b.Jobs:
+			return b.Jobs - a.Jobs
+		case a.Readings != b.Readings:
+			return int(min(max(b.Readings-a.Readings, -1), 1))
+		}
+		return strings.Compare(a.Code, b.Code)
+	})
+	return out, nil
 }

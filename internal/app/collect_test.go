@@ -639,3 +639,50 @@ func TestPanelTelegram_ChecksTheTokenThatWasJustSaved(t *testing.T) {
 		t.Errorf("бот всё ещё с токеном %q — проверка спрашивает не то, что сохранено", a.Bot.Token)
 	}
 }
+
+// refusingPlanner is a run that cannot be planned — the shape of every
+// refusal that happens before there is anything to write down.
+type refusingPlanner struct{}
+
+func (refusingPlanner) Plan(job.Job) ([]job.Item, error) {
+	return nil, errors.New("engine: BlankTrail не настроен")
+}
+
+func TestStartJob_ARefusedRunIsWrittenDownAndNotOnlyLogged(t *testing.T) {
+	// Press «Запустить», the collection refuses before there is a plan, and
+	// the row goes on saying «не запускалось» — which is not what happened,
+	// and sends its owner looking for the button they think they missed.
+	a := newApp(t)
+	configured(t, a)
+	a.Scheduler = job.NewScheduler(&job.Runner{
+		Store: a.Store, Bus: a.Bus, Planner: refusingPlanner{},
+		Fetcher: job.FetcherFunc(func(context.Context, job.Item) (int, error) { return 1, nil }),
+	})
+	id := collectible(t, a, "")
+
+	if err := a.StartJob(t.Context(), id); err != nil {
+		t.Fatalf("StartJob: %v", err)
+	}
+	settled(t, "отказ не записан", func() bool {
+		runs, err := a.Store.Runs(t.Context(), id, 5)
+		return err == nil && len(runs) == 1
+	})
+
+	runs, err := a.Store.Runs(t.Context(), id, 5)
+	if err != nil {
+		t.Fatalf("Runs: %v", err)
+	}
+	if runs[0].State != store.RunFailed {
+		t.Errorf("отказ записан как %q", runs[0].State)
+	}
+	if !strings.Contains(runs[0].Error, "BlankTrail не настроен") {
+		t.Errorf("причина отказа = %q", runs[0].Error)
+	}
+
+	// And the panel says so where somebody is looking.
+	w := httptest.NewRecorder()
+	a.Server.Handler().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/jobs", nil))
+	if strings.Contains(w.Body.String(), "не запускалось") {
+		t.Errorf("после отказа задание всё ещё «не запускалось»:\n%s", firstLines(w.Body.String()))
+	}
+}

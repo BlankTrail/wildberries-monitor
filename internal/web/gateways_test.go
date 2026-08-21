@@ -35,7 +35,7 @@ func TestGatewayPicker_OffersWhatTheServiceHasWithItsNumbers(t *testing.T) {
 
 	body := get(t, srv, "/channels", "correct horse").Body.String()
 
-	if !strings.Contains(body, `data-fill="#channel-source"`) {
+	if !strings.Contains(body, `data-fill="#channel-gateway"`) {
 		t.Fatalf("шлюзы не предлагаются для выбора:\n%s", firstLines(body))
 	}
 	for _, want := range []string{"nl-vless", "vless", "запущен, портов 2", "42 мс", "de-ovpn", "остановлен"} {
@@ -102,11 +102,11 @@ func TestGatewayPicker_SaysWhyThereIsNoListRatherThanShowingAnEmptyOne(t *testin
 			if !strings.Contains(body, c.says) {
 				t.Errorf("экран не объясняет, в чём дело (%q):\n%s", c.says, firstLines(body))
 			}
-			if strings.Contains(body, `data-fill="#channel-source"`) {
+			if strings.Contains(body, `data-fill="#channel-gateway"`) {
 				t.Error("пустой список всё равно предложен для выбора")
 			}
 			// And the field is still there: the name can always be typed.
-			if !strings.Contains(body, `id="channel-source"`) {
+			if !strings.Contains(body, `id="channel-gateway"`) {
 				t.Error("поле «Источник» пропало вместе со списком")
 			}
 		})

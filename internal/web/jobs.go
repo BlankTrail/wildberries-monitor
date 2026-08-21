@@ -366,9 +366,11 @@ func (s *Server) constructorHTML(r *http.Request) (string, error) {
 		job.KindArticles))
 
 	b.WriteString(`<h3 class="bt-form-head">Где смотреть</h3>`)
+	// The regions across the whole width: it is a list to tick, and squeezed
+	// into a third of the row every line of it wraps.
+	b.WriteString(field("Регионы", s.regionControl(r.Context()),
+		"Цена, остаток и место в выдаче — все региональные, поэтому регион обязателен. Строка внизу — то, что сохранится."))
 	b.WriteString(`<div class="bt-form-grid">`)
-	b.WriteString(field("Регионы", `<input class="bt-input bt-input--mono" name="regions" value="-1257786" data-estimate>`,
-		"Коды dest через запятую. Цена, остаток и место в выдаче — все региональные, поэтому регион обязателен."))
 	b.WriteString(field("Аудитория", `<input class="bt-input" name="app_type" type="number" value="1" data-estimate>`,
 		"Код приложения. Одно задание — одна аудитория: место в выдаче для веба и для Android — разные факты."))
 	// Pages bound a walk that has pages; the kinds without them do not ask.
@@ -380,8 +382,8 @@ func (s *Server) constructorHTML(r *http.Request) (string, error) {
 
 	b.WriteString(`<h3 class="bt-form-head">Когда и как быстро</h3>`)
 	b.WriteString(`<div class="bt-form-grid">`)
-	b.WriteString(field("Расписание", `<input class="bt-input" name="schedule" placeholder="every 3h">`,
-		"Пусто — задание идёт только когда его запустят руками."))
+	b.WriteString(field("Расписание", scheduleControl(),
+		"Пусто — задание идёт только когда его запустят руками. Строка внизу — то, что сохранится; её можно править прямо."))
 	b.WriteString(field("Потоков", `<input class="bt-input" name="threads" type="number" min="1" value="4" data-estimate>`,
 		"Сколько запросов идёт одновременно."))
 	b.WriteString(field("Пауза, мс", `<input class="bt-input" name="delay_ms" type="number" min="0" value="0" data-estimate>`,
@@ -1031,4 +1033,116 @@ func jobRowTitle(row store.JobRow) string {
 func (s *Server) writeHTML(w http.ResponseWriter, body string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	fmt.Fprint(w, body)
+}
+
+// scheduleUnits are the intervals the composer offers, in what ParseSchedule
+// accepts: Go's own duration spelling.
+//
+// Days as hours because that is what a duration knows — «every 24h» is what
+// the parser takes, and offering «1d» here would be a word this product does
+// not use anywhere else.
+var scheduleUnits = []struct {
+	Label  string
+	Suffix string
+	Hours  int
+}{
+	{"минут", "m", 0},
+	{"часов", "h", 1},
+	{"дней", "h", 24},
+}
+
+// scheduleControl is the schedule, built rather than typed — and typed if
+// somebody would rather.
+//
+// The text field stays and stays authoritative: it is what gets saved, the
+// composer only writes into it. A builder that hid the string would leave
+// nobody able to read what a job actually does, and «every 3h» is short
+// enough to read.
+func scheduleControl() string {
+	var b strings.Builder
+	b.WriteString(`<div class="bt-compose" data-compose="#job-schedule">`)
+	b.WriteString(`<label class="bt-checkbox"><input type="checkbox" data-compose-off checked> по запросу, без расписания</label>`)
+	b.WriteString(`<div class="bt-compose__every">`)
+	b.WriteString(`<span class="bt-form-hint">каждые</span>`)
+	b.WriteString(`<input class="bt-input bt-input--sm" type="number" min="1" value="3" data-compose-count>`)
+
+	b.WriteString(`<select class="bt-select" data-compose-unit>`)
+	for i, u := range scheduleUnits {
+		selected := ""
+		if i == 1 {
+			selected = ` selected`
+		}
+		fmt.Fprintf(&b, `<option value="%d%s"%s>%s</option>`, max(u.Hours, 1), u.Suffix, selected, u.Label)
+	}
+	b.WriteString(`</select>`)
+	b.WriteString(`</div>`)
+	b.WriteString(`<input class="bt-input bt-input--mono" id="job-schedule" name="schedule" placeholder="every 3h">`)
+	b.WriteString(`</div>`)
+	return b.String()
+}
+
+// regionControl is the regions: ticked from what this installation already
+// uses, or typed.
+//
+// There is no catalogue of Wildberries region codes here — spec section 4
+// plans one as wb/region.go and it is not built — so this offers what the
+// installation itself knows: the codes its jobs collect for, and the codes
+// its data came back with. A list of codes typed from memory would be worse
+// than none, because a wrong dest does not fail: it quietly returns another
+// city's prices, and every number after that is about somewhere else.
+func (s *Server) regionControl(ctx context.Context) string {
+	const field = `<input class="bt-input bt-input--mono" id="job-regions" name="regions" value="-1257786" data-estimate>`
+
+	dests, err := s.Store.Dests(ctx)
+	if err != nil || len(dests) == 0 {
+		// Nothing to tick yet, which is what a fresh install looks like. The
+		// field is the whole control, and says what to put in it.
+		return field + `<span class="bt-form-hint">Коды dest через запятую. Собранные регионы появятся здесь списком.</span>`
+	}
+
+	var b strings.Builder
+	b.WriteString(`<div class="bt-picklist" data-picklist="#job-regions">`)
+	b.WriteString(`<label class="bt-checkbox"><input type="checkbox" data-picklist-all> отметить все</label>`)
+
+	// Two groups, and the difference between them is real: one is what
+	// something already collects for, the other is a code that has been seen
+	// and may be a region nobody watches any more.
+	for _, group := range []struct {
+		Label string
+		Want  func(store.DestUse) bool
+	}{
+		{"В заданиях", func(d store.DestUse) bool { return d.Jobs > 0 }},
+		{"Встречалось в собранном", func(d store.DestUse) bool { return d.Jobs == 0 }},
+	} {
+		var rows strings.Builder
+		for _, d := range dests {
+			if !group.Want(d) {
+				continue
+			}
+			fmt.Fprintf(&rows,
+				`<label class="bt-checkbox"><input type="checkbox" value="%s"> <span class="bt-code">%s</span> %s</label>`,
+				html.EscapeString(d.Code), html.EscapeString(d.Code), html.EscapeString(destUseText(d)))
+		}
+		if rows.Len() == 0 {
+			continue
+		}
+		b.WriteString(`<fieldset class="bt-fieldset bt-fieldset--inset"><legend>` +
+			html.EscapeString(group.Label) + `</legend><div class="bt-checks">` + rows.String() + `</div></fieldset>`)
+	}
+
+	b.WriteString(field)
+	b.WriteString(`</div>`)
+	return b.String()
+}
+
+// destUseText says why a code is on the list.
+func destUseText(d store.DestUse) string {
+	switch {
+	case d.Jobs > 0 && d.Readings > 0:
+		return fmt.Sprintf("— заданий %d, чтений %d", d.Jobs, d.Readings)
+	case d.Jobs > 0:
+		return fmt.Sprintf("— заданий %d, ещё ничего не собрано", d.Jobs)
+	default:
+		return fmt.Sprintf("— чтений %d", d.Readings)
+	}
 }

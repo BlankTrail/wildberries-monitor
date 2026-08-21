@@ -383,11 +383,27 @@ func TestChannelForm_AsksOnlyForWhatTheChosenKindUses(t *testing.T) {
 		}
 	}
 
+	// The three fields that share the name "source", each in its own group.
+	for _, c := range []struct {
+		id    string
+		kinds []string
+	}{
+		{"channel-source", []string{store.ChannelList}},
+		{"channel-upstream", []string{store.ChannelRotating}},
+		{"channel-gateway", []string{store.ChannelGateway}},
+	} {
+		group := groupAround(body, `id="`+c.id+`"`)
+		if got := strings.Fields(group); !slices.Equal(got, c.kinds) {
+			t.Errorf("поле %q отнесено к %v, ожидалось %v", c.id, got, c.kinds)
+		}
+	}
+
 	for _, c := range []struct {
 		name  string
 		kinds []string
 	}{
-		{"source", []string{store.ChannelList, store.ChannelRotating, store.ChannelGateway}},
+		// One per kind, each labelled for what it wants — see the form.
+		{"source", []string{store.ChannelList}},
 		{"default_scheme", []string{store.ChannelList, store.ChannelRotating}},
 		{"rotate_url", []string{store.ChannelRotating}},
 		{"rotate_min_interval", []string{store.ChannelRotating}},
@@ -468,5 +484,54 @@ func TestSaveChannel_KeepsOnlyWhatTheChosenKindUses(t *testing.T) {
 	rotating := saved[1]
 	if rotating.RotateURL == "" || rotating.RotateMinInterval != 90*time.Second || rotating.DefaultScheme != "socks5" {
 		t.Errorf("ротируемый потерял свои поля: %+v", rotating)
+	}
+}
+
+func TestSaveChannel_ARotatingProxyIsAnAddressAndNotAList(t *testing.T) {
+	// What a provider hands over for this kind is one proxy — a host, a port,
+	// usually a login — and a link that changes what is behind it. The form
+	// asked for a «источник», which is what the other kinds take, so people
+	// went looking for a list they were never given.
+	srv := clearedChannels(t)
+
+	form := channelFormValues(map[string]string{
+		"name":                "ротируемый",
+		"kind":                store.ChannelRotating,
+		"source":              "socks5://user:pass@host:1080",
+		"rotate_url":          "https://provider.example/rotate?key=secret",
+		"rotate_min_interval": "90",
+	})
+	if w := postForm(t, srv, "/channels", form); w.Code != http.StatusOK {
+		t.Fatalf("сохранение = %d: %s", w.Code, firstLines(w.Body.String()))
+	}
+	saved, err := srv.Store.Channels(t.Context())
+	if err != nil || len(saved) != 1 {
+		t.Fatalf("Channels: %v, %d", err, len(saved))
+	}
+	if saved[0].Source != "socks5://user:pass@host:1080" {
+		t.Errorf("прокси сохранён как %q", saved[0].Source)
+	}
+
+	// Three fields carry this name, one per kind, and with no script all three
+	// are posted — the filled one is the one that counts. Reading the first
+	// would store an empty address and call it saved.
+	form["source"] = []string{"", "socks5://user:pass@host:1080", ""}
+	if w := postForm(t, srv, "/channels", form); w.Code != http.StatusOK {
+		t.Fatalf("сохранение = %d: %s", w.Code, firstLines(w.Body.String()))
+	}
+	saved, err = srv.Store.Channels(t.Context())
+	if err != nil || len(saved) != 2 {
+		t.Fatalf("Channels: %v, %d", err, len(saved))
+	}
+	if saved[1].Source != "socks5://user:pass@host:1080" {
+		t.Errorf("из трёх полей взято %q", saved[1].Source)
+	}
+
+	// And the field says so on the screen: the label and the example are the
+	// difference between «где список?» and pasting what the provider sent.
+	body := get(t, srv, "/channels", "correct horse").Body.String()
+	group := groupHTML(body, store.ChannelRotating)
+	if !strings.Contains(group, "Прокси") || !strings.Contains(group, "socks5://user:pass@host:1080") {
+		t.Errorf("поле ротируемого не показывает, что от него хотят:\n%s", group)
 	}
 }

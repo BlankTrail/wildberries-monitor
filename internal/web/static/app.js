@@ -245,6 +245,79 @@
       });
     });
 
+    // A schedule built rather than typed, writing into the field that is
+    // actually saved. The string stays visible and editable: hidden behind a
+    // builder, «every 3h» becomes something nobody can read off a screen, and
+    // it is four characters long.
+    root.querySelectorAll("[data-compose]").forEach((box) => {
+      if (box.dataset.wired) return;
+      box.dataset.wired = "1";
+      const target = document.querySelector(box.dataset.compose);
+      const off = box.querySelector("[data-compose-off]");
+      const count = box.querySelector("[data-compose-count]");
+      const unit = box.querySelector("[data-compose-unit]");
+      if (!target || !off || !count || !unit) return;
+
+      const every = box.querySelector(".bt-compose__every");
+      const apply = () => {
+        every.hidden = off.checked;
+        if (off.checked) {
+          target.value = "";
+          return;
+        }
+        // The unit carries how many of the duration one of it is worth —
+        // a day is 24h, because that is what the parser takes.
+        const [per, suffix] = [parseInt(unit.value, 10), unit.value.replace(/^\d+/, "")];
+        const n = Math.max(1, parseInt(count.value, 10) || 1) * per;
+        target.value = `every ${n}${suffix}`;
+      };
+      box.addEventListener("change", apply);
+      count.addEventListener("input", apply);
+      // Somebody typing into the field means they want that string: the
+      // composer stops overwriting it until they use the composer again.
+      target.addEventListener("input", () => {
+        off.checked = target.value.trim() === "";
+        every.hidden = off.checked;
+      });
+      apply();
+    });
+
+    // A list of codes ticked rather than typed, writing into the field that
+    // is saved. Same rule as the schedule: the string stays visible, because
+    // it is what a job actually collects for, and somebody who knows the code
+    // they want should not have to find it in a list to use it.
+    root.querySelectorAll("[data-picklist]").forEach((box) => {
+      if (box.dataset.wired) return;
+      box.dataset.wired = "1";
+      const target = document.querySelector(box.dataset.picklist);
+      if (!target) return;
+      const all = box.querySelector("[data-picklist-all]");
+      const boxes = [...box.querySelectorAll('input[type=checkbox][value]')];
+
+      const write = () => {
+        const picked = boxes.filter((c) => c.checked).map((c) => c.value);
+        target.value = picked.join(",");
+        target.dispatchEvent(new Event("input", { bubbles: true }));
+      };
+      const readBack = () => {
+        const have = new Set(target.value.split(",").map((v) => v.trim()).filter(Boolean));
+        boxes.forEach((c) => (c.checked = have.has(c.value)));
+        if (all) all.checked = boxes.length > 0 && boxes.every((c) => c.checked);
+      };
+
+      boxes.forEach((c) => c.addEventListener("change", () => { write(); readBack(); }));
+      if (all) {
+        all.addEventListener("change", () => {
+          boxes.forEach((c) => (c.checked = all.checked));
+          write();
+        });
+      }
+      // Typing a code the list does not have is allowed and stays: the ticks
+      // follow the field, not the other way round.
+      target.addEventListener("input", readBack);
+      readBack();
+    });
+
     // A filter form that reads rather than writes: its fields go into the
     // query string, so the resulting view has a URL a person can bookmark or
     // send to somebody, which a POST would take away.
