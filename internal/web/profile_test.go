@@ -125,3 +125,94 @@ func TestProfile_ShowsWhatWasResolvedAndOffersTheStorefront(t *testing.T) {
 }
 
 func itoa(v int64) string { return fmt.Sprint(v) }
+
+func TestPhrases_AreMadeFromWhatWasCollectedAndCostNothing(t *testing.T) {
+	// Section 4.7's first step. Wildberries publishes no list of the searches
+	// a seller ranks for, so the candidates come from the words already on
+	// their own cards — no requests, which is what makes this half free.
+	srv := newServer(t)
+	ctx := t.Context()
+	seedReadings(t, srv.Store, 3) // «Платье 0», «Платье 1», «Платье 2» by BrandCo
+
+	id, err := srv.Store.SaveProfile(ctx, store.ProfileRow{Name: "мой"})
+	if err != nil {
+		t.Fatalf("SaveProfile: %v", err)
+	}
+	for _, nm := range []int64{100, 101, 102} {
+		if err := srv.Store.AddProfileItem(ctx, id, store.ProfileProduct, nm); err != nil {
+			t.Fatalf("AddProfileItem: %v", err)
+		}
+	}
+
+	body := postForm(t, srv, "/profile/phrases?id="+itoa(id), nil).Body.String()
+	if !strings.Contains(body, "Подобрано фраз") {
+		t.Fatalf("фразы не подобраны:\n%s", firstLines(body))
+	}
+
+	got, err := srv.Store.ProfilePhrases(ctx, id, store.PhraseCandidate)
+	if err != nil {
+		t.Fatalf("ProfilePhrases: %v", err)
+	}
+	if len(got) == 0 {
+		t.Fatal("кандидатов не записано")
+	}
+	for _, p := range got {
+		if !strings.Contains(strings.ToLower(p.Text), "платье") && !strings.Contains(strings.ToLower(p.Text), "brandco") {
+			t.Errorf("фраза %q не из карточки", p.Text)
+		}
+	}
+}
+
+func TestPhrases_CheckingIsAJobThatGetsPricedFirst(t *testing.T) {
+	// The expensive half of onboarding: phrases × products × regions. It is a
+	// position job, saved rather than started, because the jobs screen is
+	// where a run is priced before anybody spends a request.
+	srv := newServer(t)
+	ctx := t.Context()
+
+	id, err := srv.Store.SaveProfile(ctx, store.ProfileRow{Name: "мой"})
+	if err != nil {
+		t.Fatalf("SaveProfile: %v", err)
+	}
+	if err := srv.Store.AddProfileItem(ctx, id, store.ProfileProduct, 141504066); err != nil {
+		t.Fatalf("AddProfileItem: %v", err)
+	}
+	for _, text := range []string{"платье летнее", "платье в горошек"} {
+		if err := srv.Store.SavePhrase(ctx, store.PhraseRow{ProfileID: id, Text: text}); err != nil {
+			t.Fatalf("SavePhrase: %v", err)
+		}
+	}
+
+	body := postForm(t, srv, "/profile/phrases/check?id="+itoa(id), nil).Body.String()
+	if !strings.Contains(body, "Задание на проверку создано") {
+		t.Fatalf("проверка не создана:\n%s", firstLines(body))
+	}
+
+	jobs, err := srv.Store.Jobs(ctx)
+	if err != nil || len(jobs) != 1 {
+		t.Fatalf("Jobs: %v, %d", err, len(jobs))
+	}
+	made, err := job.Load(ctx, srv.Store, jobs[0].ID)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if made.Kind != job.KindPositions {
+		t.Errorf("вид задания = %q", made.Kind)
+	}
+	if len(made.Phrases) != 2 || len(made.Articles) != 1 {
+		t.Errorf("задание проверяет %d фраз по %d товарам", len(made.Phrases), len(made.Articles))
+	}
+}
+
+func TestPhrases_WithNothingCollectedSayWhatIsMissing(t *testing.T) {
+	srv := newServer(t)
+	id, err := srv.Store.SaveProfile(t.Context(), store.ProfileRow{Name: "мой"})
+	if err != nil {
+		t.Fatalf("SaveProfile: %v", err)
+	}
+
+	body := postForm(t, srv, "/profile/phrases?id="+itoa(id), nil).Body.String()
+	if !strings.Contains(body, "Сначала соберите товары") {
+		t.Errorf("экран не говорит, чего не хватает:\n%s", firstLines(body))
+	}
+}
