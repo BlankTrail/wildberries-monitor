@@ -188,6 +188,13 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 		// configured, and a token typed into the box but not yet saved is not
 		// the one a rule would send with.
 		CheckTelegram: func(ctx context.Context, _ string) (string, error) {
+			// What is saved now, not what was saved when the program started.
+			// The background round picks settings up, and it is up to a minute
+			// away; this button is pressed a second after «Сохранить». Without
+			// this the panel answers «no bot token is configured» about a
+			// token the person is looking at, which reads as a broken save.
+			a.reloadTelegram(ctx)
+
 			// The whole ladder, not one rung: the question a person presses
 			// this for is "can you reach Telegram", and answering it about the
 			// path that happens to be first would say no on exactly the

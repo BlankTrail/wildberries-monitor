@@ -613,3 +613,29 @@ func TestPanelRules_ANotificationCanBeMadeFromNothing(t *testing.T) {
 		t.Errorf("уведомление адресовано %v, ожидался %d", all[0].Targets, targets[0].ID)
 	}
 }
+
+func TestPanelTelegram_ChecksTheTokenThatWasJustSaved(t *testing.T) {
+	// Somebody pastes a token, presses «Сохранить», presses «Проверить
+	// Telegram» — and the panel answered «no bot token is configured» about
+	// the token they were looking at. The settings reach the ladder on the
+	// background round, which is up to a minute away; the button is a second
+	// away. It reads as a save that did not happen.
+	a := newApp(t)
+	if err := a.Store.SetSetting(t.Context(), store.SettingTelegramToken,
+		"123456:the-token", store.SettingSecret); err != nil {
+		t.Fatalf("SetSetting: %v", err)
+	}
+	if a.Bot.Token != "" {
+		t.Fatalf("бот уже знает токен — проверять нечего")
+	}
+
+	// Bounded: the check ends in a real exchange with Telegram, and this test
+	// is about what the ladder is holding when it starts, not how that goes.
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	_, _ = a.Server.CheckTelegram(ctx, "")
+
+	if a.Bot.Token != "123456:the-token" {
+		t.Errorf("бот всё ещё с токеном %q — проверка спрашивает не то, что сохранено", a.Bot.Token)
+	}
+}
