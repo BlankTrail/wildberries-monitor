@@ -39,7 +39,10 @@ type params struct {
 	BrandID         int64    `json:"brand_id,omitempty"`
 	Articles        []int64  `json:"articles,omitempty"`
 	AppType         int      `json:"app_type"`
-	MaxPages        int      `json:"max_pages,omitempty"`
+	// Input is what somebody pasted for a profile job, kept as they typed it.
+	Input string `json:"input,omitempty"`
+
+	MaxPages int `json:"max_pages,omitempty"`
 }
 
 // Save writes a job and returns its id.
@@ -60,6 +63,7 @@ func Save(ctx context.Context, s *store.Store, j Job) (int64, error) {
 		BrandID:         j.BrandID,
 		Articles:        j.Articles,
 		AppType:         j.AppType,
+		Input:           j.Input,
 		MaxPages:        j.MaxPages,
 	})
 	if err != nil {
@@ -129,6 +133,7 @@ func fromRow(row store.JobRow) (Job, error) {
 		Regions:         regions,
 		AppType:         p.AppType,
 		Fields:          wb.Selection(fields),
+		Input:           p.Input,
 		MaxPages:        p.MaxPages,
 		Threads:         row.Threads,
 		Delay:           time.Duration(row.DelayMS) * time.Millisecond,

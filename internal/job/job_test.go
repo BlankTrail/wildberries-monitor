@@ -235,14 +235,14 @@ func TestEstimate_AFieldThatCostsNothingChangesNothing(t *testing.T) {
 }
 
 func TestKinds_AreOnlyTheOnesWithASource(t *testing.T) {
-	// The design lists fourteen job types. Eight of them name sources this
+	// The design lists fourteen job types. Seven of them name sources this
 	// build cannot fetch — a catalogue node, promotions, the main page's
 	// shelves, a product's recommendation shelves — and declaring one would
 	// let a user schedule a job that collects nothing, the same mistake the
 	// field catalogue refuses.
 	got := Kinds()
-	if len(got) != 6 {
-		t.Fatalf("Kinds() has %d entries, want 6", len(got))
+	if len(got) != 7 {
+		t.Fatalf("Kinds() has %d entries, want 7", len(got))
 	}
 	seen := map[Kind]bool{}
 	for _, k := range got {

@@ -52,11 +52,39 @@ const (
 	// am I», and storing the other ninety-nine products of every page to
 	// answer it fills a database with other people's goods.
 	KindPositions Kind = "positions"
+
+	// KindProfile turns what somebody pasted into «who I am» — spec section
+	// 4.7's entry point and section 4.6's type 11.
+	//
+	// One request: the card of the product in the link. What it costs is
+	// nothing beside what it decides, because every comparison this program
+	// can make needs a side to be on, and this is where that side comes from.
+	KindProfile Kind = "profile"
 )
+
+// Composable lists the kinds a person builds by hand, in the order the
+// constructor offers them.
+//
+// Beside Kinds rather than instead of it, because they answer two questions.
+// Kinds is «what can this build run», which is what validation and the
+// scheduler ask. This is «what is there a form for» — and a profile job is
+// made by pasting a link on its own screen, so a card asking somebody to
+// choose it beside «витрина продавца» would be a second door into a room
+// that already has one.
+func Composable() []Kind {
+	out := make([]Kind, 0, len(Kinds()))
+	for _, k := range Kinds() {
+		if k == KindProfile {
+			continue
+		}
+		out = append(out, k)
+	}
+	return out
+}
 
 // Kinds lists every kind this build can run, in a stable order.
 func Kinds() []Kind {
-	return []Kind{KindPhrase, KindSeller, KindBrand, KindArticles, KindPhraseAds, KindPositions}
+	return []Kind{KindPhrase, KindSeller, KindBrand, KindArticles, KindPhraseAds, KindPositions, KindProfile}
 }
 
 // Job is what to collect.
@@ -64,6 +92,11 @@ type Job struct {
 	ID   int64
 	Name string
 	Kind Kind
+
+	// Input is what a person pasted for a profile job: a link to a card, a
+	// link to a storefront, or a bare article number. Kept as typed — it is
+	// the one thing they can check the answer against.
+	Input string
 
 	// Phrases, SupplierID, BrandID and Articles are the parameters, and which
 	// of them matters depends on Kind. Validate says which.
@@ -168,6 +201,13 @@ func (j Job) Validate() error {
 		if len(j.Articles) == 0 {
 			bad = append(bad, "no article numbers")
 		}
+	case KindProfile:
+		// A link that carries no article number is not a refusal this program
+		// can make later: the whole job is resolving it, and «не нашли ничего»
+		// after a request costs a request to say what a glance says free.
+		if _, ok := wb.NmID(j.Input); !ok {
+			bad = append(bad, "profile: paste a card link or an article number")
+		}
 	case KindPositions:
 		// Both halves, because the question is a pair: this is «where does
 		// this product stand for this phrase», and either half alone is a
@@ -181,6 +221,16 @@ func (j Job) Validate() error {
 		if len(nonEmpty(j.Phrases)) > 0 && j.PhraseListID != 0 {
 			bad = append(bad, "both typed phrases and an uploaded list: pick one")
 		}
+	}
+
+	if j.Kind == KindProfile {
+		// The two questions every other kind must answer do not apply: this
+		// reads one card to learn who owns it, and a card is not regional in
+		// any way that changes the answer.
+		if len(bad) == 0 {
+			return nil
+		}
+		return fmt.Errorf("rules: %s", strings.Join(bad, "; "))
 	}
 
 	if len(nonEmpty(j.Regions)) == 0 {
@@ -282,6 +332,9 @@ func (j Job) Estimate(items int) Estimate {
 		// Known before it starts, like an article list: the products are the
 		// ones named, however many pages have to be walked to find them.
 		e.Items, e.Exact = len(j.Articles), true
+	case KindProfile:
+		// One card, one answer.
+		e.Items, e.Exact = 1, true
 	}
 
 	regions := len(nonEmpty(j.Regions))

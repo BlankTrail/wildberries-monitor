@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/BlankTrail/wildberries-monitor/internal/events"
 	"github.com/BlankTrail/wildberries-monitor/internal/job"
@@ -93,6 +94,8 @@ func (f *Fetcher) fetchKey(ctx context.Context, key job.Key) (int, error) {
 		return f.listing(ctx, key)
 	case job.ItemProduct:
 		return f.product(ctx, key)
+	case job.ItemProfile:
+		return f.profile(ctx, key)
 	case job.ItemAds:
 		return f.ads(ctx, key)
 	}
@@ -195,6 +198,62 @@ func (f *Fetcher) ads(ctx context.Context, key job.Key) (int, error) {
 	}
 	f.publish(ctx, events.ItemScraped, shelves)
 	return 1, nil
+}
+
+// profile turns what somebody pasted into «who I am» — spec section 4.7.
+//
+// One card, because the card is what knows who owns the product: the article
+// number is in the link, and the seller and the brand are on the card. What
+// the seller then sells is a storefront job the user starts next, from a
+// screen that can price it first; expanding it from here would spend an
+// unknown number of requests on a button somebody pressed to find out what
+// the link was.
+func (f *Fetcher) profile(ctx context.Context, key job.Key) (int, error) {
+	fetched, err := f.Site.Card(ctx, f.Basket, f.Eps, key.NmID, "", 0)
+	if err != nil {
+		return 1, fmt.Errorf("collect: profile card %d: %w", key.NmID, err)
+	}
+	requests := 1
+
+	name := strings.TrimSpace(fetched.Product.SupplierName)
+	if name == "" {
+		name = strings.TrimSpace(fetched.Product.Brand)
+	}
+	if name == "" {
+		// Neither is on the card often enough to promise one. The link the
+		// user pasted is a name they will recognise, which is the whole job
+		// of this field.
+		name = f.Job.Input
+	}
+
+	row := store.ProfileRow{Name: name, SourceInput: f.Job.Input, SellerID: fetched.Product.SupplierID}
+	id, err := f.Store.SaveProfile(ctx, row)
+	if err != nil {
+		return requests, fmt.Errorf("collect: saving profile: %w", err)
+	}
+
+	// The three things the card told us, each recorded as its own kind: the
+	// question asked of this table is «мой ли это», and it is asked of a
+	// product, of a brand and of a seller in turn.
+	if err := f.Store.AddProfileItem(ctx, id, store.ProfileProduct, key.NmID); err != nil {
+		return requests, err
+	}
+	if fetched.Product.SupplierID != nil {
+		if err := f.Store.AddProfileItem(ctx, id, store.ProfileSeller, *fetched.Product.SupplierID); err != nil {
+			return requests, err
+		}
+	}
+	// No brand here: the card carries a brand name, and profile_items holds
+	// identifiers. A name is not an id, and writing one into an INTEGER
+	// column would be inventing a number nobody can join on. The brand of a
+	// profile arrives with the storefront walk, which returns the id.
+
+	// The card itself is worth keeping: it is a reading like any other, and
+	// the profile screen shows the product it resolved to.
+	if _, err := f.Store.SaveProduct(ctx, fetched.Product, ""); err != nil {
+		return requests, fmt.Errorf("collect: saving the resolved product: %w", err)
+	}
+	return requests, nil
 }
 
 // enrich fetches whatever the field selection asks for beyond the page.

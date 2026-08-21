@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/BlankTrail/wildberries-monitor/wb"
 )
 
 // Item kinds. These name what a unit of work is, and they end up in
@@ -25,6 +27,7 @@ const (
 	ItemListing = "listing"
 	ItemProduct = "product" // one product, fetched by article number
 	ItemAds     = "ads"     // the paid placements for one phrase in one region
+	ItemProfile = "profile" // resolve what somebody pasted into who they are
 )
 
 // keySep separates a key's parts.
@@ -59,6 +62,8 @@ func (k Key) String() string {
 		return strings.Join([]string{ItemListing, strconv.FormatInt(k.ID, 10), k.Dest, strconv.Itoa(k.AppType), strconv.Itoa(k.Page)}, keySep)
 	case ItemProduct:
 		return strings.Join([]string{ItemProduct, strconv.FormatInt(k.NmID, 10), k.Dest, strconv.Itoa(k.AppType)}, keySep)
+	case ItemProfile:
+		return strings.Join([]string{ItemProfile, strconv.FormatInt(k.NmID, 10)}, keySep)
 	case ItemAds:
 		return strings.Join([]string{ItemAds, k.Phrase, k.Dest, strconv.Itoa(k.AppType)}, keySep)
 	}
@@ -102,6 +107,16 @@ func ParseKey(s string) (Key, error) {
 			return Key{}, fmt.Errorf("job: page key %q: page %q", s, parts[4])
 		}
 		k.Page = page
+	case ItemProfile:
+		if len(parts) != 2 {
+			return Key{}, fmt.Errorf("job: profile key %q has %d parts, want 2", s, len(parts))
+		}
+		nm, err := strconv.ParseInt(parts[1], 10, 64)
+		if err != nil {
+			return Key{}, fmt.Errorf("job: profile key %q: article %q", s, parts[1])
+		}
+		k.NmID = nm
+
 	case ItemProduct:
 		if len(parts) != 4 {
 			return Key{}, fmt.Errorf("job: product key %q has %d parts, want 4", s, len(parts))
@@ -153,6 +168,16 @@ func (StaticPlanner) Plan(j Job) ([]Item, error) {
 	if err := j.Validate(); err != nil {
 		return nil, err
 	}
+	// A profile resolves one link, and one link has no regions to walk: the
+	// card says who owns the product wherever it is read from.
+	if j.Kind == KindProfile {
+		nm, ok := wb.NmID(j.Input)
+		if !ok {
+			return nil, fmt.Errorf("job: profile %q carries no article number", j.Input)
+		}
+		return []Item{{Kind: ItemProfile, Key: Key{Kind: ItemProfile, NmID: nm}.String()}}, nil
+	}
+
 	regions := nonEmpty(j.Regions)
 	phrases := nonEmpty(j.Phrases)
 	for _, p := range phrases {

@@ -64,8 +64,14 @@ func (f *fakeSite) Card(_ context.Context, _ *wb.Basket, _ wb.Endpoints, nm int6
 		return wb.CardFetch{}, f.cardFail
 	}
 	return wb.CardFetch{
-		Card:    wb.Card{NmID: nm, ImtID: f.cardImt, Name: "Платье"},
-		Product: wb.Product{ID: nm, Name: "Платье", Dest: dest, AppType: app, FetchedAt: time.Unix(1000, 0).UTC()},
+		Card: wb.Card{NmID: nm, ImtID: f.cardImt, Name: "Платье"},
+		// The seller travels on the live half, because that is where the site
+		// puts it — and a profile is nothing without it.
+		Product: wb.Product{
+			ID: nm, Name: "Платье", Brand: "BrandCo",
+			SupplierID: ptrTo(int64(4242)), SupplierName: "ООО Ромашка",
+			Dest: dest, AppType: app, FetchedAt: time.Unix(1000, 0).UTC(),
+		},
 	}, nil
 }
 
@@ -522,5 +528,69 @@ func TestPage_EveryOtherKindKeepsThePageItWalked(t *testing.T) {
 
 	if got := savedIDs(t, st); len(got) != 2 {
 		t.Errorf("сохранено %v, ожидалась вся страница", got)
+	}
+}
+
+func TestProfile_ResolvesALinkIntoWhoTheUserIs(t *testing.T) {
+	// Spec section 4.7's entry point: one card, because the card is what
+	// knows who owns the product. Everything this program can compare needs
+	// a side to be on, and this is where that side comes from.
+	site := &fakeSite{products: []wb.Product{product(141504066)}, cardImt: 777}
+	st := openStore(t)
+	f := &Fetcher{
+		Site: site, Store: st,
+		Job: job.Job{
+			Kind:  job.KindProfile,
+			Input: "https://www.wildberries.ru/catalog/141504066/detail.aspx",
+		},
+	}
+
+	n, err := f.Fetch(t.Context(), job.Item{Key: job.Key{
+		Kind: job.ItemProfile, NmID: 141504066,
+	}.String()})
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("разрешение стоило %d запросов, ожидался один", n)
+	}
+
+	profiles, err := st.Profiles(t.Context())
+	if err != nil {
+		t.Fatalf("Profiles: %v", err)
+	}
+	if len(profiles) != 1 {
+		t.Fatalf("профилей %d, ожидался один", len(profiles))
+	}
+	// What was pasted is kept as it was typed: it is the one thing the user
+	// can check the resolution against.
+	if profiles[0].SourceInput == "" {
+		t.Error("не сохранено, что именно вставили")
+	}
+
+	products, err := st.ProfileItems(t.Context(), profiles[0].ID, store.ProfileProduct)
+	if err != nil {
+		t.Fatalf("ProfileItems: %v", err)
+	}
+	if len(products) != 1 || products[0] != 141504066 {
+		t.Errorf("товары профиля = %v", products)
+	}
+
+	// The seller is the answer the whole resolution is for: «мой ли этот
+	// товар» is asked of a supplier id, and a profile without one can compare
+	// nothing.
+	sellers, err := st.ProfileItems(t.Context(), profiles[0].ID, store.ProfileSeller)
+	if err != nil {
+		t.Fatalf("ProfileItems: %v", err)
+	}
+	if len(sellers) != 1 {
+		t.Errorf("продавцы профиля = %v, ожидался один", sellers)
+	}
+	if profiles[0].SellerID == nil {
+		t.Error("у профиля не записан продавец")
+	}
+	// And the reading itself is kept, because it is a reading like any other.
+	if got := savedIDs(t, st); !got[141504066] {
+		t.Error("разрешённый товар не сохранён")
 	}
 }

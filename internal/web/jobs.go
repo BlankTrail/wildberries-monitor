@@ -413,8 +413,8 @@ func (s *Server) constructorHTML(r *http.Request) (string, error) {
 // The one picker in the panel whose radios carry data-estimate: changing what
 // a job walks changes what it will cost, and the price is on the same screen.
 func kindPicker() string {
-	picks := make([]pick, 0, len(job.Kinds()))
-	for _, k := range job.Kinds() {
+	picks := make([]pick, 0, len(job.Composable()))
+	for _, k := range job.Composable() {
 		label := kindLabels[k]
 		if label == "" {
 			label = string(k)

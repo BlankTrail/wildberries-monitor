@@ -426,7 +426,7 @@ func TestConstructor_OffersEveryKindAsAChoiceThatSaysWhatItWalks(t *testing.T) {
 	srv := newServer(t)
 	body := get(t, srv, "/jobs", "correct horse").Body.String()
 
-	for _, k := range job.Kinds() {
+	for _, k := range job.Composable() {
 		if !strings.Contains(body, `type="radio" name="kind" value="`+string(k)+`"`) {
 			t.Errorf("вид %q нельзя выбрать", k)
 		}
@@ -443,7 +443,7 @@ func TestConstructor_OffersEveryKindAsAChoiceThatSaysWhatItWalks(t *testing.T) {
 	// Something has to be picked from the start, or the first estimate
 	// answers «kind "" is not one this build can run» to a person who filled
 	// in everything the screen showed them.
-	first := job.Kinds()[0]
+	first := job.Composable()[0]
 	if !strings.Contains(body, `name="kind" value="`+string(first)+`" checked`) {
 		t.Errorf("вид %q не выбран заранее, форма открывается пустой", first)
 	}

@@ -230,6 +230,10 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /settings/check", s.auth(http.HandlerFunc(s.checkSettings)))
 	mux.Handle("GET /settings/telegram", s.auth(http.HandlerFunc(s.checkTelegram)))
 
+	mux.Handle("GET /profile", s.auth(http.HandlerFunc(s.profilePage)))
+	mux.Handle("POST /profile", s.auth(http.HandlerFunc(s.saveProfile)))
+	mux.Handle("POST /profile/collect", s.auth(http.HandlerFunc(s.collectProfile)))
+	mux.Handle("POST /profile/delete", s.auth(http.HandlerFunc(s.deleteProfile)))
 	mux.Handle("GET /rules", s.auth(http.HandlerFunc(s.rulesPage)))
 	mux.Handle("POST /rules", s.auth(http.HandlerFunc(s.saveRule)))
 	mux.Handle("GET /rules/log", s.auth(http.HandlerFunc(s.ruleLog)))
@@ -357,6 +361,7 @@ func (s *Server) tabs(current string) []Tab {
 	// refused that three times for the same reason.
 	all := []Tab{
 		{Label: "Обзор", Href: "/"},
+		{Label: "Мой профиль", Href: "/profile"},
 		{Label: "Задачи", Href: "/jobs"},
 		{Label: "Отслеживание", Href: "/track"},
 		{Label: "Уведомления", Href: "/rules"},
