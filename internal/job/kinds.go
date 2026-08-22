@@ -31,6 +31,7 @@ const (
 	ItemCatalog = "catalog" // one page of one catalogue node
 	ItemShelf   = "shelf"   // the recommendation row under one product
 	ItemPromo   = "promo"   // one page of one promotion's goods
+	ItemMain    = "main"    // one page of the front page's feed
 )
 
 // keySep separates a key's parts.
@@ -74,6 +75,10 @@ func (k Key) String() string {
 		// its id: the preset is a parameter the site can renumber, and a resumed
 		// run has to match on what the promotion is.
 		return strings.Join([]string{ItemPromo, strconv.FormatInt(k.ID, 10), k.Dest, strconv.Itoa(k.AppType), strconv.Itoa(k.Page)}, keySep)
+	case ItemMain:
+		// No id: there is one front page. The region and the audience are the
+		// whole of what distinguishes two readings of it.
+		return strings.Join([]string{ItemMain, k.Dest, strconv.Itoa(k.AppType), strconv.Itoa(k.Page)}, keySep)
 	case ItemProduct:
 		return strings.Join([]string{ItemProduct, strconv.FormatInt(k.NmID, 10), k.Dest, strconv.Itoa(k.AppType)}, keySep)
 	case ItemProfile:
@@ -138,6 +143,22 @@ func ParseKey(s string) (Key, error) {
 			return Key{}, fmt.Errorf("job: %s key %q: article %q", k.Kind, s, parts[1])
 		}
 		k.NmID = nm
+
+	case ItemMain:
+		if len(parts) != 4 {
+			return Key{}, fmt.Errorf("job: main key %q has %d parts, want 4", s, len(parts))
+		}
+		k.Dest = parts[1]
+		app, err := strconv.Atoi(parts[2])
+		if err != nil {
+			return Key{}, fmt.Errorf("job: main key %q: app type %q", s, parts[2])
+		}
+		k.AppType = app
+		page, err := strconv.Atoi(parts[3])
+		if err != nil {
+			return Key{}, fmt.Errorf("job: main key %q: page %q", s, parts[3])
+		}
+		k.Page = page
 
 	case ItemProduct:
 		if len(parts) != 4 {
@@ -246,6 +267,12 @@ func (StaticPlanner) Plan(j Job) ([]Item, error) {
 			for page := 1; page <= j.MaxPages; page++ {
 				out = append(out, Item{Kind: ItemPromo, Key: Key{
 					Kind: ItemPromo, ID: j.PromotionID, Dest: dest, AppType: j.AppType, Page: page,
+				}.String()})
+			}
+		case KindMainFeed:
+			for page := 1; page <= j.MaxPages; page++ {
+				out = append(out, Item{Kind: ItemMain, Key: Key{
+					Kind: ItemMain, Dest: dest, AppType: j.AppType, Page: page,
 				}.String()})
 			}
 		case KindSeller, KindBrand:

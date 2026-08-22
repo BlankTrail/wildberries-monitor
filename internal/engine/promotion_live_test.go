@@ -79,3 +79,48 @@ func TestLive_APromotionYieldsItsGoods(t *testing.T) {
 		t.Logf("  %d место — %d «%s», бренд %s", p.Rank, p.ID, p.Name, p.Brand)
 	}
 }
+
+// TestLive_TheFrontPageFeedAnswers walks spec section 4.6's type 10 against the
+// live site. Skipped on the same terms as the promotion probe above.
+func TestLive_TheFrontPageFeedAnswers(t *testing.T) {
+	addr, key := os.Getenv("WBMON_LIVE_BT"), os.Getenv("WBMON_LIVE_KEY")
+	if addr == "" || key == "" {
+		t.Skip("WBMON_LIVE_BT / WBMON_LIVE_KEY не заданы")
+	}
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "live.db"))
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { st.Close() })
+	for _, kv := range [][3]string{
+		{store.SettingBlankTrailURL, addr, store.SettingText},
+		{store.SettingBlankTrailAPIKey, key, store.SettingSecret},
+	} {
+		if err := st.SetSetting(ctx, kv[0], kv[1], kv[2]); err != nil {
+			t.Fatalf("SetSetting: %v", err)
+		}
+	}
+
+	e := &Engine{Store: st, Endpoints: wb.DefaultEndpoints(),
+		Log: func(f string, a ...any) { t.Logf(f, a...) }}
+	t.Cleanup(e.CloseService)
+
+	site, err := e.Service(ctx)
+	if err != nil {
+		t.Fatalf("Service: %v", err)
+	}
+	env, err := site.MainFeedPage(ctx, e.Endpoints, wb.SearchQuery{
+		Dest: "-1257786", AppType: wb.AppWeb, Page: 1,
+	})
+	if err != nil {
+		t.Fatalf("MainFeedPage: %v", err)
+	}
+	if len(env.Products) == 0 {
+		t.Fatal("лента главной вернулась пустой")
+	}
+	t.Logf("товаров на первой странице: %d", len(env.Products))
+	for _, p := range env.Products[:min(3, len(env.Products))] {
+		t.Logf("  %d место — %d «%s», бренд %s", p.Rank, p.ID, p.Name, p.Brand)
+	}
+}

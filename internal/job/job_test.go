@@ -235,21 +235,23 @@ func TestEstimate_AFieldThatCostsNothingChangesNothing(t *testing.T) {
 }
 
 func TestKinds_AreOnlyTheOnesWithASource(t *testing.T) {
-	// The design lists fourteen job types. The ones absent here name sources
-	// this build cannot fetch — the main page's shelves — and declaring one
-	// would let a user schedule a job that collects nothing, the same mistake
-	// the field catalogue refuses.
+	// The design lists fourteen job types. Every one whose source this build
+	// can fetch is here; declaring one it cannot would let a user schedule a
+	// job that collects nothing, the same mistake the field catalogue refuses.
 	//
-	// Three stopped being absent. A catalogue node is filled through the search
+	// Four stopped being absent. A catalogue node is filled through the search
 	// endpoint this build already speaks, with a query the site's own directory
 	// publishes per node; a product's «Продавец рекомендует» row is a static
 	// file published per card; and a promotion's goods come from the same
-	// search index under the preset the promotion's own record names. The other
-	// two shelves section 4.6 names — «с этим покупают» and «комплекты» — are
-	// still absent, and KindShelves says so where it is declared.
+	// search index under the preset the promotion's own record names; and the
+	// front page's feed comes from the recommendation index asked for nothing
+	// in particular. The other two shelves section 4.6 names — «с этим
+	// покупают» and «комплекты» — are still absent, and KindShelves says so
+	// where it is declared; so is the front page's own list of shelves, which
+	// the site no longer has — see KindMainFeed.
 	got := Kinds()
-	if len(got) != 10 {
-		t.Fatalf("Kinds() has %d entries, want 10", len(got))
+	if len(got) != 11 {
+		t.Fatalf("Kinds() has %d entries, want 11", len(got))
 	}
 	seen := map[Kind]bool{}
 	for _, k := range got {
@@ -532,6 +534,38 @@ func TestPlan_APromotionIsWalkedPageByPage(t *testing.T) {
 	for page := 1; page <= 3; page++ {
 		if pages[page] != 2 {
 			t.Errorf("страница %d запланирована %d раз, ожидалось два (по региону)", page, pages[page])
+		}
+	}
+}
+
+func TestPlan_TheFrontPageIsWalkedPageByPage(t *testing.T) {
+	// There is one front page, so the plan is pages by regions and nothing
+	// else. A plan that asked for page one three times would report three
+	// items done and store the same hundred goods three times over.
+	j := Job{Kind: KindMainFeed, Regions: []string{"-1257786", "-5887751"},
+		MaxPages: 3, AppType: 1, Fields: wb.Selection{"nm_id"}}
+
+	items, err := StaticPlanner{}.Plan(j)
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if len(items) != 6 {
+		t.Fatalf("пунктов %d, ожидалось шесть", len(items))
+	}
+	pages := map[int]int{}
+	for _, it := range items {
+		k, err := ParseKey(it.Key)
+		if err != nil {
+			t.Fatalf("ParseKey %q: %v", it.Key, err)
+		}
+		if k.Kind != ItemMain {
+			t.Errorf("пункт вида %q", k.Kind)
+		}
+		pages[k.Page]++
+	}
+	for page := 1; page <= 3; page++ {
+		if pages[page] != 2 {
+			t.Errorf("страница %d запланирована %d раз, ожидалось два", page, pages[page])
 		}
 	}
 }

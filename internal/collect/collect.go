@@ -45,6 +45,7 @@ type Site interface {
 	Shelves(ctx context.Context, eps wb.Endpoints, q wb.SearchQuery) (wb.Shelves, error)
 	ProductShelf(ctx context.Context, eps wb.Endpoints, nm int64) (wb.ProductShelf, error)
 	PromotionPage(ctx context.Context, eps wb.Endpoints, p wb.Promotion, q wb.SearchQuery) (wb.Envelope, error)
+	MainFeedPage(ctx context.Context, eps wb.Endpoints, q wb.SearchQuery) (wb.Envelope, error)
 }
 
 // Fetcher does one item of a job.
@@ -108,6 +109,8 @@ func (f *Fetcher) fetchKey(ctx context.Context, key job.Key) (int, error) {
 		return f.shelf(ctx, key)
 	case job.ItemPromo:
 		return f.promo(ctx, key)
+	case job.ItemMain:
+		return f.mainFeed(ctx, key)
 	}
 	// Not a default that quietly does nothing: an item kind this build cannot
 	// do would otherwise be marked done, and a run would report success having
@@ -276,6 +279,33 @@ func (f *Fetcher) promo(ctx context.Context, key job.Key) (int, error) {
 	// «третий в акции» has to keep meaning the same thing next season.
 	if _, err := f.Store.SaveSearchPage(ctx, env, promoQueryKey(p.Slug)); err != nil {
 		return requests, fmt.Errorf("collect: сохранение акции %q страница %d: %w", p.Slug, key.Page, err)
+	}
+	if err := f.link(ctx, env.Products); err != nil {
+		return requests, err
+	}
+
+	extra, err := f.enrich(ctx, env.Products, key)
+	return requests + extra, err
+}
+
+// mainFeed walks one page of the front page's run of goods — spec section
+// 4.6's type 10.
+//
+// Filed under one key for the whole feed, and deliberately outside change
+// tracking: the page reshuffles itself between two visitors, so a series taken
+// from it would report a fall every time somebody looked. See
+// store.PositionMainFeed, which is where that exclusion is made.
+func (f *Fetcher) mainFeed(ctx context.Context, key job.Key) (int, error) {
+	env, err := f.Site.MainFeedPage(ctx, f.Eps, wb.SearchQuery{
+		Dest: key.Dest, AppType: key.AppType, Page: key.Page,
+	})
+	if err != nil {
+		return 1, fmt.Errorf("collect: главная страница %d: %w", key.Page, err)
+	}
+	requests := 1
+
+	if _, err := f.Store.SaveSearchPage(ctx, env, store.MainFeedQuery); err != nil {
+		return requests, fmt.Errorf("collect: сохранение главной страницы %d: %w", key.Page, err)
 	}
 	if err := f.link(ctx, env.Products); err != nil {
 		return requests, err

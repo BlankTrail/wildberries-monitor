@@ -37,6 +37,7 @@ type fakeSite struct {
 	// gives most of the time — a named shelf with nobody in it — which is the
 	// case the collector must not read as a failure.
 	promotions     []wb.Promotion
+	mainFeeds      []wb.SearchQuery
 	productShelves []int64
 	shelfOf        func(nm int64) (wb.ProductShelf, error)
 
@@ -59,6 +60,16 @@ type fakeSite struct {
 func (f *fakeSite) PromotionPage(_ context.Context, _ wb.Endpoints, p wb.Promotion, q wb.SearchQuery) (wb.Envelope, error) {
 	f.promotions = append(f.promotions, p)
 	f.searches = append(f.searches, q)
+	if f.fail != nil {
+		return wb.Envelope{}, f.fail
+	}
+	return wb.Envelope{Products: f.products}, nil
+}
+
+// MainFeedPage answers with the same products the search fake gives, and
+// records that the front page was asked at all.
+func (f *fakeSite) MainFeedPage(_ context.Context, _ wb.Endpoints, q wb.SearchQuery) (wb.Envelope, error) {
+	f.mainFeeds = append(f.mainFeeds, q)
 	if f.fail != nil {
 		return wb.Envelope{}, f.fail
 	}
@@ -1006,6 +1017,47 @@ func TestPromotionOf_TellsAPromotionFromAPhrase(t *testing.T) {
 	for _, q := range []string{"платье летнее", "cat:8126", "promo:", "", "promo"} {
 		if got, ok := PromotionOf(q); ok {
 			t.Errorf("%q прочитано как акция %q", q, got)
+		}
+	}
+}
+
+func TestMainFeed_IsFiledOutsideTheSeriesTheDetectorReads(t *testing.T) {
+	// Section 4.6 says the front page «в трекинг изменений не подключается»,
+	// and the reason is not shyness: the page reshuffles itself between two
+	// visitors, so a series taken from it would report a fall every time
+	// anybody looked. The key it is filed under is what keeps it out.
+	site := &fakeSite{products: []wb.Product{
+		{ID: 100, Name: "первый", Rank: 1},
+		{ID: 200, Name: "второй", Rank: 2},
+	}}
+	f, st := watching(t, site, job.KindMainFeed)
+
+	if _, err := f.Fetch(t.Context(), job.Item{Key: job.Key{
+		Kind: job.ItemMain, Dest: "-1257786", AppType: 1, Page: 1,
+	}.String()}); err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if len(site.mainFeeds) != 1 || site.mainFeeds[0].Page != 1 {
+		t.Fatalf("главную спросили %+v", site.mainFeeds)
+	}
+
+	stored, err := st.CountForTest(t.Context(),
+		`SELECT COUNT(*) FROM positions WHERE query = '`+store.MainFeedQuery+`'`)
+	if err != nil {
+		t.Fatalf("CountForTest: %v", err)
+	}
+	if stored != 2 {
+		t.Errorf("мест на главной записано %d, ожидались два", stored)
+	}
+
+	// And the detector does not see them.
+	keys, err := st.PlacementsChangedSince(t.Context(), 0)
+	if err != nil {
+		t.Fatalf("PlacementsChangedSince: %v", err)
+	}
+	for _, k := range keys {
+		if k.Query == store.MainFeedQuery {
+			t.Errorf("место на главной попало в разбор изменений: %+v", k)
 		}
 	}
 }

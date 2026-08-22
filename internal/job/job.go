@@ -72,6 +72,19 @@ const (
 	// is per listing, and a job over five promotions could not be priced.
 	KindPromotion Kind = "promotion"
 
+	// KindMainFeed walks the front page's run of goods — spec section 4.6's
+	// type 10, as far as the site still has one.
+	//
+	// The section asks for the front page's shelves and their contents. There
+	// are no shelves: the page carries banners, which hold no goods, and one
+	// continuous feed. This walks the feed.
+	//
+	// Its readings are deliberately outside change tracking, which is the
+	// section's own instruction and not a limitation of this build: the page
+	// reshuffles itself between two visitors, so «место упало» about it would
+	// be a message about the weather.
+	KindMainFeed Kind = "main-feed"
+
 	// KindShelves reads the «Продавец рекомендует» row under each of the
 	// named products — spec section 4.6's type 9.
 	//
@@ -113,7 +126,8 @@ func Composable() []Kind {
 // Kinds lists every kind this build can run, in a stable order.
 func Kinds() []Kind {
 	return []Kind{KindPhrase, KindCatalog, KindSeller, KindBrand, KindArticles,
-		KindPhraseAds, KindPositions, KindPromotion, KindShelves, KindProfile}
+		KindPhraseAds, KindPositions, KindPromotion, KindMainFeed, KindShelves,
+		KindProfile}
 }
 
 // Job is what to collect.
@@ -473,9 +487,9 @@ func (j Job) Estimate(items int) Estimate {
 		e.Requests += pages * regions
 	case KindArticles:
 		// No walk: the list is the enumeration.
-	case KindPromotion:
-		// One request per page, the same as a search: a promotion is a listing
-		// in the same index, asked for a preset instead of a phrase.
+	case KindPromotion, KindMainFeed:
+		// One request per page, the same as a search: both are listings in the
+		// same index, asked for a preset or for nothing at all.
 		e.Requests += pages * regions
 	case KindShelves:
 		// One published file per product, and it does not move with the

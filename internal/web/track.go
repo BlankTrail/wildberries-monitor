@@ -352,6 +352,9 @@ func readAtText(ts int64) string {
 // is a cache of somebody else's document, and a category WB renamed should read
 // under its new name rather than under the one it had on the day of the run.
 func positionTitle(ctx context.Context, st *store.Store, query string) string {
+	if query == store.MainFeedQuery {
+		return "лента главной"
+	}
 	if slug, ok := collect.PromotionOf(query); ok {
 		// A place in a promotion is the third sentence this table holds, and
 		// the one that dates fastest: a promotion ends, and a series that read

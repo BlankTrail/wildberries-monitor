@@ -45,6 +45,7 @@ var kindLabels = map[job.Kind]string{
 	job.KindPhraseAds: "Реклама в выдаче по фразе",
 	job.KindPositions: "Позиции товаров по фразам",
 	job.KindPromotion: "Состав акции",
+	job.KindMainFeed:  "Лента главной страницы",
 	job.KindShelves:   "Полка «Продавец рекомендует»",
 }
 
@@ -63,6 +64,7 @@ var kindWhat = map[job.Kind]string{
 	job.KindPhraseAds: "Рекламные полки в выдаче по фразе: чей товар и на каком месте.",
 	job.KindPositions: "Где перечисленные артикулы стоят в выдаче по каждой фразе. Чужие товары со страниц не сохраняются.",
 	job.KindPromotion: "Товары одной акции и место каждого в ней. Видно, кто зашёл в акцию и с какой ценой.",
+	job.KindMainFeed:  "Что Wildberries показывает на главной и в каком порядке. Срез ассортиментной политики: главная перемешивается постоянно, поэтому в отслеживание изменений эти места не идут.",
 	job.KindShelves:   "Что продавец повесил под своей карточкой: чьи товары и на каком месте. По одному файлу на артикул, без прокси.",
 }
 
@@ -700,7 +702,7 @@ func (s *Server) jobFromForm(r *http.Request) (job.Job, error) {
 	// none, and a page count stored against them is a number no run reads.
 	switch j.Kind {
 	case job.KindPhrase, job.KindCatalog, job.KindSeller, job.KindBrand,
-		job.KindPositions, job.KindPromotion:
+		job.KindPositions, job.KindPromotion, job.KindMainFeed:
 		j.MaxPages = int(atoi64(f.Get("max_pages")))
 	}
 

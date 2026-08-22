@@ -132,6 +132,17 @@ type Endpoints struct {
 	// the job.
 	PromoCatalog string `yaml:"promo_catalog"`
 
+	// MainFeed is the run of goods the front page shows — spec section 4.6's
+	// type 10, as far as the site still has one.
+	//
+	// The section describes «подборки главной страницы и их состав», one
+	// request for the list and one per shelf. There are no shelves any more:
+	// the front page carries one banner strip and one continuous feed, and
+	// this is the feed's address. It is the recommendation index, asked with
+	// query=0, which is how the page asks for «всё подряд» rather than for
+	// anything about a visitor.
+	MainFeed string `yaml:"main_feed"`
+
 	// PickupPoints is the site's own directory of every delivery point it
 	// has: address, coordinates and number, for the whole country at once.
 	//
@@ -174,6 +185,16 @@ const promoCatalogTemplate = "https://www.wildberries.ru/__internal/u-search/{sh
 	"?ab_testing=false&appType={app}&curr=rub&dest={dest}" +
 	"&hide_vflags=4294967296&lang=ru&{query}&sort=popular&spp=30"
 
+// mainFeedTemplate is one page of the front page's feed.
+//
+// Read off the site's own request, parameters and all, for the reason
+// searchTemplate is kept whole: the exact parameter set is what the edge was
+// observed to accept. query=0 is the front page's own value — it is not a
+// phrase and not a preset, it is how this index is asked for the general run.
+const mainFeedTemplate = "https://www.wildberries.ru/__internal/u-recom/personal/ru/common/v8/search" +
+	"?appType={app}&curr=rub&dest={dest}&hide_vflags=4294967296&lang=ru&locale=ru" +
+	"&query=0&resultset=catalog&spp=30"
+
 // DefaultEndpoints returns the built-in addresses.
 func DefaultEndpoints() Endpoints {
 	return Endpoints{
@@ -190,6 +211,7 @@ func DefaultEndpoints() Endpoints {
 		ProductShelf:  "https://static-basket-08.wbbasket.ru/vol154/content-recommendations/{nm}.json",
 		PickupPoint:   "https://www.wildberries.ru/webapi/spa/poo/{id}/show",
 		PickupPoints:  "https://static-basket-01.wbbasket.ru/vol0/data/all-poo-fr-v3.json",
+		MainFeed:      mainFeedTemplate,
 		Promotions:    "https://static-basket-01.wbbasket.ru/vol0/data/banners-promo-ru-v2.json",
 		Promotion:     "https://static-basket-01.wbbasket.ru/vol0/data/promotions/{slug}-v3.json",
 		PromoCatalog:  promoCatalogTemplate,
@@ -308,6 +330,9 @@ func (e Endpoints) Validate() error {
 	}
 	if strings.TrimSpace(e.PickupPoints) == "" {
 		return errors.New("pickup_points is empty")
+	}
+	if strings.TrimSpace(e.MainFeed) == "" {
+		return errors.New("main_feed is empty")
 	}
 	if strings.TrimSpace(e.Promotions) == "" {
 		return errors.New("promotions is empty")

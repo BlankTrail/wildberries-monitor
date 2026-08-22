@@ -221,3 +221,52 @@ func TestPromotionPage_FillsInThePlaceInThePromotion(t *testing.T) {
 		t.Errorf("происхождение = %+v — акция должна отличаться от поиска", env.Fetches)
 	}
 }
+
+func TestMainFeedURL_SendsThePageFromTheFirstOne(t *testing.T) {
+	// Unlike the search, the front page sends a page parameter from the start.
+	// Reproduced as observed rather than made consistent with its neighbours:
+	// what the site accepts is what was seen, not what is tidy.
+	eps := DefaultEndpoints()
+	first := eps.MainFeedURL(SearchQuery{Dest: "-1257786", AppType: AppWeb, Page: 1})
+	if !strings.Contains(first, "page=1") {
+		t.Errorf("на первой странице нет page=1: %s", first)
+	}
+	if !strings.Contains(first, "query=0") {
+		t.Errorf("в адресе нет query=0 — главную спрашивают именно так: %s", first)
+	}
+	if !strings.Contains(first, "dest=-1257786") {
+		t.Errorf("в адресе нет региона: %s", first)
+	}
+	if second := eps.MainFeedURL(SearchQuery{Dest: "-1", Page: 2}); !strings.Contains(second, "page=2") {
+		t.Errorf("вторая страница = %s", second)
+	}
+}
+
+func TestMainFeedPage_FillsInThePlaceOnTheFrontPage(t *testing.T) {
+	// «WB puts these goods in front of a visitor first» is the only fact the
+	// front page has to offer, and a page without places offers none of it.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte(`{"data":{"products":[{"id":1,"name":"a"},{"id":2,"name":"b"}]}}`))
+	}))
+	defer srv.Close()
+
+	eps := DefaultEndpoints()
+	eps.MainFeed = srv.URL + "/feed?dest={dest}&app={app}"
+
+	env, err := liveClient(srv.Client()).MainFeedPage(t.Context(), eps,
+		SearchQuery{Dest: "-1257786", AppType: AppWeb, Page: 1})
+	if err != nil {
+		t.Fatalf("MainFeedPage: %v", err)
+	}
+	if len(env.Products) != 2 {
+		t.Fatalf("товаров %d", len(env.Products))
+	}
+	for i, p := range env.Products {
+		if p.Rank != i+1 {
+			t.Errorf("товар %d на месте %d", p.ID, p.Rank)
+		}
+	}
+	if len(env.Fetches) != 1 || env.Fetches[0].Source != SourceMainFeed {
+		t.Errorf("происхождение = %+v", env.Fetches)
+	}
+}

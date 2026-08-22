@@ -30,6 +30,27 @@ type SeriesKey struct {
 	AppType int
 }
 
+// PositionMainFeed marks a place in the front page's feed.
+//
+// The one query key this package has to know about, and the reason is spec
+// section 4.6's own instruction: the front page is personalised and moves
+// constantly, so it «в трекинг изменений не подключается». A rank in it is a
+// snapshot of what Wildberries is pushing today, not a measurement anybody can
+// compare with last week's — and left in the change detector it would fire
+// «место в выдаче упало» about a page that reshuffles itself between two
+// visitors.
+//
+// The other key prefixes — a catalogue node's, a promotion's — are known to the
+// collector rather than here, because those are names a screen has to read
+// back. This one is a filter, and a filter belongs where the table is.
+const PositionMainFeed = "main:"
+
+// MainFeedQuery is what a place in the front page's feed is filed under.
+//
+// One key for the whole feed rather than one per shelf: the page has no
+// shelves any more, which is what wb/mainfeed.go's own comment is about.
+const MainFeedQuery = PositionMainFeed + "feed"
+
 // PhraseKey identifies one placement history: one product's rank on one phrase
 // in one region for one audience.
 type PhraseKey struct {
@@ -109,8 +130,8 @@ func (s *Store) PlacementsChangedSince(ctx context.Context, since int64) ([]Phra
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT DISTINCT nm_id, query, dest, app_type
 		  FROM positions
-		 WHERE ts > ?
-		 ORDER BY nm_id, query, dest, app_type`, since)
+		 WHERE ts > ? AND query NOT LIKE ?
+		 ORDER BY nm_id, query, dest, app_type`, since, PositionMainFeed+"%")
 	if err != nil {
 		return nil, fmt.Errorf("store: placements changed since %d: %w", since, err)
 	}
