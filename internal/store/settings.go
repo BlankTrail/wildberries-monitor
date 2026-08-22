@@ -90,6 +90,34 @@ const (
 	// request — see RegradePhrases.
 	SettingPhrasesTopN = "phrases.top_n"
 
+	// The Google spreadsheet spec section 5.3's last row asks for, and the
+	// OAuth client that reaches it.
+	//
+	// The client is the user's own, made in their own Google Cloud project.
+	// Google says an installed application's secret is not confidential and
+	// many open-source desktop apps ship one; this product does not, because a
+	// public repository that carries somebody's OAuth client is a repository
+	// that carries somebody's OAuth client. So it lives here, beside the
+	// Telegram token, filled in the same way.
+	SettingGoogleClientID = "google.client_id"
+	SettingGoogleSecret   = "google.client_secret"
+	// SettingGoogleRefresh is the long-lived permission; the other two are the
+	// hour-long token made from it and when it dies.
+	SettingGoogleRefresh = "google.refresh_token"
+	SettingGoogleAccess  = "google.access_token"
+	SettingGoogleExpiry  = "google.access_expiry"
+	// SettingGoogleState is the anti-forgery value of one authorisation in
+	// flight. Cleared the moment the redirect arrives, whatever it says: a
+	// state that stays valid is one somebody else's page can use tomorrow.
+	SettingGoogleState = "google.state"
+	// SettingGoogleSheet is the spreadsheet — a link or an id — and
+	// SettingGoogleTab the tab inside it.
+	SettingGoogleSheet = "google.spreadsheet"
+	SettingGoogleTab   = "google.tab"
+	// SettingGoogleTitle is the spreadsheet's own name, kept so the settings
+	// screen can say what is connected rather than only that something is.
+	SettingGoogleTitle = "google.title"
+
 	// SettingLastMaintenance is when the history was last thinned and the file
 	// last rebuilt, as Unix seconds. Kept in settings rather than in a table of
 	// its own: it is one number, it is read once a minute, and a table for it

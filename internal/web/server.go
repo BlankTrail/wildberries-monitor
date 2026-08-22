@@ -295,6 +295,15 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /jobs", s.auth(http.HandlerFunc(s.jobsPage)))
 	mux.Handle("POST /jobs", s.auth(http.HandlerFunc(s.saveJobHandler)))
 	mux.Handle("POST /jobs/estimate", s.auth(http.HandlerFunc(s.estimateHandler)))
+	mux.Handle("POST /results/sheets", s.auth(http.HandlerFunc(s.exportToSheets)))
+	mux.Handle("POST /google/connect", s.auth(http.HandlerFunc(s.connectGoogle)))
+	mux.Handle("POST /google/forget", s.auth(http.HandlerFunc(s.forgetGoogle)))
+	// The callback is not behind the panel's password. The browser arrives
+	// here from Google with a code and a state this panel issued a minute ago,
+	// and neither is worth anything without the client secret; a password
+	// prompt at this point would land on a page Google redirected to and lose
+	// the code.
+	mux.Handle("GET "+googleCallback, http.HandlerFunc(s.googleCallbackHandler))
 	mux.Handle("POST /jobs/promotions", s.auth(http.HandlerFunc(s.refreshPromotions)))
 	mux.Handle("POST /jobs/categories", s.auth(http.HandlerFunc(s.refreshCategories)))
 	mux.Handle("POST /regions", s.auth(http.HandlerFunc(s.addRegion)))

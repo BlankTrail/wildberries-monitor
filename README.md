@@ -114,9 +114,17 @@ check passes.
   and a rotating channel's change link is deliberately **not** pulled — the
   provider limits how often it may be, and a test that broke what it was
   testing would be worse than none.
-* **Результаты** — a table of what was collected, and the same data as a file:
-  CSV, XLSX, JSON, JSONL or a SQLite database. Four of the five stream; the
-  fifth cannot, because a SQLite file is finished by seeking back to its header.
+* **Результаты** — a table of what was collected, and the same data somewhere
+  else: CSV, XLSX, JSON, JSONL, a SQLite database, a PostgreSQL or MySQL dump
+  with a batched upsert, or a Google spreadsheet. One selection of fields gives
+  identical columns in every one of them. Everything streams except SQLite,
+  which cannot: the file is finished by seeking back to its header.
+
+  The spreadsheet needs an OAuth client, and it is yours rather than this
+  program's — nothing in this repository carries anyone's credentials. Make a
+  «Desktop app» client in your own Google Cloud project, put this panel's
+  address with `/google/callback` on the end into its redirect URIs, and paste
+  the id and secret into the settings beside the Telegram token.
 * **Telegram** — notifications, and a bot: `/jobs` lists what is saved with the
   progress of anything in flight, `/run` and `/stop` control it, `/track`, `/untrack` and
   `/tracked` put a product or a phrase under a job's watch from a link or an

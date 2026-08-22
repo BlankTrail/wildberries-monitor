@@ -105,7 +105,7 @@ func (s *Server) resultsHTML(r *http.Request) (string, error) {
 			`<div class="bt-alert bt-alert--neutral">Показаны первые %d строк. Полностью — выгрузкой.</div>`, tableRows)
 	}
 
-	b.WriteString(exportButtons(q))
+	b.WriteString(s.exportButtons(r, q))
 	b.WriteString(`</section>`)
 	return b.String(), nil
 }
@@ -191,7 +191,7 @@ var exportFormats = []struct{ key, label string }{
 	{"mysql", "MySQL"},
 }
 
-func exportButtons(q url.Values) string {
+func (s *Server) exportButtons(r *http.Request, q url.Values) string {
 	// The filter travels with the button, so what a person exports is what
 	// they are looking at. An export that quietly ignored the filter would be
 	// the worst kind of wrong: right in shape, wrong in content.
@@ -208,7 +208,18 @@ func exportButtons(q url.Values) string {
 		b.WriteString(`<a class="bt-btn bt-btn--secondary bt-btn--sm" href="` +
 			html.EscapeString(base+sep+"format="+f.key) + `">` + f.label + `</a>`)
 	}
-	b.WriteString(`</div>`)
+	// The spreadsheet is not a file, so it is not a link: it is an action that
+	// runs here and reports how many rows went. Shown only when one is
+	// connected — a button that answers «настройте сначала» is a button that
+	// exists to say no.
+	if s.Store.SettingOr(r.Context(), store.SettingGoogleRefresh, "") != "" {
+		b.WriteString(`<form class="bt-inline" data-post="` +
+			html.EscapeString("/results/sheets?"+q.Encode()) + `" data-target="#export-note">` +
+			`<button class="bt-btn bt-btn--secondary bt-btn--sm" type="submit">Google Таблицы</button>` +
+			info("Лист очищается и заполняется заново тем, что показано сейчас. "+
+				"Дозапись пачками по 500 строк.") + `</form>`)
+	}
+	b.WriteString(`</div><div id="export-note"></div>`)
 	return b.String()
 }
 

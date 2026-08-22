@@ -126,6 +126,7 @@ func (s *Server) writeSettingsForm(w http.ResponseWriter, r *http.Request, notic
   <span class="bt-form-hint">` + appHashHint + `</span>
 </details>`)
 
+	b.WriteString(s.googleFields(r))
 	b.WriteString(s.historyFields(r))
 	b.WriteString(s.quietFields(r))
 
@@ -198,6 +199,26 @@ func (s *Server) saveSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// The Google spreadsheet and the OAuth client that reaches it. The secret
+	// is skipped when the field came back empty, which is what a form that
+	// never re-renders it sends every time it is saved — writing that through
+	// would clear the secret whenever anybody touched an unrelated checkbox.
+	for _, f := range []struct{ key, field, typ string }{
+		{store.SettingGoogleClientID, "google_client_id", store.SettingText},
+		{store.SettingGoogleSecret, "google_client_secret", store.SettingSecret},
+		{store.SettingGoogleSheet, "google_spreadsheet", store.SettingText},
+		{store.SettingGoogleTab, "google_tab", store.SettingText},
+	} {
+		value := strings.TrimSpace(r.FormValue(f.field))
+		if f.typ == store.SettingSecret && value == "" {
+			continue
+		}
+		if err := s.Store.SetSetting(ctx, f.key, value, f.typ); err != nil {
+			http.Error(w, "settings: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+
 	for key, field := range map[string]string{
 		store.SettingQuietFrom: "quiet_from",
 		store.SettingQuietTo:   "quiet_to",
