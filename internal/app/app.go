@@ -69,6 +69,13 @@ type App struct {
 	Password  string
 	Generated bool
 
+	// Hints asks the site what people search for when they start typing a
+	// phrase — spec section 4.7's second step. A field rather than a call into
+	// the engine from the chain: it is the one decision about how a phrase
+	// gets expanded, it belongs in one place, and a chain that reached into
+	// the engine for it could not be tested without a proxy licence.
+	Hints func(ctx context.Context, query string) ([]string, error)
+
 	Log *log.Logger
 
 	// paused stops the background round without stopping the program. The tray
@@ -313,6 +320,13 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 		Log: func(format string, args ...any) { a.Log.Printf(format, args...) },
 	}
 	a.Scheduler = job.NewScheduler(a.Engine)
+	a.Hints = func(ctx context.Context, query string) ([]string, error) {
+		site, err := a.Engine.Service(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return site.Suggest(ctx, a.endpoints(), query, wb.AppWeb)
+	}
 	// Before the first tick, so a restart does not make every scheduled job due
 	// at once — see primeSchedule.
 	a.primeSchedule(ctx)

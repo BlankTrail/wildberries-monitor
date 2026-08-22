@@ -57,32 +57,43 @@ func (s *Store) PhraseChecks(ctx context.Context, profileID int64, limit int) ([
 			SELECT entity_id AS nm_id FROM profile_items
 			 WHERE profile_id = ? AND kind = 'product'
 		),
-		-- The profile's phrase list. nm_id = 0 is the phrase itself rather
-		-- than one of its gradings: a candidate belongs to the profile, and
-		-- CheckedPhrase writes the narrow rows beside it.
-		listed AS (
-			SELECT DISTINCT text FROM phrases
-			 WHERE profile_id = ? AND nm_id = 0
+		-- What is to be graded, and against which product. Two shapes, because
+		-- a phrase arrives two ways: made for one product out of its own card,
+		-- or listed for the profile as a whole — an uploaded file, a phrase
+		-- somebody typed. The first is graded for its own product and no
+		-- other; the second for every product there is.
+		--
+		-- dest = '' is what tells a candidate from a verdict. CheckedPhrase
+		-- writes the narrow rows with a region on them, and grading those
+		-- again would ask the site the same question once per answer it has
+		-- already given.
+		targets AS (
+			SELECT DISTINCT ph.text AS text, m.nm_id AS nm_id
+			  FROM phrases ph CROSS JOIN mine m
+			 WHERE ph.profile_id = ? AND ph.nm_id = 0
+			UNION
+			SELECT DISTINCT text, nm_id FROM phrases
+			 WHERE profile_id = ? AND nm_id != 0 AND dest = ''
 		),
 		walked AS (
 			SELECT p.query AS query, p.dest AS dest, MAX(p.ts) AS ts
 			  FROM positions p
-			  JOIN listed l ON l.text = p.query
+			  JOIN (SELECT DISTINCT text FROM targets) l ON l.text = p.query
 			 GROUP BY p.query, p.dest
 		)
-		SELECT w.query, w.dest, m.nm_id, COALESCE(MIN(p.rank), 0)
+		SELECT w.query, w.dest, t.nm_id, COALESCE(MIN(p.rank), 0)
 		  FROM walked w
-		  CROSS JOIN mine m
+		  JOIN targets t ON t.text = w.query
 		  LEFT JOIN positions p
-		    ON p.query = w.query AND p.dest = w.dest AND p.ts = w.ts AND p.nm_id = m.nm_id
+		    ON p.query = w.query AND p.dest = w.dest AND p.ts = w.ts AND p.nm_id = t.nm_id
 		  LEFT JOIN phrases done
 		    ON done.profile_id = ? AND done.text = w.query
-		   AND done.nm_id = m.nm_id AND done.dest = w.dest
-		 GROUP BY w.query, w.dest, m.nm_id
+		   AND done.nm_id = t.nm_id AND done.dest = w.dest
+		 GROUP BY w.query, w.dest, t.nm_id
 		HAVING MAX(COALESCE(done.checked_at, 0)) < w.ts
-		 ORDER BY w.query, w.dest, m.nm_id
+		 ORDER BY w.query, w.dest, t.nm_id
 		 LIMIT ?`,
-		profileID, profileID, profileID, limit)
+		profileID, profileID, profileID, profileID, limit)
 	if err != nil {
 		return nil, fmt.Errorf("store: phrase checks of profile %d: %w", profileID, err)
 	}

@@ -132,6 +132,13 @@ type Endpoints struct {
 	// the job.
 	PromoCatalog string `yaml:"promo_catalog"`
 
+	// Suggest is what the site's own search box offers while somebody types —
+	// spec section 4.7's «расширение через поисковые подсказки».
+	//
+	// The candidates made from a card are the phrases the seller wrote; these
+	// are the phrases buyers type. {query} is the phrase being expanded.
+	Suggest string `yaml:"suggest"`
+
 	// MainFeed is the run of goods the front page shows — spec section 4.6's
 	// type 10, as far as the site still has one.
 	//
@@ -185,6 +192,15 @@ const promoCatalogTemplate = "https://www.wildberries.ru/__internal/u-search/{sh
 	"?ab_testing=false&appType={app}&curr=rub&dest={dest}" +
 	"&hide_vflags=4294967296&lang=ru&{query}&sort=popular&spp=30"
 
+// suggestTemplate is one phrase's hints.
+//
+// Read off the site's own request, parameters and all. gender=common is what
+// the front end sends before anybody has told it otherwise, and it is what
+// this program wants: the suggestions everybody is shown rather than the ones
+// tuned to a visitor.
+const suggestTemplate = "https://www.wildberries.ru/__internal/u-suggests/suggests/api/v9/hint" +
+	"?ab_testing=false&gender=common&locale=ru&lang=ru&appType={app}&query={query}"
+
 // mainFeedTemplate is one page of the front page's feed.
 //
 // Read off the site's own request, parameters and all, for the reason
@@ -211,6 +227,7 @@ func DefaultEndpoints() Endpoints {
 		ProductShelf:  "https://static-basket-08.wbbasket.ru/vol154/content-recommendations/{nm}.json",
 		PickupPoint:   "https://www.wildberries.ru/webapi/spa/poo/{id}/show",
 		PickupPoints:  "https://static-basket-01.wbbasket.ru/vol0/data/all-poo-fr-v3.json",
+		Suggest:       suggestTemplate,
 		MainFeed:      mainFeedTemplate,
 		Promotions:    "https://static-basket-01.wbbasket.ru/vol0/data/banners-promo-ru-v2.json",
 		Promotion:     "https://static-basket-01.wbbasket.ru/vol0/data/promotions/{slug}-v3.json",
@@ -330,6 +347,9 @@ func (e Endpoints) Validate() error {
 	}
 	if strings.TrimSpace(e.PickupPoints) == "" {
 		return errors.New("pickup_points is empty")
+	}
+	if !strings.Contains(e.Suggest, "{query}") {
+		return errors.New("suggest template is missing the {query} placeholder")
 	}
 	if strings.TrimSpace(e.MainFeed) == "" {
 		return errors.New("main_feed is empty")

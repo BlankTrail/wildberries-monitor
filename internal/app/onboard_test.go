@@ -3,6 +3,8 @@
 package app
 
 import (
+	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -64,8 +66,19 @@ func TestProfilePlan_ANewProfileArrivesReadyToCollect(t *testing.T) {
 	if len(p.Fields) == 0 {
 		t.Error("у нового профиля не выбрано ни одного поля")
 	}
-	if p.MaxPages <= 0 {
-		t.Error("у нового профиля нет предела страниц")
+	// Zero pages, and that is the answer rather than a gap: a storefront ends
+	// on its own and the run extends the plan as it goes, so «до конца» is
+	// what somebody asking for their own assortment means.
+	if p.MaxPages != 0 {
+		t.Errorf("у нового профиля предел страниц %d — витрина должна собираться до конца", p.MaxPages)
+	}
+	if p.SuggestRounds <= 0 {
+		t.Error("у нового профиля выключено расширение фраз подсказками")
+	}
+	// Everything the build knows how to collect: the field that was not read
+	// in March is the one a comparison wants in June.
+	if len(p.Fields) != len(wb.Fields()) {
+		t.Errorf("полей %d из %d — профиль собирает не всё", len(p.Fields), len(wb.Fields()))
 	}
 	if p.Running() || p.Collected() {
 		t.Errorf("новый профиль сразу считается собранным или идущим: %+v", p)
@@ -570,5 +583,306 @@ func TestAdoptSellerProducts_IsSafeToRunAgain(t *testing.T) {
 	}
 	if again != 0 {
 		t.Errorf("повторный приём добавил %d товаров", again)
+	}
+}
+
+func TestProfilePhrases_AreKeptAgainstTheProductTheyWereMadeFrom(t *testing.T) {
+	// «Итоговый список нужно хранить с каждым товаром» — and the reason is
+	// what happens next: the search results collected under a phrase are what
+	// a comparison for that product is built out of, and a list that lost
+	// which product it was for could not be used to collect anything about one.
+	a := newApp(t)
+	ctx := t.Context()
+	configured(t, a)
+	collecting(t, a)
+	p := aProfile(t, a, 4242)
+
+	seedProfileProductOf(t, a, 100, 4242, "Платье летнее длинное")
+	seedProfileProductOf(t, a, 200, 4242, "Куртка зимняя мужская")
+
+	if err := a.StartProfileChain(ctx, p.ID); err != nil {
+		t.Fatalf("StartProfileChain: %v", err)
+	}
+	got, _ := a.Store.Profile(ctx, p.ID)
+	landed(t, a, got.CatalogJob)
+	a.advanceProfiles(ctx)
+
+	counts, err := a.Store.PhraseCounts(ctx, p.ID)
+	if err != nil {
+		t.Fatalf("PhraseCounts: %v", err)
+	}
+	if counts[100][0] == 0 || counts[200][0] == 0 {
+		t.Fatalf("фразы не привязаны к товарам: %v", counts)
+	}
+
+	// And they are the product's own words, not each other's.
+	all, err := a.Store.ProfilePhrases(ctx, p.ID, store.PhraseCandidate)
+	if err != nil {
+		t.Fatalf("ProfilePhrases: %v", err)
+	}
+	for _, ph := range all {
+		if ph.NmID == 0 {
+			t.Errorf("фраза %q не привязана ни к какому товару", ph.Text)
+		}
+		if ph.NmID == 200 && strings.Contains(ph.Text, "плать") {
+			t.Errorf("фраза %q оказалась под курткой", ph.Text)
+		}
+	}
+}
+
+func TestProfileSubjects_NarrowTheExpensiveHalf(t *testing.T) {
+	// The check is one request per phrase, and a seller with goods across nine
+	// categories usually cares about three. Nothing ticked means all of them;
+	// a choice means only those.
+	a := newApp(t)
+	ctx := t.Context()
+	configured(t, a)
+	collecting(t, a)
+	p := aProfile(t, a, 4242)
+
+	seedSubjectProduct(t, a, 100, 4242, "Платье летнее", 11)
+	seedSubjectProduct(t, a, 200, 4242, "Куртка зимняя", 22)
+	if _, err := a.Store.AdoptSellerProducts(ctx, p.ID, 4242); err != nil {
+		t.Fatalf("AdoptSellerProducts: %v", err)
+	}
+
+	subjects, err := a.Store.ProfileSubjects(ctx, p.ID)
+	if err != nil {
+		t.Fatalf("ProfileSubjects: %v", err)
+	}
+	if len(subjects) != 2 {
+		t.Fatalf("категорий %d, ожидались две: %+v", len(subjects), subjects)
+	}
+
+	p.Regions, p.Fields, p.Subjects = []string{"-1257786"}, []string{"nm_id"}, []int64{11}
+	if err := a.Store.SaveProfilePlan(ctx, p); err != nil {
+		t.Fatalf("SaveProfilePlan: %v", err)
+	}
+	if err := a.StartProfileChain(ctx, p.ID); err != nil {
+		t.Fatalf("StartProfileChain: %v", err)
+	}
+	got, _ := a.Store.Profile(ctx, p.ID)
+	landed(t, a, got.CatalogJob)
+	a.advanceProfiles(ctx)
+
+	counts, err := a.Store.PhraseCounts(ctx, p.ID)
+	if err != nil {
+		t.Fatalf("PhraseCounts: %v", err)
+	}
+	if counts[100][0] == 0 {
+		t.Error("у товара из выбранной категории нет фраз")
+	}
+	if counts[200][0] != 0 {
+		t.Errorf("у товара из невыбранной категории собрано %d фраз", counts[200][0])
+	}
+}
+
+func TestProfileCheck_KeepsTheWholePageSoThereAreCompetitors(t *testing.T) {
+	// A positions job walks the same pages and keeps only the named articles,
+	// so a profile checked that way ends with its own ranks and nothing to
+	// compare them against — the neighbour query comes back empty every time,
+	// which reads as a seller with no competitors.
+	a := newApp(t)
+	ctx := t.Context()
+	configured(t, a)
+	collecting(t, a)
+	p := aProfile(t, a, 4242)
+	seedProfileProductOf(t, a, 100, 4242, "Платье летнее")
+
+	if err := a.StartProfileChain(ctx, p.ID); err != nil {
+		t.Fatalf("StartProfileChain: %v", err)
+	}
+	got, _ := a.Store.Profile(ctx, p.ID)
+	landed(t, a, got.CatalogJob)
+	a.advanceProfiles(ctx)
+
+	after, _ := a.Store.Profile(ctx, p.ID)
+	if after.CheckJob == 0 {
+		t.Fatal("задание на проверку не создано")
+	}
+	made, err := job.Load(ctx, a.Store, after.CheckJob)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if made.Kind != job.KindPhrase {
+		t.Errorf("проверка идёт заданием %q — чужие товары со страниц не сохранятся, "+
+			"и конкурентов будет неоткуда взять", made.Kind)
+	}
+}
+
+// seedSubjectProduct puts one product of one seller in one category.
+func seedSubjectProduct(t *testing.T, a *App, nm, seller int64, name string, subject int64) {
+	t.Helper()
+	if _, err := a.Store.SaveProduct(t.Context(), wb.Product{
+		ID: nm, Name: name, Brand: "BrandCo", Dest: "-1257786", AppType: 1,
+		SupplierID: ptrTo(seller), SubjectID: ptrTo(subject), FetchedAt: time.Now(),
+		Sizes: []wb.Size{{Name: "M", PriceProduct: ptrTo(int64(100000))}},
+	}, ""); err != nil {
+		t.Fatalf("SaveProduct: %v", err)
+	}
+}
+
+func TestProfileExpand_AsksTheSiteAndKeepsWhatItOffers(t *testing.T) {
+	// Section 4.7's second step. The candidates made from a card are the
+	// phrases the seller wrote; the suggestions are the phrases buyers type,
+	// and the two are rarely the same words.
+	a := newApp(t)
+	ctx := t.Context()
+	configured(t, a)
+	collecting(t, a)
+
+	var asked []string
+	a.Hints = func(_ context.Context, query string) ([]string, error) {
+		asked = append(asked, query)
+		return []string{query + " женское", query + " больших размеров"}, nil
+	}
+
+	p := aProfile(t, a, 4242)
+	seedProfileProductOf(t, a, 100, 4242, "Платье летнее")
+	p.Regions, p.Fields, p.SuggestRounds = []string{"-1257786"}, []string{"nm_id"}, 1
+	if err := a.Store.SaveProfilePlan(ctx, p); err != nil {
+		t.Fatalf("SaveProfilePlan: %v", err)
+	}
+
+	if err := a.StartProfileChain(ctx, p.ID); err != nil {
+		t.Fatalf("StartProfileChain: %v", err)
+	}
+	got, _ := a.Store.Profile(ctx, p.ID)
+	landed(t, a, got.CatalogJob)
+	a.advanceProfiles(ctx)
+
+	if len(asked) == 0 {
+		t.Fatal("сайт о подсказках не спросили")
+	}
+	all, err := a.Store.ProfilePhrases(ctx, p.ID, store.PhraseCandidate)
+	if err != nil {
+		t.Fatalf("ProfilePhrases: %v", err)
+	}
+	suggested := 0
+	for _, ph := range all {
+		if ph.Origin != store.PhraseSuggested {
+			continue
+		}
+		suggested++
+		if ph.NmID != 100 {
+			t.Errorf("подсказка %q привязана к товару %d", ph.Text, ph.NmID)
+		}
+	}
+	if suggested == 0 {
+		t.Error("ни одна подсказка не сохранена")
+	}
+}
+
+func TestProfileExpand_AsksAboutOnePhraseOnce(t *testing.T) {
+	// A phrase made for four products is four rows and one question, and a
+	// rescan asks nothing it already has an answer to: the expansion is a
+	// request apiece and the same one twice buys nothing.
+	a := newApp(t)
+	ctx := t.Context()
+	configured(t, a)
+	collecting(t, a)
+
+	asked := map[string]int{}
+	a.Hints = func(_ context.Context, query string) ([]string, error) {
+		asked[query]++
+		return []string{query + " женское"}, nil
+	}
+
+	p := aProfile(t, a, 4242)
+	// Two products with the same name produce the same candidates.
+	seedProfileProductOf(t, a, 100, 4242, "Платье летнее")
+	seedProfileProductOf(t, a, 200, 4242, "Платье летнее")
+	p.Regions, p.Fields, p.SuggestRounds = []string{"-1257786"}, []string{"nm_id"}, 1
+	if err := a.Store.SaveProfilePlan(ctx, p); err != nil {
+		t.Fatalf("SaveProfilePlan: %v", err)
+	}
+	if err := a.StartProfileChain(ctx, p.ID); err != nil {
+		t.Fatalf("StartProfileChain: %v", err)
+	}
+	got, _ := a.Store.Profile(ctx, p.ID)
+	landed(t, a, got.CatalogJob)
+	a.advanceProfiles(ctx)
+
+	for query, n := range asked {
+		if n > 1 {
+			t.Errorf("о фразе %q спросили %d раз", query, n)
+		}
+	}
+	if len(asked) == 0 {
+		t.Fatal("ни о чём не спросили")
+	}
+}
+
+func TestProfileExpand_TheLimitIsHonoured(t *testing.T) {
+	// One request per phrase. Without a bound a seller with two thousand
+	// candidates spends two thousand requests before the check has started.
+	a := newApp(t)
+	ctx := t.Context()
+	configured(t, a)
+	collecting(t, a)
+
+	asked := 0
+	a.Hints = func(_ context.Context, query string) ([]string, error) {
+		asked++
+		return []string{query + " женское"}, nil
+	}
+
+	p := aProfile(t, a, 4242)
+	for i, name := range []string{
+		"Платье летнее длинное", "Куртка зимняя мужская",
+		"Ботинки кожаные осенние", "Рюкзак школьный городской",
+	} {
+		seedProfileProductOf(t, a, int64(100*(i+1)), 4242, name)
+	}
+	p.Regions, p.Fields = []string{"-1257786"}, []string{"nm_id"}
+	p.SuggestRounds, p.SuggestLimit = 1, 2
+	if err := a.Store.SaveProfilePlan(ctx, p); err != nil {
+		t.Fatalf("SaveProfilePlan: %v", err)
+	}
+	if err := a.StartProfileChain(ctx, p.ID); err != nil {
+		t.Fatalf("StartProfileChain: %v", err)
+	}
+	got, _ := a.Store.Profile(ctx, p.ID)
+	landed(t, a, got.CatalogJob)
+	a.advanceProfiles(ctx)
+
+	if asked > 2 {
+		t.Errorf("спрошено %d фраз при ограничении 2", asked)
+	}
+	if asked == 0 {
+		t.Error("ни о чём не спросили")
+	}
+}
+
+func TestProfileExpand_ZeroRoundsSwitchesItOff(t *testing.T) {
+	// A profile that wants only the seller's own words asks for this, and it
+	// must cost nothing rather than a little.
+	a := newApp(t)
+	ctx := t.Context()
+	configured(t, a)
+	collecting(t, a)
+
+	asked := 0
+	a.Hints = func(context.Context, string) ([]string, error) { asked++; return nil, nil }
+
+	p := aProfile(t, a, 4242)
+	seedProfileProductOf(t, a, 100, 4242, "Платье летнее")
+	p.Regions, p.Fields, p.SuggestRounds = []string{"-1257786"}, []string{"nm_id"}, 0
+	if err := a.Store.SaveProfilePlan(ctx, p); err != nil {
+		t.Fatalf("SaveProfilePlan: %v", err)
+	}
+	if err := a.StartProfileChain(ctx, p.ID); err != nil {
+		t.Fatalf("StartProfileChain: %v", err)
+	}
+	got, _ := a.Store.Profile(ctx, p.ID)
+	landed(t, a, got.CatalogJob)
+	a.advanceProfiles(ctx)
+
+	if asked != 0 {
+		t.Errorf("при нуле кругов спрошено %d фраз", asked)
+	}
+	after, _ := a.Store.Profile(ctx, p.ID)
+	if after.Stage == store.StageFailed {
+		t.Errorf("выключенное расширение остановило цепочку: %s", after.Failure)
 	}
 }

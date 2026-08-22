@@ -110,3 +110,36 @@ func TestCandidates_AnEmptyCardProducesNothingRatherThanRubbish(t *testing.T) {
 		}
 	}
 }
+
+func TestClean_NormalisesWithoutRewriting(t *testing.T) {
+	// The suggestions are exactly what people type, so this normalises and
+	// refuses rather than edits. A phrase changed here would no longer be the
+	// phrase the site suggested, which is the whole reason to ask it.
+	for _, c := range []struct{ in, want string }{
+		{"платье летнее женское", "платье летнее женское"},
+		{"  платье   летнее  ", "платье летнее"},
+		{"", ""},
+		{"   ", ""},
+		// A key this program cannot spell is a phrase a resumed run would
+		// match against the wrong work.
+		{"платье|летнее", ""},
+	} {
+		if got := Clean(c.in); got != c.want {
+			t.Errorf("Clean(%q) = %q, ожидалось %q", c.in, got, c.want)
+		}
+	}
+}
+
+func TestClean_RefusesASentence(t *testing.T) {
+	// Past a certain length a search is a sentence: it returns the one product
+	// or nothing, and either way a request finds that out.
+	long := "платье летнее женское длинное нарядное вечернее в пол на выпускной"
+	if got := Clean(long); got != "" {
+		t.Errorf("Clean принял предложение из %d слов: %q", len(strings.Fields(long)), got)
+	}
+	// And the ceiling is above what the candidates themselves produce, so a
+	// suggestion that refines one of them is not thrown away.
+	if got := Clean("платье летнее женское больших размеров"); got == "" {
+		t.Error("уточнённая подсказка отвергнута как предложение")
+	}
+}

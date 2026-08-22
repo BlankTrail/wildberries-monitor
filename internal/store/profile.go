@@ -47,6 +47,10 @@ const (
 	// StagePhrases derives the candidate phrases. The one stage that costs no
 	// requests: the words come from cards already collected.
 	StagePhrases = "phrases"
+	// StageExpand asks the site's own search what people type instead of what
+	// the seller wrote. Section 4.7's second step, and the one that turns a
+	// list of the seller's own words into a list of real searches.
+	StageExpand = "expand"
 	// StageCheck takes the positions that turn candidates into working
 	// phrases. The expensive half of section 4.7's onboarding.
 	StageCheck = "check"
@@ -92,6 +96,19 @@ type ProfileRow struct {
 	PhrasesPerProduct int
 	PhraseProducts    int
 
+	// Subjects narrows the collection to some of the seller's own categories.
+	// Empty means all of them. A seller with four hundred goods across nine
+	// categories usually cares about three, and the expensive half of
+	// onboarding is priced per phrase.
+	Subjects []int64
+	// SuggestLimit is how many phrases go to the site's own search
+	// suggestions, and SuggestRounds how many times that is repeated on what
+	// came back. Zero on the limit is «сколько есть»; zero on the rounds
+	// switches the expansion off, which is what a profile that wants only the
+	// seller's own words asks for.
+	SuggestLimit  int
+	SuggestRounds int
+
 	// Schedule and Enabled are the rescan. A profile can keep its data
 	// without being refreshed, which is what a disabled schedule means.
 	Schedule string
@@ -127,17 +144,25 @@ func (p ProfileRow) Running() bool {
 // and reputation groups are a request per product each, which is a decision
 // with a price and belongs to the person, not to a default.
 func DefaultProfilePlan() ProfileRow {
+	// Every field this build knows how to collect. A profile exists to be
+	// compared against competitors later, by criteria nobody has chosen yet —
+	// and the field that was not collected in March is the one the comparison
+	// wants in June. The cheap groups ride on pages the walk pays for anyway;
+	// the card and the reputation groups are a request per product, which is
+	// real money and is why the screen lets them be switched off.
 	var fields []string
-	for _, g := range []wb.FieldGroup{wb.GroupBase, wb.GroupStock, wb.GroupDelivery} {
-		for _, f := range wb.FieldsOfGroup(g) {
-			fields = append(fields, f.Key)
-		}
+	for _, f := range wb.Fields() {
+		fields = append(fields, f.Key)
 	}
 	return ProfileRow{
 		Regions: []string{DefaultProfileRegion},
 		Fields:  fields,
-		// A storefront ends on its own; this is where to stop if it does not.
-		MaxPages: 20,
+		// Zero pages, not twenty: a storefront ends on its own and the run
+		// extends the plan as it goes, so this is «до конца» — which is what
+		// somebody asking for their own assortment means.
+		MaxPages: 0,
+		// One round of the site's own suggestions over every candidate.
+		SuggestRounds: 1,
 	}
 }
 
@@ -195,6 +220,7 @@ func (s *Store) Profiles(ctx context.Context) ([]ProfileRow, error) {
 		SELECT id, name, source_input, seller_id, created_at, updated_at,
 		       stage, stage_job, catalog_job, check_job, regions, fields, max_pages,
 		       phrases_per_product, phrase_products,
+		       subjects, suggest_limit, suggest_rounds,
 		       schedule, enabled, started_at, finished_at, failure
 		  FROM profiles ORDER BY id`)
 	if err != nil {
@@ -222,6 +248,7 @@ func (s *Store) Profile(ctx context.Context, id int64) (ProfileRow, error) {
 		SELECT id, name, source_input, seller_id, created_at, updated_at,
 		       stage, stage_job, catalog_job, check_job, regions, fields, max_pages,
 		       phrases_per_product, phrase_products,
+		       subjects, suggest_limit, suggest_rounds,
 		       schedule, enabled, started_at, finished_at, failure
 		  FROM profiles WHERE id = ?`, id))
 	if errors.Is(err, sql.ErrNoRows) {
@@ -239,11 +266,12 @@ func (s *Store) Profile(ctx context.Context, id int64) (ProfileRow, error) {
 // already there: one row is one row whatever table it came out of.
 func scanProfile(row scanner) (ProfileRow, error) {
 	var p ProfileRow
-	var regions, fields string
+	var regions, fields, subjects string
 	var enabled int64
 	if err := row.Scan(&p.ID, &p.Name, &p.SourceInput, &p.SellerID, &p.CreatedAt, &p.UpdatedAt,
 		&p.Stage, &p.StageJob, &p.CatalogJob, &p.CheckJob, &regions, &fields, &p.MaxPages,
 		&p.PhrasesPerProduct, &p.PhraseProducts,
+		&subjects, &p.SuggestLimit, &p.SuggestRounds,
 		&p.Schedule, &enabled, &p.StartedAt, &p.FinishedAt, &p.Failure); err != nil {
 		return ProfileRow{}, err
 	}
@@ -254,6 +282,7 @@ func scanProfile(row scanner) (ProfileRow, error) {
 	// products and the phrases over a settings field.
 	_ = json.Unmarshal([]byte(regions), &p.Regions)
 	_ = json.Unmarshal([]byte(fields), &p.Fields)
+	_ = json.Unmarshal([]byte(subjects), &p.Subjects)
 	return p, nil
 }
 
@@ -271,6 +300,10 @@ func (s *Store) SaveProfilePlan(ctx context.Context, p ProfileRow) error {
 	if err != nil {
 		return fmt.Errorf("store: profile plan %d: %w", p.ID, err)
 	}
+	subjects, err := json.Marshal(nonZero(p.Subjects))
+	if err != nil {
+		return fmt.Errorf("store: profile plan %d: %w", p.ID, err)
+	}
 	enabled := int64(0)
 	if p.Enabled {
 		enabled = 1
@@ -279,10 +312,12 @@ func (s *Store) SaveProfilePlan(ctx context.Context, p ProfileRow) error {
 		UPDATE profiles
 		   SET regions = ?, fields = ?, max_pages = ?,
 		       phrases_per_product = ?, phrase_products = ?,
+		       subjects = ?, suggest_limit = ?, suggest_rounds = ?,
 		       schedule = ?, enabled = ?, updated_at = ?
 		 WHERE id = ?`,
 		string(regions), string(fields), p.MaxPages,
 		max(p.PhrasesPerProduct, 0), max(p.PhraseProducts, 0),
+		string(subjects), max(p.SuggestLimit, 0), max(p.SuggestRounds, 0),
 		strings.TrimSpace(p.Schedule), enabled, s.now().UTC().Unix(), p.ID); err != nil {
 		return fmt.Errorf("store: profile plan %d: %w", p.ID, err)
 	}
@@ -344,6 +379,17 @@ func wrapProfile(id int64, err error) error {
 		return fmt.Errorf("store: profile %d: %w", id, err)
 	}
 	return nil
+}
+
+// nonZero drops the zeroes a form sends for a box nobody ticked.
+func nonZero(in []int64) []int64 {
+	out := make([]int64, 0, len(in))
+	for _, v := range in {
+		if v != 0 {
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 // nonEmptyStrings drops the blanks a form sends for a field nobody filled in.

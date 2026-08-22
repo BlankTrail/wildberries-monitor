@@ -156,3 +156,26 @@ func (s *Store) DeletePhrase(ctx context.Context, id int64) error {
 	}
 	return nil
 }
+
+// PhraseExpanded reports whether this phrase has already been sent to the
+// site's own suggestions.
+//
+// Asked by the text rather than by the row, because that is what a request is
+// made of: one phrase belonging to four products is four rows and one question,
+// and a rescan that asked it again would pay for an answer it already has.
+//
+// The mark is the presence of a suggested phrase that starts with this one —
+// which is what a suggestion is: the site offers refinements of what was typed.
+// A separate column would be another thing to keep in step with the rows it
+// describes.
+func (s *Store) PhraseExpanded(ctx context.Context, profileID int64, text string) (bool, error) {
+	var n int64
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM phrases
+		 WHERE profile_id = ? AND origin = ? AND text LIKE ? AND text != ?
+		 LIMIT 1`,
+		profileID, PhraseSuggested, text+"%", text).Scan(&n); err != nil {
+		return false, fmt.Errorf("store: phrase expanded %q: %w", text, err)
+	}
+	return n > 0, nil
+}

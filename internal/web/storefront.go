@@ -84,6 +84,14 @@ func (s *Server) storefrontTable(r *http.Request, p store.ProfileRow) string {
 			`Товаров пока нет. Они появятся, когда пройдёт сбор.</div>`
 	}
 
+	// The phrase list belongs to the product, so its size belongs in the row:
+	// «фраз 14, рабочих 3» is what a person reads down a storefront looking
+	// for the goods nobody finds.
+	counts, err := s.Store.PhraseCounts(ctx, p.ID)
+	if err != nil {
+		return alert("error", err.Error())
+	}
+
 	var b strings.Builder
 	b.WriteString(`<h4 class="bt-form-head">Товары` +
 		info("Последнее прочитанное по каждому товару. Полная таблица со всеми полями, "+
@@ -91,7 +99,8 @@ func (s *Server) storefrontTable(r *http.Request, p store.ProfileRow) string {
 	b.WriteString(`<div class="bt-table-wrap"><table class="bt-table"><thead><tr>` +
 		`<th class="bt-num">Артикул</th><th>Название</th><th>Бренд</th>` +
 		`<th class="bt-num">Цена</th><th class="bt-num">Остаток</th>` +
-		`<th class="bt-num">Рейтинг</th><th class="bt-num">Отзывов</th><th>Прочитано</th>` +
+		`<th class="bt-num">Рейтинг</th><th class="bt-num">Отзывов</th>` +
+		`<th class="bt-num">Фраз</th><th class="bt-num">Рабочих</th><th>Прочитано</th>` +
 		`</tr></thead><tbody>`)
 
 	shown := 0
@@ -104,12 +113,15 @@ func (s *Server) storefrontTable(r *http.Request, p store.ProfileRow) string {
 			break
 		}
 		shown++
+		n := counts[row.NmID]
 		fmt.Fprintf(&b, `<tr><td class="bt-num bt-mono">%d</td><td class="bt-cell-wrap">%s</td>`+
 			`<td>%s</td><td class="bt-num">%s</td><td class="bt-num">%s</td>`+
+			`<td class="bt-num">%s</td><td class="bt-num">%s</td>`+
 			`<td class="bt-num">%s</td><td class="bt-num">%s</td><td class="bt-mono">%s</td></tr>`,
 			row.NmID, html.EscapeString(row.Name), html.EscapeString(row.Brand),
 			moneyOrDash(row.PriceSale), intOrDash(row.TotalQuantity),
-			floatOrDash(row.Rating), intOrDash(row.Feedbacks), stamp(row.TS))
+			floatOrDash(row.Rating), intOrDash(row.Feedbacks),
+			countOrDash(n[0]), countOrDash(n[1]), stamp(row.TS))
 	}
 	b.WriteString(`</tbody></table></div>`)
 
@@ -179,6 +191,16 @@ func moneyOrDash(minor *int64) string {
 		return "—"
 	}
 	return fmt.Sprintf("%d,%02d", *minor/100, *minor%100)
+}
+
+// countOrDash keeps a zero out of a column where it would read as a fact: a
+// product whose phrases have not been derived yet has none, and «0» says the
+// derivation ran and found nothing.
+func countOrDash(n int) string {
+	if n == 0 {
+		return "—"
+	}
+	return strconv.Itoa(n)
 }
 
 func stamp(ts int64) string {

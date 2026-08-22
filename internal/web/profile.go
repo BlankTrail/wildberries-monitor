@@ -33,6 +33,11 @@ const (
 	profileRegion = "-1257786"
 	profilePages  = 20
 
+	// phrasesShown bounds the table. A seller with four hundred goods carries
+	// tens of thousands of phrases, and a page that drew all of them is one
+	// nobody can open — the counts under it are the answer anyway.
+	phrasesShown = 200
+
 	// profileCheckPages is how deep a phrase check looks before calling a
 	// phrase irrelevant. A hundred places is section 4.7's own default for
 	// «рабочая», and a hundred is what the first page of a walk holds.
@@ -112,7 +117,7 @@ func (s *Server) profileCard(r *http.Request, p store.ProfileRow) string {
 	b.WriteString(s.storefrontTable(r, p))
 	b.WriteString(s.phrasesHTML(r, p))
 	b.WriteString(s.competitorsHTML(r, p))
-	b.WriteString(s.profilePlanForm(p))
+	b.WriteString(s.profilePlanForm(r, p))
 	b.WriteString(`<div class="bt-form-actions">`)
 	if p.SellerID != nil && !p.Running() {
 		b.WriteString(action(fmt.Sprintf("/profile/scan?id=%d", p.ID), "#profile-body",
@@ -189,7 +194,7 @@ func (s *Server) chainState(r *http.Request, p store.ProfileRow) string {
 // the profile: a rescan has to ask the same question it was configured with,
 // and reading it back out of a job somebody edited elsewhere would let the
 // answer drift.
-func (s *Server) profilePlanForm(p store.ProfileRow) string {
+func (s *Server) profilePlanForm(r *http.Request, p store.ProfileRow) string {
 	var b strings.Builder
 	b.WriteString(`<h4 class="bt-form-head">Что собирать` +
 		info("Эти настройки — профиля, а не задания: по ним же пойдёт каждый повторный сбор.") +
@@ -204,9 +209,10 @@ func (s *Server) profilePlanForm(p store.ProfileRow) string {
 		"Коды dest через запятую. Каждый регион — отдельный проход: цены, остатки и места "+
 			"в выдаче у Wildberries свои для каждого. Справочник регионов — на вкладке «Задачи»."))
 	b.WriteString(field("Страниц витрины",
-		fmt.Sprintf(`<input class="bt-input" name="max_pages" type="number" min="1" value="%d">`,
-			orDefault(p.MaxPages, profilePages)),
-		"Витрина кончается сама; это предел на случай, если не кончится."))
+		fmt.Sprintf(`<input class="bt-input" name="max_pages" type="number" min="0" value="%d" placeholder="0">`,
+			p.MaxPages),
+		"0 — до конца витрины, сколько бы её ни было: обход продлевает себя сам, пока страницы "+
+			"не кончатся. Число — жёсткий предел, если ассортимент огромен, а нужен только верх."))
 	b.WriteString(field("Фраз на товар",
 		fmt.Sprintf(`<input class="bt-input" name="phrases_per_product" type="number" min="0" value="%d" placeholder="20">`,
 			p.PhrasesPerProduct),
@@ -216,6 +222,15 @@ func (s *Server) profilePlanForm(p store.ProfileRow) string {
 			p.PhraseProducts),
 		"С какого числа товаров собирать фразы. Проверка стоит один запрос на фразу, "+
 			"так что у большого ассортимента это и есть главная цена сбора."))
+	b.WriteString(field("Кругов подсказок",
+		fmt.Sprintf(`<input class="bt-input" name="suggest_rounds" type="number" min="0" value="%d">`,
+			p.SuggestRounds),
+		"Сколько раз расширять фразы подсказками поиска Wildberries. Первый круг спрашивает "+
+			"подсказки к фразам из карточек, второй — к тому, что нашлось. 0 — не расширять."))
+	b.WriteString(field("Фраз в подсказки",
+		fmt.Sprintf(`<input class="bt-input" name="suggest_limit" type="number" min="0" value="%d" placeholder="все">`,
+			p.SuggestLimit),
+		"Один запрос на фразу. 0 — спросить обо всех."))
 	b.WriteString(field("Пересобирать",
 		`<input class="bt-input bt-input--mono" name="schedule" value="`+
 			html.EscapeString(p.Schedule)+`" placeholder="every 24h">`,
@@ -227,6 +242,7 @@ func (s *Server) profilePlanForm(p store.ProfileRow) string {
 		`Расписание включено</label>` +
 		`<span class="bt-form-hint">Профиль можно держать без обновления — данные останутся.</span></div>`)
 
+	b.WriteString(s.subjectChecks(r, p))
 	b.WriteString(`<h5 class="bt-form-head">Поля</h5>`)
 	b.WriteString(profileFieldChecks(p.Fields))
 	b.WriteString(`<div class="bt-form-actions bt-form-actions--tight">` +
@@ -397,8 +413,13 @@ func (s *Server) saveProfilePlan(w http.ResponseWriter, r *http.Request) {
 	perProduct, _ := strconv.Atoi(strings.TrimSpace(r.PostFormValue("phrases_per_product")))
 	phraseProducts, _ := strconv.Atoi(strings.TrimSpace(r.PostFormValue("phrase_products")))
 
+	rounds, _ := strconv.Atoi(strings.TrimSpace(r.PostFormValue("suggest_rounds")))
+	suggestLimit, _ := strconv.Atoi(strings.TrimSpace(r.PostFormValue("suggest_limit")))
+
 	p.Regions, p.Fields, p.MaxPages = regions, fields, pages
 	p.PhrasesPerProduct, p.PhraseProducts = perProduct, phraseProducts
+	p.SuggestRounds, p.SuggestLimit = rounds, suggestLimit
+	p.Subjects = subjectIDs(r.PostForm["subjects"])
 	p.Schedule = strings.TrimSpace(r.PostFormValue("schedule"))
 	p.Enabled = r.PostFormValue("enabled") != ""
 	if p.Schedule != "" {
@@ -462,6 +483,18 @@ func (s *Server) phrasesHTML(r *http.Request, p store.ProfileRow) string {
 	if err != nil {
 		return `<div class="bt-alert bt-alert--error">` + html.EscapeString(err.Error()) + `</div>`
 	}
+	totals, err := s.Store.PhraseTotals(ctx, p.ID)
+	if err != nil {
+		return `<div class="bt-alert bt-alert--error">` + html.EscapeString(err.Error()) + `</div>`
+	}
+	// The list is bounded and the counts are not. A seller with four hundred
+	// goods carries tens of thousands of phrases, and a table of all of them is
+	// a page nobody can open — while «рабочих 227 из 26 000» is the whole
+	// answer in one line.
+	shown := phrases
+	if len(shown) > phrasesShown {
+		shown = shown[:phrasesShown]
+	}
 
 	var b strings.Builder
 	b.WriteString(`<h4 class="bt-form-head">Фразы` +
@@ -470,12 +503,13 @@ func (s *Server) phrasesHTML(r *http.Request, p store.ProfileRow) string {
 
 	if len(phrases) == 0 {
 		b.WriteString(`<div class="bt-alert bt-alert--neutral">Фраз пока нет. ` +
-			`«Подобрать» соберёт их из названий собранных товаров — это бесплатно, запросов не будет.</div>`)
+			`Они собираются из карточек товаров и расширяются подсказками поиска Wildberries — ` +
+			`это часть общего сбора.</div>`)
 	} else {
 		b.WriteString(`<div class="bt-table-wrap"><table class="bt-table"><thead><tr>` +
 			`<th>Фраза</th><th>Состояние</th><th>Откуда</th><th class="bt-num">Лучшее место</th><th></th>` +
 			`</tr></thead><tbody>`)
-		for _, ph := range phrases {
+		for _, ph := range shown {
 			rank := "—"
 			if ph.BestRank != nil {
 				rank = fmt.Sprint(*ph.BestRank)
@@ -486,6 +520,7 @@ func (s *Server) phrasesHTML(r *http.Request, p store.ProfileRow) string {
 				action(fmt.Sprintf("/profile/phrases/delete?id=%d", ph.ID), "#profile-body", "Убрать"))
 		}
 		b.WriteString(`</tbody></table></div>`)
+		b.WriteString(`<span class="bt-form-hint">` + html.EscapeString(phraseTotalsText(totals, len(shown))) + `</span>`)
 	}
 
 	b.WriteString(`<div class="bt-form-actions bt-form-actions--tight">`)
@@ -945,3 +980,78 @@ func profileIDFromQuery(w http.ResponseWriter, r *http.Request) (int64, bool) {
 // a neighbour. Twenty is the top of the list — the part that is an answer
 // rather than a copy of the page.
 const competitorsKept = 20
+
+// subjectChecks is the seller's own categories, with the sizes.
+//
+// The expensive half of onboarding is a request per phrase, and a seller with
+// four hundred goods across nine categories usually cares about three. Nothing
+// ticked means all of them, which is the honest default for a seller who has
+// two — and the counts are what make «эти три» an informed answer rather than
+// a guess about names.
+func (s *Server) subjectChecks(r *http.Request, p store.ProfileRow) string {
+	subjects, err := s.Store.ProfileSubjects(r.Context(), p.ID)
+	if err != nil {
+		return alert("error", err.Error())
+	}
+	if len(subjects) <= 1 {
+		// One category is not a choice. Drawn as a single ticked box it would
+		// be a control that can only be got wrong.
+		return ""
+	}
+
+	chosen := map[int64]bool{}
+	for _, id := range p.Subjects {
+		chosen[id] = true
+	}
+
+	var b strings.Builder
+	b.WriteString(`<h5 class="bt-form-head">Категории продавца` +
+		info("Ничего не отмечено — собираются все. Отметьте, чтобы фразы и проверка позиций "+
+			"шли только по нужным: это и есть главная цена сбора.") + `</h5>`)
+	b.WriteString(`<div class="bt-checks">`)
+	for _, sub := range subjects {
+		name := sub.Name
+		if name == "" {
+			// A product collected without the card's fields has no category
+			// name, only a number. Shown as the number rather than dropped: a
+			// category nobody can name is still one somebody may want.
+			name = "категория " + strconv.FormatInt(sub.ID, 10)
+			if sub.ID == 0 {
+				name = "без категории"
+			}
+		}
+		b.WriteString(`<label class="bt-checkbox"><input type="checkbox" name="subjects" value="` +
+			strconv.FormatInt(sub.ID, 10) + `"` + checkedIf(chosen[sub.ID]) + `> ` +
+			html.EscapeString(name) + `<span class="bt-dim"> ` + strconv.Itoa(sub.Count) + `</span></label>`)
+	}
+	b.WriteString(`</div>`)
+	return b.String()
+}
+
+// subjectIDs reads the ticked categories.
+func subjectIDs(values []string) []int64 {
+	var out []int64
+	for _, v := range values {
+		if id, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64); err == nil {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+// phraseTotalsText is the line under the phrase table: how many there are, and
+// how many of them the checking kept.
+//
+// Counted by text rather than by row, because a phrase made for forty products
+// is forty rows and one phrase — and «26 000 фраз» about a seller who has two
+// thousand would be a number nobody could act on.
+func phraseTotalsText(totals map[string]int, shown int) string {
+	all := totals[store.PhraseCandidate] + totals[store.PhraseWorking] + totals[store.PhraseIrrelevant]
+	out := fmt.Sprintf("Показаны %d. Всего фраз %d: рабочих %d, отложенных %d, ещё не проверено %d.",
+		shown, all, totals[store.PhraseWorking], totals[store.PhraseIrrelevant],
+		totals[store.PhraseCandidate])
+	if totals[store.PhraseWorking] == 0 && totals[store.PhraseIrrelevant] > 0 {
+		out += " Ни одна фраза не вывела товар в топ — проверьте порог ниже."
+	}
+	return out
+}

@@ -175,3 +175,29 @@ func isDigits(s string) bool {
 	}
 	return s != ""
 }
+
+// Clean turns one of the site's suggestions into a phrase worth a request.
+//
+// The suggestions come back as the search box would put them in — the spacing
+// is the box's, not a person's — and they are otherwise exactly what people
+// type, so this normalises and refuses rather than rewrites. A phrase edited
+// here would no longer be the phrase the site suggested, which is the whole
+// reason to ask it.
+func Clean(text string) string {
+	out := strings.Join(strings.Fields(text), " ")
+	if out == "" {
+		return ""
+	}
+	// Longer than a search is a sentence, and the same ceiling the candidates
+	// are made under: it either returns the one product or nothing, and either
+	// way a request finds that out.
+	if len(strings.Fields(out)) > maxWords+2 {
+		return ""
+	}
+	// A phrase this program cannot key an item on is a phrase a resumed run
+	// would match against the wrong work — see internal/job's keySep.
+	if strings.ContainsAny(out, "|") {
+		return ""
+	}
+	return out
+}

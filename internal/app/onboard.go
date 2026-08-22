@@ -164,6 +164,8 @@ func (a *App) stepProfileOnce(ctx context.Context, p store.ProfileRow) (store.Pr
 		err = a.profileCatalog(ctx, p)
 	case store.StagePhrases:
 		err = a.profilePhrases(ctx, p)
+	case store.StageExpand:
+		err = a.profileExpand(ctx, p)
 	case store.StageCheck:
 		err = a.profileCheck(ctx, p)
 	case store.StageRivals:
@@ -260,33 +262,52 @@ func (a *App) profilePhrases(ctx context.Context, p store.ProfileRow) error {
 		}
 	}
 
-	products, err := a.Store.ProfileItems(ctx, p.ID, store.ProfileProduct)
+	all, err := a.Store.ProfileItems(ctx, p.ID, store.ProfileProduct)
 	if err != nil {
 		return err
 	}
-	if len(products) == 0 {
+	if len(all) == 0 {
 		return fmt.Errorf("после сбора ассортимента в профиле нет товаров — витрина не прочиталась")
 	}
 
-	// The two bounds section 4.7 asks for. Zero on either means «сколько
-	// есть», which is right for a seller with fifty goods: the cost of getting
-	// this wrong is not a slow run, it is a check job of one request per
-	// candidate that nobody was shown the size of.
-	from := products
+	// The categories first, then the two bounds section 4.7 asks for. Zero on
+	// either bound means «сколько есть», which is right for a seller with
+	// fifty goods: the cost of getting this wrong is not a slow run, it is a
+	// check of one request per phrase that nobody was shown the size of.
+	from, err := a.Store.ProfileProductsIn(ctx, p.ID, p.Subjects)
+	if err != nil {
+		return err
+	}
 	if p.PhraseProducts > 0 && len(from) > p.PhraseProducts {
 		from = from[:p.PhraseProducts]
 	}
 
 	made := 0
-	for row, err := range a.Store.Products(ctx, store.ProductFilter{NmIDs: from, Latest: true}) {
-		if err != nil {
+	for _, nm := range from {
+		if err := ctx.Err(); err != nil {
 			return err
 		}
+		// The whole card rather than the title: section 4.7 asks for «из
+		// названия товара, характеристик, категории, бренда, назначения», and
+		// only the first two of those are on a search row. A profile that
+		// collects the content fields gets phrases about what the thing is
+		// rather than about what the seller called it.
+		src, err := a.Store.PhraseSourceOf(ctx, nm)
+		if err != nil {
+			a.Log.Printf("профиль %q: товар %d: %v", p.Name, nm, err)
+			continue
+		}
 		for _, text := range phrase.Candidates(phrase.Source{
-			Name: row.Name, Brand: row.Brand, MaxPerSource: p.PhrasesPerProduct,
+			Name: src.Name, Brand: src.Brand,
+			Subject: src.Subject, SubjectRoot: src.SubjectRoot, Options: src.Options,
+			MaxPerSource: p.PhrasesPerProduct,
 		}) {
+			// Kept against the product, not against the profile. The whole
+			// point of the list is that it is this product's: the search
+			// results collected under it are what a comparison for this
+			// product is later built out of.
 			if err := a.Store.SavePhrase(ctx, store.PhraseRow{
-				ProfileID: p.ID, Text: text,
+				ProfileID: p.ID, Text: text, NmID: nm,
 				State: store.PhraseCandidate, Origin: store.PhraseGenerated,
 			}); err != nil {
 				return err
@@ -295,10 +316,110 @@ func (a *App) profilePhrases(ctx context.Context, p store.ProfileRow) error {
 		}
 	}
 	a.Log.Printf("профиль %q: товаров %d, фразы собраны с %d из них, кандидатов %d",
-		p.Name, len(products), len(from), made)
-	// No job, so the next tick picks the chain straight up rather than waiting
-	// on anything.
+		p.Name, len(all), len(from), made)
+	// No job, so the chain carries straight on rather than waiting a tick.
+	return a.Store.SetProfileStage(ctx, p.ID, store.StageExpand, 0)
+}
+
+// profileExpand asks the site's own search what people type instead — spec
+// section 4.7's second step.
+//
+// The candidates made from a card are the phrases the seller wrote; the
+// suggestions are the phrases buyers type, and the two are rarely the same
+// words. «платье летнее» comes back as «платье летнее женское», «платье летнее
+// больших размеров», «платье летнее для девочки» — real searches, offered by
+// the site, none of them invented here.
+//
+// It costs one request per phrase expanded, which makes it the same kind of
+// decision the check is, so it takes the same kind of bound. Zero rounds
+// switches it off; zero on the limit means every candidate there is.
+func (a *App) profileExpand(ctx context.Context, p store.ProfileRow) error {
+	// No «if rounds <= 0» here: the loop below counts up to them and does not
+	// run at all when there are none, which is the same decision made once.
+	// What this does check is whether there is anything to ask with.
+	if a.Hints == nil {
+		return a.Store.SetProfileStage(ctx, p.ID, store.StageCheck, 0)
+	}
+
+	asked, added := 0, 0
+	// Round by round: the first expands what the cards produced, the second
+	// expands what the first found. Each round is read fresh, so a phrase that
+	// arrived in round one is a seed for round two and nothing is expanded
+	// twice — SavePhrase leaves a row that is already there.
+	for round := 1; round <= p.SuggestRounds; round++ {
+		seeds, err := a.Store.ProfilePhrases(ctx, p.ID, store.PhraseCandidate)
+		if err != nil {
+			return err
+		}
+		before := added
+		done := map[string]bool{}
+		for _, seed := range seeds {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if p.SuggestLimit > 0 && asked >= p.SuggestLimit {
+				break
+			}
+			// One request per phrase, not per row: a phrase made for four
+			// products is four rows and one question.
+			if done[seed.Text] || a.expandedAlready(ctx, p.ID, seed.Text) {
+				continue
+			}
+			done[seed.Text] = true
+			asked++
+
+			hints, err := a.Hints(ctx, seed.Text)
+			if err != nil {
+				// One phrase the site would not answer about is not a reason
+				// to abandon the rest — and neither is a proxy that is not
+				// configured: the candidates made from the cards are a usable
+				// list on their own, and throwing away a storefront walk over
+				// an expansion that improves it rather than makes it would be
+				// the expensive way to be strict.
+				a.Log.Printf("профиль %q: подсказки к %q: %v", p.Name, seed.Text, err)
+				continue
+			}
+			for _, hint := range hints {
+				text := phrase.Clean(hint)
+				if text == "" {
+					continue
+				}
+				// Kept against the same product the seed belonged to: a
+				// suggestion is a way of searching for that product, and a
+				// list that lost which product it was for could not be used
+				// to collect anything about one.
+				if err := a.Store.SavePhrase(ctx, store.PhraseRow{
+					ProfileID: p.ID, Text: text, NmID: seed.NmID,
+					State: store.PhraseCandidate, Origin: store.PhraseSuggested,
+				}); err != nil {
+					return err
+				}
+				added++
+			}
+		}
+		a.Log.Printf("профиль %q: расширение, круг %d — спрошено %d, добавлено %d",
+			p.Name, round, asked, added-before)
+		if added == before {
+			// A round that found nothing new will not find anything on the
+			// next one either: the seeds are the same phrases.
+			break
+		}
+	}
 	return a.Store.SetProfileStage(ctx, p.ID, store.StageCheck, 0)
+}
+
+// expandedAlready reports whether this phrase has already been sent to the
+// suggestions, whichever product it was for.
+//
+// The question is about the request, not about the row: expanding «платье
+// летнее» twice costs two requests and produces one answer.
+func (a *App) expandedAlready(ctx context.Context, profileID int64, text string) bool {
+	done, err := a.Store.PhraseExpanded(ctx, profileID, text)
+	if err != nil {
+		a.Log.Printf("профиль %d: %v", profileID, err)
+		return false
+	}
+	return done
 }
 
 // profileCheck takes the positions that turn candidates into working phrases.
@@ -334,10 +455,20 @@ func (a *App) profileCheck(ctx context.Context, p store.ProfileRow) error {
 		return a.Store.SetProfileStage(ctx, p.ID, store.StageRivals, 0)
 	}
 
+	// A phrase job rather than a positions one, and the difference is the
+	// whole competitive half of section 4.7. A positions job walks the same
+	// pages and keeps only the named articles — «чужие товары со страниц не
+	// сохраняются» — so a profile checked that way ends with its own ranks and
+	// nothing to compare them against, and the neighbour query, which reads
+	// who stood beside them, comes back empty every time.
+	//
+	// The same requests either way: one per phrase per page. What changes is
+	// how much of each page is kept, and keeping all of it is what «собрать
+	// всё, чтобы потом сравнивать» means.
 	j := job.Job{
 		ID:       p.CheckJob,
 		Name:     "профиль: проверка фраз " + p.Name,
-		Kind:     job.KindPositions,
+		Kind:     job.KindPhrase,
 		Phrases:  texts,
 		Articles: products,
 		Regions:  p.Regions,
