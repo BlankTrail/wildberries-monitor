@@ -97,6 +97,12 @@ type Server struct {
 	// silently never hears anything.
 	NotifyKinds func() []string
 
+	// Categories downloads the catalogue directory and stores it, returning how
+	// many nodes it holds. A field for the same reason the checks are: the
+	// fetch belongs to wb and the wiring to app, and this package's tests must
+	// not need the live CDN to render a picker.
+	Categories func(ctx context.Context) (int, error)
+
 	CheckTelegram func(ctx context.Context, token string) (username string, err error)
 	// TelegramRoute names the rung currently in use, for the settings screen.
 	TelegramRoute func() string
@@ -264,6 +270,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /jobs", s.auth(http.HandlerFunc(s.jobsPage)))
 	mux.Handle("POST /jobs", s.auth(http.HandlerFunc(s.saveJobHandler)))
 	mux.Handle("POST /jobs/estimate", s.auth(http.HandlerFunc(s.estimateHandler)))
+	mux.Handle("POST /jobs/categories", s.auth(http.HandlerFunc(s.refreshCategories)))
 	mux.Handle("POST /jobs/phrases", s.auth(http.HandlerFunc(s.uploadPhrases)))
 	mux.Handle("GET /jobs/detail", s.auth(http.HandlerFunc(s.jobDetail)))
 	mux.Handle("POST /jobs/run", s.auth(http.HandlerFunc(s.runJobHandler)))

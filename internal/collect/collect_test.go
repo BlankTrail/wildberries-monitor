@@ -716,3 +716,70 @@ func TestSearch_ARunWithNoJobBehindItLinksNothing(t *testing.T) {
 		t.Errorf("связь без задания записана: %v", jobs)
 	}
 }
+
+func TestCatalog_WalksTheNodeWithTheJobsQueryAndRecordsItsPlaces(t *testing.T) {
+	// Spec section 4.6's type 2. The site fills a category page through the
+	// search endpoint with a query its own directory publishes per node, so
+	// this is the phrase walk with a query that came from a directory — which
+	// is why it reuses everything rather than adding a second way to read a
+	// page.
+	site := &fakeSite{products: []wb.Product{product(100), product(200)}}
+	f, st := watching(t, site, job.KindCatalog)
+	f.Job.CategoryID = 8126
+	f.Job.CategoryQuery = "menu_v3_8126 блузка рубашка женская"
+
+	if _, err := f.Fetch(t.Context(), job.Item{Key: job.Key{
+		Kind: job.ItemCatalog, ID: 8126, Dest: "-1257786", AppType: 1, Page: 1,
+	}.String()}); err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+
+	// The request carries the directory's query, exactly as published.
+	if len(site.searches) != 1 || site.searches[0].Query != f.Job.CategoryQuery {
+		t.Fatalf("запрошено %+v", site.searches)
+	}
+	if got := savedIDs(t, st); !got[100] || !got[200] {
+		t.Errorf("товары узла не сохранены: %v", got)
+	}
+
+	// The places are recorded against the node rather than against WB's query
+	// string: the query is a sentence that can be reworded, the id is what the
+	// node is.
+	phrases, err := st.PositionPhrases(t.Context(), 100, "-1257786", 1)
+	if err != nil {
+		t.Fatalf("PositionPhrases: %v", err)
+	}
+	if len(phrases) != 1 || phrases[0] != "cat:8126" {
+		t.Fatalf("места записаны под %v", phrases)
+	}
+	if id, ok := CatalogNode(phrases[0]); !ok || id != 8126 {
+		t.Errorf("CatalogNode(%q) = %d, %v", phrases[0], id, ok)
+	}
+	if _, ok := CatalogNode("кроссовки"); ok {
+		t.Error("обычная фраза принята за категорию")
+	}
+}
+
+func TestCatalog_WithoutAQueryItRefusesBeforeSpendingARequest(t *testing.T) {
+	// An empty query asks the site for nothing and comes back as an empty
+	// category, which reads like a node that went quiet.
+	site := &fakeSite{products: []wb.Product{product(100)}}
+	f, _ := watching(t, site, job.KindCatalog)
+	f.Job.CategoryID = 8126
+
+	n, err := f.Fetch(t.Context(), job.Item{Key: job.Key{
+		Kind: job.ItemCatalog, ID: 8126, Dest: "-1257786", AppType: 1, Page: 1,
+	}.String()})
+	if err == nil {
+		t.Fatal("узел без запроса всё же запрошен")
+	}
+	if n != 0 {
+		t.Errorf("отказ до запроса стоил %d запросов", n)
+	}
+	if len(site.searches) != 0 {
+		t.Errorf("запрос всё же ушёл: %+v", site.searches)
+	}
+	if !strings.Contains(err.Error(), "выберите категорию") {
+		t.Errorf("причина = %v — не говорит, что делать", err)
+	}
+}

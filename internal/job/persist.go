@@ -42,6 +42,13 @@ type params struct {
 	// Input is what somebody pasted for a profile job, kept as they typed it.
 	Input string `json:"input,omitempty"`
 
+	// CategoryID and CategoryQuery are the catalogue node a catalogue job
+	// walks, and the query the site fills it with. Both stored, because the id
+	// is the node's identity and the query is what the request carries — see
+	// Job.CategoryQuery for why the query is copied rather than looked up.
+	CategoryID    int64  `json:"category_id,omitempty"`
+	CategoryQuery string `json:"category_query,omitempty"`
+
 	MaxPages int `json:"max_pages,omitempty"`
 }
 
@@ -64,6 +71,8 @@ func Save(ctx context.Context, s *store.Store, j Job) (int64, error) {
 		Articles:        j.Articles,
 		AppType:         j.AppType,
 		Input:           j.Input,
+		CategoryID:      j.CategoryID,
+		CategoryQuery:   j.CategoryQuery,
 		MaxPages:        j.MaxPages,
 	})
 	if err != nil {
@@ -134,6 +143,8 @@ func fromRow(row store.JobRow) (Job, error) {
 		AppType:         p.AppType,
 		Fields:          wb.Selection(fields),
 		Input:           p.Input,
+		CategoryID:      p.CategoryID,
+		CategoryQuery:   p.CategoryQuery,
 		MaxPages:        p.MaxPages,
 		Threads:         row.Threads,
 		Delay:           time.Duration(row.DelayMS) * time.Millisecond,

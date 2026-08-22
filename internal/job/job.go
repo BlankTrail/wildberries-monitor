@@ -53,6 +53,16 @@ const (
 	// answer it fills a database with other people's goods.
 	KindPositions Kind = "positions"
 
+	// KindCatalog walks one node of the site's own catalogue — spec section
+	// 4.6's type 2.
+	//
+	// The same requests a phrase job makes, and that is not a shortcut: the
+	// site fills a category page through the search endpoint, with a query of
+	// its own that the catalogue directory publishes per node. So this kind is
+	// a phrase job whose phrase is not a phrase, which is why it carries a
+	// category rather than one — see CategoryID.
+	KindCatalog Kind = "catalog"
+
 	// KindProfile turns what somebody pasted into «who I am» — spec section
 	// 4.7's entry point and section 4.6's type 11.
 	//
@@ -84,7 +94,7 @@ func Composable() []Kind {
 
 // Kinds lists every kind this build can run, in a stable order.
 func Kinds() []Kind {
-	return []Kind{KindPhrase, KindSeller, KindBrand, KindArticles, KindPhraseAds, KindPositions, KindProfile}
+	return []Kind{KindPhrase, KindCatalog, KindSeller, KindBrand, KindArticles, KindPhraseAds, KindPositions, KindProfile}
 }
 
 // Job is what to collect.
@@ -104,6 +114,25 @@ type Job struct {
 	SupplierID int64
 	BrandID    int64
 	Articles   []int64
+
+	// CategoryID is the catalogue node a KindCatalog job walks, and
+	// CategoryQuery is the query the site fills that node with.
+	//
+	// Both, because they answer different questions. The id is the node's
+	// identity: it is what the positions are recorded against and what the
+	// constructor re-picks to refresh the rest. The query is what the request
+	// carries, and it is copied out of the directory when the job is saved
+	// rather than looked up per run — the same trade PhraseListCount makes, for
+	// the same reason: a plan must be buildable without touching a table, and
+	// a directory that has not been refreshed in a month should not silently
+	// change what a saved job collects.
+	//
+	// A query that has gone stale is fixed by picking the category again. The
+	// symptom is visible rather than silent: WB's own query strings carry the
+	// node id, so a run whose results stop matching its category is one whose
+	// query no longer names it.
+	CategoryID    int64
+	CategoryQuery string
 
 	// PhraseListID points at an uploaded file of phrases instead of Phrases.
 	// The two are alternatives: a handful typed into the form travels in the
@@ -222,6 +251,17 @@ func (j Job) Validate() error {
 		// after a request costs a request to say what a glance says free.
 		if _, ok := wb.NmID(j.Input); !ok {
 			bad = append(bad, "profile: paste a card link or an article number")
+		}
+	case KindCatalog:
+		// The node and its query, because neither alone is a job: an id with
+		// no query cannot be requested, and a query with no id cannot be
+		// recorded against anything. Both come from the same pick, so a job
+		// missing either was not built by the constructor.
+		if j.CategoryID == 0 {
+			bad = append(bad, "no category: a catalogue job needs the node to walk")
+		}
+		if strings.TrimSpace(j.CategoryQuery) == "" {
+			bad = append(bad, "the category carries no search query, so this build cannot walk it")
 		}
 	case KindPositions:
 		// Both halves, because the question is a pair: this is «where does
@@ -369,6 +409,9 @@ func (j Job) Estimate(items int) Estimate {
 	switch j.Kind {
 	case KindPhrase, KindPositions:
 		e.Requests += pages * regions * max(phrases, 1)
+	case KindCatalog:
+		// One node, so no phrase multiplier: pages by regions and nothing else.
+		e.Requests += pages * regions
 	case KindSeller, KindBrand:
 		e.Requests += pages * regions
 	case KindArticles:

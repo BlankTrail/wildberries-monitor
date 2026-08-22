@@ -235,14 +235,18 @@ func TestEstimate_AFieldThatCostsNothingChangesNothing(t *testing.T) {
 }
 
 func TestKinds_AreOnlyTheOnesWithASource(t *testing.T) {
-	// The design lists fourteen job types. Seven of them name sources this
-	// build cannot fetch — a catalogue node, promotions, the main page's
-	// shelves, a product's recommendation shelves — and declaring one would
-	// let a user schedule a job that collects nothing, the same mistake the
-	// field catalogue refuses.
+	// The design lists fourteen job types. The ones absent here name sources
+	// this build cannot fetch — promotions, the main page's shelves, a
+	// product's recommendation shelves — and declaring one would let a user
+	// schedule a job that collects nothing, the same mistake the field
+	// catalogue refuses.
+	//
+	// The catalogue node stopped being one of them: the site fills a category
+	// page through the search endpoint this build already speaks, with a query
+	// its own directory publishes per node.
 	got := Kinds()
-	if len(got) != 7 {
-		t.Fatalf("Kinds() has %d entries, want 7", len(got))
+	if len(got) != 8 {
+		t.Fatalf("Kinds() has %d entries, want 8", len(got))
 	}
 	seen := map[Kind]bool{}
 	for _, k := range got {
@@ -351,5 +355,73 @@ func TestPositions_WalksTheSearchAndKnowsItsOwnSize(t *testing.T) {
 	}
 	if e.Requests < 16 {
 		t.Errorf("запросов в оценке %d — обход выдачи не посчитан", e.Requests)
+	}
+}
+
+func TestValidate_ACatalogueJobNeedsBothTheNodeAndItsQuery(t *testing.T) {
+	// Neither alone is a job: an id with no query cannot be requested, and a
+	// query with no id cannot be recorded against anything. Both come from the
+	// same pick, so a job missing either was not built by the constructor.
+	base := Job{
+		Kind: KindCatalog, Regions: []string{"-1257786"},
+		Fields: wb.Selection{"nm_id"}, MaxPages: 2,
+	}
+	if err := base.Validate(); err == nil {
+		t.Error("задание без категории принято")
+	}
+
+	noQuery := base
+	noQuery.CategoryID = 8126
+	if err := noQuery.Validate(); err == nil {
+		t.Error("категория без поискового запроса принята")
+	}
+
+	// And the other way round, which is the half that is easy to leave
+	// untested: a query with no node cannot be recorded against anything, so
+	// the positions it produced would belong to nobody.
+	noNode := base
+	noNode.CategoryQuery = "menu_v3_8126 блузка"
+	if err := noNode.Validate(); err == nil {
+		t.Error("запрос без категории принят")
+	}
+
+	good := base
+	good.CategoryID, good.CategoryQuery = 8126, "menu_v3_8126 блузка"
+	if err := good.Validate(); err != nil {
+		t.Errorf("Validate: %v", err)
+	}
+}
+
+func TestPlan_ACatalogueJobWalksPagesOfOneNodePerRegion(t *testing.T) {
+	// One node, so no phrase multiplier — pages by regions and nothing else.
+	// The key holds the node id rather than its query: the query is a sentence
+	// WB can reword, and a resumed run matching on it would treat a reworded
+	// category as a new one.
+	j := Job{
+		Kind: KindCatalog, CategoryID: 8126, CategoryQuery: "menu_v3_8126 блузка",
+		Regions: []string{"-1257786", "12358499"}, AppType: 1,
+		Fields: wb.Selection{"nm_id"}, MaxPages: 3,
+	}
+	plan, err := StaticPlanner{}.Plan(j)
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if len(plan) != 6 {
+		t.Fatalf("в плане %d позиций, ожидалось шесть — три страницы на два региона", len(plan))
+	}
+	k, err := ParseKey(plan[0].Key)
+	if err != nil {
+		t.Fatalf("ParseKey: %v", err)
+	}
+	if k.Kind != ItemCatalog || k.ID != 8126 || k.Page != 1 || k.Dest != "-1257786" {
+		t.Errorf("первый ключ = %+v", k)
+	}
+	if strings.Contains(plan[0].Key, "блузка") {
+		t.Errorf("ключ несёт запрос вместо узла: %q", plan[0].Key)
+	}
+
+	// And the estimate prices it as one walk rather than as one per phrase.
+	if got := j.Estimate(100).Requests; got != 6 {
+		t.Errorf("оценка = %d запросов, ожидалось шесть", got)
 	}
 }

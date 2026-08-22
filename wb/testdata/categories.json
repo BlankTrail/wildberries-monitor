@@ -1,0 +1,50 @@
+[
+ {
+  "id": 306,
+  "name": "Женщинам",
+  "url": "/catalog/zhenshchinam",
+  "shard": "blackhole",
+  "query": "cat=306",
+  "isDenyLink": true,
+  "childs": [
+   {
+    "id": 8126,
+    "parent": 306,
+    "name": "Блузки и рубашки",
+    "seo": "Женские блузки и рубашки",
+    "url": "/catalog/zhenshchinam/odezhda/bluzki-i-rubashki",
+    "shard": "bl_shirts",
+    "query": "cat=8126",
+    "searchQuery": "menu_v3_8126 блузка рубашка женская"
+   },
+   {
+    "id": 8127,
+    "parent": 306,
+    "name": "Брюки",
+    "seo": "Женские брюки",
+    "url": "/catalog/zhenshchinam/odezhda/bryuki-i-shorty",
+    "shard": "pants",
+    "query": "cat=8127",
+    "searchQuery": "menu_redirect_subject_v2_8127 женские брюки"
+   }
+  ]
+ },
+ {
+  "id": 250,
+  "name": "Школа",
+  "url": "/catalog/detyam/shkola",
+  "query": "kind=5;3;6&subject=1513;1;2;3;4;7;571;786;195;1598;3497;1605&ext=19646;27140;27527;72887;27147;27238;146286;27586;27536;27144;27145;72913;27535;27142;27241;27534;27141;27146;27239;27532;27537;27245;72912;27244;27143;26854;31133;462102;92256;27236;27138;27526;72888;72889;10577431;27139",
+  "isDenyLink": true,
+  "childs": [
+   {
+    "id": 130001,
+    "parent": 250,
+    "name": "Одежда для девочек",
+    "url": "/catalog/detyam/shkola/odezhda-dlya-devochek",
+    "shard": "school1",
+    "query": "cat=130001",
+    "isDenyLink": true
+   }
+  ]
+ }
+]

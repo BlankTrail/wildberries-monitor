@@ -26,6 +26,7 @@ import (
 	"github.com/BlankTrail/wildberries-monitor/internal/store"
 	"github.com/BlankTrail/wildberries-monitor/internal/telegram"
 	"github.com/BlankTrail/wildberries-monitor/internal/web"
+	"github.com/BlankTrail/wildberries-monitor/wb"
 )
 
 // Config is what the command line and the environment decide.
@@ -100,6 +101,22 @@ func (a *App) lifetime(ctx context.Context) context.Context {
 		return *p
 	}
 	return context.WithoutCancel(ctx)
+}
+
+// endpoints is the address registry this program is running with — the
+// built-in one, or whatever endpoints.yaml overrode it with.
+//
+// Read through the engine rather than kept twice: the engine is what a run
+// collects through, and two copies of the registry is two answers to «куда
+// этот процесс ходит» on the day one of them is edited.
+func (a *App) endpoints() wb.Endpoints {
+	if a.Engine != nil {
+		return a.Engine.Endpoints
+	}
+	// Before New has finished wiring, which nothing in the product reaches —
+	// the defaults are the honest answer rather than a zero registry that
+	// would fail with «categories is empty».
+	return wb.DefaultEndpoints()
 }
 
 // Pause stops or resumes the background round.
@@ -189,6 +206,17 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 			}
 			slices.Sort(kinds)
 			return kinds
+		},
+		// The catalogue directory: fetched from the CDN and stored, so the job
+		// constructor can offer three thousand nodes without a network call
+		// per keystroke. Wired here for the reason every other fetch is — web
+		// must not need the live site to render a picker.
+		Categories: func(ctx context.Context) (int, error) {
+			tree, err := wb.FetchCategories(ctx, http.DefaultClient, a.endpoints())
+			if err != nil {
+				return 0, err
+			}
+			return a.Store.SaveCategories(ctx, tree)
 		},
 		CheckBlankTrail: func(ctx context.Context, url, apiKey string) error {
 			client, err := blanktrail.NewClient(url, apiKey)

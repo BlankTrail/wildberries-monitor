@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/BlankTrail/wildberries-monitor/internal/events"
@@ -92,6 +93,8 @@ func (f *Fetcher) fetchKey(ctx context.Context, key job.Key) (int, error) {
 		return f.page(ctx, key)
 	case job.ItemListing:
 		return f.listing(ctx, key)
+	case job.ItemCatalog:
+		return f.catalog(ctx, key)
 	case job.ItemProduct:
 		return f.product(ctx, key)
 	case job.ItemProfile:
@@ -166,6 +169,84 @@ func (f *Fetcher) listing(ctx context.Context, key job.Key) (int, error) {
 
 	extra, err := f.enrich(ctx, env.Products, key)
 	return requests + extra, err
+}
+
+// catalog walks one page of one catalogue node — spec section 4.6's type 2.
+//
+// The site's own search endpoint, because that is how the site fills a category
+// page: the catalogue directory publishes a query per node and the browser
+// sends it exactly as a phrase. So this is the phrase walk with a query that
+// came from a directory instead of from a person — which is why it reuses
+// everything below it rather than adding a second way to read a page.
+//
+// The query is the job's rather than the key's. A key holds the node id, which
+// is what the node is; the query is a sentence WB can reword, and a resumed run
+// matching on it would treat a reworded category as a new one.
+func (f *Fetcher) catalog(ctx context.Context, key job.Key) (int, error) {
+	query := strings.TrimSpace(f.Job.CategoryQuery)
+	if query == "" {
+		// Refused before the request rather than after: an empty query asks
+		// the site for nothing and comes back as an empty category, which
+		// reads like a node that went quiet.
+		return 0, fmt.Errorf("collect: catalogue node %d: у задания нет поискового запроса категории — "+
+			"выберите категорию заново", key.ID)
+	}
+
+	env, err := f.Site.SearchPage(ctx, f.Eps, wb.SearchQuery{
+		Query: query, Dest: key.Dest, AppType: key.AppType, Page: key.Page,
+	})
+	if err != nil {
+		return 1, fmt.Errorf("collect: catalogue node %d page %d: %w", key.ID, key.Page, err)
+	}
+	requests := 1
+
+	// The place a product holds inside the node, recorded under the node's own
+	// identity rather than under WB's query string. Two reasons, and both are
+	// about what the row means a year later: the query is a sentence that can
+	// be reworded, and a position table keyed on it would silently start a new
+	// series when it is; and «место в категории 8126» is a fact somebody can
+	// look up, while «место по запросу menu_v3_8126 блузка рубашка женская» is
+	// one they have to decode.
+	//
+	// The prefix is what tells the two apart. A phrase somebody types is a
+	// phrase; anything beginning with catalogKey is a place in a catalogue
+	// node. A person who types exactly «cat:8126» into a phrase job would
+	// collide with it — vanishingly unlikely, and cheaper to say than to guard
+	// against with a column nothing else needs.
+	if _, err := f.Store.SaveSearchPage(ctx, env, catalogQueryKey(key.ID)); err != nil {
+		return requests, fmt.Errorf("collect: saving catalogue node %d page %d: %w", key.ID, key.Page, err)
+	}
+	if err := f.link(ctx, env.Products); err != nil {
+		return requests, err
+	}
+
+	extra, err := f.enrich(ctx, env.Products, key)
+	return requests + extra, err
+}
+
+// catalogPrefix marks a position recorded inside a catalogue node rather than
+// inside a search. See catalog above.
+const catalogPrefix = "cat:"
+
+// catalogQueryKey is the query column's value for a node's positions.
+func catalogQueryKey(id int64) string {
+	return catalogPrefix + strconv.FormatInt(id, 10)
+}
+
+// CatalogNode reports the node a position belongs to, and whether it is one at
+// all. The reading half of catalogQueryKey, exported because the screens that
+// draw a position history have to tell «место в категории» from «место по
+// фразе» — they are different sentences about different things.
+func CatalogNode(query string) (int64, bool) {
+	rest, ok := strings.CutPrefix(query, catalogPrefix)
+	if !ok {
+		return 0, false
+	}
+	id, err := strconv.ParseInt(rest, 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return id, true
 }
 
 // product fetches one product by article number.

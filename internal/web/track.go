@@ -3,6 +3,7 @@
 package web
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"html"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/BlankTrail/wildberries-monitor/internal/chart"
+	"github.com/BlankTrail/wildberries-monitor/internal/collect"
 	"github.com/BlankTrail/wildberries-monitor/internal/history"
 	"github.com/BlankTrail/wildberries-monitor/internal/store"
 	"github.com/BlankTrail/wildberries-monitor/wb"
@@ -191,7 +193,7 @@ func (s *Server) productTrackHTML(r *http.Request, nmID int64, days int) (string
 		if err != nil {
 			return "", err
 		}
-		b.WriteString(`<h5>` + html.EscapeString(phrase) + `</h5>`)
+		b.WriteString(`<h5>` + html.EscapeString(positionTitle(r.Context(), s.Store, phrase)) + `</h5>`)
 		if pf.Points == 0 {
 			b.WriteString(alert("neutral", "За выбранный срок замеров по этой фразе нет."))
 			continue
@@ -201,7 +203,7 @@ func (s *Server) productTrackHTML(r *http.Request, nmID int64, days int) (string
 			`</p>`)
 		b.WriteString(chartIMG(
 			fmt.Sprintf("/track/chart?nm=%d&days=%d&phrase=%s", nmID, days, url.QueryEscape(phrase)),
-			"график позиции по фразе "+phrase))
+			"график позиции: "+positionTitle(r.Context(), s.Store, phrase)))
 	}
 	return b.String(), nil
 }
@@ -336,4 +338,28 @@ func readAtText(ts int64) string {
 		return "—"
 	}
 	return time.Unix(ts, 0).Local().Format("02.01.2006 15:04")
+}
+
+// positionTitle names a position series the way it should be read.
+//
+// A rank in a catalogue node and a rank in a search are different sentences
+// about different things, and the positions table holds both — the node's under
+// a key of its own (see collect.CatalogNode). Drawn as a phrase, «cat:8126» is
+// something a person has to decode; drawn as its category, it is the thing they
+// picked.
+//
+// The name is looked up rather than stored beside the position: the directory
+// is a cache of somebody else's document, and a category WB renamed should read
+// under its new name rather than under the one it had on the day of the run.
+func positionTitle(ctx context.Context, st *store.Store, query string) string {
+	id, ok := collect.CatalogNode(query)
+	if !ok {
+		return query
+	}
+	if c, err := st.Category(ctx, id); err == nil {
+		return "категория: " + c.Title()
+	}
+	// The directory no longer carries it. The id is still what the series is
+	// about, and saying so beats printing a key nobody can read.
+	return fmt.Sprintf("категория %d (нет в справочнике)", id)
 }

@@ -86,6 +86,16 @@ type Endpoints struct {
 	// apptype are query parameters Endpoints.ShelvesURL appends — so a bare
 	// base address is all this field needs to hold.
 	Shelves string `yaml:"shelves"`
+
+	// Categories is the catalogue directory: the whole tree of nodes with the
+	// search query that fills each one. See category.go.
+	//
+	// A static file on the CDN rather than an API in the __internal family,
+	// which is why it is fetched without a worker port: it is a public
+	// document, the same for everybody, with no challenge in front of it.
+	// A field like the rest so that a path the site renames is one line in
+	// endpoints.yaml rather than a release.
+	Categories string `yaml:"categories"`
 }
 
 // searchTemplate is kept as one string, parameters and all, because the exact
@@ -112,6 +122,7 @@ func DefaultEndpoints() Endpoints {
 		SellerCatalog: "https://www.wildberries.ru/__internal/u-catalog/sellers/v4/catalog",
 		Duplicates:    "https://www.wildberries.ru/__internal/meta/duplicates/ru/common/v8/search",
 		Shelves:       "https://www.wildberries.ru/__internal/banners/shelfs/search",
+		Categories:    "https://static-basket-01.wbbasket.ru/vol0/data/main-menu-ru-ru-v3.json",
 	}
 }
 
@@ -211,6 +222,9 @@ func (e Endpoints) Validate() error {
 	}
 	if strings.TrimSpace(e.Shelves) == "" {
 		return errors.New("shelves is empty")
+	}
+	if strings.TrimSpace(e.Categories) == "" {
+		return errors.New("categories is empty")
 	}
 	return nil
 }

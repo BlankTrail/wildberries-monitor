@@ -38,6 +38,7 @@ import (
 // list of things a user can choose.
 var kindLabels = map[job.Kind]string{
 	job.KindPhrase:    "Поисковая выдача по фразе",
+	job.KindCatalog:   "Узел каталога",
 	job.KindSeller:    "Витрина продавца",
 	job.KindBrand:     "Товары бренда",
 	job.KindArticles:  "Список артикулов",
@@ -53,6 +54,7 @@ var kindLabels = map[job.Kind]string{
 // added without a card is a kind nobody can pick.
 var kindWhat = map[job.Kind]string{
 	job.KindPhrase:    "Страницы выдачи по каждой фразе: какие товары там стоят и на каком месте.",
+	job.KindCatalog:   "Категория целиком: что в ней стоит и на каком месте. Тем же запросом, которым сайт наполняет её страницу.",
 	job.KindSeller:    "Всё, что выставил один продавец — по его артикулу.",
 	job.KindBrand:     "Все товары бренда — по его идентификатору.",
 	job.KindArticles:  "Только перечисленные артикулы, без поиска.",
@@ -356,6 +358,8 @@ func (s *Server) constructorHTML(r *http.Request) (string, error) {
 			s.phraseListField(lists),
 		job.KindPhrase, job.KindPhraseAds, job.KindPositions))
 
+	b.WriteString(whenAny(s.categoryBox(r, ""), job.KindCatalog))
+
 	b.WriteString(whenAny(
 		field("Артикул продавца", `<input class="bt-input" name="supplier_id" type="number" min="1" data-estimate>`,
 			"Число из адреса витрины продавца."),
@@ -383,7 +387,7 @@ func (s *Server) constructorHTML(r *http.Request) (string, error) {
 	b.WriteString(whenAny(
 		field("Страниц выдачи", `<input class="bt-input" name="max_pages" type="number" min="1" value="5" data-estimate>`,
 			"Постраничная выдача сама не кончается, поэтому предел обязателен."),
-		job.KindPhrase, job.KindSeller, job.KindBrand, job.KindPositions))
+		job.KindPhrase, job.KindCatalog, job.KindSeller, job.KindBrand, job.KindPositions))
 	b.WriteString(`</div>`)
 
 	b.WriteString(`<h3 class="bt-form-head">Когда и как быстро</h3>`)
@@ -660,11 +664,20 @@ func (s *Server) jobFromForm(r *http.Request) (job.Job, error) {
 		j.BrandID = atoi64(f.Get("brand_id"))
 	case job.KindArticles:
 		j.Articles = articleNumbers(f.Get("articles"))
+	case job.KindCatalog:
+		// The node and the query it is walked with, both read now: a job has
+		// to be saved with what it will ask for, and a directory refreshed a
+		// month later must not silently change what a saved job collects.
+		c, err := s.categoryOf(r, atoi64(f.Get("category_id")))
+		if err != nil {
+			return job.Job{}, err
+		}
+		j.CategoryID, j.CategoryQuery = c.ID, c.SearchQuery
 	}
 	// Paging bounds a walk that has pages. The article and advert kinds have
 	// none, and a page count stored against them is a number no run reads.
 	switch j.Kind {
-	case job.KindPhrase, job.KindSeller, job.KindBrand, job.KindPositions:
+	case job.KindPhrase, job.KindCatalog, job.KindSeller, job.KindBrand, job.KindPositions:
 		j.MaxPages = int(atoi64(f.Get("max_pages")))
 	}
 

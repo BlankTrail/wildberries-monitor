@@ -454,6 +454,9 @@ func TestConstructor_ShowsOnlyTheFieldsTheChosenKindUses(t *testing.T) {
 	// them belonging to a kind the user did not pick. Each parameter now
 	// declares whose it is, and app.js follows the picker.
 	srv := newServer(t)
+	// A directory to pick from, or the catalogue field is the sentence that
+	// says there is none — which is a different claim than the one under test.
+	seedCategories(t, srv)
 	body := get(t, srv, "/jobs", "correct horse").Body.String()
 
 	if !strings.Contains(body, `data-switch="kind"`) {
@@ -474,7 +477,8 @@ func TestConstructor_ShowsOnlyTheFieldsTheChosenKindUses(t *testing.T) {
 		// Positions is the one kind that is a pair: which products, and which
 		// searches to look for them in.
 		{"articles", []job.Kind{job.KindArticles, job.KindPositions}},
-		{"max_pages", []job.Kind{job.KindPhrase, job.KindSeller, job.KindBrand, job.KindPositions}},
+		{"category_id", []job.Kind{job.KindCatalog}},
+		{"max_pages", []job.Kind{job.KindPhrase, job.KindCatalog, job.KindSeller, job.KindBrand, job.KindPositions}},
 	} {
 		group := groupAround(body, `name="`+c.name+`"`)
 		if group == "" {
