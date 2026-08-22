@@ -78,11 +78,20 @@ check passes.
   how the last one ended and when, and buttons to start, stop, switch the
   schedule off and delete. Deleting takes the job and its runs and leaves what
   they collected — that is data about the site, not about the job. Below it,
-  build a collection job: what to enumerate (a phrase, a seller,
-  a brand, a list of article numbers, the paid placements for a phrase), which
-  of 38 fields to collect, over which regions and for which audience. The
+  build a collection job: what to enumerate — a phrase, a catalogue node, a
+  seller, a brand, a list of article numbers, the places those articles hold on
+  a list of phrases, the paid placements for a phrase, the goods in a promotion,
+  the front page's own feed, or the row a seller hangs under their own card —
+  which of 38 fields to collect, over which regions and for which audience. The
   screen prices the job in requests before you start it, and says which of its
   numbers is a guess.
+* **Регионы** — every price, stock figure and rank on this site is regional, and
+  the region travels as a bare code Wildberries publishes no directory of. So
+  the directory is built out of the site's own delivery points: pick a region,
+  a settlement in it, and a point in that — or take every point in a town, one
+  in the middle of it, or all eighty-five regional capitals at once. The code is
+  asked for once per point and kept, and every row says how much of a choice is
+  already paid for before it is made.
 * **Отслеживание** — what has been collected, and the two charts of it: the
   discounted price and the search position for every phrase the product has
   been ranked for. Drawn on request and never written to disk, without a
