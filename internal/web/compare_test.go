@@ -58,7 +58,7 @@ func TestCompare_RecomputesFromWhatWasCollected(t *testing.T) {
 	if err := srv.Store.AddProfileItem(ctx, id, store.ProfileProduct, 100); err != nil {
 		t.Fatalf("AddProfileItem: %v", err)
 	}
-	if err := srv.Store.CheckedPhrase(ctx, id, "платье", 100, "-1257786", 8, 100); err != nil {
+	if _, err := srv.Store.CheckedPhrase(ctx, id, "платье", 100, "-1257786", 8, 100); err != nil {
 		t.Fatalf("CheckedPhrase: %v", err)
 	}
 
@@ -119,7 +119,7 @@ func TestCompare_TheMedianIsOfTheTopRatherThanOfThePage(t *testing.T) {
 	if err := srv.Store.AddProfileItem(ctx, id, store.ProfileProduct, 100); err != nil {
 		t.Fatalf("AddProfileItem: %v", err)
 	}
-	if err := srv.Store.CheckedPhrase(ctx, id, "платье", 100, "-1257786", 50, 100); err != nil {
+	if _, err := srv.Store.CheckedPhrase(ctx, id, "платье", 100, "-1257786", 50, 100); err != nil {
 		t.Fatalf("CheckedPhrase: %v", err)
 	}
 
@@ -162,7 +162,7 @@ func TestCompare_APinnedRivalGetsItsOwnRow(t *testing.T) {
 	if err := srv.Store.AddProfileItem(ctx, id, store.ProfileProduct, 100); err != nil {
 		t.Fatalf("AddProfileItem: %v", err)
 	}
-	if err := srv.Store.CheckedPhrase(ctx, id, "платье", 100, "-1257786", 8, 100); err != nil {
+	if _, err := srv.Store.CheckedPhrase(ctx, id, "платье", 100, "-1257786", 8, 100); err != nil {
 		t.Fatalf("CheckedPhrase: %v", err)
 	}
 	if err := srv.Store.MarkCompetitor(ctx, id, store.CompetitorProduct, 200, true, false); err != nil {
@@ -227,7 +227,7 @@ func TestCompare_WithNothingCollectedSaysSoRatherThanShowingZeroes(t *testing.T)
 	if err := srv.Store.AddProfileItem(ctx, id, store.ProfileProduct, 100); err != nil {
 		t.Fatalf("AddProfileItem: %v", err)
 	}
-	if err := srv.Store.CheckedPhrase(ctx, id, "платье", 100, "-1257786", 8, 100); err != nil {
+	if _, err := srv.Store.CheckedPhrase(ctx, id, "платье", 100, "-1257786", 8, 100); err != nil {
 		t.Fatalf("CheckedPhrase: %v", err)
 	}
 

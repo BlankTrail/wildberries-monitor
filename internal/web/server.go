@@ -250,6 +250,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /profile/delete", s.auth(http.HandlerFunc(s.deleteProfile)))
 	mux.Handle("POST /profile/phrases", s.auth(http.HandlerFunc(s.makePhrases)))
 	mux.Handle("POST /profile/phrases/check", s.auth(http.HandlerFunc(s.checkPhrases)))
+	mux.Handle("POST /profile/phrases/top", s.auth(http.HandlerFunc(s.setPhrasesTopN)))
 	mux.Handle("POST /profile/phrases/delete", s.auth(http.HandlerFunc(s.dropPhrase)))
 	mux.Handle("POST /profile/phrases/collect", s.auth(http.HandlerFunc(s.collectPhrasePages)))
 	mux.Handle("POST /profile/competitors", s.auth(http.HandlerFunc(s.findCompetitors)))

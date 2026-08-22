@@ -59,7 +59,7 @@ func TestProfilePhrases_CheckingDecidesWhetherItIsAWorkingOne(t *testing.T) {
 		{"платье", 340},
 		{"сарафан", 0}, // not found at all in the pages that were walked
 	} {
-		if err := s.CheckedPhrase(ctx, profile, c.text, 141504066, "-1257786", c.rank, topN); err != nil {
+		if _, err := s.CheckedPhrase(ctx, profile, c.text, 141504066, "-1257786", c.rank, topN); err != nil {
 			t.Fatalf("CheckedPhrase %q: %v", c.text, err)
 		}
 	}
@@ -109,7 +109,7 @@ func TestProfilePhrases_AreCheckedPerProductAndRegion(t *testing.T) {
 		{200, "-1257786", 900},
 		{100, "-2133463", 400},
 	} {
-		if err := s.CheckedPhrase(ctx, profile, "платье", c.nm, c.dest, c.rank, 100); err != nil {
+		if _, err := s.CheckedPhrase(ctx, profile, "платье", c.nm, c.dest, c.rank, 100); err != nil {
 			t.Fatalf("CheckedPhrase: %v", err)
 		}
 	}

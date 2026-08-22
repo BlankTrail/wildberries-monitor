@@ -505,6 +505,12 @@ func (a *App) Tick(ctx context.Context) {
 	// empty by construction.
 	a.detectChanges(ctx)
 
+	// And what a position walk collected becomes a verdict on the phrase that
+	// asked for it — spec section 4.7's fourth step. See phrases.go: until now
+	// nothing moved a phrase out of «кандидат», so the competitive environment,
+	// which is computed from working phrases alone, was empty by construction.
+	a.gradePhrases(ctx)
+
 	if a.Commands != nil && a.Bot.Token != "" {
 		if _, err := a.Commands.Poll(ctx); err != nil && ctx.Err() == nil {
 			a.Log.Printf("команды бота: %v", err)

@@ -233,7 +233,7 @@ func TestCompetitors_AreRecomputedFromWhatWasCollected(t *testing.T) {
 	if err := srv.Store.AddProfileItem(ctx, id, store.ProfileProduct, 100); err != nil {
 		t.Fatalf("AddProfileItem: %v", err)
 	}
-	if err := srv.Store.CheckedPhrase(ctx, id, "платье", 100, "-1257786", 5, 100); err != nil {
+	if _, err := srv.Store.CheckedPhrase(ctx, id, "платье", 100, "-1257786", 5, 100); err != nil {
 		t.Fatalf("CheckedPhrase: %v", err)
 	}
 
@@ -284,7 +284,7 @@ func TestCompetitors_TheSetIsTheTopOfTheListRatherThanThePage(t *testing.T) {
 	if err := srv.Store.AddProfileItem(ctx, id, store.ProfileProduct, 100); err != nil {
 		t.Fatalf("AddProfileItem: %v", err)
 	}
-	if err := srv.Store.CheckedPhrase(ctx, id, "платье", 100, "-1257786", 1, 100); err != nil {
+	if _, err := srv.Store.CheckedPhrase(ctx, id, "платье", 100, "-1257786", 1, 100); err != nil {
 		t.Fatalf("CheckedPhrase: %v", err)
 	}
 
@@ -357,7 +357,7 @@ func TestCompetitors_TheirPagesAreCollectedByAPhraseJob(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SaveProfile: %v", err)
 	}
-	if err := srv.Store.CheckedPhrase(ctx, id, "платье летнее", 100, "-1257786", 5, 100); err != nil {
+	if _, err := srv.Store.CheckedPhrase(ctx, id, "платье летнее", 100, "-1257786", 5, 100); err != nil {
 		t.Fatalf("CheckedPhrase: %v", err)
 	}
 

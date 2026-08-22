@@ -80,6 +80,16 @@ const (
 	// one pass, and a run interrupted halfway is picked up by the next one.
 	SettingChangesSeenUpTo = "notify.changes_seen_up_to"
 
+	// SettingPhrasesTopN is where the line between «рабочая» and «проверенная и
+	// нерелевантная» is drawn — spec section 4.7 names it and says it is a
+	// setting with a default of 100.
+	//
+	// A place rather than a page count, because a place is what the person is
+	// deciding: «я считаю себя найденным, если стою не ниже сотого». Moving it
+	// re-grades what has already been collected instead of costing a single
+	// request — see RegradePhrases.
+	SettingPhrasesTopN = "phrases.top_n"
+
 	// SettingLastMaintenance is when the history was last thinned and the file
 	// last rebuilt, as Unix seconds. Kept in settings rather than in a table of
 	// its own: it is one number, it is read once a minute, and a table for it

@@ -35,7 +35,7 @@ func TestNeighbours_AreWhoStandsBesideTheProfileInItsWorkingPhrases(t *testing.T
 		t.Fatalf("AddProfileItem: %v", err)
 	}
 	for _, text := range []string{"платье летнее", "платье в горошек"} {
-		if err := s.CheckedPhrase(ctx, profile, text, 100, "-1257786", 5, 100); err != nil {
+		if _, err := s.CheckedPhrase(ctx, profile, text, 100, "-1257786", 5, 100); err != nil {
 			t.Fatalf("CheckedPhrase: %v", err)
 		}
 	}
@@ -54,7 +54,7 @@ func TestNeighbours_AreWhoStandsBesideTheProfileInItsWorkingPhrases(t *testing.T
 	// A phrase that was checked and put aside is not a working phrase, and
 	// who stands in it is not a competitor: the whole point of checking was
 	// deciding which searches this product is actually in.
-	if err := s.CheckedPhrase(ctx, profile, "сарафан", 100, "-1257786", 900, 100); err != nil {
+	if _, err := s.CheckedPhrase(ctx, profile, "сарафан", 100, "-1257786", 900, 100); err != nil {
 		t.Fatalf("CheckedPhrase: %v", err)
 	}
 	standing(t, s, 100, "сарафан", "-1257786", 900, at)
@@ -98,7 +98,7 @@ func TestNeighbours_CountTheNewestReadingOnly(t *testing.T) {
 	if err := s.AddProfileItem(ctx, profile, ProfileProduct, 100); err != nil {
 		t.Fatalf("AddProfileItem: %v", err)
 	}
-	if err := s.CheckedPhrase(ctx, profile, "платье", 100, "-1257786", 5, 100); err != nil {
+	if _, err := s.CheckedPhrase(ctx, profile, "платье", 100, "-1257786", 5, 100); err != nil {
 		t.Fatalf("CheckedPhrase: %v", err)
 	}
 

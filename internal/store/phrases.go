@@ -81,7 +81,11 @@ func (s *Store) SavePhrase(ctx context.Context, p PhraseRow) error {
 // is where the line between «рабочая» and «проверенная и нерелевантная» is
 // drawn — passed in rather than fixed here, because section 4.7 says it is a
 // setting.
-func (s *Store) CheckedPhrase(ctx context.Context, profileID int64, text string, nmID int64, dest string, rank, topN int64) error {
+// The state it wrote comes back, so that a caller reporting «рабочих среди
+// них» reads the verdict rather than deriving it a second time from the same
+// rank — two places deciding one thing is how a threshold ends up meaning
+// something different in a log line than in the table.
+func (s *Store) CheckedPhrase(ctx context.Context, profileID int64, text string, nmID int64, dest string, rank, topN int64) (string, error) {
 	state := PhraseIrrelevant
 	if rank > 0 && rank <= topN {
 		state = PhraseWorking
@@ -105,9 +109,9 @@ func (s *Store) CheckedPhrase(ctx context.Context, profileID int64, text string,
 			best_rank = excluded.best_rank,
 			checked_at = excluded.checked_at`,
 		profileID, text, state, PhraseGenerated, nmID, dest, best, now, now); err != nil {
-		return fmt.Errorf("store: checked phrase %q: %w", text, err)
+		return "", fmt.Errorf("store: checked phrase %q: %w", text, err)
 	}
-	return nil
+	return state, nil
 }
 
 // ProfilePhrases lists a profile's phrases in a state, newest checks first.

@@ -3,6 +3,7 @@
 package web
 
 import (
+	"context"
 	"fmt"
 	"html"
 	"net/http"
@@ -286,7 +287,69 @@ func (s *Server) phrasesHTML(r *http.Request, p store.ProfileRow) string {
 		b.WriteString(action(fmt.Sprintf("/profile/phrases/check?id=%d", p.ID), "#profile-body", "Проверить позиции"))
 	}
 	b.WriteString(`</div>`)
+	b.WriteString(s.topNField(ctx))
 	return b.String()
+}
+
+// topNField is where the line between «рабочая» and «не подошла» is drawn.
+//
+// On this screen rather than in the settings, because it is only legible next
+// to the column it decides: the same phrase list re-reads itself as soon as
+// the number moves. And moving it costs nothing — the verdicts are recomputed
+// from places already collected, which is what the stored «лучшее место» is
+// for.
+func (s *Server) topNField(ctx context.Context) string {
+	return `<form class="bt-form-row" data-post="/profile/phrases/top" data-target="#profile-body">` +
+		field("Рабочей считать фразу с местом не ниже",
+			`<input class="bt-input bt-input--mono" name="top_n" type="number" min="1" `+
+				`inputmode="numeric" placeholder="`+strconv.Itoa(store.DefaultPhrasesTopN)+`" value="`+
+				html.EscapeString(s.Store.SettingOr(ctx, store.SettingPhrasesTopN, ""))+`">`,
+			"Пусто — по умолчанию первая сотня. Изменение пересуживает уже проверенные фразы "+
+				"по их лучшему месту, без единого нового запроса.") +
+		`<div class="bt-form-actions bt-form-actions--tight">` +
+		`<button class="bt-btn bt-btn--secondary bt-btn--sm" type="submit">Применить порог</button></div>` +
+		`</form>`
+}
+
+// setPhrasesTopN moves the threshold and re-grades on the spot.
+//
+// Re-graded here rather than left to the next tick: somebody who changes a
+// number and watches the list not change concludes the field does nothing.
+func (s *Server) setPhrasesTopN(w http.ResponseWriter, r *http.Request) {
+	if err := parseForm(r); err != nil {
+		http.Error(w, "profile: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	ctx := r.Context()
+	raw := strings.TrimSpace(r.PostFormValue("top_n"))
+	if raw != "" {
+		if n, err := strconv.ParseInt(raw, 10, 64); err != nil || n <= 0 {
+			s.profileFragment(w, r, alert("error", "Порог — это место в выдаче: целое число больше нуля."))
+			return
+		}
+	}
+	if err := s.Store.SetSetting(ctx, store.SettingPhrasesTopN, raw, store.SettingInt); err != nil {
+		s.profileFragment(w, r, alert("error", err.Error()))
+		return
+	}
+
+	topN := s.Store.PhrasesTopN(ctx)
+	moved := 0
+	profiles, err := s.Store.Profiles(ctx)
+	if err != nil {
+		s.profileFragment(w, r, alert("error", err.Error()))
+		return
+	}
+	for _, p := range profiles {
+		n, err := s.Store.RegradePhrases(ctx, p.ID, topN)
+		if err != nil {
+			s.profileFragment(w, r, alert("error", err.Error()))
+			return
+		}
+		moved += n
+	}
+	s.profileFragment(w, r, alert("success", fmt.Sprintf(
+		"Рабочей считается фраза с местом не ниже %d. Пересужено фраз: %d.", topN, moved)))
 }
 
 // phraseStateHTML says what checking decided, or that nothing has yet.
