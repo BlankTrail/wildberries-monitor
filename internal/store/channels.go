@@ -60,10 +60,39 @@ type ChannelRow struct {
 	// parse error — it is a list of proxies that all look dead.
 	DefaultScheme string
 
+	// Refresh is how often a list is read again while a run is going. Zero
+	// means DefaultChannelRefresh, which is what «не указано» has always meant
+	// here — a list nobody re-read would go stale silently, and that is the
+	// failure this exists to prevent rather than to allow.
+	//
+	// Only a list has one. A rotating proxy changes its address by being asked
+	// to, which is RotateURL above; a gateway and a direct exit have nothing to
+	// re-read.
+	Refresh time.Duration
+
 	Enabled bool
 
 	FirstSavedAt int64
 	LastSavedAt  int64
+}
+
+// DefaultChannelRefresh is how often a proxy list is read again when nobody
+// says.
+//
+// Half an hour. The list is somebody else's document and the only thing this
+// program can do about a stale one is ask again; twice an hour is nothing
+// beside the requests a run makes through it, and short enough that a list its
+// owner is repairing takes effect inside the same run rather than the next one.
+const DefaultChannelRefresh = 30 * time.Minute
+
+// RefreshOrDefault is the interval in force. The substitution of the default
+// for «не указано» is made here and nowhere else, so the screen that explains
+// it and the engine that obeys it cannot disagree about what zero means.
+func (c ChannelRow) RefreshOrDefault() time.Duration {
+	if c.Refresh <= 0 {
+		return DefaultChannelRefresh
+	}
+	return c.Refresh
 }
 
 // Channels lists every saved channel, oldest first.
@@ -74,7 +103,7 @@ type ChannelRow struct {
 func (s *Store) Channels(ctx context.Context) ([]ChannelRow, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, name, kind, source, rotate_url, rotate_min_interval_sec,
-		       default_scheme, enabled, created_at, updated_at
+		       refresh_sec, default_scheme, enabled, created_at, updated_at
 		FROM channels ORDER BY id`)
 	if err != nil {
 		return nil, fmt.Errorf("store: channels: %w", err)
@@ -99,7 +128,7 @@ func (s *Store) Channels(ctx context.Context) ([]ChannelRow, error) {
 func (s *Store) Channel(ctx context.Context, id int64) (ChannelRow, error) {
 	c, err := scanChannel(s.db.QueryRowContext(ctx, `
 		SELECT id, name, kind, source, rotate_url, rotate_min_interval_sec,
-		       default_scheme, enabled, created_at, updated_at
+		       refresh_sec, default_scheme, enabled, created_at, updated_at
 		FROM channels WHERE id = ?`, id))
 	if err != nil {
 		return ChannelRow{}, fmt.Errorf("store: channel %d: %w", id, err)
@@ -112,13 +141,14 @@ type scanner interface{ Scan(dest ...any) error }
 
 func scanChannel(row scanner) (ChannelRow, error) {
 	var c ChannelRow
-	var seconds int64
+	var seconds, refresh int64
 	var enabled int
 	if err := row.Scan(&c.ID, &c.Name, &c.Kind, &c.Source, &c.RotateURL, &seconds,
-		&c.DefaultScheme, &enabled, &c.FirstSavedAt, &c.LastSavedAt); err != nil {
+		&refresh, &c.DefaultScheme, &enabled, &c.FirstSavedAt, &c.LastSavedAt); err != nil {
 		return ChannelRow{}, err
 	}
 	c.RotateMinInterval = time.Duration(seconds) * time.Second
+	c.Refresh = time.Duration(refresh) * time.Second
 	c.Enabled = enabled != 0
 	return c, nil
 }
@@ -143,13 +173,15 @@ func (s *Store) SaveChannel(ctx context.Context, c ChannelRow) (int64, error) {
 		enabled = 1
 	}
 	seconds := int64(c.RotateMinInterval / time.Second)
+	refresh := int64(max(c.Refresh, 0) / time.Second)
 
 	if c.ID == 0 {
 		res, err := s.db.ExecContext(ctx, `
 			INSERT INTO channels (name, kind, source, rotate_url, rotate_min_interval_sec,
-			                      default_scheme, enabled, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			c.Name, c.Kind, c.Source, c.RotateURL, seconds, c.DefaultScheme, enabled, now, now)
+			                      refresh_sec, default_scheme, enabled, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			c.Name, c.Kind, c.Source, c.RotateURL, seconds, refresh,
+			c.DefaultScheme, enabled, now, now)
 		if err != nil {
 			return 0, fmt.Errorf("store: save channel: %w", err)
 		}
@@ -159,9 +191,10 @@ func (s *Store) SaveChannel(ctx context.Context, c ChannelRow) (int64, error) {
 	res, err := s.db.ExecContext(ctx, `
 		UPDATE channels
 		SET name = ?, kind = ?, source = ?, rotate_url = ?, rotate_min_interval_sec = ?,
-		    default_scheme = ?, enabled = ?, updated_at = ?
+		    refresh_sec = ?, default_scheme = ?, enabled = ?, updated_at = ?
 		WHERE id = ?`,
-		c.Name, c.Kind, c.Source, c.RotateURL, seconds, c.DefaultScheme, enabled, now, c.ID)
+		c.Name, c.Kind, c.Source, c.RotateURL, seconds, refresh,
+		c.DefaultScheme, enabled, now, c.ID)
 	if err != nil {
 		return 0, fmt.Errorf("store: save channel %d: %w", c.ID, err)
 	}

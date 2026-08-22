@@ -123,11 +123,11 @@ func sourceOf(row store.ChannelRow) blanktrail.Source {
 		DefaultScheme: row.DefaultScheme,
 		// Re-read while the run goes, which is what the screen promises beside
 		// the field: a list its owner is repairing takes effect without anybody
-		// coming back here to save anything. A quarter of an hour is four pulls
-		// an hour against a provider's list — nothing beside the requests a run
-		// makes through it — and short enough that a repair lands inside the
-		// same run rather than the next one.
-		Refresh: listRefresh,
+		// coming back here to save anything. How often is the channel's own
+		// setting now — it used to be a constant here, which meant the screen
+		// promised a re-read and never said when, and a provider that
+		// rate-limits pulls could not be accommodated at all.
+		Refresh: row.RefreshOrDefault(),
 	}
 }
 

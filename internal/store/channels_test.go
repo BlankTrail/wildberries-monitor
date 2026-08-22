@@ -330,3 +330,55 @@ func TestDeleteChannel_RemovesItAndForgivesOneThatIsAlreadyGone(t *testing.T) {
 		t.Errorf("повторное удаление: %v", err)
 	}
 }
+
+func TestChannelRefresh_SurvivesASaveAndDefaultsToHalfAnHour(t *testing.T) {
+	// It used to be a constant in the engine: the screen promised the list
+	// would be re-read and never said when, so a provider that rate-limits
+	// pulls could not be accommodated and a person repairing a list could not
+	// hurry it.
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	id, err := s.SaveChannel(ctx, ChannelRow{
+		Name: "список", Kind: ChannelList, Source: "https://provider.example/list.txt",
+		Refresh: 5 * time.Minute, Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("SaveChannel: %v", err)
+	}
+	got, err := s.Channel(ctx, id)
+	if err != nil {
+		t.Fatalf("Channel: %v", err)
+	}
+	if got.Refresh != 5*time.Minute {
+		t.Errorf("интервал = %v", got.Refresh)
+	}
+	if got.RefreshOrDefault() != 5*time.Minute {
+		t.Errorf("заданный интервал подменён умолчанием: %v", got.RefreshOrDefault())
+	}
+
+	// Nothing said means half an hour, and that substitution is made in one
+	// place so the screen and the engine cannot disagree about what zero is.
+	bare, err := s.SaveChannel(ctx, ChannelRow{
+		Name: "без интервала", Kind: ChannelList, Source: "/tmp/list.txt", Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("SaveChannel: %v", err)
+	}
+	row, err := s.Channel(ctx, bare)
+	if err != nil {
+		t.Fatalf("Channel: %v", err)
+	}
+	if row.Refresh != 0 {
+		t.Errorf("незаданный интервал сохранён как %v", row.Refresh)
+	}
+	if row.RefreshOrDefault() != DefaultChannelRefresh {
+		t.Errorf("умолчание = %v, ожидалось %v", row.RefreshOrDefault(), DefaultChannelRefresh)
+	}
+	// «Никогда» is not on offer: a list nobody re-read would go stale in
+	// silence, which is the failure this exists to prevent.
+	never := ChannelRow{Refresh: -time.Hour}
+	if never.RefreshOrDefault() != DefaultChannelRefresh {
+		t.Errorf("отрицательный интервал принят: %v", never.RefreshOrDefault())
+	}
+}

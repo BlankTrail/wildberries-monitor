@@ -1,0 +1,15 @@
+-- SPDX-License-Identifier: AGPL-3.0-or-later
+--
+-- How often a proxy list is re-read.
+--
+-- It was already re-read — a quarter of an hour, written into the engine as a
+-- constant — and that is exactly the shape of a decision somebody cannot see:
+-- the screen said the list would be picked up again and never said when, so a
+-- person with a provider that rate-limits pulls had no way to slow it down and
+-- a person repairing a list had no way to speed it up.
+--
+-- Seconds, like the rotating channel's own minimum interval beside it. Zero
+-- means the default rather than «никогда»: a list nobody re-read would be a
+-- list that goes stale silently, which is the failure this column exists to
+-- make visible.
+ALTER TABLE channels ADD COLUMN refresh_sec INTEGER NOT NULL DEFAULT 0;

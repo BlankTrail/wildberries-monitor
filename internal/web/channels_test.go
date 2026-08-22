@@ -535,3 +535,63 @@ func TestSaveChannel_ARotatingProxyIsAnAddressAndNotAList(t *testing.T) {
 		t.Errorf("поле ротируемого не показывает, что от него хотят:\n%s", group)
 	}
 }
+
+func TestChannels_TheListSaysHowOftenItIsReadAgainAndKeepsIt(t *testing.T) {
+	// A list is somebody else's document. Read once and never again, a run that
+	// lasts a day is a run using yesterday's proxies — which is the failure the
+	// field prevents, and it prevents nothing unless what the form posts is the
+	// name the save reads.
+	srv := clearedChannels(t)
+
+	postForm(t, srv, "/channels", channelFormValues(map[string]string{
+		"refresh_min": "45",
+	}))
+
+	saved, err := srv.Store.Channels(context.Background())
+	if err != nil {
+		t.Fatalf("Channels: %v", err)
+	}
+	if len(saved) != 1 {
+		t.Fatalf("сохранено каналов: %d", len(saved))
+	}
+	if got := saved[0].Refresh; got != 45*time.Minute {
+		t.Errorf("перечитывание = %v, ожидалось 45 минут", got)
+	}
+	if got := saved[0].RefreshOrDefault(); got != 45*time.Minute {
+		t.Errorf("в силе %v, а сохранено 45 минут", got)
+	}
+
+	// And the screen says it back — a setting a person cannot see is one they
+	// cannot check.
+	body := get(t, srv, "/channels", "correct horse").Body.String()
+	if !strings.Contains(body, "перечитывать каждые 45 мин") {
+		t.Errorf("таблица не говорит, как часто читается список: %q", firstLines(body))
+	}
+}
+
+func TestChannels_ListLeftBlankIsReadAgainEveryHalfHour(t *testing.T) {
+	// «Не указано» is the state most installs stay in, so it has to mean the
+	// interval the screen promises beside the box and not «никогда».
+	srv := clearedChannels(t)
+	postForm(t, srv, "/channels", channelFormValues(map[string]string{"refresh_min": ""}))
+
+	saved, err := srv.Store.Channels(context.Background())
+	if err != nil {
+		t.Fatalf("Channels: %v", err)
+	}
+	if len(saved) != 1 {
+		t.Fatalf("сохранено каналов: %d", len(saved))
+	}
+	if got := saved[0].RefreshOrDefault(); got != 30*time.Minute {
+		t.Errorf("по умолчанию %v, ожидалось полчаса", got)
+	}
+	// The box says what leaving it empty means, in the place where it is left
+	// empty: a default nobody is told about is a default nobody relies on.
+	form := get(t, srv, "/channels", "correct horse").Body.String()
+	if !strings.Contains(form, `name="refresh_min" type="number" min="0" placeholder="30"`) {
+		t.Errorf("форма не называет интервал по умолчанию: %q", firstLines(form))
+	}
+	if !strings.Contains(form, "перечитывать каждые 30 мин") {
+		t.Errorf("таблица не называет интервал, который в силе: %q", firstLines(form))
+	}
+}

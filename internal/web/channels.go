@@ -154,10 +154,16 @@ func sourceText(c store.ChannelRow) string {
 		}
 		return out
 	case store.ChannelList:
+		// How often it is re-read belongs in the row, not only in the form: it
+		// is the half of «перечитывается сам» that a person cannot otherwise
+		// see, and it is the one they change when a provider starts refusing
+		// pulls.
+		out := maskPassword(c.Source)
 		if c.DefaultScheme != "" {
-			return maskPassword(c.Source) + ", по умолчанию " + c.DefaultScheme
+			out += ", по умолчанию " + c.DefaultScheme
 		}
-		return maskPassword(c.Source)
+		return out + fmt.Sprintf(", перечитывать каждые %d мин",
+			int(c.RefreshOrDefault()/time.Minute))
 	}
 	return maskPassword(c.Source)
 }
@@ -237,7 +243,7 @@ func (s *Server) channelForm(ctx context.Context) string {
 	b.WriteString(whenAny(
 		field("Список прокси",
 			`<input class="bt-input" id="channel-source" name="source" placeholder="C:\proxies\list.txt или https://provider.example/list.txt">`,
-			"Путь к файлу или адрес списка. Читается там, где лежит, и перечитывается сам."),
+			"Путь к файлу или адрес списка. Читается там, где лежит, и перечитывается сам — как часто, ниже."),
 		store.ChannelList))
 	b.WriteString(whenAny(
 		field("Прокси",
@@ -271,6 +277,19 @@ func (s *Server) channelForm(ctx context.Context) string {
 			`<input class="bt-input" name="rotate_url" placeholder="https://provider.example/rotate?key=...">`,
 			"Без неё это один адрес, который никогда не меняется."),
 		store.ChannelRotating))
+	// The list is somebody else's document, and the only thing this program can
+	// do about a stale one is ask again. How often used to be a constant in the
+	// engine: the screen promised a re-read and never said when, so a provider
+	// that rate-limits pulls could not be accommodated and a person repairing a
+	// list could not hurry it.
+	b.WriteString(whenAny(
+		field("Перечитывать, минут",
+			fmt.Sprintf(`<input class="bt-input" name="refresh_min" type="number" min="0" placeholder="%d">`,
+				int(store.DefaultChannelRefresh/time.Minute)),
+			fmt.Sprintf("Как часто читать список заново, пока идёт сбор. Пусто или 0 — каждые %d минут. "+
+				"Правка списка вступает в силу без пересохранения канала.",
+				int(store.DefaultChannelRefresh/time.Minute))),
+		store.ChannelList))
 	b.WriteString(whenAny(
 		field("Не чаще, секунд",
 			`<input class="bt-input" name="rotate_min_interval" type="number" min="0" placeholder="90">`,
@@ -314,6 +333,13 @@ func (s *Server) saveChannel(w http.ResponseWriter, r *http.Request) {
 	case store.ChannelList:
 		row.Source = source
 		row.DefaultScheme = r.PostFormValue("default_scheme")
+		// Minutes on the screen, because that is the unit somebody thinks in
+		// for «перечитывать»; seconds in the row, because that is the unit the
+		// column beside it already uses. Zero is left as zero and read as the
+		// default in one place — see ChannelRow.RefreshOrDefault.
+		if minutes, err := strconv.Atoi(strings.TrimSpace(r.PostFormValue("refresh_min"))); err == nil && minutes > 0 {
+			row.Refresh = time.Duration(minutes) * time.Minute
+		}
 	case store.ChannelRotating:
 		row.Source = source
 		row.DefaultScheme = r.PostFormValue("default_scheme")
