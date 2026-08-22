@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"iter"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -399,6 +400,11 @@ type DestUse struct {
 	Code     string
 	Readings int64 // how many readings came back with it
 	Jobs     int   // how many saved jobs collect for it
+	// Known says the region directory has a name for it — somebody chose this
+	// place in the picker and paid a request to learn its code. A code can be
+	// known and never used, which is the whole state a fresh picker leaves
+	// behind, and it is why the screen groups the three cases apart.
+	Known bool
 }
 
 // Dests lists the region codes this installation uses, the busiest first.
@@ -455,6 +461,26 @@ func (s *Store) Dests(ctx context.Context) ([]DestUse, error) {
 		}
 	}
 	if err := jobRows.Err(); err != nil {
+		return nil, fmt.Errorf("store: dests: %w", err)
+	}
+
+	// And the region directory: codes somebody chose in the picker and paid a
+	// request each to learn. Without this source they were a list of names on
+	// one screen that no job could select — the picker resolved eighty-five
+	// regional capitals and not one of them appeared where a region is chosen.
+	regionRows, err := s.db.QueryContext(ctx, `SELECT dest FROM regions`)
+	if err != nil {
+		return nil, fmt.Errorf("store: dests: %w", err)
+	}
+	defer regionRows.Close()
+	for regionRows.Next() {
+		var dest int64
+		if err := regionRows.Scan(&dest); err != nil {
+			return nil, fmt.Errorf("store: dests: %w", err)
+		}
+		use(strconv.FormatInt(dest, 10)).Known = true
+	}
+	if err := regionRows.Err(); err != nil {
 		return nil, fmt.Errorf("store: dests: %w", err)
 	}
 

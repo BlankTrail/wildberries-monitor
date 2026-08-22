@@ -1150,15 +1150,23 @@ func (s *Server) regionControl(r *http.Request) string {
 	b.WriteString(`<div class="bt-picklist" data-picklist="#job-regions">`)
 	b.WriteString(`<label class="bt-checkbox"><input type="checkbox" data-picklist-all> отметить все</label>`)
 
-	// Two groups, and the difference between them is real: one is what
-	// something already collects for, the other is a code that has been seen
-	// and may be a region nobody watches any more.
+	// Three groups, and the differences between them are real. One is what
+	// something already collects for. One is a code that turned up in
+	// collected data and may be a region nobody watches any more. And one is a
+	// place chosen in the picker above and not yet used anywhere — which is
+	// the whole state a fresh «все региональные центры» leaves behind, and
+	// which had nowhere to appear until the directory became a source here.
 	for _, group := range []struct {
 		Label string
 		Want  func(store.DestUse) bool
 	}{
 		{"В заданиях", func(d store.DestUse) bool { return d.Jobs > 0 }},
-		{"Встречалось в собранном", func(d store.DestUse) bool { return d.Jobs == 0 }},
+		{"Встречалось в собранном", func(d store.DestUse) bool {
+			return d.Jobs == 0 && d.Readings > 0
+		}},
+		{"Из справочника, ещё не использованы", func(d store.DestUse) bool {
+			return d.Jobs == 0 && d.Readings == 0
+		}},
 	} {
 		var rows strings.Builder
 		for _, d := range dests {

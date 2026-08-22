@@ -848,3 +848,38 @@ func TestCollection_CountsWhatIsThereAndWhenItLanded(t *testing.T) {
 		t.Errorf("последнее чтение %d, ожидалось %d", got.LastAt, want)
 	}
 }
+
+func TestDests_ARegionChosenInThePickerCanBeCollectedFor(t *testing.T) {
+	// The directory used not to be a source here, and the consequence was the
+	// whole point of the picker going nowhere: somebody could resolve
+	// eighty-five regional capitals, watch them appear in the directory, and
+	// find not one of them in the list where a job's region is chosen.
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	if _, err := s.SaveRegionFromPoint(ctx, wb.PickupPoint{
+		ID: 1, Dest: -1257786, Address: "г. Казань, ул Кремлевская д. 8",
+	}); err != nil {
+		t.Fatalf("SaveRegionFromPoint: %v", err)
+	}
+
+	dests, err := s.Dests(ctx)
+	if err != nil {
+		t.Fatalf("Dests: %v", err)
+	}
+	var got *DestUse
+	for i := range dests {
+		if dests[i].Code == "-1257786" {
+			got = &dests[i]
+		}
+	}
+	if got == nil {
+		t.Fatalf("код из справочника не попал в список: %+v", dests)
+	}
+	if !got.Known {
+		t.Error("код есть в справочнике, но не помечен как названный")
+	}
+	if got.Jobs != 0 || got.Readings != 0 {
+		t.Errorf("незадействованный код показан как используемый: %+v", got)
+	}
+}

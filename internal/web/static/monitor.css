@@ -961,3 +961,27 @@ dialog.bt-modal > #settings-body {
   flex-wrap: wrap;
   gap: var(--space-2);
 }
+
+/* A control inside a picker column has one column's width to live in, and the
+   design system's small input assumes a form field's. Without a floor the
+   preset's «центральный пункт» renders as «центры» and the search box as
+   «поиск по» — a control whose own label does not fit is one nobody can use
+   without clicking it to find out what it says. */
+.bt[data-bt-theme="dashboard"] .bt-form-grid--tight select.bt-input,
+.bt[data-bt-theme="dashboard"] .bt-col .bt-input {
+  min-width: 11rem;
+  flex: 1 1 auto;
+}
+
+/* Each preset is a choice and a question about it — «все региональные центры»,
+   and which point in each. Stacked, because side by side the question reads as
+   a separate control that happens to sit next to a button. */
+.bt[data-bt-theme="dashboard"] .bt-form-grid--tight > .bt-inline {
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--space-1);
+  padding: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card-2);
+}
