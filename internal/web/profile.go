@@ -120,6 +120,7 @@ func (s *Server) profileCard(r *http.Request, p store.ProfileRow) string {
 	b.WriteString(`</div>`)
 
 	b.WriteString(s.phrasesHTML(r, p))
+	b.WriteString(s.competitorsHTML(r, p))
 
 	// The storefront is a job rather than something this button does itself:
 	// it is an unknown number of requests through a licensed proxy, and the
@@ -439,3 +440,232 @@ func baseFields() wb.Selection {
 	}
 	return out
 }
+
+// competitorsHTML is spec section 4.7's competitive environment.
+//
+// The only thing this program can observe about a competitor is who appears
+// beside the profile's products, how often, and how close. That is what the
+// two numbers are, and the ranking is theirs alone — a name nobody recognises
+// that keeps standing two places above is a competitor whether or not anybody
+// would have listed it.
+func (s *Server) competitorsHTML(r *http.Request, p store.ProfileRow) string {
+	ctx := r.Context()
+	list, err := s.Store.Competitors(ctx, p.ID)
+	if err != nil {
+		return `<div class="bt-alert bt-alert--error">` + html.EscapeString(err.Error()) + `</div>`
+	}
+
+	var b strings.Builder
+	b.WriteString(`<h4 class="bt-form-head">Конкуренты` +
+		info("Кто стоял рядом в выдаче по рабочим фразам: в скольких фразах и на сколько мест выше или ниже. Закреплённые не выпадают при пересчёте.") +
+		`</h4>`)
+
+	if len(list) == 0 {
+		b.WriteString(`<div class="bt-alert bt-alert--neutral">Пока никого. ` +
+			`Нужны рабочие фразы и собранная по ним выдача — тогда «Пересчитать» найдёт соседей.</div>`)
+	} else {
+		b.WriteString(`<div class="bt-table-wrap"><table class="bt-table"><thead><tr>` +
+			`<th>Артикул</th><th class="bt-num">В скольких фразах</th><th class="bt-num">Разница мест</th>` +
+			`<th>Состояние</th><th></th></tr></thead><tbody>`)
+		for _, c := range list {
+			delta := "—"
+			if c.PositionDelta != nil {
+				delta = fmt.Sprintf("%+.1f", *c.PositionDelta)
+			}
+			state := `<span class="bt-badge bt-badge--neutral bt-badge--sm">по расчёту</span>`
+			switch {
+			case c.Excluded:
+				state = `<span class="bt-badge bt-badge--warning bt-badge--sm">исключён</span>`
+			case c.Pinned:
+				state = `<span class="bt-badge bt-badge--success bt-badge--sm">закреплён</span>`
+			}
+			fmt.Fprintf(&b, `<tr><td class="bt-code">%d</td><td class="bt-num">%d</td><td class="bt-num">%s</td><td>%s</td><td class="bt-row-actions">%s%s</td></tr>`,
+				c.EntityID, c.Adjacency, delta, state,
+				action(fmt.Sprintf("/profile/competitors/pin?id=%d&entity=%d&on=%t", p.ID, c.EntityID, !c.Pinned),
+					"#profile-body", pinLabel(c.Pinned)),
+				action(fmt.Sprintf("/profile/competitors/exclude?id=%d&entity=%d&on=%t", p.ID, c.EntityID, !c.Excluded),
+					"#profile-body", excludeLabel(c.Excluded)))
+		}
+		b.WriteString(`</tbody></table></div>`)
+	}
+
+	b.WriteString(`<div class="bt-form-actions bt-form-actions--tight">`)
+	b.WriteString(action(fmt.Sprintf("/profile/competitors?id=%d", p.ID), "#profile-body", "Пересчитать по собранному"))
+	b.WriteString(action(fmt.Sprintf("/profile/phrases/collect?id=%d", p.ID), "#profile-body", "Собрать выдачу по рабочим фразам"))
+	b.WriteString(`</div>`)
+	return b.String()
+}
+
+func pinLabel(pinned bool) string {
+	if pinned {
+		return "Открепить"
+	}
+	return "Закрепить"
+}
+
+func excludeLabel(excluded bool) string {
+	if excluded {
+		return "Вернуть"
+	}
+	return "Исключить"
+}
+
+// findCompetitors recomputes the set from what has been collected.
+//
+// No requests: the neighbours are in the position rows a phrase job already
+// wrote. What it needs is that those rows exist — which is what «Собрать
+// выдачу по рабочим фразам» is for.
+func (s *Server) findCompetitors(w http.ResponseWriter, r *http.Request) {
+	id, ok := profileIDFromQuery(w, r)
+	if !ok {
+		return
+	}
+	ctx := r.Context()
+
+	found, err := s.Store.Neighbours(ctx, id)
+	if err != nil {
+		http.Error(w, "profile: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if len(found) > competitorsKept {
+		// Bounded: a search page holds a hundred products, and every one of
+		// them is technically a neighbour. The top of the list is the answer;
+		// the tail is the page.
+		found = found[:competitorsKept]
+	}
+	if err := s.Store.SaveCompetitors(ctx, id, found); err != nil {
+		http.Error(w, "profile: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if len(found) == 0 {
+		s.profileFragment(w, r, alert("neutral",
+			"Соседей не нашлось. Нужны рабочие фразы и собранная по ним выдача — задание ниже."))
+		return
+	}
+	s.profileFragment(w, r, alert("success", fmt.Sprintf("Найдено соседей: %d.", len(found))))
+}
+
+// collectPhrasePages makes the job that fills in what the recompute reads.
+//
+// A phrase job rather than a position one: the neighbours are the other
+// products on the page, and a position job keeps only the watched articles —
+// which is exactly the right thing for checking a phrase and exactly the
+// wrong one for finding out who else was there.
+func (s *Server) collectPhrasePages(w http.ResponseWriter, r *http.Request) {
+	id, ok := profileIDFromQuery(w, r)
+	if !ok {
+		return
+	}
+	ctx := r.Context()
+
+	p, err := s.Store.Profile(ctx, id)
+	if err != nil {
+		http.Error(w, "profile: "+err.Error(), http.StatusNotFound)
+		return
+	}
+	working, err := s.Store.ProfilePhrases(ctx, id, store.PhraseWorking)
+	if err != nil {
+		http.Error(w, "profile: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if len(working) == 0 {
+		s.profileFragment(w, r, alert("neutral",
+			"Рабочих фраз пока нет: подберите фразы и проверьте позиции."))
+		return
+	}
+
+	seen := map[string]bool{}
+	var texts []string
+	for _, ph := range working {
+		if seen[ph.Text] {
+			continue
+		}
+		seen[ph.Text] = true
+		texts = append(texts, ph.Text)
+	}
+
+	jobID, err := job.Save(ctx, s.Store, job.Job{
+		Name:     "выдача по рабочим фразам: " + p.Name,
+		Kind:     job.KindPhrase,
+		Phrases:  texts,
+		Regions:  []string{profileRegion},
+		AppType:  1,
+		MaxPages: profileCheckPages,
+		Threads:  4,
+		Fields:   baseFields(),
+	})
+	if err != nil {
+		s.profileFragment(w, r, alert("error", err.Error()))
+		return
+	}
+	s.profileFragment(w, r, alert("success", fmt.Sprintf(
+		"Задание создано (№%d): %d рабочих фраз. Запустите его на вкладке «Задачи», потом пересчитайте конкурентов.",
+		jobID, len(texts))))
+}
+
+// markCompetitor is the hand edit section 4.7 asks for.
+func (s *Server) markCompetitor(w http.ResponseWriter, r *http.Request) {
+	id, ok := profileIDFromQuery(w, r)
+	if !ok {
+		return
+	}
+	entity, err := strconv.ParseInt(r.URL.Query().Get("entity"), 10, 64)
+	if err != nil {
+		http.Error(w, "profile: which competitor?", http.StatusBadRequest)
+		return
+	}
+	on := r.URL.Query().Get("on") == "true"
+	pinning := strings.HasSuffix(r.URL.Path, "/pin")
+
+	ctx := r.Context()
+	current, err := s.Store.Competitors(ctx, id)
+	if err != nil {
+		http.Error(w, "profile: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	var pinned, excluded bool
+	for _, c := range current {
+		if c.EntityID == entity {
+			pinned, excluded = c.Pinned, c.Excluded
+			break
+		}
+	}
+	if pinning {
+		pinned = on
+	} else {
+		excluded = on
+	}
+	// Both at once is a state nobody asked for: pinning something excluded is
+	// how a person changes their mind, and it means «keep it».
+	if pinned && excluded {
+		if pinning {
+			excluded = false
+		} else {
+			pinned = false
+		}
+	}
+
+	if err := s.Store.MarkCompetitor(ctx, id, store.CompetitorProduct, entity, pinned, excluded); err != nil {
+		http.Error(w, "profile: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.profileFragment(w, r, alert("success", "Набор конкурентов поправлен."))
+}
+
+// profileIDFromQuery reads the profile a request is about.
+func profileIDFromQuery(w http.ResponseWriter, r *http.Request) (int64, bool) {
+	id, err := strconv.ParseInt(r.URL.Query().Get("id"), 10, 64)
+	if err != nil {
+		http.Error(w, "profile: which profile?", http.StatusBadRequest)
+		return 0, false
+	}
+	return id, true
+}
+
+// competitorsKept is how many neighbours a recompute keeps.
+//
+// A search page holds a hundred products and every one of them is technically
+// a neighbour. Twenty is the top of the list — the part that is an answer
+// rather than a copy of the page.
+const competitorsKept = 20

@@ -8,9 +8,11 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/BlankTrail/wildberries-monitor/internal/job"
 	"github.com/BlankTrail/wildberries-monitor/internal/store"
+	"github.com/BlankTrail/wildberries-monitor/wb"
 )
 
 func TestProfile_TheScreenIsOneLineUntilThereIsAnAnswer(t *testing.T) {
@@ -214,5 +216,167 @@ func TestPhrases_WithNothingCollectedSayWhatIsMissing(t *testing.T) {
 	body := postForm(t, srv, "/profile/phrases?id="+itoa(id), nil).Body.String()
 	if !strings.Contains(body, "Сначала соберите товары") {
 		t.Errorf("экран не говорит, чего не хватает:\n%s", firstLines(body))
+	}
+}
+
+func TestCompetitors_AreRecomputedFromWhatWasCollected(t *testing.T) {
+	// Section 4.7's competitive environment: who stands beside the profile's
+	// products in the searches that matter. No requests — the neighbours are
+	// in the position rows a phrase job already wrote.
+	srv := newServer(t)
+	ctx := t.Context()
+
+	id, err := srv.Store.SaveProfile(ctx, store.ProfileRow{Name: "мой"})
+	if err != nil {
+		t.Fatalf("SaveProfile: %v", err)
+	}
+	if err := srv.Store.AddProfileItem(ctx, id, store.ProfileProduct, 100); err != nil {
+		t.Fatalf("AddProfileItem: %v", err)
+	}
+	if err := srv.Store.CheckedPhrase(ctx, id, "платье", 100, "-1257786", 5, 100); err != nil {
+		t.Fatalf("CheckedPhrase: %v", err)
+	}
+
+	at := time.Date(2026, 8, 20, 10, 0, 0, 0, time.UTC)
+	for _, p := range []struct {
+		nm   int64
+		rank int
+	}{{100, 5}, {200, 3}, {300, 40}} {
+		if _, err := srv.Store.SaveSearchPage(ctx, wb.Envelope{Products: []wb.Product{{
+			ID: p.nm, Name: "товар", Brand: "BrandCo", Dest: "-1257786", AppType: 1,
+			Rank: p.rank, Page: 1, FetchedAt: at,
+			Sizes: []wb.Size{{Name: "M", PriceProduct: ptrTo(int64(100000))}},
+		}}}, "платье"); err != nil {
+			t.Fatalf("SaveSearchPage: %v", err)
+		}
+	}
+
+	body := postForm(t, srv, "/profile/competitors?id="+itoa(id), nil).Body.String()
+	if !strings.Contains(body, "Найдено соседей: 2") {
+		t.Fatalf("соседи не пересчитаны:\n%s", firstLines(body))
+	}
+	if !strings.Contains(body, "200") || !strings.Contains(body, "300") {
+		t.Error("соседи не показаны")
+	}
+	// Ours is not its own competitor.
+	list, err := srv.Store.Competitors(ctx, id)
+	if err != nil {
+		t.Fatalf("Competitors: %v", err)
+	}
+	for _, c := range list {
+		if c.EntityID == 100 {
+			t.Error("свой товар попал в конкуренты")
+		}
+	}
+}
+
+func TestCompetitors_TheSetIsTheTopOfTheListRatherThanThePage(t *testing.T) {
+	// A search page holds a hundred products and every one of them is
+	// technically a neighbour. A «competitive environment» that is a copy of
+	// the page is not one.
+	srv := newServer(t)
+	ctx := t.Context()
+
+	id, err := srv.Store.SaveProfile(ctx, store.ProfileRow{Name: "мой"})
+	if err != nil {
+		t.Fatalf("SaveProfile: %v", err)
+	}
+	if err := srv.Store.AddProfileItem(ctx, id, store.ProfileProduct, 100); err != nil {
+		t.Fatalf("AddProfileItem: %v", err)
+	}
+	if err := srv.Store.CheckedPhrase(ctx, id, "платье", 100, "-1257786", 1, 100); err != nil {
+		t.Fatalf("CheckedPhrase: %v", err)
+	}
+
+	at := time.Date(2026, 8, 20, 10, 0, 0, 0, time.UTC)
+	var products []wb.Product
+	for i := range 40 {
+		products = append(products, wb.Product{
+			ID: int64(100 + i), Name: "товар", Brand: "BrandCo", Dest: "-1257786", AppType: 1,
+			Rank: i + 1, Page: 1, FetchedAt: at,
+			Sizes: []wb.Size{{Name: "M", PriceProduct: ptrTo(int64(100000))}},
+		})
+	}
+	if _, err := srv.Store.SaveSearchPage(ctx, wb.Envelope{Products: products}, "платье"); err != nil {
+		t.Fatalf("SaveSearchPage: %v", err)
+	}
+
+	if w := postForm(t, srv, "/profile/competitors?id="+itoa(id), nil); w.Code != 200 {
+		t.Fatalf("пересчёт = %d", w.Code)
+	}
+	list, err := srv.Store.Competitors(ctx, id)
+	if err != nil {
+		t.Fatalf("Competitors: %v", err)
+	}
+	if len(list) != 20 {
+		t.Errorf("конкурентов %d, ожидалась верхушка списка в 20", len(list))
+	}
+}
+
+func TestCompetitors_APinnedOneSurvivesTheNextRecompute(t *testing.T) {
+	// «Закреплённые никогда не вытесняются автоматикой» — the pin is what a
+	// person says when the ranking disagrees with them.
+	srv := newServer(t)
+	ctx := t.Context()
+
+	id, err := srv.Store.SaveProfile(ctx, store.ProfileRow{Name: "мой"})
+	if err != nil {
+		t.Fatalf("SaveProfile: %v", err)
+	}
+	if err := srv.Store.SaveCompetitors(ctx, id, []store.CompetitorRow{
+		{Kind: store.CompetitorProduct, EntityID: 555, Adjacency: 4},
+	}); err != nil {
+		t.Fatalf("SaveCompetitors: %v", err)
+	}
+
+	if w := postForm(t, srv, fmt.Sprintf("/profile/competitors/pin?id=%d&entity=555&on=true", id), nil); w.Code != 200 {
+		t.Fatalf("закрепление = %d", w.Code)
+	}
+	// A recompute that finds nothing at all.
+	if w := postForm(t, srv, "/profile/competitors?id="+itoa(id), nil); w.Code != 200 {
+		t.Fatalf("пересчёт = %d", w.Code)
+	}
+
+	list, err := srv.Store.Competitors(ctx, id)
+	if err != nil {
+		t.Fatalf("Competitors: %v", err)
+	}
+	if len(list) != 1 || !list[0].Pinned {
+		t.Errorf("после пересчёта = %+v, ожидался закреплённый", list)
+	}
+}
+
+func TestCompetitors_TheirPagesAreCollectedByAPhraseJob(t *testing.T) {
+	// The neighbours are the other products on the page. A position job keeps
+	// only the watched articles — right for checking a phrase, wrong for
+	// finding out who else was there.
+	srv := newServer(t)
+	ctx := t.Context()
+
+	id, err := srv.Store.SaveProfile(ctx, store.ProfileRow{Name: "мой"})
+	if err != nil {
+		t.Fatalf("SaveProfile: %v", err)
+	}
+	if err := srv.Store.CheckedPhrase(ctx, id, "платье летнее", 100, "-1257786", 5, 100); err != nil {
+		t.Fatalf("CheckedPhrase: %v", err)
+	}
+
+	body := postForm(t, srv, "/profile/phrases/collect?id="+itoa(id), nil).Body.String()
+	if !strings.Contains(body, "Задание создано") {
+		t.Fatalf("задание не создано:\n%s", firstLines(body))
+	}
+	jobs, err := srv.Store.Jobs(ctx)
+	if err != nil || len(jobs) != 1 {
+		t.Fatalf("Jobs: %v, %d", err, len(jobs))
+	}
+	made, err := job.Load(ctx, srv.Store, jobs[0].ID)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if made.Kind != job.KindPhrase {
+		t.Errorf("вид задания = %q, ожидался обход выдачи целиком", made.Kind)
+	}
+	if len(made.Phrases) != 1 || made.Phrases[0] != "платье летнее" {
+		t.Errorf("фразы задания = %v", made.Phrases)
 	}
 }
