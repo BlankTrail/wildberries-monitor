@@ -65,7 +65,7 @@ func TestDecodeProductShelf_ADocumentThatIsNotAShelfIsNotAnEmptyOne(t *testing.T
 	}
 }
 
-func TestFetchProductShelf_AMissingShelfIsNotAFailure(t *testing.T) {
+func TestProductShelf_AMissingShelfIsNotAFailure(t *testing.T) {
 	// Most sellers configure none. The site asks anyway and gets a 404, and a
 	// run that treated that as a failure would report most of its plan broken.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -76,7 +76,7 @@ func TestFetchProductShelf_AMissingShelfIsNotAFailure(t *testing.T) {
 	eps := DefaultEndpoints()
 	eps.ProductShelf = srv.URL + "/vol154/content-recommendations/{nm}.json"
 
-	shelf, err := FetchProductShelf(t.Context(), srv.Client(), eps, 126050166)
+	shelf, err := liveClient(srv.Client()).ProductShelf(t.Context(), eps, 126050166)
 	if err != nil {
 		t.Fatalf("отсутствие полки выдано за поломку: %v", err)
 	}
@@ -88,7 +88,7 @@ func TestFetchProductShelf_AMissingShelfIsNotAFailure(t *testing.T) {
 	}
 }
 
-func TestFetchProductShelf_AsksForTheProductInTheTemplate(t *testing.T) {
+func TestProductShelf_AsksForTheProductInTheTemplate(t *testing.T) {
 	var got string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		got = r.URL.Path
@@ -99,9 +99,9 @@ func TestFetchProductShelf_AsksForTheProductInTheTemplate(t *testing.T) {
 	eps := DefaultEndpoints()
 	eps.ProductShelf = srv.URL + "/vol154/content-recommendations/{nm}.json"
 
-	shelf, err := FetchProductShelf(t.Context(), srv.Client(), eps, 126050166)
+	shelf, err := liveClient(srv.Client()).ProductShelf(t.Context(), eps, 126050166)
 	if err != nil {
-		t.Fatalf("FetchProductShelf: %v", err)
+		t.Fatalf("ProductShelf: %v", err)
 	}
 	if !strings.Contains(got, "126050166.json") {
 		t.Errorf("запрошен %q", got)
@@ -111,8 +111,8 @@ func TestFetchProductShelf_AsksForTheProductInTheTemplate(t *testing.T) {
 	}
 }
 
-func TestFetchProductShelf_RefusesAProductThatIsNotOne(t *testing.T) {
-	if _, err := FetchProductShelf(t.Context(), nil, DefaultEndpoints(), 0); err == nil {
+func TestProductShelf_RefusesAProductThatIsNotOne(t *testing.T) {
+	if _, err := (*Client)(nil).ProductShelf(t.Context(), DefaultEndpoints(), 0); err == nil {
 		t.Error("нулевой артикул принят")
 	}
 }

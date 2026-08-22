@@ -212,7 +212,10 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 		// per keystroke. Wired here for the reason every other fetch is — web
 		// must not need the live site to render a picker.
 		Categories: func(ctx context.Context) (int, error) {
-			tree, err := wb.FetchCategories(ctx, http.DefaultClient, a.endpoints())
+			if a.Engine == nil {
+				return 0, errors.New("сбор не собран в этой сборке")
+			}
+			tree, err := a.Engine.Categories(ctx)
 			if err != nil {
 				return 0, err
 			}
@@ -412,6 +415,21 @@ func (a *App) Run(ctx context.Context) error {
 		a.loop(ctx)
 	}()
 
+	if a.Engine != nil {
+		// The standing port, opened while nobody is waiting on it. Everything
+		// this program asks Wildberries goes through BlankTrail, the panel's
+		// own errands included, and opening a port is the slow part: done here
+		// it costs a few seconds of startup instead of a few seconds under the
+		// first person who presses «обновить справочник». A failure is logged
+		// and not fatal — a fresh install has no proxy configured yet, and
+		// refusing to start would take away the screen where that is fixed.
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			a.Engine.Warm(ctx)
+		}()
+	}
+
 	serverErr := make(chan error, 1)
 	go func() {
 		err := server.Serve(listener)
@@ -439,6 +457,11 @@ func (a *App) Run(ctx context.Context) error {
 	defer cancel()
 	_ = server.Shutdown(stopCtx)
 	wg.Wait()
+	if a.Engine != nil {
+		// The standing port is somebody's money for as long as it is open, and
+		// a process that exits without closing it leaves it open on the proxy.
+		a.Engine.CloseService()
+	}
 	return nil
 }
 

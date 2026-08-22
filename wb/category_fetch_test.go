@@ -9,11 +9,11 @@ import (
 	"testing"
 )
 
-func TestFetchCategories_ReadsTheDirectoryFromWhereverTheRegistryPointsIt(t *testing.T) {
+func TestCategories_ReadsTheDirectoryFromWhereverTheRegistryPointsIt(t *testing.T) {
 	body := readFixture(t, "categories.json")
-	var gotAgent, gotPath string
+	var gotPath, gotOrigin string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotAgent, gotPath = r.Header.Get("User-Agent"), r.URL.Path
+		gotPath, gotOrigin = r.URL.Path, r.Header.Get("Origin")
 		w.Write(body)
 	}))
 	defer srv.Close()
@@ -21,9 +21,9 @@ func TestFetchCategories_ReadsTheDirectoryFromWhereverTheRegistryPointsIt(t *tes
 	eps := DefaultEndpoints()
 	eps.Categories = srv.URL + "/vol0/data/menu.json"
 
-	tree, err := FetchCategories(t.Context(), srv.Client(), eps)
+	tree, err := liveClient(srv.Client()).Categories(t.Context(), eps)
 	if err != nil {
-		t.Fatalf("FetchCategories: %v", err)
+		t.Fatalf("Categories: %v", err)
 	}
 	if len(tree) != 2 {
 		t.Errorf("узлов %d, ожидалось два", len(tree))
@@ -31,16 +31,18 @@ func TestFetchCategories_ReadsTheDirectoryFromWhereverTheRegistryPointsIt(t *tes
 	if gotPath != "/vol0/data/menu.json" {
 		t.Errorf("запрошен %q — адрес взят не из реестра", gotPath)
 	}
-	// Named honestly rather than dressed as a browser. Through a worker port
-	// the transport owns identity and this package sends no User-Agent at all;
-	// here there is no transport, and a public static file is the one request
-	// with no reason to look like anything but what it is.
-	if !strings.Contains(gotAgent, "wildberries-monitor") {
-		t.Errorf("агент = %q", gotAgent)
+	// The CDN is another host, and the front end asks it with an Origin and
+	// no gate headers at all. This used to go out named as this program, from
+	// this machine's own address, on the grounds that a public file has no
+	// challenge in front of it — true, and beside the point: an address that
+	// fetches the catalogue directly and prices its products through proxies
+	// has told the site the two are one visitor.
+	if gotOrigin == "" {
+		t.Error("справочник запрошен без Origin — front end так не ходит")
 	}
 }
 
-func TestFetchCategories_SaysWhatWentWrongRatherThanReturningNothing(t *testing.T) {
+func TestCategories_SaysWhatWentWrongRatherThanReturningNothing(t *testing.T) {
 	// The failure that matters is the one where the CDN starts answering with
 	// something else. Read as an empty directory it empties the picker
 	// silently; reported, it is a line somebody can act on.
@@ -61,7 +63,7 @@ func TestFetchCategories_SaysWhatWentWrongRatherThanReturningNothing(t *testing.
 		}))
 		eps := DefaultEndpoints()
 		eps.Categories = srv.URL
-		_, err := FetchCategories(t.Context(), srv.Client(), eps)
+		_, err := liveClient(srv.Client()).Categories(t.Context(), eps)
 		srv.Close()
 		if err == nil {
 			t.Errorf("%s: принято за справочник", c.name)
@@ -70,42 +72,5 @@ func TestFetchCategories_SaysWhatWentWrongRatherThanReturningNothing(t *testing.
 		if !strings.Contains(err.Error(), "categor") {
 			t.Errorf("%s: в ошибке не сказано, что читалось: %v", c.name, err)
 		}
-	}
-}
-
-func TestFetchCategories_DoesNotReadWhateverTheOtherEndFeelsLikeSending(t *testing.T) {
-	// The address is editable in endpoints.yaml. A reader with no ceiling turns
-	// a mistyped one into as much memory as the other end cares to send.
-	// Valid JSON all the way through, and far past the ceiling. Garbage would
-	// be refused by the decoder whether or not anything bounded the read, and
-	// the ceiling could then be deleted without a test noticing.
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Write([]byte(`[{"id":1,"name":"первый","searchQuery":"menu_1 первый"}`))
-		node := `,{"id":2,"name":"` + strings.Repeat("х", 4096) + `","searchQuery":"menu_2 второй"}`
-		for range (categoryLimit / len(node)) + 8 {
-			if _, err := w.Write([]byte(node)); err != nil {
-				return
-			}
-		}
-		w.Write([]byte("]"))
-	}))
-	defer srv.Close()
-
-	eps := DefaultEndpoints()
-	eps.Categories = srv.URL
-	if _, err := FetchCategories(t.Context(), srv.Client(), eps); err == nil {
-		t.Error("бесконечный ответ прочитан целиком и принят")
-	}
-}
-
-func TestEndpoints_ValidateWantsTheDirectoryAddress(t *testing.T) {
-	// An override file that clears it would otherwise pass validation and fail
-	// later, at the one moment somebody is watching: the refresh button.
-	eps := DefaultEndpoints()
-	eps.Categories = ""
-	if err := eps.Validate(); err == nil {
-		t.Fatal("реестр без адреса справочника принят")
-	} else if !strings.Contains(err.Error(), "categories") {
-		t.Errorf("в отказе не назван ключ: %v", err)
 	}
 }

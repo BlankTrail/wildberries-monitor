@@ -1293,3 +1293,25 @@ func TestCostOf_ReadsWhatAFailedFetchSpent(t *testing.T) {
 		}
 	}
 }
+
+// liveLease forwards to a real HTTP client — an httptest server, in practice.
+//
+// The scripted fakeLease above answers without a round trip, which is what most
+// of this package's tests want. The public documents on the CDN are read
+// through the site client now, and their tests are about the request that goes
+// out — the address it asks for, the status it gets back — so they need a
+// server on the other end.
+type liveLease struct{ hc *http.Client }
+
+func (l liveLease) Do(r *http.Request) (*http.Response, error) { return l.hc.Do(r) }
+func (l liveLease) Session() string                            { return "test#1" }
+func (l liveLease) Port() int                                  { return 1 }
+func (l liveLease) RotateEgress(context.Context) error         { return blanktrail.ErrRenewUnsupported }
+func (l liveLease) Release()                                   {}
+
+type liveLeaser struct{ hc *http.Client }
+
+func (l liveLeaser) Acquire(context.Context) (Lease, error) { return liveLease{l.hc}, nil }
+
+// liveClient is a site client whose port is the given server.
+func liveClient(hc *http.Client) *Client { return NewClient(liveLeaser{hc}, NewSessions()) }

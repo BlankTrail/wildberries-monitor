@@ -4,20 +4,10 @@ package wb
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"io"
-	"net/http"
 	"time"
 )
-
-// categoryLimit bounds the download.
-//
-// The directory is about eight hundred kilobytes of the site's own JSON. Four
-// megabytes is room for it to grow several times over and still a ceiling: the
-// address is in endpoints.yaml and can be pointed anywhere, and a reader with
-// no limit turns a mistyped address into as much memory as the other end feels
-// like sending.
-const categoryLimit = 4 << 20
 
 // categoryTimeout bounds the fetch.
 //
@@ -27,54 +17,36 @@ const categoryLimit = 4 << 20
 // watching.
 const categoryTimeout = time.Minute
 
-// directoryAgent names this program on the one request it makes as itself.
-const directoryAgent = "wildberries-monitor (+https://github.com/BlankTrail/wildberries-monitor)"
-
-// FetchCategories downloads the catalogue directory.
+// Categories downloads the catalogue directory.
 //
-// Over a plain HTTP client rather than through a worker port, and that is a
-// decision rather than an omission: the file is a public document, the same for
-// everybody, with no challenge in front of it — verified against the live
-// address before this was written. Spending a proxy port on it would spend a
-// port on a download.
+// Through the site client like everything else in this program, which means
+// through a BlankTrail port. The file is a public document with no challenge
+// in front of it and would answer a bare request — but a bare request comes
+// from this machine's own address, and an address that fetches the catalogue
+// from here and the catalogue's products from a proxy has told the site the
+// two are the same visitor. The port it costs is the standing one the program
+// opens at startup, not a port taken from a run.
 //
 // If the site ever puts its edge in front of this address, the symptom is a
-// challenge page decoding as «no categories in it», and the fix is to fetch it
-// through Client.Get like everything else. The decoder refusing a wall of HTML
-// rather than reading it as an empty directory is what makes that day
-// diagnosable.
-func FetchCategories(ctx context.Context, hc *http.Client, eps Endpoints) ([]Category, error) {
-	if hc == nil {
-		hc = &http.Client{}
+// challenge page decoding as «no categories in it». The decoder refusing a
+// wall of HTML rather than reading it as an empty directory is what makes that
+// day diagnosable.
+func (c *Client) Categories(ctx context.Context, eps Endpoints) ([]Category, error) {
+	if c == nil {
+		return nil, errors.New("wb: category directory: no client")
 	}
 	ctx, cancel := context.WithTimeout(ctx, categoryTimeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, eps.Categories, nil)
+	// KindPlain: another host, which the front end asks with no gate headers
+	// at all. Sending the on-site profile to the CDN would be this program
+	// inventing a request shape the site never makes.
+	res, err := c.Get(ctx, eps.Categories, KindPlain, eps.Home)
 	if err != nil {
 		return nil, fmt.Errorf("wb: category directory: %w", err)
 	}
-	// An honest name rather than a browser's, and the contrast with the rest of
-	// this package is the point: through a worker port the transport owns
-	// identity and headers.go sends no User-Agent at all rather than contradict
-	// it. There is no transport here, and a public static file is the one
-	// request in this program that has no reason to look like anything but
-	// what it is.
-	req.Header.Set("User-Agent", directoryAgent)
-	req.Header.Set("Accept", "application/json, text/plain, */*")
-
-	res, err := hc.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("wb: category directory: %w", err)
+	if res.Class != ClassOK {
+		return nil, fmt.Errorf("wb: category directory: status %d (%s)", res.Status, res.Class)
 	}
-	defer res.Body.Close()
-
-	if res.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("wb: category directory: status %d", res.StatusCode)
-	}
-	body, err := io.ReadAll(io.LimitReader(res.Body, categoryLimit))
-	if err != nil {
-		return nil, fmt.Errorf("wb: category directory: %w", err)
-	}
-	return DecodeCategories(body)
+	return DecodeCategories(res.Body)
 }

@@ -20,7 +20,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
 	"strconv"
 	"strings"
 
@@ -44,16 +43,12 @@ type Site interface {
 	Reviews(ctx context.Context, eps wb.Endpoints, imtID int64) (wb.Reviews, error)
 	Questions(ctx context.Context, eps wb.Endpoints, imtID int64, take, skip int) (wb.Questions, error)
 	Shelves(ctx context.Context, eps wb.Endpoints, q wb.SearchQuery) (wb.Shelves, error)
+	ProductShelf(ctx context.Context, eps wb.Endpoints, nm int64) (wb.ProductShelf, error)
 }
 
 // Fetcher does one item of a job.
 type Fetcher struct {
-	Site Site
-	// HTTP is for the public files that have no challenge in front of them —
-	// the catalogue directory and a product's shelf. A field rather than
-	// http.DefaultClient reached for inline, so a test can answer without a
-	// network and so one place decides what timeouts a plain fetch runs under.
-	HTTP   *http.Client
+	Site   Site
 	Store  *store.Store
 	Bus    *events.Bus
 	Basket *wb.Basket
@@ -335,17 +330,12 @@ func (f *Fetcher) ads(ctx context.Context, key job.Key) (int, error) {
 // shelf reads the «Продавец рекомендует» row under one product — spec section
 // 4.6's type 9.
 //
-// Over a plain HTTP client rather than through a worker port, and the reason is
-// the same one the catalogue directory gives: it is a public file on the media
-// CDN with no challenge in front of it, verified from outside a browser before
-// this was written. A run that spent a port on it would be spending a port on a
-// download — and this kind is one file per product, so that would be a port per
-// product for nothing.
-//
-// It costs a request all the same, and the estimate counts it: what is free is
-// the port, not the traffic.
+// Through the run's own ports, like everything else it collects. The file is a
+// public document on the media CDN and would answer a bare request — but a bare
+// request comes from this machine's address, and a run that pulled its shelves
+// from here and its cards from a proxy would have tied the two together itself.
 func (f *Fetcher) shelf(ctx context.Context, key job.Key) (int, error) {
-	shelf, err := wb.FetchProductShelf(ctx, f.HTTP, f.Eps, key.NmID)
+	shelf, err := f.Site.ProductShelf(ctx, f.Eps, key.NmID)
 	if err != nil {
 		return 1, fmt.Errorf("collect: полка товара %d: %w", key.NmID, err)
 	}

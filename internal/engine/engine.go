@@ -20,7 +20,6 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
-	"net/http"
 	"net/url"
 	"strings"
 	"time"
@@ -59,6 +58,12 @@ type Engine struct {
 
 	// Log is where a run's preparation reports what it found. Optional.
 	Log func(format string, args ...any)
+
+	// svc is the standing port the panel's own requests go through. See
+	// service.go — it opens once and is held, because opening a port per
+	// button press is seconds of waiting for a request that takes a fraction
+	// of one.
+	svc service
 }
 
 // Check reports whether a run could be prepared at all.
@@ -128,11 +133,7 @@ func (e *Engine) RunnerFor(ctx context.Context, j job.Job) (*job.Runner, func(),
 		// was before anything went wrong.
 		Ports: func() []job.PortStat { return portStats(pool) },
 		Fetcher: &collect.Fetcher{
-			Site: site,
-			// The public files that carry no challenge — a product's shelf, the
-			// catalogue directory. Straight out, no worker port: a port spent
-			// on a download is a port nothing was collected through.
-			HTTP:   http.DefaultClient,
+			Site:   site,
 			Store:  e.Store,
 			Bus:    e.Bus,
 			Basket: wb.NewBasket(site),

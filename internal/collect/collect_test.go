@@ -5,8 +5,6 @@ package collect
 import (
 	"context"
 	"errors"
-	"net/http"
-	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -34,6 +32,12 @@ type fakeSite struct {
 	reviews       []int64
 	questions     []int64
 	shelves       []wb.SearchQuery
+	// productShelves records which products were asked for their own row, and
+	// shelfOf answers for them. A nil shelfOf gives the answer the live site
+	// gives most of the time — a named shelf with nobody in it — which is the
+	// case the collector must not read as a failure.
+	productShelves []int64
+	shelfOf        func(nm int64) (wb.ProductShelf, error)
 
 	products []wb.Product
 	cardImt  int64
@@ -46,6 +50,14 @@ type fakeSite struct {
 	// cardFail fails only the card fetches, so a test can let a page succeed
 	// and every card on it fail — which is the case worth pinning.
 	cardFail error
+}
+
+func (f *fakeSite) ProductShelf(_ context.Context, _ wb.Endpoints, nm int64) (wb.ProductShelf, error) {
+	f.productShelves = append(f.productShelves, nm)
+	if f.shelfOf != nil {
+		return f.shelfOf(nm)
+	}
+	return wb.ProductShelf{NmID: nm, Title: wb.ShelfSellerRecommends}, nil
 }
 
 func (f *fakeSite) SearchPage(_ context.Context, _ wb.Endpoints, q wb.SearchQuery) (wb.Envelope, error) {
@@ -839,16 +851,13 @@ func TestShelf_ReadsTheRowUnderOneCardAndKeepsThePlaces(t *testing.T) {
 	// Spec section 4.6's type 9, in the one shelf that was observed: «Продавец
 	// рекомендует». The order is the fact worth keeping — «третий в полке» is
 	// a place somebody competes for.
-	var asked string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		asked = r.URL.Path
-		w.Write([]byte(`{"nms":[241450167,824617439,1291739928]}`))
-	}))
-	defer srv.Close()
-
-	f, st := watching(t, &fakeSite{}, job.KindShelves)
-	f.HTTP = srv.Client()
-	f.Eps.ProductShelf = srv.URL + "/vol154/content-recommendations/{nm}.json"
+	site := &fakeSite{shelfOf: func(nm int64) (wb.ProductShelf, error) {
+		return wb.ProductShelf{
+			NmID: nm, Title: wb.ShelfSellerRecommends, Present: true,
+			Members: []int64{241450167, 824617439, 1291739928},
+		}, nil
+	}}
+	f, st := watching(t, site, job.KindShelves)
 
 	n, err := f.Fetch(t.Context(), job.Item{Key: job.Key{
 		Kind: job.ItemShelf, NmID: 126050166,
@@ -859,8 +868,8 @@ func TestShelf_ReadsTheRowUnderOneCardAndKeepsThePlaces(t *testing.T) {
 	if n != 1 {
 		t.Errorf("полка стоила %d запросов, ожидался один", n)
 	}
-	if !strings.Contains(asked, "126050166") {
-		t.Errorf("запрошено %q", asked)
+	if len(site.productShelves) != 1 || site.productShelves[0] != 126050166 {
+		t.Errorf("спрошены полки товаров %v, ожидался один 126050166", site.productShelves)
 	}
 
 	members, err := st.ProductShelfMembers(t.Context(), 126050166)
@@ -882,14 +891,9 @@ func TestShelf_ASellerWithNoShelfIsRecordedRatherThanSkipped(t *testing.T) {
 	// A seller who never set a shelf up and a seller whose shelf emptied out
 	// look identical in a store that only records what exists — and only the
 	// second is worth telling somebody about. So the empty reading is written.
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusNotFound)
-	}))
-	defer srv.Close()
-
+	// The fake's default answer is the 404 the live site gives: a shelf with
+	// a name, no members and Present false.
 	f, st := watching(t, &fakeSite{}, job.KindShelves)
-	f.HTTP = srv.Client()
-	f.Eps.ProductShelf = srv.URL + "/{nm}.json"
 
 	if _, err := f.Fetch(t.Context(), job.Item{Key: job.Key{
 		Kind: job.ItemShelf, NmID: 1,

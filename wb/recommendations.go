@@ -5,8 +5,8 @@ package wb
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -29,17 +29,10 @@ import (
 // endpoint this package already speaks — the same product listed by other
 // sellers — which is a different question wearing a similar name.
 
-// shelfLimit bounds the download. A shelf is a couple of dozen numbers; a
-// quarter of a megabyte is room for a hundred times that and still a ceiling.
-const shelfLimit = 256 << 10
-
 // shelfTimeout bounds the fetch. It is one small static file per product, made
 // inside a run that is already paying for its own pace.
 const shelfTimeout = 30 * time.Second
 
-// ShelfSellerRecommends is what the site calls this row, and the title stored
-// with it. Named rather than written inline at the call site, because a shelf
-// with no name is a row of products nobody can tell from the next row.
 const ShelfSellerRecommends = "Продавец рекомендует"
 
 // ProductShelf is one shelf under one product's card.
@@ -65,52 +58,39 @@ func (e Endpoints) ProductShelfURL(nm int64) string {
 	return strings.ReplaceAll(e.ProductShelf, "{nm}", strconv.FormatInt(nm, 10))
 }
 
-// FetchProductShelf reads one product's «Продавец рекомендует» row.
+// ProductShelf reads one product's «Продавец рекомендует» row.
 //
-// Over a plain HTTP client, not through a worker port, and checked before it
-// was written: the file is a public document on the media CDN with no
-// challenge in front of it. A run that spent a proxy port on it would be
-// spending a port on a download.
+// Through the site client, which means through a BlankTrail port — the run's
+// own, since this is collected inside a run that has ports open anyway. The
+// file is public and would answer a bare request, but a bare request comes
+// from this machine's address, and a run that fetched its shelves from here
+// and its cards from a proxy would have tied the two together itself.
 //
 // A missing file is not an error. Most sellers configure no shelf, the site
 // asks anyway and gets a 404, and a run that treated that as a failure would
 // report most of its plan broken.
-func FetchProductShelf(ctx context.Context, hc *http.Client, eps Endpoints, nm int64) (ProductShelf, error) {
+func (c *Client) ProductShelf(ctx context.Context, eps Endpoints, nm int64) (ProductShelf, error) {
 	if nm <= 0 {
 		return ProductShelf{}, fmt.Errorf("wb: product shelf: invalid product id %d", nm)
 	}
-	if hc == nil {
-		hc = &http.Client{}
+	if c == nil {
+		return ProductShelf{}, errors.New("wb: product shelf: no client")
 	}
 	ctx, cancel := context.WithTimeout(ctx, shelfTimeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, eps.ProductShelfURL(nm), nil)
+	res, err := c.Get(ctx, eps.ProductShelfURL(nm), KindPlain, eps.Home)
 	if err != nil {
 		return ProductShelf{}, fmt.Errorf("wb: product shelf %d: %w", nm, err)
 	}
-	req.Header.Set("User-Agent", directoryAgent)
-	req.Header.Set("Accept", "application/json, text/plain, */*")
-
-	res, err := hc.Do(req)
-	if err != nil {
-		return ProductShelf{}, fmt.Errorf("wb: product shelf %d: %w", nm, err)
-	}
-	defer res.Body.Close()
-
-	if res.StatusCode == http.StatusNotFound {
+	if res.Status == http.StatusNotFound {
 		// The ordinary case. Said as «no shelf» rather than as a failure.
 		return ProductShelf{NmID: nm, Title: ShelfSellerRecommends}, nil
 	}
-	if res.StatusCode != http.StatusOK {
-		return ProductShelf{}, fmt.Errorf("wb: product shelf %d: status %d", nm, res.StatusCode)
+	if res.Class != ClassOK {
+		return ProductShelf{}, fmt.Errorf("wb: product shelf %d: status %d (%s)", nm, res.Status, res.Class)
 	}
-
-	body, err := io.ReadAll(io.LimitReader(res.Body, shelfLimit))
-	if err != nil {
-		return ProductShelf{}, fmt.Errorf("wb: product shelf %d: %w", nm, err)
-	}
-	return decodeProductShelf(body, nm)
+	return decodeProductShelf(res.Body, nm)
 }
 
 // decodeProductShelf reads the published file.
