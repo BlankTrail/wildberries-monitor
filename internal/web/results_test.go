@@ -584,3 +584,29 @@ func TestResults_TheRegionListOffersOnlyRegionsWithSomethingInThem(t *testing.T)
 		t.Errorf("у названия нет кода, который оно означает: %q", list)
 	}
 }
+
+func TestResults_TheTableGetsTheWindowAndAScrollbarInsideIt(t *testing.T) {
+	// Thirty-eight columns of collected facts. Laid out in the reading column
+	// every other screen uses, two thirds of them sit behind a sideways scroll
+	// on a monitor with room for all of them.
+	//
+	// And the sideways scroll belongs to the table, not to the page: at the
+	// bottom of a hundred rows, moving a table sideways meant first scrolling
+	// the page down to find the control for it — by which point the columns
+	// being moved were off the top of the screen.
+	srv := resultsServer(t, 4)
+
+	page := get(t, srv, "/results", "correct horse").Body.String()
+	if !strings.Contains(page, "bt-container--full") {
+		t.Errorf("таблица зажата в читательскую колонку:\n%s", firstLines(page))
+	}
+	if !strings.Contains(page, "bt-table-wrap--window") {
+		t.Errorf("у таблицы нет своего окна:\n%s", firstLines(page))
+	}
+
+	// The fragment carries it too, or the first filter loses both.
+	table := get(t, srv, "/results/table", "correct horse").Body.String()
+	if !strings.Contains(table, "bt-table-wrap--window") {
+		t.Errorf("после фильтра таблица теряет своё окно:\n%s", firstLines(table))
+	}
+}

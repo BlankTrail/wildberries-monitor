@@ -37,9 +37,41 @@ func TestJobsScreen_ShowsWhatWasSaved(t *testing.T) {
 			t.Errorf("на экране нет %q", want)
 		}
 	}
-	// And the constructor is still there, under the list.
-	if !strings.Contains(body, "Новое задание") {
-		t.Error("конструктор пропал с экрана")
+	// And the constructor is a press, not a screen. Most visits here are to
+	// look at what is already saved, and a form of fifteen fields under the
+	// list made a screen about a list into a screen about a form.
+	if strings.Contains(body, "Новое задание") {
+		t.Errorf("конструктор открыт, хотя его не просили:\n%s", firstLines(body))
+	}
+	if !strings.Contains(body, `data-get="/jobs/new"`) {
+		t.Errorf("добавить задание нечем:\n%s", firstLines(body))
+	}
+
+	// Pressing opens it, and it can be put away again.
+	form := get(t, srv, "/jobs/new", "correct horse").Body.String()
+	if !strings.Contains(form, "Новое задание") {
+		t.Errorf("нажатие не открыло конструктор:\n%s", firstLines(form))
+	}
+	if !strings.Contains(form, `data-get="/jobs/new?close=1"`) {
+		t.Errorf("конструктор нельзя закрыть:\n%s", firstLines(form))
+	}
+	// The directories it needs come with it and not before it: which pickup
+	// point and which region are questions somebody has while filling this in.
+	for _, want := range []string{"pickup-box", "regions-box"} {
+		if !strings.Contains(form, want) {
+			t.Errorf("с конструктором не пришёл справочник %q", want)
+		}
+		if strings.Contains(body, want) {
+			t.Errorf("справочник %q лежит на вкладке, когда его не просили", want)
+		}
+	}
+
+	closed := get(t, srv, "/jobs/new?close=1", "correct horse").Body.String()
+	if strings.Contains(closed, "Новое задание") {
+		t.Errorf("отмена оставила конструктор открытым:\n%s", firstLines(closed))
+	}
+	if !strings.Contains(closed, `data-get="/jobs/new"`) {
+		t.Errorf("после отмены нечем открыть заново:\n%s", firstLines(closed))
 	}
 }
 
@@ -298,5 +330,52 @@ func TestJobsScreen_AnActionWithNoJobNumberIsRefused(t *testing.T) {
 		if got := postForm(t, srv, path, nil).Code; got != 400 {
 			t.Errorf("%s без номера = %d, ожидалось 400", path, got)
 		}
+	}
+}
+
+func TestSaveJob_ComesBackToTheScreenAndNotToACardOnItsOwn(t *testing.T) {
+	// The constructor posts into #main, so answering with one card took the
+	// list, the run panel and everything else off the screen until somebody
+	// reloaded the tab. What a person wants after saving is the list with their
+	// new job in it — and the constructor put away, because the job is up there
+	// now and a form still holding it invites saving the same thing twice.
+	srv := newServer(t)
+	savedJobRow(t, srv, "уже было", "", true)
+
+	body := postForm(t, srv, "/jobs", goodForm()).Body.String()
+
+	if !strings.Contains(body, "сохранено") {
+		t.Errorf("сохранение не подтверждено:\n%s", firstLines(body))
+	}
+	if !strings.Contains(body, "уже было") {
+		t.Errorf("список пропал с экрана после сохранения:\n%s", firstLines(body))
+	}
+	if strings.Contains(body, "Новое задание") {
+		t.Errorf("после сохранения конструктор остался открытым:\n%s", firstLines(body))
+	}
+	if !strings.Contains(body, `data-get="/jobs/new"`) {
+		t.Errorf("после сохранения нечем добавить следующее:\n%s", firstLines(body))
+	}
+}
+
+func TestSaveJob_ARefusalLeavesTheConstructorOpen(t *testing.T) {
+	// The refusals here are things to fix in the form. Closed with the refusal,
+	// fixing one starts with hunting for the button that opens the thing being
+	// fixed — and before that the whole screen was replaced by the error alone.
+	srv := newServer(t)
+	savedJobRow(t, srv, "уже было", "", true)
+	form := goodForm()
+	form["fields"] = nil
+
+	body := postForm(t, srv, "/jobs", form).Body.String()
+
+	if !strings.Contains(body, "bt-alert--error") {
+		t.Errorf("отказ не показан:\n%s", firstLines(body))
+	}
+	if !strings.Contains(body, "Новое задание") {
+		t.Errorf("после отказа конструктор закрылся:\n%s", firstLines(body))
+	}
+	if !strings.Contains(body, "уже было") {
+		t.Errorf("после отказа список пропал с экрана:\n%s", firstLines(body))
 	}
 }

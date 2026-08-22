@@ -39,7 +39,7 @@ func TestCategories_ThePickerOffersOnlyTheNodesThisBuildCanWalk(t *testing.T) {
 	srv := newServer(t)
 	seedCategories(t, srv)
 
-	body := get(t, srv, "/jobs", "correct horse").Body.String()
+	body := get(t, srv, "/jobs/new", "correct horse").Body.String()
 	if !strings.Contains(body, `value="8126"`) {
 		t.Errorf("собираемая категория не предложена:\n%s", firstLines(body))
 	}
@@ -59,7 +59,7 @@ func TestCategories_ThePickerOffersOnlyTheNodesThisBuildCanWalk(t *testing.T) {
 func TestCategories_AnEmptyDirectorySaysWhatToPress(t *testing.T) {
 	// An empty select reads like a catalogue with no categories in it.
 	srv := newServer(t)
-	body := get(t, srv, "/jobs", "correct horse").Body.String()
+	body := get(t, srv, "/jobs/new", "correct horse").Body.String()
 
 	if !strings.Contains(body, "ещё не загружен") {
 		t.Errorf("пустой справочник ничего о себе не говорит:\n%s", firstLines(body))

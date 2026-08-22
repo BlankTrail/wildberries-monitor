@@ -40,7 +40,7 @@
   </div>
 </header>
 
-<main id="main" class="bt-container bt-container--wide bt-container--padded">
+<main id="main" class="bt-container {{if .Width}}{{.Width}}{{else}}bt-container--wide{{end}} bt-container--padded">
   {{.Body}}
 </main>
 

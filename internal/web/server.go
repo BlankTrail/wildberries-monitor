@@ -311,6 +311,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /channels/delete", s.auth(http.HandlerFunc(s.deleteChannel)))
 	mux.Handle("GET /jobs", s.auth(http.HandlerFunc(s.jobsPage)))
 	mux.Handle("POST /jobs", s.auth(http.HandlerFunc(s.saveJobHandler)))
+	mux.Handle("GET /jobs/new", s.auth(http.HandlerFunc(s.newJobHandler)))
 	mux.Handle("POST /jobs/estimate", s.auth(http.HandlerFunc(s.estimateHandler)))
 	mux.Handle("POST /results/sheets", s.auth(http.HandlerFunc(s.exportToSheets)))
 	mux.Handle("POST /google/connect", s.auth(http.HandlerFunc(s.connectGoogle)))
@@ -395,6 +396,14 @@ type page struct {
 	BlankTrail template.HTML
 	SourceURL  string
 	FollowRun  string
+	// Width is the class the main region is laid out with. Empty is the
+	// ordinary one — a column of about 1400px, which is what a form or a card
+	// wants and what everything but one screen uses.
+	//
+	// The results table is the exception, and it is a real one: it has sixteen
+	// columns of collected facts, and a column that ends at 1400px puts half of
+	// them behind a sideways scroll on a monitor with room for all of them.
+	Width string
 }
 
 // rawHTML marks a string as already-escaped markup.

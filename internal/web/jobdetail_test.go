@@ -143,7 +143,7 @@ func TestRegionControl_OffersTheCodesThisInstallationUses(t *testing.T) {
 		t.Fatalf("SaveProduct: %v", err)
 	}
 
-	body := get(t, srv, "/jobs", "correct horse").Body.String()
+	body := get(t, srv, "/jobs/new", "correct horse").Body.String()
 
 	if !strings.Contains(body, `data-picklist="#job-regions"`) {
 		t.Fatalf("регионы нечем отметить:\n%s", firstLines(body))
@@ -169,7 +169,7 @@ func TestRegionControl_AFreshInstallStillHasAField(t *testing.T) {
 	// Nothing collected and no jobs: the list has nothing to offer, and an
 	// empty box of checkboxes would be a control that does nothing.
 	srv := newServer(t)
-	body := get(t, srv, "/jobs", "correct horse").Body.String()
+	body := get(t, srv, "/jobs/new", "correct horse").Body.String()
 
 	if strings.Contains(body, `data-picklist="#job-regions"`) {
 		t.Error("пустой список регионов всё равно нарисован")
@@ -187,7 +187,7 @@ func TestScheduleControl_BuildsTheStringItSaves(t *testing.T) {
 	// writes it; the field stays visible and editable, because a schedule
 	// hidden behind a builder is one nobody can read off the screen.
 	srv := newServer(t)
-	body := get(t, srv, "/jobs", "correct horse").Body.String()
+	body := get(t, srv, "/jobs/new", "correct horse").Body.String()
 
 	for _, want := range []string{
 		`data-compose="#job-schedule"`, "data-compose-off", "data-compose-count",

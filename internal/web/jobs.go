@@ -89,7 +89,9 @@ const productsPerPage = 100
 
 // jobsPage renders the constructor as a whole page.
 func (s *Server) jobsPage(w http.ResponseWriter, r *http.Request) {
-	body, err := s.jobsHTML(r)
+	// Closed: this tab is about what is already there, and the constructor is
+	// asked for by pressing for it.
+	body, err := s.jobsHTML(r, false)
 	if err != nil {
 		http.Error(w, "jobs: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -103,30 +105,71 @@ func (s *Server) jobsPage(w http.ResponseWriter, r *http.Request) {
 // this existed, a job saved yesterday could not be seen, started, stopped or
 // removed from anywhere but the bot — the screen offered only the form that
 // made it.
-func (s *Server) jobsHTML(r *http.Request) (string, error) {
+func (s *Server) jobsHTML(r *http.Request, open bool) (string, error) {
 	list, err := s.jobList(r.Context())
 	if err != nil {
 		return "", err
 	}
-	constructor, err := s.constructorHTML(r)
+	region, err := s.jobConstructor(r, open)
 	if err != nil {
 		return "", err
 	}
 	// Between the list and the constructor: the details of a job are about the
 	// row somebody just clicked, and a region at the bottom would put the
 	// answer off the screen the question was asked from.
-	// The region directory sits after the constructor rather than inside it:
-	// a form nested in a form is not HTML, and this is the screen where
-	// somebody first meets a bare dest code and wonders what it is.
-	return s.jobListHTML(list) + `<div id="job-detail"></div>` + constructor +
+	return s.jobListHTML(list) + `<div id="job-detail"></div>` +
+		`<div id="job-new">` + region + `</div>`, nil
+}
+
+// jobConstructor is what sits under the list: the press that opens the
+// constructor, or the constructor itself.
+//
+// Closed unless somebody asks. Most visits to this tab are to look at what is
+// already there — start something, read why something stopped — and a form of
+// fifteen fields permanently below the list made a screen about a list into a
+// screen about a form, with the list a strip at the top of it.
+//
+// One region and one route, because «добавить задание» and «передумал» are the
+// same place on the screen.
+//
+// The directories come with it. Which pickup point, which region: they are
+// questions a person has while filling this in and nowhere else, and they sit
+// after the form rather than inside it because a form nested in a form is not
+// HTML.
+func (s *Server) jobConstructor(r *http.Request, open bool) (string, error) {
+	if !open {
+		return `<div class="bt-form-actions"><button class="bt-btn bt-btn--primary" type="button" ` +
+			`data-get="/jobs/new" data-target="#job-new">Добавить задание</button></div>`, nil
+	}
+
+	constructor, err := s.constructorHTML(r)
+	if err != nil {
+		return "", err
+	}
+	return constructor +
 		`<section class="bt-card">` + s.pickupSection(r) + `</section>` +
 		`<section class="bt-card">` + s.regionsSection(r) + `</section>`, nil
 }
 
+// newJobHandler opens the constructor, or puts the press back.
+func (s *Server) newJobHandler(w http.ResponseWriter, r *http.Request) {
+	body, err := s.jobConstructor(r, r.URL.Query().Get("close") == "")
+	if err != nil {
+		http.Error(w, "jobs: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.writeHTML(w, body)
+}
+
 // jobsFragment re-renders the screen after an action, without the page around
 // it.
-func (s *Server) jobsFragment(w http.ResponseWriter, r *http.Request, notice string) {
-	body, err := s.jobsHTML(r)
+//
+// open says whether the constructor comes back with it. Saved, it does not —
+// the job is in the list above and the form has nothing left to say. Refused,
+// it does, because the refusal is something to fix in the form and hunting for
+// the button again is not part of fixing it.
+func (s *Server) jobsFragment(w http.ResponseWriter, r *http.Request, notice string, open bool) {
+	body, err := s.jobsHTML(r, open)
 	if err != nil {
 		http.Error(w, "jobs: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -246,21 +289,21 @@ func (s *Server) runJobHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.StartJob == nil {
-		s.jobsFragment(w, r, alert("neutral", "Запуск заданий недоступен в этой сборке."))
+		s.jobsFragment(w, r, alert("neutral", "Запуск заданий недоступен в этой сборке."), false)
 		return
 	}
 	if err := s.StartJob(r.Context(), id); err != nil {
 		// Onto the screen rather than out as a status: every refusal here — no
 		// proxy configured, already running, no such job — is something the
 		// person reading it can act on.
-		s.jobsFragment(w, r, alert("error", err.Error()))
+		s.jobsFragment(w, r, alert("error", err.Error()), false)
 		return
 	}
 	// And what it does from here is on the screen. The events, the endpoint
 	// and the client that reads them were all built — nothing ever asked the
 	// page to start listening, so a run showed a line saying it had started
 	// and then nothing at all until it was over.
-	s.jobsFragment(w, r, alert("success", fmt.Sprintf("Задание %d запущено.", id))+runLiveHTML(id))
+	s.jobsFragment(w, r, alert("success", fmt.Sprintf("Задание %d запущено.", id))+runLiveHTML(id), false)
 }
 
 func (s *Server) stopJobHandler(w http.ResponseWriter, r *http.Request) {
@@ -269,14 +312,14 @@ func (s *Server) stopJobHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.StopJob == nil {
-		s.jobsFragment(w, r, alert("neutral", "Управление заданиями недоступно в этой сборке."))
+		s.jobsFragment(w, r, alert("neutral", "Управление заданиями недоступно в этой сборке."), false)
 		return
 	}
 	if err := s.StopJob(id); err != nil {
-		s.jobsFragment(w, r, alert("error", err.Error()))
+		s.jobsFragment(w, r, alert("error", err.Error()), false)
 		return
 	}
-	s.jobsFragment(w, r, alert("success", fmt.Sprintf("Задание %d остановлено.", id)))
+	s.jobsFragment(w, r, alert("success", fmt.Sprintf("Задание %d остановлено.", id)), false)
 }
 
 func (s *Server) toggleJobHandler(w http.ResponseWriter, r *http.Request) {
@@ -286,18 +329,18 @@ func (s *Server) toggleJobHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	row, err := s.Store.Job(r.Context(), id)
 	if err != nil {
-		s.jobsFragment(w, r, alert("error", err.Error()))
+		s.jobsFragment(w, r, alert("error", err.Error()), false)
 		return
 	}
 	if err := s.Store.SetJobEnabled(r.Context(), id, !row.Enabled); err != nil {
-		s.jobsFragment(w, r, alert("error", err.Error()))
+		s.jobsFragment(w, r, alert("error", err.Error()), false)
 		return
 	}
 	if row.Enabled {
-		s.jobsFragment(w, r, alert("success", "Расписание выключено. Задание осталось — его можно запускать вручную."))
+		s.jobsFragment(w, r, alert("success", "Расписание выключено. Задание осталось — его можно запускать вручную."), false)
 		return
 	}
-	s.jobsFragment(w, r, alert("success", "Расписание включено."))
+	s.jobsFragment(w, r, alert("success", "Расписание включено."), false)
 }
 
 func (s *Server) deleteJobHandler(w http.ResponseWriter, r *http.Request) {
@@ -312,11 +355,11 @@ func (s *Server) deleteJobHandler(w http.ResponseWriter, r *http.Request) {
 		_ = s.StopJob(id)
 	}
 	if err := s.Store.DeleteJob(r.Context(), id); err != nil {
-		s.jobsFragment(w, r, alert("error", err.Error()))
+		s.jobsFragment(w, r, alert("error", err.Error()), false)
 		return
 	}
 	s.jobsFragment(w, r, alert("success",
-		"Задание удалено вместе с его прогонами. Собранное осталось: это данные о сайте, а не о задании."))
+		"Задание удалено вместе с его прогонами. Собранное осталось: это данные о сайте, а не о задании."), false)
 }
 
 // jobIDFromQuery reads the id, or answers why it could not.
@@ -420,6 +463,7 @@ func (s *Server) constructorHTML(r *http.Request) (string, error) {
 	b.WriteString(`<div class="bt-form-actions">
 	  <button class="bt-btn bt-btn--primary" type="submit">Сохранить задание</button>
 	  <button class="bt-btn bt-btn--secondary" type="button" data-post-form="/jobs/estimate" data-target="#estimate">Пересчитать оценку</button>
+	  <button class="bt-btn bt-btn--ghost" type="button" data-get="/jobs/new?close=1" data-target="#job-new">Отмена</button>
 	</div>`)
 	b.WriteString(`</form></section>`)
 	return b.String(), nil
@@ -625,16 +669,18 @@ func (s *Server) saveJobHandler(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		// A validation failure is the user's to fix, not a server fault, and
 		// it arrives in the page rather than as a status the browser would
-		// render as its own error.
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		fmt.Fprint(w, `<section class="bt-card"><div class="bt-alert bt-alert--error">`+
-			html.EscapeString(err.Error())+`</div></section>`)
+		// render as its own error. With the constructor still open, because
+		// that is where the fixing happens.
+		s.jobsFragment(w, r, alert("error", err.Error()), true)
 		return
 	}
 
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprintf(w, `<section class="bt-card"><div class="bt-alert bt-alert--success">Задание «%s» сохранено (№%d).</div>%s</section>`,
-		html.EscapeString(j.Name), id, estimateHTML(j))
+	// The whole screen back, and not a card holding the estimate alone: this
+	// posts into #main, so answering with one card took the list, the run
+	// panel and everything else off the screen until somebody reloaded it.
+	s.jobsFragment(w, r, fmt.Sprintf(
+		`<div class="bt-alert bt-alert--success">Задание «%s» сохранено (№%d).</div>%s`,
+		html.EscapeString(j.Name), id, estimateHTML(j)), false)
 }
 
 // jobFromForm builds a job out of the constructor's fields.

@@ -1326,7 +1326,6 @@ dialog.bt-modal > #settings-body {
 }
 
 .bt[data-bt-theme="dashboard"] .bt-table--results td:nth-child(2) {
-  max-width: 26rem;
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -1382,3 +1381,51 @@ dialog.bt-modal > #settings-body {
   overflow-y: auto;
 }
 
+
+/* ---- the results table -------------------------------------------------- */
+
+/* The whole window, for the one screen that needs it. Everything else on this
+   panel is a form or a card and reads better in a column; a table of sixteen
+   collected facts is not read, it is scanned across, and a column that stops at
+   1400px puts half of it behind a sideways scroll on a monitor with room. */
+.bt[data-bt-theme="dashboard"] .bt-container--full {
+  max-width: none;
+}
+
+/* The table gets a window of its own rather than the page's.
+   Without one, the sideways scrollbar sits at the bottom of a hundred rows:
+   to move a table sideways you first scrolled a page downwards to find the
+   control for it, and then had lost sight of the columns you were moving. */
+.bt[data-bt-theme="dashboard"] .bt-table-wrap--window {
+  max-height: calc(100vh - 22rem);
+  min-height: 20rem;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+/* And the column names stay while the rows go past. In a box that scrolls
+   internally they would otherwise leave at the first turn of the wheel, and a
+   number in the eleventh column of an unlabelled table is a number nobody can
+   read. */
+.bt[data-bt-theme="dashboard"] .bt-table-wrap--window thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bg-card);
+}
+
+/* Denser than the rest: the other tables on this panel hold four or five
+   columns and can afford the air. This one holds sixteen, and every millimetre
+   of padding is a column that did not fit. */
+.bt[data-bt-theme="dashboard"] .bt-table--results td,
+.bt[data-bt-theme="dashboard"] .bt-table--results th {
+  padding: 2px var(--space-2);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+/* A name is the one column worth wrapping room; the rest are short and stay on
+   one line so the eye can run down a column of them. */
+.bt[data-bt-theme="dashboard"] .bt-table--results td:nth-child(2) {
+  max-width: 34rem;
+}

@@ -72,7 +72,7 @@ func TestRegions_TheNameReachesTheRegionPicker(t *testing.T) {
 		t.Fatalf("SaveSearchPage: %v", err)
 	}
 
-	body := get(t, srv, "/jobs", "correct horse").Body.String()
+	body := get(t, srv, "/jobs/new", "correct horse").Body.String()
 	if !strings.Contains(body, "Казань") {
 		t.Errorf("имя региона не дошло до выбора:\n%s", firstLines(body))
 	}
@@ -118,7 +118,7 @@ func TestRegions_AnEmptyDirectorySaysWhereToGetOne(t *testing.T) {
 	// «Пусто» on its own is not an instruction. The map is where a person
 	// already picks a pickup point, and the link off it is what this takes.
 	srv := newServer(t)
-	body := get(t, srv, "/jobs", "correct horse").Body.String()
+	body := get(t, srv, "/jobs/new", "correct horse").Body.String()
 	if !strings.Contains(body, "карту пунктов выдачи") {
 		t.Errorf("не сказано, откуда брать регионы:\n%s", firstLines(body))
 	}

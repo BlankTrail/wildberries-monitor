@@ -39,7 +39,7 @@ func TestConstructor_DrawsEveryFieldTheCatalogueDeclares(t *testing.T) {
 	// catalogue would be collectable by the engine and invisible on the
 	// screen, and a field removed would stay as a box that collects nothing.
 	srv := newServer(t)
-	body := get(t, srv, "/jobs", "correct horse").Body.String()
+	body := get(t, srv, "/jobs/new", "correct horse").Body.String()
 
 	for _, f := range wb.Fields() {
 		if !strings.Contains(body, `value="`+f.Key+`"`) {
@@ -60,7 +60,7 @@ func TestConstructor_SaysWhatEachGroupCosts(t *testing.T) {
 	// The one thing the grouping exists for: a user reading down the list has
 	// to be able to see where the free part ends.
 	srv := newServer(t)
-	body := get(t, srv, "/jobs", "correct horse").Body.String()
+	body := get(t, srv, "/jobs/new", "correct horse").Body.String()
 
 	if !strings.Contains(body, "бесплатно") {
 		t.Error("no group is marked free, so the free/paid boundary is invisible")
@@ -424,7 +424,7 @@ func TestConstructor_OffersEveryKindAsAChoiceThatSaysWhatItWalks(t *testing.T) {
 	// cards rather than a dropdown line — and a kind added to the build
 	// without a card is a kind nobody can pick at all.
 	srv := newServer(t)
-	body := get(t, srv, "/jobs", "correct horse").Body.String()
+	body := get(t, srv, "/jobs/new", "correct horse").Body.String()
 
 	for _, k := range job.Composable() {
 		if !strings.Contains(body, `type="radio" name="kind" value="`+string(k)+`"`) {
@@ -457,7 +457,7 @@ func TestConstructor_ShowsOnlyTheFieldsTheChosenKindUses(t *testing.T) {
 	// A directory to pick from, or the catalogue field is the sentence that
 	// says there is none — which is a different claim than the one under test.
 	seedCategories(t, srv)
-	body := get(t, srv, "/jobs", "correct horse").Body.String()
+	body := get(t, srv, "/jobs/new", "correct horse").Body.String()
 
 	if !strings.Contains(body, `data-switch="kind"`) {
 		t.Fatal("форма не сказала, за каким полем следовать")
@@ -622,7 +622,7 @@ func TestField_PutsItsExplanationUnderAnInfoMark(t *testing.T) {
 	const hint = "Постраничная выдача сама не кончается, поэтому предел обязателен."
 
 	srv := newServer(t)
-	body := get(t, srv, "/jobs", "correct horse").Body.String()
+	body := get(t, srv, "/jobs/new", "correct horse").Body.String()
 
 	at := strings.Index(body, hint)
 	if at < 0 {
@@ -645,7 +645,7 @@ func TestFieldCheckboxes_EachGroupIsLaidOutInColumns(t *testing.T) {
 	// CSS needs is markup — without it the rule matches nothing and the list
 	// goes back to one column with nobody the wiser.
 	srv := newServer(t)
-	body := get(t, srv, "/jobs", "correct horse").Body.String()
+	body := get(t, srv, "/jobs/new", "correct horse").Body.String()
 
 	groups := 0
 	for _, g := range wb.Groups() {

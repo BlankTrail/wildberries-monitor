@@ -41,7 +41,10 @@ func (s *Server) resultsPage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "results: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	s.render(w, r, page{Title: "Результаты", Body: rawHTML(body)})
+	// The whole window. Sixteen columns of collected facts do not fit a reading
+	// column, and the ones that do not fit are the ones somebody came to
+	// compare — price against stock against place.
+	s.render(w, r, page{Title: "Результаты", Body: rawHTML(body), Width: "bt-container--full"})
 }
 
 // resultsFragment renders the same thing without the page, for a filter
@@ -84,7 +87,7 @@ func (s *Server) resultsHTML(r *http.Request) (string, error) {
 	// hundred rows would make it a hundred.
 	names := s.regionNames(r)
 
-	b.WriteString(`<div class="bt-table-wrap"><table class="bt-table bt-table--results"><thead><tr>`)
+	b.WriteString(`<div class="bt-table-wrap bt-table-wrap--window"><table class="bt-table bt-table--results"><thead><tr>`)
 	for _, c := range cols {
 		b.WriteString(sortHeader(q, c))
 	}
