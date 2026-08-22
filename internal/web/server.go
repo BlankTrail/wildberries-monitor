@@ -298,6 +298,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /track/chart", s.auth(http.HandlerFunc(s.trackChart)))
 	mux.Handle("GET /channels", s.auth(http.HandlerFunc(s.channelsPage)))
 	mux.Handle("POST /channels", s.auth(http.HandlerFunc(s.saveChannel)))
+	mux.Handle("GET /channels/edit", s.auth(http.HandlerFunc(s.editChannel)))
 	mux.Handle("GET /channels/test", s.auth(http.HandlerFunc(s.testChannel)))
 	mux.Handle("POST /channels/delete", s.auth(http.HandlerFunc(s.deleteChannel)))
 	mux.Handle("GET /jobs", s.auth(http.HandlerFunc(s.jobsPage)))

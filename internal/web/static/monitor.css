@@ -1330,3 +1330,18 @@ dialog.bt-modal > #settings-body {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* ---- the row a form is open on ------------------------------------------ */
+
+/* The proxy form sits under a table that can be longer than a screen, and it
+   carries no copy of the name it is opened on. So «какой из них я сейчас правлю»
+   has to be answerable at the row as well as at the form, and the answer is the
+   same colour the chosen card in a picker already uses — one language for «это
+   выбрано» rather than two. */
+.bt[data-bt-theme="dashboard"] .bt-table tbody tr.bt-row--current > td {
+  background: #faf5ff;
+}
+
+.bt[data-bt-theme="dashboard"] .bt-table tbody tr.bt-row--current > td:first-child {
+  box-shadow: inset 2px 0 0 var(--accent);
+}

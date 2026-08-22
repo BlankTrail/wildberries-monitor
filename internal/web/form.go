@@ -6,6 +6,7 @@ import (
 	"errors"
 	"html"
 	"net/http"
+	"slices"
 	"strings"
 )
 
@@ -58,6 +59,10 @@ func whenAny[T ~string](inner string, values ...T) string {
 // pick is one choice in a picker: what it stores, what it is called, and what
 // choosing it will do.
 type pick struct {
+	// Checked opens the picker on this one. With none marked the first is
+	// picked, which is what an empty form wants.
+	Checked bool
+
 	Value string
 	Label string
 	What  string
@@ -82,11 +87,14 @@ func picker(legend, field, attrs string, picks []pick) string {
 	var b strings.Builder
 	b.WriteString(`<fieldset class="bt-fieldset bt-fieldset--inset bt-picker">`)
 	b.WriteString(`<legend>` + html.EscapeString(legend) + `</legend>`)
+	marked := slices.ContainsFunc(picks, func(p pick) bool { return p.Checked })
 	for i, p := range picks {
-		// The first is picked, so the form is never a blank that refuses
-		// itself for a choice the screen never offered to make.
+		// Whichever the caller marked, and otherwise the first — so a form
+		// opened on a saved record shows what that record is, and a blank one
+		// is never a blank that refuses itself for a choice the screen never
+		// offered to make.
 		checked := ""
-		if i == 0 {
+		if (marked && p.Checked) || (!marked && i == 0) {
 			checked = ` checked`
 		}
 		b.WriteString(`<label class="bt-pick"><input type="radio" name="` +

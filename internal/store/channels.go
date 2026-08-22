@@ -76,6 +76,15 @@ type ChannelRow struct {
 	LastSavedAt  int64
 }
 
+// ErrNoSuchChannel is what a read or a save reports for a channel that is not
+// there anymore.
+//
+// Almost always the same story: two tabs, one of them deleted the proxy while
+// the other had a form open on it. Its own value rather than the database
+// package's ErrNoRows so that a screen can tell that case apart — and say so in
+// words a person can act on — without importing a database package to do it.
+var ErrNoSuchChannel = errors.New("store: no such channel")
+
 // DefaultChannelRefresh is how often a proxy list is read again when nobody
 // says.
 //
@@ -130,6 +139,9 @@ func (s *Store) Channel(ctx context.Context, id int64) (ChannelRow, error) {
 		SELECT id, name, kind, source, rotate_url, rotate_min_interval_sec,
 		       refresh_sec, default_scheme, enabled, created_at, updated_at
 		FROM channels WHERE id = ?`, id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return ChannelRow{}, fmt.Errorf("store: channel %d: %w", id, ErrNoSuchChannel)
+	}
 	if err != nil {
 		return ChannelRow{}, fmt.Errorf("store: channel %d: %w", id, err)
 	}
@@ -202,7 +214,7 @@ func (s *Store) SaveChannel(ctx context.Context, c ChannelRow) (int64, error) {
 	// in another tab. Reported, because the alternative is a screen that says
 	// "сохранено" over a form whose contents went nowhere.
 	if n, err := res.RowsAffected(); err == nil && n == 0 {
-		return 0, fmt.Errorf("store: save channel %d: %w", c.ID, sql.ErrNoRows)
+		return 0, fmt.Errorf("store: save channel %d: %w", c.ID, ErrNoSuchChannel)
 	}
 	return c.ID, nil
 }

@@ -4,7 +4,6 @@ package store
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"path/filepath"
 	"testing"
@@ -97,14 +96,24 @@ func TestSaveChannel_AnEditKeepsWhenTheChannelWasFirstDefined(t *testing.T) {
 func TestSaveChannel_AnEditOfSomethingDeletedIsReported(t *testing.T) {
 	// Two tabs, one of them stale. Silently doing nothing would put "сохранено"
 	// over a form whose contents went nowhere.
+	//
+	// Reported as this package's own condition rather than the database
+	// package's ErrNoRows, so that the screen which has to say it in words can
+	// tell the case apart without importing a database package to do it.
 	s := openTestStore(t)
 	ctx := context.Background()
 
 	ghost := sampleChannel()
 	ghost.ID = 404
 	_, err := s.SaveChannel(ctx, ghost)
-	if !errors.Is(err, sql.ErrNoRows) {
-		t.Errorf("SaveChannel = %v, ожидалось sql.ErrNoRows", err)
+	if !errors.Is(err, ErrNoSuchChannel) {
+		t.Errorf("SaveChannel = %v, ожидалось ErrNoSuchChannel", err)
+	}
+
+	// And a read of the same ghost says the same thing, so one check covers
+	// both ways a screen can meet a channel that is gone.
+	if _, err := s.Channel(ctx, 404); !errors.Is(err, ErrNoSuchChannel) {
+		t.Errorf("Channel = %v, ожидалось ErrNoSuchChannel", err)
 	}
 }
 

@@ -370,6 +370,22 @@
       follow(el.dataset.follow);
     });
 
+    // A control the server wants the reader looking at, because the swap that
+    // brought it may have changed nothing they can see: the proxy form sits
+    // under a table that can be longer than a screen, so opening it on a saved
+    // record moved the cursor and nothing else.
+    //
+    // Only a fragment ever carries this — the server never renders it into a
+    // page load — so it cannot take focus from somebody who was already typing.
+    // The scroll is instant on purpose: a smooth one is motion nobody asked for
+    // on a screen that just replaced itself.
+    root.querySelectorAll("[data-focus]").forEach((el) => {
+      if (el.dataset.focusWired) return;
+      el.dataset.focusWired = "1";
+      el.scrollIntoView({ block: "center" });
+      el.focus({ preventScroll: true });
+    });
+
     // A filter form that reads rather than writes: its fields go into the
     // query string, so the resulting view has a URL a person can bookmark or
     // send to somebody, which a POST would take away.

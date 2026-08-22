@@ -4,6 +4,7 @@ package web
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"html"
 	"net/http"
@@ -69,35 +70,58 @@ func (s *Server) channelsPage(w http.ResponseWriter, r *http.Request) {
 	s.render(w, r, page{Title: "Прокси", Body: rawHTML(body)})
 }
 
-// channelsFragment renders the same thing without the page around it, for a
-// save that must not reload the tab.
-func (s *Server) channelsFragment(w http.ResponseWriter, r *http.Request, notice string) {
-	body, err := s.channelsHTML(r)
+// channelsFragment renders the inside of that section, for a save that must not
+// reload the tab.
+//
+// The inside and not the section itself. The script sets the target's
+// innerHTML, and the target is the section — so a fragment carrying its own
+// <section id="channels-body"> put a second element of that id inside the
+// first: a card drawn inside a card, and an id that no longer names one thing.
+//
+// form is the record the form below the table is opened on. The zero value is
+// the new-proxy form. A save that was refused passes back what was posted, so
+// that a refusal costs a sentence and not everything the person had typed.
+func (s *Server) channelsFragment(w http.ResponseWriter, r *http.Request, notice string, form store.ChannelRow) {
+	body, err := s.channelsBody(r.Context(), notice, form)
 	if err != nil {
 		http.Error(w, "channels: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprint(w, notice+body)
+	fmt.Fprint(w, body)
 }
 
 func (s *Server) channelsHTML(r *http.Request) (string, error) {
-	ctx := r.Context()
+	body, err := s.channelsBody(r.Context(), "", store.ChannelRow{})
+	if err != nil {
+		return "", err
+	}
+	return `<section id="channels-body" class="bt-card">` + body + `</section>`, nil
+}
+
+// channelsBody is the heading, what exists, and the form — everything the
+// section holds, so that a swap replaces the screen rather than nesting one
+// copy of it inside another.
+func (s *Server) channelsBody(ctx context.Context, notice string, form store.ChannelRow) (string, error) {
 	list, err := s.Store.Channels(ctx)
 	if err != nil {
 		return "", err
 	}
 
 	var b strings.Builder
-	b.WriteString(`<section id="channels-body" class="bt-card"><h2>Прокси выхода</h2>`)
-	b.WriteString(channelList(list))
-	b.WriteString(s.channelForm(ctx))
-	b.WriteString(`</section>`)
+	b.WriteString(`<h2>Прокси выхода</h2>`)
+	b.WriteString(notice)
+	b.WriteString(channelList(list, form.ID))
+	b.WriteString(s.channelForm(ctx, form))
 	return b.String(), nil
 }
 
 // channelList shows what exists, and what the mix comes to.
-func channelList(list []store.ChannelRow) string {
+//
+// editing is the row the form below is opened on, marked here as well: the form
+// is under a table that can be longer than the screen, and «какой из них я
+// сейчас правлю» is a question the form alone cannot answer.
+func channelList(list []store.ChannelRow, editing int64) string {
 	var b strings.Builder
 
 	// The state of a fresh install, said plainly rather than left as an empty
@@ -125,14 +149,22 @@ func channelList(list []store.ChannelRow) string {
 				state = `<span class="bt-badge bt-badge--neutral bt-badge--sm">выключен</span>`
 			}
 
-			b.WriteString(`<tr>`)
+			if c.ID == editing {
+				b.WriteString(`<tr class="bt-row--current" aria-current="true">`)
+			} else {
+				b.WriteString(`<tr>`)
+			}
 			b.WriteString(`<td>` + html.EscapeString(c.Name) + `</td>`)
 			b.WriteString(`<td>` + html.EscapeString(channelLabel(c.Kind)) + `</td>`)
 			b.WriteString(`<td class="bt-cell-wrap">` + html.EscapeString(sourceText(c)) + `</td>`)
 			b.WriteString(`<td>` + state + `</td>`)
 			fmt.Fprintf(&b,
-				`<td class="bt-row-actions"><button class="bt-btn bt-btn--ghost bt-btn--sm" data-get="/channels/test?id=%d" data-target="#channel-test">Проверить</button>%s</td>`,
-				c.ID, action("/channels/delete?id="+fmt.Sprint(c.ID), "#channels-body", "Удалить"))
+				`<td class="bt-row-actions">`+
+					`<button class="bt-btn bt-btn--ghost bt-btn--sm" type="button" data-get="/channels/edit?id=%d" data-target="#channels-body">Изменить</button>`+
+					`<button class="bt-btn bt-btn--ghost bt-btn--sm" type="button" data-get="/channels/test?id=%d" data-target="#channel-test">Проверить</button>`+
+					`%s</td>`,
+				c.ID, c.ID,
+				action("/channels/delete?id="+fmt.Sprint(c.ID), "#channels-body", "Удалить"))
 			b.WriteString(`</tr>`)
 		}
 		b.WriteString(`</tbody></table></div>`)
@@ -209,13 +241,44 @@ func maskPassword(source string) string {
 	return prefix + userinfo[:colon] + ":***" + host + tail
 }
 
-func (s *Server) channelForm(ctx context.Context) string {
+// channelForm is the form, empty for a new proxy and filled in for one being
+// changed.
+//
+// One form and not two. A screen with an «добавить» form and a separate
+// «изменить» form has two places for every field, and the day somebody adds a
+// field to one of them is the day the other quietly stops carrying it.
+func (s *Server) channelForm(ctx context.Context, form store.ChannelRow) string {
+	editing := form.ID != 0
+
+	// The value belongs to the field of the chosen kind and to no other. Three
+	// fields carry the name «source», and a value left in one that the choice
+	// does not use is a list path saved as a rotating proxy's entry point the
+	// first time somebody submits without the script.
+	source := func(kind string) string {
+		if form.Kind != kind {
+			return ""
+		}
+		return ` value="` + html.EscapeString(form.Source) + `"`
+	}
+
 	var b strings.Builder
-	b.WriteString(`<h3>Новый прокси</h3>`)
+	if editing {
+		b.WriteString(`<h3>Изменить прокси</h3>`)
+	} else {
+		b.WriteString(`<h3>Новый прокси</h3>`)
+	}
 	b.WriteString(`<form class="bt-fieldset bt-form" data-post="/channels" data-target="#channels-body" data-switch="kind">`)
+	if editing {
+		// Which record is being written over. Without it every save is a new
+		// proxy, which is what this screen did for as long as there was no way
+		// to change one — while the store underneath knew how to update all
+		// along.
+		b.WriteString(hidden("id", strconv.FormatInt(form.ID, 10)))
+	}
 
 	b.WriteString(field("Название",
-		`<input class="bt-input" name="name" required placeholder="список провайдера">`,
+		`<input class="bt-input" name="name" required placeholder="список провайдера" value="`+
+			html.EscapeString(form.Name)+`"`+focusIf(editing)+`>`,
 		"По нему прокси узнаётся в логе прогона, и по нему же ему считается вес в смеси — так что двум записям одно имя давать не стоит."))
 
 	// The kind, as cards. Each carries its own description, so the four are no
@@ -223,7 +286,10 @@ func (s *Server) channelForm(ctx context.Context) string {
 	// nothing could swap a hint when the choice changed, and now something can.
 	picks := make([]pick, 0, len(channelKinds))
 	for _, k := range channelKinds {
-		picks = append(picks, pick{Value: k.Kind, Label: k.Label, What: k.Hint})
+		picks = append(picks, pick{
+			Value: k.Kind, Label: k.Label, What: k.Hint,
+			Checked: k.Kind == form.Kind,
+		})
 	}
 	b.WriteString(picker("Вид прокси", "kind", "", picks))
 
@@ -242,28 +308,32 @@ func (s *Server) channelForm(ctx context.Context) string {
 	// provider hands over — a host, a port and usually a login.
 	b.WriteString(whenAny(
 		field("Список прокси",
-			`<input class="bt-input" id="channel-source" name="source" placeholder="C:\proxies\list.txt или https://provider.example/list.txt">`,
+			`<input class="bt-input" id="channel-source" name="source" placeholder="C:\proxies\list.txt или https://provider.example/list.txt"`+
+				source(store.ChannelList)+`>`,
 			"Путь к файлу или адрес списка. Читается там, где лежит, и перечитывается сам — как часто, ниже."),
 		store.ChannelList))
 	b.WriteString(whenAny(
 		field("Прокси",
-			`<input class="bt-input" id="channel-upstream" name="source" placeholder="socks5://user:pass@host:1080 или host:1080:user:pass">`,
+			`<input class="bt-input" id="channel-upstream" name="source" placeholder="socks5://user:pass@host:1080 или host:1080:user:pass"`+
+				source(store.ChannelRotating)+`>`,
 			"Один адрес, который меняется по ссылке ниже. Принимаются пять написаний: со схемой и без, с логином и без."),
 		store.ChannelRotating))
 	b.WriteString(whenAny(
 		field("Имя конфигурации",
-			`<input class="bt-input" id="channel-gateway" name="source" placeholder="имя из BlankTrail">`,
+			`<input class="bt-input" id="channel-gateway" name="source" placeholder="имя из BlankTrail"`+
+				source(store.ChannelGateway)+`>`,
 			"Как шлюз называется в BlankTrail. Выбор из списка выше подставляет его сюда."),
 		store.ChannelGateway))
 
 	var schemes strings.Builder
 	schemes.WriteString(`<select class="bt-select" name="default_scheme">`)
-	for _, s := range proxySchemes {
-		label := s
-		if s == "" {
+	for _, scheme := range proxySchemes {
+		label := scheme
+		if scheme == "" {
 			label = "— по умолчанию —"
 		}
-		schemes.WriteString(`<option value="` + html.EscapeString(s) + `">` + html.EscapeString(label) + `</option>`)
+		schemes.WriteString(`<option value="` + html.EscapeString(scheme) + `"` +
+			selectedIf(scheme == form.DefaultScheme) + `>` + html.EscapeString(label) + `</option>`)
 	}
 	schemes.WriteString(`</select>`)
 
@@ -274,7 +344,8 @@ func (s *Server) channelForm(ctx context.Context) string {
 		store.ChannelList, store.ChannelRotating))
 	b.WriteString(whenAny(
 		field("Ссылка смены адреса",
-			`<input class="bt-input" name="rotate_url" placeholder="https://provider.example/rotate?key=...">`,
+			`<input class="bt-input" name="rotate_url" placeholder="https://provider.example/rotate?key=..." value="`+
+				html.EscapeString(form.RotateURL)+`">`,
 			"Без неё это один адрес, который никогда не меняется."),
 		store.ChannelRotating))
 	// The list is somebody else's document, and the only thing this program can
@@ -284,26 +355,96 @@ func (s *Server) channelForm(ctx context.Context) string {
 	// list could not hurry it.
 	b.WriteString(whenAny(
 		field("Перечитывать, минут",
-			fmt.Sprintf(`<input class="bt-input" name="refresh_min" type="number" min="0" placeholder="%d">`,
-				int(store.DefaultChannelRefresh/time.Minute)),
+			fmt.Sprintf(`<input class="bt-input" name="refresh_min" type="number" min="0" placeholder="%d"%s>`,
+				int(store.DefaultChannelRefresh/time.Minute),
+				numberValue(int(form.Refresh/time.Minute))),
 			fmt.Sprintf("Как часто читать список заново, пока идёт сбор. Пусто или 0 — каждые %d минут. "+
 				"Правка списка вступает в силу без пересохранения канала.",
 				int(store.DefaultChannelRefresh/time.Minute))),
 		store.ChannelList))
 	b.WriteString(whenAny(
 		field("Не чаще, секунд",
-			`<input class="bt-input" name="rotate_min_interval" type="number" min="0" placeholder="90">`,
+			`<input class="bt-input" name="rotate_min_interval" type="number" min="0" placeholder="90"`+
+				numberValue(int(form.RotateMinInterval/time.Second))+`>`,
 			"Минимальный интервал, который держит провайдер. Дёрнуть ссылку чаще — потерять прокси, поэтому проверка её не дёргает вовсе."),
 		store.ChannelRotating))
 	b.WriteString(`</div>`)
 
+	// A new proxy is on by default — nobody adds one meaning to leave it out —
+	// and one being changed is however it was left.
 	b.WriteString(field("Включён",
-		`<label class="bt-checkbox"><input type="checkbox" name="enabled" value="1" checked><span>участвует в сборе</span></label>`,
+		`<label class="bt-checkbox"><input type="checkbox" name="enabled" value="1"`+
+			checkedIf(!editing || form.Enabled)+`><span>участвует в сборе</span></label>`,
 		"Выключенный прокси остаётся сохранённым — список, который чинят, не надо набирать заново."))
 
-	b.WriteString(`<div class="bt-form-actions"><button class="bt-btn bt-btn--primary" type="submit">Сохранить прокси</button></div>`)
+	b.WriteString(`<div class="bt-form-actions">`)
+	if editing {
+		b.WriteString(`<button class="bt-btn bt-btn--primary" type="submit">Сохранить изменения</button>`)
+		// «Отмена» is the same route with nothing to open on: giving up on an
+		// edit and starting a new proxy are one screen, so they are one route.
+		b.WriteString(`<button class="bt-btn bt-btn--ghost" type="button" ` +
+			`data-get="/channels/edit" data-target="#channels-body">Отмена</button>`)
+	} else {
+		b.WriteString(`<button class="bt-btn bt-btn--primary" type="submit">Сохранить прокси</button>`)
+	}
+	b.WriteString(`</div>`)
 	b.WriteString(`</form>`)
 	return b.String()
+}
+
+// focusIf puts the reader where the screen just changed.
+//
+// The form sits under a table that can be longer than a screen, so opening it
+// on a saved proxy could move nothing a person can see. The attribute is only
+// ever rendered into a fragment that replaced part of the page — never into a
+// page load — so it cannot take the cursor away from somebody mid-sentence.
+func focusIf(on bool) string {
+	if on {
+		return " data-focus"
+	}
+	return ""
+}
+
+func selectedIf(on bool) string {
+	if on {
+		return " selected"
+	}
+	return ""
+}
+
+// numberValue renders a stored number into a box that has a placeholder for
+// «не указано».
+//
+// Nothing rather than a zero, and nothing rather than the default: an empty box
+// and the default are the same setting, and a box pre-filled with the default
+// hides which of the two this record actually is.
+func numberValue(n int) string {
+	if n <= 0 {
+		return ""
+	}
+	return ` value="` + strconv.Itoa(n) + `"`
+}
+
+// editChannel opens the form on a saved proxy.
+//
+// Without an id it is the empty form, which is what «Отмена» asks for: stopping
+// an edit and starting a new proxy are the same screen.
+func (s *Server) editChannel(w http.ResponseWriter, r *http.Request) {
+	var form store.ChannelRow
+	if id, err := strconv.ParseInt(r.URL.Query().Get("id"), 10, 64); err == nil && id != 0 {
+		row, err := s.Store.Channel(r.Context(), id)
+		if errors.Is(err, store.ErrNoSuchChannel) {
+			s.channelsFragment(w, r, alert("error",
+				"Этого прокси больше нет — его удалили в другой вкладке."), store.ChannelRow{})
+			return
+		}
+		if err != nil {
+			http.Error(w, "channels: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		form = row
+	}
+	s.channelsFragment(w, r, "", form)
 }
 
 // saveChannel takes the form.
@@ -317,6 +458,17 @@ func (s *Server) saveChannel(w http.ResponseWriter, r *http.Request) {
 		Name:    strings.TrimSpace(r.PostFormValue("name")),
 		Kind:    r.PostFormValue("kind"),
 		Enabled: r.PostFormValue("enabled") != "",
+	}
+	// The record the form was opened on, when it was opened on one. A form
+	// without it is a new proxy — the common case, and the only one this
+	// screen had for as long as the id was missing.
+	//
+	// Whatever parses is passed on rather than screened for sensibility here.
+	// The store is what knows which ids name a row: an id that names none is
+	// refused there in so many words, and a second opinion in this function
+	// could only turn that refusal into a silent new proxy.
+	if id, err := strconv.ParseInt(r.PostFormValue("id"), 10, 64); err == nil {
+		row.ID = id
 	}
 
 	// Only the fields the chosen kind uses. The form shows one set at a time,
@@ -355,12 +507,24 @@ func (s *Server) saveChannel(w http.ResponseWriter, r *http.Request) {
 		// Back as a message on the screen rather than as a status code: the
 		// refusals here — no name, a kind or a scheme outside the catalogue —
 		// are things the person filling the form has to change, and a 400 they
-		// cannot read tells them nothing.
-		s.channelsFragment(w, r, `<div class="bt-alert bt-alert--error">`+
-			html.EscapeString(err.Error())+`</div>`)
+		// cannot read tells them nothing. The form comes back holding what was
+		// typed, so changing it costs a word rather than the whole form.
+		text := err.Error()
+		if errors.Is(err, store.ErrNoSuchChannel) {
+			// The one refusal that is not about the form: somebody deleted this
+			// proxy in another tab while it was open here.
+			text = "Этот прокси удалили, пока форма была открыта. Уберите номер записи — и он сохранится как новый."
+		}
+		s.channelsFragment(w, r, alert("error", text), row)
 		return
 	}
-	s.channelsFragment(w, r, `<div class="bt-alert bt-alert--success">Прокси сохранён.</div>`)
+	saved := "Прокси сохранён."
+	if row.ID != 0 {
+		saved = "Прокси изменён."
+	}
+	// And back to the empty form: the change is in the table above, and a form
+	// still holding it invites saving the same edit twice.
+	s.channelsFragment(w, r, alert("success", saved), store.ChannelRow{})
 }
 
 func (s *Server) deleteChannel(w http.ResponseWriter, r *http.Request) {
@@ -373,7 +537,7 @@ func (s *Server) deleteChannel(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "channels: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	s.channelsFragment(w, r, `<div class="bt-alert bt-alert--success">Прокси удалён.</div>`)
+	s.channelsFragment(w, r, alert("success", "Прокси удалён."), store.ChannelRow{})
 }
 
 // testChannel is spec section 7.9's "tests".
