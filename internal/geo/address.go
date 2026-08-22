@@ -87,6 +87,14 @@ func Parse(address string) (settlement, region string) {
 		if region == "" {
 			region = r.Name
 		}
+		// Moscow, St Petersburg and Sevastopol are a city and a region at
+		// once, so «Санкт-Петербург, Невский проспект, 1» is not a region
+		// followed by a settlement — it is the city followed by its street.
+		// Read the other way it puts «Невский проспект» in the picker as a
+		// town.
+		if Key(r.Centre) == Key(r.Name) {
+			return r.Centre, region
+		}
 		if len(parts) > 1 {
 			return trimSettlement(parts[1]), region
 		}
@@ -97,6 +105,16 @@ func Parse(address string) (settlement, region string) {
 	}
 
 	name := trimSettlement(first)
+	if region == "" {
+		// Moscow, St Petersburg and Sevastopol are a city and a region at
+		// once, and the site writes them as «г. Москва, улица…» with no region
+		// anywhere in the line. Without this they are cities belonging to
+		// nowhere, and the sweep in split.go would hand them whichever region
+		// happened to be nearest.
+		if r, ok := RegionByName(name); ok && Key(r.Centre) == Key(name) {
+			region = r.Name
+		}
+	}
 	if !plausible(name) {
 		// «Кантауровский с/с», «Верейское с/п», «Ленина 4» — an administrative
 		// unit or a bare street, not a settlement. Kept as a name it would put

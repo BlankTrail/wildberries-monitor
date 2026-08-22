@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/BlankTrail/wildberries-monitor/internal/geo"
 	"github.com/BlankTrail/wildberries-monitor/internal/store"
 	"github.com/BlankTrail/wildberries-monitor/wb"
 )
@@ -115,6 +116,19 @@ func (s *Server) deleteRegion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.writeHTML(w, s.regionsBody(r))
+}
+
+// regionNamed is a region's own name, by its directory code.
+//
+// The picker's own codes — «ta», «mow» — and not the site's dest: those name a
+// subject of the federation, which has no single dest, and that difference is
+// the whole shape of section 4.5.
+func regionNamed(code string) (string, bool) {
+	r, ok := geo.RegionOf(strings.TrimSpace(code))
+	if !ok {
+		return "", false
+	}
+	return r.Name, true
 }
 
 // regionLabel is how one code reads on a screen.

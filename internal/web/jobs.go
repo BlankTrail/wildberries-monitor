@@ -115,6 +115,7 @@ func (s *Server) jobsHTML(r *http.Request) (string, error) {
 	// a form nested in a form is not HTML, and this is the screen where
 	// somebody first meets a bare dest code and wonders what it is.
 	return s.jobListHTML(list) + `<div id="job-detail"></div>` + constructor +
+		`<section class="bt-card">` + s.pickupSection(r) + `</section>` +
 		`<section class="bt-card">` + s.regionsSection(r) + `</section>`, nil
 }
 

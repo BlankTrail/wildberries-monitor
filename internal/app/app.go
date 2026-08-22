@@ -231,6 +231,18 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 			}
 			return a.Engine.PickupPoint(ctx, id)
 		},
+		// The site's whole directory of delivery points: one request for the
+		// country, so the picker can offer five thousand settlements without a
+		// network call per keystroke.
+		PickupDirectory: func(ctx context.Context) (int, int, error) {
+			return a.refreshPickupDirectory(ctx)
+		},
+		// And the expensive half: the region code of every chosen point that
+		// has never been asked for one. See pickup.go — the codes are kept, so
+		// the same point is never paid for twice.
+		ResolvePickup: func(ctx context.Context, ids []int64) (store.PickupResolution, error) {
+			return a.resolvePickup(ctx, ids)
+		},
 		CheckBlankTrail: func(ctx context.Context, url, apiKey string) error {
 			client, err := blanktrail.NewClient(url, apiKey)
 			if err != nil {

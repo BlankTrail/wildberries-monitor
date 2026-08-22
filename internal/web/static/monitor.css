@@ -839,3 +839,125 @@ dialog.bt-modal > #settings-body {
 .bt[data-bt-theme="dashboard"] .bt-delta--even {
   color: var(--text-muted);
 }
+
+/* ---- the region picker -------------------------------------------------- */
+
+/* Three columns that narrow each other: region, settlement, delivery point.
+   A grid rather than a set of dropdowns because the choice at each level is
+   made against a number — how many points are in it, how many of those already
+   have their region code — and a select hides that number until it is too late
+   to change your mind about it.
+
+   On a narrow screen they stack. That is not a fallback: a picker that scrolls
+   sideways is one where the third column is invisible on the device most
+   people would open a panel on from the sofa. */
+.bt[data-bt-theme="dashboard"] .bt-cols {
+  display: grid;
+  gap: var(--space-3);
+  margin: var(--space-3) 0;
+}
+
+@media (min-width: 60rem) {
+  .bt[data-bt-theme="dashboard"] .bt-cols--three {
+    grid-template-columns: 1fr 1fr 1.4fr;
+  }
+}
+
+/* The third column holds addresses, which are long, so it gets the extra
+   width above and the others get equal shares of what is left. */
+.bt[data-bt-theme="dashboard"] .bt-col {
+  min-width: 0;
+  padding: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card-2);
+}
+
+/* A scrolling list rather than a table: these are choices, not data. The
+   height is a screenful — five thousand settlements in one region's column
+   would otherwise push the two columns beside it off the page. */
+.bt[data-bt-theme="dashboard"] .bt-list {
+  max-height: 22rem;
+  overflow-y: auto;
+  margin-top: var(--space-2);
+}
+
+.bt[data-bt-theme="dashboard"] .bt-list-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: var(--space-1) var(--space-2);
+  background: var(--bg-card-2);
+  color: var(--text-muted);
+  font-size: .75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+
+/* One row is one choice. A button rather than a link because nothing here
+   navigates — every click replaces the column to its right. */
+.bt[data-bt-theme="dashboard"] .bt-list-row {
+  display: flex;
+  gap: var(--space-2);
+  align-items: baseline;
+  justify-content: space-between;
+  width: 100%;
+  padding: var(--space-1) var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.bt[data-bt-theme="dashboard"] .bt-list-row:hover {
+  background: var(--bg-input);
+}
+
+.bt[data-bt-theme="dashboard"] .bt-list-row:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: -2px;
+}
+
+/* The count beside a row. Dim because it is the qualifier, not the choice —
+   but tabular, because two of them one above the other are being compared. */
+.bt[data-bt-theme="dashboard"] .bt-dim {
+  color: var(--text-muted);
+  font-size: .8rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* A submit control that has to read as the row it sits in. The delivery points
+   are forms — choosing one posts it — and a button drawn as a button would put
+   forty of them in a column that is meant to read as a list of addresses. */
+.bt[data-bt-theme="dashboard"] .bt-linklike {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-link);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.bt[data-bt-theme="dashboard"] .bt-linklike:hover {
+  text-decoration: underline;
+}
+
+.bt[data-bt-theme="dashboard"] .bt-alert--sm {
+  padding: var(--space-2);
+  font-size: .8rem;
+}
+
+/* The presets sit in a row of their own above the columns, each a choice plus
+   the one question that goes with it. Tight, because they are three controls
+   and not a form somebody fills in. */
+.bt[data-bt-theme="dashboard"] .bt-form-grid--tight {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}

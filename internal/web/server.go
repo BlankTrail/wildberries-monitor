@@ -110,6 +110,17 @@ type Server struct {
 	// tests must not need a live Wildberries to render a directory.
 	PickupPoint func(ctx context.Context, id int64) (wb.PickupPoint, error)
 
+	// PickupDirectory reads the site's whole directory of delivery points and
+	// stores it, returning how many settlements and how many points. One
+	// request for the country — see spec section 4.5's picker.
+	PickupDirectory func(ctx context.Context) (places, points int, err error)
+
+	// ResolvePickup asks the site for the region code of each of these points,
+	// keeping what it learns. It is the expensive half of the picker: one
+	// request per point that has never been asked, and nothing at all for the
+	// ones already known.
+	ResolvePickup func(ctx context.Context, ids []int64) (store.PickupResolution, error)
+
 	CheckTelegram func(ctx context.Context, token string) (username string, err error)
 	// TelegramRoute names the rung currently in use, for the settings screen.
 	TelegramRoute func() string
@@ -280,6 +291,10 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /jobs/estimate", s.auth(http.HandlerFunc(s.estimateHandler)))
 	mux.Handle("POST /jobs/categories", s.auth(http.HandlerFunc(s.refreshCategories)))
 	mux.Handle("POST /regions", s.auth(http.HandlerFunc(s.addRegion)))
+	mux.Handle("GET /pickup/settlements", s.auth(http.HandlerFunc(s.pickupSettlements)))
+	mux.Handle("GET /pickup/points", s.auth(http.HandlerFunc(s.pickupPoints)))
+	mux.Handle("POST /pickup/refresh", s.auth(http.HandlerFunc(s.refreshPickup)))
+	mux.Handle("POST /pickup/add", s.auth(http.HandlerFunc(s.addPickup)))
 	mux.Handle("POST /regions/delete", s.auth(http.HandlerFunc(s.deleteRegion)))
 	mux.Handle("POST /jobs/phrases", s.auth(http.HandlerFunc(s.uploadPhrases)))
 	mux.Handle("GET /jobs/detail", s.auth(http.HandlerFunc(s.jobDetail)))
