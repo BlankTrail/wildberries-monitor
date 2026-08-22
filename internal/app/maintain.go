@@ -81,6 +81,10 @@ func (a *App) maintain(ctx context.Context) {
 		// half of the pass.
 	}
 
+	// The files the aggregated notifications left behind. Cheap, and it belongs
+	// with the rest of the housekeeping rather than on a timer of its own.
+	a.sweepSummaries()
+
 	if err := a.Store.SetSetting(ctx, store.SettingLastMaintenance,
 		strconv.FormatInt(time.Now().Unix(), 10), store.SettingInt); err != nil {
 		a.Log.Printf("история: время обслуживания не записано: %v", err)

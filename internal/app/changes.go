@@ -57,10 +57,11 @@ func (a *App) detectChanges(ctx context.Context) {
 	}
 
 	since := a.watermark(ctx)
-	engine := rules.Engine{
+	engine := &rules.Engine{
 		Store:      a.Store,
 		Suppressor: a.suppressor(ctx),
 		Render:     renderFiring,
+		Summarise:  a.summarise,
 	}
 
 	seen, fired := 0, 0
@@ -104,8 +105,20 @@ func (a *App) detectChanges(ctx context.Context) {
 		highest = max(highest, at)
 	}
 
+	// The pass is over, so the aggregating rules can be told how many they
+	// fired on. Before the watermark moves: a summary that failed to queue
+	// must not have its firings marked as looked at.
+	summaries, err := engine.Flush(ctx)
+	if err != nil {
+		a.Log.Printf("правила: сводки не поставлены в очередь: %v", err)
+		return
+	}
+
 	if highest > since {
 		a.setWatermark(ctx, highest)
+	}
+	if summaries > 0 {
+		a.Log.Printf("правила: сводок %d", summaries)
 	}
 	if fired > 0 {
 		a.Log.Printf("правила: сработок %d", fired)
@@ -115,7 +128,7 @@ func (a *App) detectChanges(ctx context.Context) {
 // applySeries diffs one product's last two readings and runs the rules over
 // what moved. It returns how many rules fired and the timestamp of the newest
 // reading it looked at.
-func (a *App) applySeries(ctx context.Context, e rules.Engine, all []rules.Rule, key store.SeriesKey) (int, int64, error) {
+func (a *App) applySeries(ctx context.Context, e *rules.Engine, all []rules.Rule, key store.SeriesKey) (int, int64, error) {
 	points, err := a.Store.LastTwoPoints(ctx, key)
 	if err != nil {
 		return 0, 0, err
@@ -160,7 +173,7 @@ func (a *App) applySeries(ctx context.Context, e rules.Engine, all []rules.Rule,
 }
 
 // applyPlacement does the same for one product's rank on one phrase.
-func (a *App) applyPlacement(ctx context.Context, e rules.Engine, all []rules.Rule, key store.PhraseKey) (int, int64, error) {
+func (a *App) applyPlacement(ctx context.Context, e *rules.Engine, all []rules.Rule, key store.PhraseKey) (int, int64, error) {
 	points, err := a.Store.LastTwoPlacements(ctx, key)
 	if err != nil {
 		return 0, 0, err

@@ -125,6 +125,10 @@ func fromRow(row store.RuleRow) (Rule, error) {
 // It is the one place that knows all four, and it is deliberately small — the
 // judgement lives in Matches and Decide, both of which are testable without a
 // database, and this only carries the answer to the queue.
+//
+// One Engine is one pass. That matters for the aggregating rules: «вместо
+// сорока сообщений одно» needs a boundary to count the forty inside, and the
+// boundary is the pass — see Flush.
 type Engine struct {
 	Store      *store.Store
 	Suppressor Suppressor
@@ -133,6 +137,30 @@ type Engine struct {
 	// business, and so a caller can render for a channel that wants
 	// something other than prose.
 	Render func(r Rule, ev Event) (body, attachment string)
+
+	// Summarise turns everything one aggregating rule fired on in this pass
+	// into a single message. Spec section 6.3: «40 товаров подешевели», the
+	// first few in the text and the rest in a file whose path is the second
+	// return value.
+	//
+	// Optional in the same sense Render is. An aggregating rule with no
+	// Summarise falls back to Render over the first firing, which is a worse
+	// message than the summary and a much better one than silence.
+	Summarise func(r Rule, firings []Firing) (body, attachment string)
+
+	// held is what the aggregating rules have fired on so far, by rule id.
+	// Nothing reaches the queue from here until Flush.
+	held map[int64][]Firing
+	// order is the rule ids in the order they first fired, so that two passes
+	// over the same data queue the same messages in the same order.
+	order []int64
+}
+
+// Firing is one match that got through, kept for the summary.
+type Firing struct {
+	Rule    Rule
+	Event   Event
+	EventID int64
 }
 
 // Apply runs every rule against one change.
@@ -140,7 +168,7 @@ type Engine struct {
 // Every match is recorded, including the suppressed ones. That is the whole
 // value of rule_events: a product that silently drops notifications cannot be
 // debugged by the person who stopped receiving them.
-func (e Engine) Apply(ctx context.Context, all []Rule, ev Event) (fired int, err error) {
+func (e *Engine) Apply(ctx context.Context, all []Rule, ev Event) (fired int, err error) {
 	for _, r := range all {
 		if !r.Matches(ev) {
 			continue
@@ -168,21 +196,83 @@ func (e Engine) Apply(ctx context.Context, all []Rule, ev Event) (fired int, err
 			continue
 		}
 
+		if r.Aggregate {
+			// Held rather than queued. The rule said its firings should arrive
+			// as one message, and a message per firing is exactly the product
+			// spec section 6.3 says gets switched off on the second day.
+			if e.held == nil {
+				e.held = map[int64][]Firing{}
+			}
+			if _, seen := e.held[r.ID]; !seen {
+				e.order = append(e.order, r.ID)
+			}
+			e.held[r.ID] = append(e.held[r.ID], Firing{Rule: r, Event: ev, EventID: eventID})
+			fired++
+			continue
+		}
+
 		body, attachment := "", ""
 		if e.Render != nil {
 			body, attachment = e.Render(r, ev)
 		}
-		for _, target := range r.Targets {
-			if _, err := e.Store.Enqueue(ctx, store.OutboxRow{
-				TargetID:    target,
-				RuleEventID: &eventID,
-				Body:        body,
-				Attachment:  attachment,
-			}); err != nil {
-				return fired, err
-			}
+		if err := e.queue(ctx, r, &eventID, body, attachment); err != nil {
+			return fired, err
 		}
 		fired++
 	}
 	return fired, nil
+}
+
+// Flush queues one message per aggregating rule that fired in this pass.
+//
+// Called at the end of a pass, and safe to call when nothing was held. What it
+// returns is how many messages it queued — one per rule, not one per firing,
+// which is the whole point.
+//
+// The rule event a queued message points at is the first firing's. It is one
+// row and there were many; the alternative is to point at none, and a message
+// nobody can trace back to a change is one nobody can debug when it turns out
+// to be wrong.
+func (e *Engine) Flush(ctx context.Context) (queued int, err error) {
+	for _, id := range e.order {
+		firings := e.held[id]
+		if len(firings) == 0 {
+			continue
+		}
+		r := firings[0].Rule
+
+		var body, attachment string
+		switch {
+		case e.Summarise != nil:
+			body, attachment = e.Summarise(r, firings)
+		case e.Render != nil:
+			// No summariser wired. One firing's message is a worse answer than
+			// the summary and a far better one than silence — and it says
+			// which rule, so the person can see the rest in its log.
+			body, attachment = e.Render(r, firings[0].Event)
+		}
+
+		first := firings[0].EventID
+		if err := e.queue(ctx, r, &first, body, attachment); err != nil {
+			return queued, err
+		}
+		queued++
+	}
+	e.held, e.order = nil, nil
+	return queued, nil
+}
+
+// queue puts one message in front of every addressee the rule names.
+func (e *Engine) queue(ctx context.Context, r Rule, eventID *int64, body, attachment string) error {
+	for _, target := range r.Targets {
+		if _, err := e.Store.Enqueue(ctx, store.OutboxRow{
+			TargetID:    target,
+			RuleEventID: eventID,
+			Body:        body,
+			Attachment:  attachment,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
