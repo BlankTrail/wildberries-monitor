@@ -402,8 +402,8 @@ func TestChannelForm_AsksOnlyForWhatTheChosenKindUses(t *testing.T) {
 		name  string
 		kinds []string
 	}{
-		// One per kind, each labelled for what it wants — see the form.
-		{"source", []string{store.ChannelList}},
+		// «source» is not here: three fields carry it, one per kind that asks
+		// for something, and each is pinned by its own id in the loop above.
 		{"default_scheme", []string{store.ChannelList, store.ChannelRotating}},
 		{"rotate_url", []string{store.ChannelRotating}},
 		{"rotate_min_interval", []string{store.ChannelRotating}},
@@ -414,12 +414,16 @@ func TestChannelForm_AsksOnlyForWhatTheChosenKindUses(t *testing.T) {
 		}
 	}
 
-	// The name and the switch belong to every kind, including the direct
-	// connection, which asks for nothing else.
-	for _, name := range []string{"name", "enabled"} {
-		if group := groupAround(body, `name="`+name+`"`); group != "" {
-			t.Errorf("общее поле %q отнесено к видам %q", name, group)
-		}
+	// The switch belongs to every kind, including the direct connection, which
+	// asks for nothing else.
+	if group := groupAround(body, `name="enabled"`); group != "" {
+		t.Errorf("общее поле «enabled» отнесено к видам %q", group)
+	}
+	// The name belongs to every kind but the gateway, which is named for the
+	// configuration it is — see channelForm.
+	if got := strings.Fields(groupAround(body, `name="name"`)); !slices.Equal(got,
+		[]string{store.ChannelList, store.ChannelRotating, store.ChannelDirect}) {
+		t.Errorf("поле названия отнесено к %v", got)
 	}
 }
 

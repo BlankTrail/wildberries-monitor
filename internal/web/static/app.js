@@ -58,6 +58,27 @@
 
   let estimateTimer = null;
 
+  // retally rewrites «сколько выбрано из скольких», per group and for the whole
+  // list. The server draws the first one; after that the numbers are the
+  // reader's own ticking, and a count that did not follow it would be worse
+  // than no count — it would be a wrong one.
+  function retally(box) {
+    const count = (root) => {
+      const boxes = root.querySelectorAll('input[name="gateway"]');
+      let on = 0;
+      boxes.forEach((b) => {
+        if (b.checked) on++;
+      });
+      return on + "/" + boxes.length;
+    };
+    box.querySelectorAll("[data-gateways]").forEach((group) => {
+      const tally = group.querySelector("[data-tally]");
+      if (tally) tally.textContent = count(group);
+    });
+    const whole = box.querySelector('[data-tally="all"]');
+    if (whole) whole.textContent = count(box);
+  }
+
   function wire(root) {
     root.querySelectorAll("[data-get]").forEach((el) => {
       if (el.dataset.wired) return;
@@ -368,6 +389,34 @@
       if (el.dataset.wired) return;
       el.dataset.wired = "1";
       follow(el.dataset.follow);
+    });
+
+    // «Все» and «никакие», and the tallies beside them. A subscription of
+    // eight is eight boxes to tick by hand otherwise, which is the whole thing
+    // this list exists to stop.
+    //
+    // Everything with a box can be ticked: a gateway that is already an exit
+    // comes back as a line rather than as a control, so there is nothing here
+    // that has to be told apart and left alone.
+    root.querySelectorAll("[data-tick]").forEach((el) => {
+      if (el.dataset.tickWired) return;
+      el.dataset.tickWired = "1";
+      el.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        const within = el.closest("[data-gateways]") || el.closest("#gateway-box");
+        if (!within) return;
+        within
+          .querySelectorAll('input[type="checkbox"]')
+          .forEach((box) => (box.checked = el.dataset.tick === "all"));
+        retally(el.closest("#gateway-box") || document);
+      });
+    });
+
+    root.querySelectorAll("#gateway-box").forEach((box) => {
+      if (box.dataset.tallyWired) return;
+      box.dataset.tallyWired = "1";
+      box.addEventListener("change", () => retally(box));
+      retally(box);
     });
 
     // A control the server wants the reader looking at, because the swap that

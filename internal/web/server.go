@@ -167,6 +167,13 @@ type Server struct {
 	// need a licensed service.
 	Gateways func(ctx context.Context) (blanktrail.GatewayList, error)
 
+	// gateways is the last listing that field gave, held for a couple of
+	// minutes. The channels form is redrawn on every save, delete and kind
+	// switch, and asking the service behind each of those would put a request
+	// on the wire for a list that changes when somebody adds a configuration —
+	// which is what the refresh button is for.
+	gateways gatewayHold
+
 	// Autostart is the operating system's own start-at-login mechanism, or
 	// nil in a build that has none. An interface rather than the package, so
 	// the settings screen can be tested without writing to a real registry or
@@ -299,6 +306,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /channels", s.auth(http.HandlerFunc(s.channelsPage)))
 	mux.Handle("POST /channels", s.auth(http.HandlerFunc(s.saveChannel)))
 	mux.Handle("GET /channels/edit", s.auth(http.HandlerFunc(s.editChannel)))
+	mux.Handle("POST /channels/gateways", s.auth(http.HandlerFunc(s.refreshGateways)))
 	mux.Handle("GET /channels/test", s.auth(http.HandlerFunc(s.testChannel)))
 	mux.Handle("POST /channels/delete", s.auth(http.HandlerFunc(s.deleteChannel)))
 	mux.Handle("GET /jobs", s.auth(http.HandlerFunc(s.jobsPage)))

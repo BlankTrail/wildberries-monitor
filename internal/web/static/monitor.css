@@ -1345,3 +1345,46 @@ dialog.bt-modal > #settings-body {
 .bt[data-bt-theme="dashboard"] .bt-table tbody tr.bt-row--current > td:first-child {
   box-shadow: inset 2px 0 0 var(--accent);
 }
+
+/* ---- the gateway list --------------------------------------------------- */
+
+/* The line above the groups: what the whole list comes to on the left, and what
+   acts on it on the right. Wraps rather than squeezing, because the buttons are
+   words and a narrow window is not a reason to abbreviate them. */
+.bt[data-bt-theme="dashboard"] .bt-picker-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-3);
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: var(--space-2);
+}
+
+.bt[data-bt-theme="dashboard"] .bt-picker-head__acts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  align-items: center;
+}
+
+/* A gateway is two lines: what it is called, and what is known about it. The
+   second is read only when the first has been found, so it is quieter and it
+   sits under rather than beside — beside, thirty of them made a column of
+   numbers nobody was looking for. */
+.bt[data-bt-theme="dashboard"] .bt-gw-line {
+  display: block;
+  font-size: 0.85em;
+}
+
+/* Thirty configurations is a list to scroll, not a form to scroll past. */
+.bt[data-bt-theme="dashboard"] #gateway-box .bt-fieldset {
+  max-height: 22rem;
+  overflow-y: auto;
+}
+
+/* Already an exit: read, not chosen. Drawn quieter, and indented by the width
+   of the box it does not have, so the names still line up down the column. */
+.bt[data-bt-theme="dashboard"] .bt-checkbox--read {
+  color: var(--text-muted);
+  padding-left: calc(var(--space-4) + var(--space-1));
+}

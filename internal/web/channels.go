@@ -3,17 +3,14 @@
 package web
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"html"
 	"net/http"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/BlankTrail/wildberries-monitor/blanktrail"
 	"github.com/BlankTrail/wildberries-monitor/internal/store"
 )
 
@@ -82,7 +79,7 @@ func (s *Server) channelsPage(w http.ResponseWriter, r *http.Request) {
 // the new-proxy form. A save that was refused passes back what was posted, so
 // that a refusal costs a sentence and not everything the person had typed.
 func (s *Server) channelsFragment(w http.ResponseWriter, r *http.Request, notice string, form store.ChannelRow) {
-	body, err := s.channelsBody(r.Context(), notice, form)
+	body, err := s.channelsBody(r, notice, form)
 	if err != nil {
 		http.Error(w, "channels: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -92,7 +89,7 @@ func (s *Server) channelsFragment(w http.ResponseWriter, r *http.Request, notice
 }
 
 func (s *Server) channelsHTML(r *http.Request) (string, error) {
-	body, err := s.channelsBody(r.Context(), "", store.ChannelRow{})
+	body, err := s.channelsBody(r, "", store.ChannelRow{})
 	if err != nil {
 		return "", err
 	}
@@ -102,8 +99,8 @@ func (s *Server) channelsHTML(r *http.Request) (string, error) {
 // channelsBody is the heading, what exists, and the form — everything the
 // section holds, so that a swap replaces the screen rather than nesting one
 // copy of it inside another.
-func (s *Server) channelsBody(ctx context.Context, notice string, form store.ChannelRow) (string, error) {
-	list, err := s.Store.Channels(ctx)
+func (s *Server) channelsBody(r *http.Request, notice string, form store.ChannelRow) (string, error) {
+	list, err := s.Store.Channels(r.Context())
 	if err != nil {
 		return "", err
 	}
@@ -112,7 +109,7 @@ func (s *Server) channelsBody(ctx context.Context, notice string, form store.Cha
 	b.WriteString(`<h2>Прокси выхода</h2>`)
 	b.WriteString(notice)
 	b.WriteString(channelList(list, form.ID))
-	b.WriteString(s.channelForm(ctx, form))
+	b.WriteString(s.channelForm(r, form, list))
 	return b.String(), nil
 }
 
@@ -247,7 +244,7 @@ func maskPassword(source string) string {
 // One form and not two. A screen with an «добавить» form and a separate
 // «изменить» form has two places for every field, and the day somebody adds a
 // field to one of them is the day the other quietly stops carrying it.
-func (s *Server) channelForm(ctx context.Context, form store.ChannelRow) string {
+func (s *Server) channelForm(r *http.Request, form store.ChannelRow, saved []store.ChannelRow) string {
 	editing := form.ID != 0
 
 	// The value belongs to the field of the chosen kind and to no other. Three
@@ -258,7 +255,7 @@ func (s *Server) channelForm(ctx context.Context, form store.ChannelRow) string 
 		if form.Kind != kind {
 			return ""
 		}
-		return ` value="` + html.EscapeString(form.Source) + `"`
+		return valueAttr(form.Source)
 	}
 
 	var b strings.Builder
@@ -276,10 +273,15 @@ func (s *Server) channelForm(ctx context.Context, form store.ChannelRow) string 
 		b.WriteString(hidden("id", strconv.FormatInt(form.ID, 10)))
 	}
 
-	b.WriteString(field("Название",
-		`<input class="bt-input" name="name" required placeholder="список провайдера" value="`+
-			html.EscapeString(form.Name)+`"`+focusIf(editing)+`>`,
-		"По нему прокси узнаётся в логе прогона, и по нему же ему считается вес в смеси — так что двум записям одно имя давать не стоит."))
+	// Asked of every kind but the gateway, which is named for the configuration
+	// it is: the mixer weighs a channel by its name and watches its health under
+	// that name, so eight gateways ticked at once need eight names and there is
+	// only one sensible set of them — their own.
+	b.WriteString(whenAny(field("Название",
+		`<input class="bt-input" name="name" required placeholder="список провайдера"`+
+			valueAttr(form.Name)+focusIf(editing)+`>`,
+		"По нему прокси узнаётся в логе прогона, и по нему же ему считается вес в смеси — так что двум записям одно имя давать не стоит."),
+		store.ChannelList, store.ChannelRotating, store.ChannelDirect))
 
 	// The kind, as cards. Each carries its own description, so the four are no
 	// longer a wall of hints under a dropdown — that wall was here because
@@ -296,10 +298,13 @@ func (s *Server) channelForm(ctx context.Context, form store.ChannelRow) string 
 	// Everything below belongs to some of the kinds and not the others, and it
 	// is laid out side by side. A direct connection asks for nothing at all:
 	// it is the machine's own address, and that is the whole of it.
-	b.WriteString(`<div class="bt-form-grid">`)
 	// The gateways the service has, for the kind whose source is one of their
-	// names. Inside the group, so it is asked for only when it applies.
-	b.WriteString(whenAny(s.gatewayPicker(ctx), store.ChannelGateway))
+	// names. Above the grid rather than in it: it is a list of everything the
+	// service holds, and a third of a row is not where a list of thirty lines
+	// goes.
+	b.WriteString(whenAny(s.gatewayBox(r.Context(), form, saved), store.ChannelGateway))
+
+	b.WriteString(`<div class="bt-form-grid">`)
 
 	// One field per kind rather than one field for all of them. «Источник» left
 	// the user to work out which of three things was wanted, and for a
@@ -318,12 +323,6 @@ func (s *Server) channelForm(ctx context.Context, form store.ChannelRow) string 
 				source(store.ChannelRotating)+`>`,
 			"Один адрес, который меняется по ссылке ниже. Принимаются пять написаний: со схемой и без, с логином и без."),
 		store.ChannelRotating))
-	b.WriteString(whenAny(
-		field("Имя конфигурации",
-			`<input class="bt-input" id="channel-gateway" name="source" placeholder="имя из BlankTrail"`+
-				source(store.ChannelGateway)+`>`,
-			"Как шлюз называется в BlankTrail. Выбор из списка выше подставляет его сюда."),
-		store.ChannelGateway))
 
 	var schemes strings.Builder
 	schemes.WriteString(`<select class="bt-select" name="default_scheme">`)
@@ -344,8 +343,8 @@ func (s *Server) channelForm(ctx context.Context, form store.ChannelRow) string 
 		store.ChannelList, store.ChannelRotating))
 	b.WriteString(whenAny(
 		field("Ссылка смены адреса",
-			`<input class="bt-input" name="rotate_url" placeholder="https://provider.example/rotate?key=..." value="`+
-				html.EscapeString(form.RotateURL)+`">`,
+			`<input class="bt-input" name="rotate_url" placeholder="https://provider.example/rotate?key=..."`+
+				valueAttr(form.RotateURL)+`>`,
 			"Без неё это один адрес, который никогда не меняется."),
 		store.ChannelRotating))
 	// The list is somebody else's document, and the only thing this program can
@@ -378,18 +377,44 @@ func (s *Server) channelForm(ctx context.Context, form store.ChannelRow) string 
 		"Выключенный прокси остаётся сохранённым — список, который чинят, не надо набирать заново."))
 
 	b.WriteString(`<div class="bt-form-actions">`)
-	if editing {
+	switch {
+	case editing:
 		b.WriteString(`<button class="bt-btn bt-btn--primary" type="submit">Сохранить изменения</button>`)
 		// «Отмена» is the same route with nothing to open on: giving up on an
 		// edit and starting a new proxy are one screen, so they are one route.
 		b.WriteString(`<button class="bt-btn bt-btn--ghost" type="button" ` +
 			`data-get="/channels/edit" data-target="#channels-body">Отмена</button>`)
-	} else {
-		b.WriteString(`<button class="bt-btn bt-btn--primary" type="submit">Сохранить прокси</button>`)
+	default:
+		// One label for four kinds would have to be «Сохранить», and what the
+		// gateway kind does is add as many exits as were ticked. Said plainly,
+		// because eight new rows appearing after one press is a surprise the
+		// button should have prepared the reader for.
+		b.WriteString(whenAny(
+			`<button class="bt-btn bt-btn--primary" type="submit">Добавить отмеченные шлюзы</button>`,
+			store.ChannelGateway))
+		b.WriteString(whenAny(
+			`<button class="bt-btn bt-btn--primary" type="submit">Сохранить прокси</button>`,
+			store.ChannelList, store.ChannelRotating, store.ChannelDirect))
 	}
 	b.WriteString(`</div>`)
 	b.WriteString(`</form>`)
+
+	// The refresh button lives inside the form and the thing it submits cannot:
+	// a form inside a form is not a form at all, and the browser drops it. This
+	// is the shape HTML gives for that — an empty form beside it, and a button
+	// that names it.
+	b.WriteString(`<form id="gateways-afresh" class="bt-inline" data-post="` +
+		html.EscapeString(gatewaysAfreshURL(form)) + `" data-target="#gateway-box"></form>`)
 	return b.String()
+}
+
+// gatewaysAfreshURL is the refresh, carrying the record the form is open on so
+// that asking again in the middle of changing one does not lose which one.
+func gatewaysAfreshURL(form store.ChannelRow) string {
+	if form.ID == 0 {
+		return "/channels/gateways"
+	}
+	return "/channels/gateways?id=" + strconv.FormatInt(form.ID, 10)
 }
 
 // focusIf puts the reader where the screen just changed.
@@ -403,6 +428,19 @@ func focusIf(on bool) string {
 		return " data-focus"
 	}
 	return ""
+}
+
+// valueAttr is a value a form field starts with, or nothing at all.
+//
+// Nothing rather than value="": every field on this screen has a placeholder
+// saying what belongs in it, and an empty value attribute is the same setting
+// written in a way that a reader of the markup — and a test — cannot tell from
+// a filled one.
+func valueAttr(v string) string {
+	if v == "" {
+		return ""
+	}
+	return ` value="` + html.EscapeString(v) + `"`
 }
 
 func selectedIf(on bool) string {
@@ -500,7 +538,11 @@ func (s *Server) saveChannel(w http.ResponseWriter, r *http.Request) {
 			row.RotateMinInterval = time.Duration(seconds) * time.Second
 		}
 	case store.ChannelGateway:
-		row.Source = source
+		// Not one record. Every ticked configuration is its own exit, and how
+		// many were ticked is not something the rest of this function is shaped
+		// for — see saveGateways.
+		s.saveGateways(w, r, row)
+		return
 	}
 
 	if _, err := s.Store.SaveChannel(r.Context(), row); err != nil {
@@ -509,13 +551,7 @@ func (s *Server) saveChannel(w http.ResponseWriter, r *http.Request) {
 		// are things the person filling the form has to change, and a 400 they
 		// cannot read tells them nothing. The form comes back holding what was
 		// typed, so changing it costs a word rather than the whole form.
-		text := err.Error()
-		if errors.Is(err, store.ErrNoSuchChannel) {
-			// The one refusal that is not about the form: somebody deleted this
-			// proxy in another tab while it was open here.
-			text = "Этот прокси удалили, пока форма была открыта. Уберите номер записи — и он сохранится как новый."
-		}
-		s.channelsFragment(w, r, alert("error", text), row)
+		s.channelsFragment(w, r, alert("error", saveChannelFault(err)), row)
 		return
 	}
 	saved := "Прокси сохранён."
@@ -525,6 +561,95 @@ func (s *Server) saveChannel(w http.ResponseWriter, r *http.Request) {
 	// And back to the empty form: the change is in the table above, and a form
 	// still holding it invites saving the same edit twice.
 	s.channelsFragment(w, r, alert("success", saved), store.ChannelRow{})
+}
+
+// saveGateways writes one channel per ticked configuration.
+//
+// One each, and not one record holding a list. The mixer weighs a channel by
+// its name and watches its health under that name, so eight gateways behind one
+// record would share one weight and one verdict: the day one of them stopped,
+// the other seven would lose their share of the run with it. Separate records
+// also mean the row actions this screen already has — проверить, выключить,
+// удалить — go on saying what they say.
+//
+// A record being changed is still one record: what is being asked there is
+// which configuration this exit is, and the list offers that as a choice of one.
+func (s *Server) saveGateways(w http.ResponseWriter, r *http.Request, row store.ChannelRow) {
+	names := chosenGateways(r)
+	if len(names) == 0 {
+		s.channelsFragment(w, r, alert("error",
+			"Не отмечено ни одного шлюза — отметьте нужные в списке выше."), row)
+		return
+	}
+
+	if row.ID != 0 {
+		// The name follows the configuration: an exit called after a gateway it
+		// no longer is would be a line in the log naming the wrong country.
+		row.Source, row.Name = names[0], names[0]
+		if _, err := s.Store.SaveChannel(r.Context(), row); err != nil {
+			s.channelsFragment(w, r, alert("error", saveChannelFault(err)), row)
+			return
+		}
+		s.channelsFragment(w, r, alert("success", "Прокси изменён."), store.ChannelRow{})
+		return
+	}
+
+	// Whatever is already an exit is not offered again by the list, so a name
+	// arriving twice means two tabs raced or the service listed one twice.
+	// Skipped rather than refused: the reader asked for these gateways to be
+	// exits, and they are. This is the only place that decides it, which is why
+	// a name written below is added to this set as it goes.
+	have := map[string]bool{}
+	saved, err := s.Store.Channels(r.Context())
+	if err != nil {
+		s.channelsFragment(w, r, alert("error", err.Error()), row)
+		return
+	}
+	for _, c := range saved {
+		if c.Kind == store.ChannelGateway {
+			have[c.Source] = true
+		}
+	}
+
+	added := 0
+	for _, name := range names {
+		if have[name] {
+			continue
+		}
+		if _, err := s.Store.SaveChannel(r.Context(), store.ChannelRow{
+			Name: name, Kind: store.ChannelGateway, Source: name, Enabled: row.Enabled,
+		}); err != nil {
+			// What was written stays written, and the message names where it
+			// stopped: silently rolling back eight gateways because the ninth
+			// was refused would undo work the reader can see happened.
+			s.channelsFragment(w, r, alert("error",
+				fmt.Sprintf("Шлюз %q не сохранился: %s. Добавлено до него: %d.",
+					name, saveChannelFault(err), added)), store.ChannelRow{})
+			return
+		}
+		have[name] = true
+		added++
+	}
+
+	if added == 0 {
+		s.channelsFragment(w, r, alert("neutral",
+			"Все отмеченные шлюзы уже добавлены."), store.ChannelRow{})
+		return
+	}
+	s.channelsFragment(w, r, alert("success",
+		fmt.Sprintf("Добавлено: %s.", countOf(int64(added), "шлюз", "шлюза", "шлюзов"))),
+		store.ChannelRow{})
+}
+
+// saveChannelFault says a refusal in words the person filling the form can act
+// on.
+func saveChannelFault(err error) string {
+	if errors.Is(err, store.ErrNoSuchChannel) {
+		// The one refusal that is not about the form: somebody deleted this
+		// proxy in another tab while it was open here.
+		return "Этот прокси удалили, пока форма была открыта. Уберите номер записи — и он сохранится как новый."
+	}
+	return err.Error()
 }
 
 func (s *Server) deleteChannel(w http.ResponseWriter, r *http.Request) {
@@ -560,124 +685,4 @@ func (s *Server) testChannel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	fmt.Fprint(w, `<div class="bt-alert bt-alert--success">`+html.EscapeString(summary)+`</div>`)
-}
-
-// gatewayPicker offers the gateways the licensed service has, with what it
-// knows about each.
-//
-// Read from the service rather than typed: a gateway is named by whoever set
-// it up, the names come and go, and a name typed from memory is a channel
-// that fails at the first port it tries to open. The numbers beside each are
-// the ones a choice actually turns on — whether it is up, how many ports are
-// already on it, and how far away it answers from.
-//
-// Grouped by what each one routes through, because that is what a chain is:
-// a gateway going through another inherits its exit, and picking one without
-// seeing that is picking a country by accident.
-func (s *Server) gatewayPicker(ctx context.Context) string {
-	if s.Gateways == nil {
-		return `<div class="bt-alert bt-alert--neutral">Список шлюзов недоступен в этой сборке — имя можно ввести вручную.</div>`
-	}
-
-	list, err := s.Gateways(ctx)
-	if err != nil {
-		// The service's own words. «Не настроен» and «не отвечает» are two
-		// different things to do next, and only it knows which this is.
-		return `<div class="bt-alert bt-alert--warning">Шлюзы не спросить: ` +
-			html.EscapeString(err.Error()) + `. Имя можно ввести вручную.</div>`
-	}
-	if !list.Available {
-		reason := list.Reason
-		if reason == "" {
-			reason = "служба не сказала, почему"
-		}
-		return `<div class="bt-alert bt-alert--warning">Шлюзы у этой службы недоступны: ` +
-			html.EscapeString(reason) + `</div>`
-	}
-	if len(list.Gateways) == 0 {
-		return `<div class="bt-alert bt-alert--neutral">У службы нет ни одного шлюза — их заводят в самой BlankTrail.</div>`
-	}
-
-	var sel strings.Builder
-	sel.WriteString(`<select class="bt-select" data-fill="#channel-gateway">`)
-	sel.WriteString(`<option value="">— выбрать из списка —</option>`)
-	for _, group := range groupGateways(list.Gateways) {
-		sel.WriteString(`<optgroup label="` + html.EscapeString(group.Label) + `">`)
-		for _, g := range group.Gateways {
-			sel.WriteString(`<option value="` + html.EscapeString(g.Name) + `">` +
-				html.EscapeString(gatewayLine(g)) + `</option>`)
-		}
-		sel.WriteString(`</optgroup>`)
-	}
-	sel.WriteString(`</select>`)
-
-	return field("Шлюзы службы", sel.String(),
-		"Что настроено в BlankTrail прямо сейчас: состояние, занятые порты и время отклика. Выбор подставляется в «Источник».")
-}
-
-// gatewayGroup is one heading in the picker and what belongs under it.
-type gatewayGroup struct {
-	Label    string
-	Gateways []blanktrail.Gateway
-}
-
-// groupGateways puts the direct ones first and each chain under its own
-// heading, in a stable order.
-func groupGateways(all []blanktrail.Gateway) []gatewayGroup {
-	const direct = "Напрямую"
-
-	order := []string{}
-	byLabel := map[string][]blanktrail.Gateway{}
-	for _, g := range all {
-		label := direct
-		if g.Via != "" {
-			label = "Через " + g.Via
-		}
-		if _, seen := byLabel[label]; !seen {
-			order = append(order, label)
-		}
-		byLabel[label] = append(byLabel[label], g)
-	}
-	// Direct first when it is there at all: it is the shortest path, and the
-	// one somebody choosing without a reason should land on.
-	slices.SortStableFunc(order, func(a, b string) int {
-		switch {
-		case a == direct:
-			return -1
-		case b == direct:
-			return 1
-		}
-		return strings.Compare(a, b)
-	})
-
-	out := make([]gatewayGroup, 0, len(order))
-	for _, label := range order {
-		out = append(out, gatewayGroup{Label: label, Gateways: byLabel[label]})
-	}
-	return out
-}
-
-// gatewayLine is one gateway said in a line: what it is, whether it is up, how
-// busy, and how far.
-func gatewayLine(g blanktrail.Gateway) string {
-	parts := []string{g.Name}
-	if g.Kind != "" {
-		parts = append(parts, g.Kind)
-	}
-	if g.Running {
-		parts = append(parts, fmt.Sprintf("запущен, портов %d", g.Ports))
-	} else {
-		parts = append(parts, "остановлен")
-	}
-	switch {
-	case !g.Ping.Tried:
-		// Not «0 мс»: never measured is not instant, and a list sorted by eye
-		// would put every unmeasured gateway first.
-		parts = append(parts, "отклик не мерили")
-	case !g.Ping.Answered:
-		parts = append(parts, "не отвечает")
-	default:
-		parts = append(parts, fmt.Sprintf("%d мс", g.Ping.MS))
-	}
-	return strings.Join(parts, " · ")
 }
