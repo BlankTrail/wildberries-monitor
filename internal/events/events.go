@@ -56,8 +56,22 @@ const (
 // change every time a new one appears. Subscribers assert the type they
 // asked for and say so when it is not what arrived.
 type Event struct {
-	Kind    Kind
-	RunID   int64
+	Kind Kind
+	// JobID is the job this happened under, and it is what a screen following
+	// a run filters on.
+	//
+	// The job and not the run. A person watching presses «Запустить» on a job
+	// and the panel that opens is that job's; the run is the attempt, whose id
+	// exists only after the run has opened and differs again when a stopped run
+	// resumes. Carrying the attempt here meant every screen filtered on a
+	// number it did not have — the panel sent the job's, nothing ever matched,
+	// and a run reported «План составляется…» from start to finish.
+	//
+	// One id and not two, because the second would be set at some publish sites
+	// and not others: the collector knows which job it is fetching for and has
+	// never been told which attempt. A field that is right half the time is
+	// worse than a field that is not there.
+	JobID   int64
 	Payload any
 }
 

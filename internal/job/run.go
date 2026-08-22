@@ -115,7 +115,7 @@ const progressEvery = time.Second
 // has to be one consistent reading of all of them, and assembling that in the
 // caller would put the throttle there too — in the hot loop, once per item,
 // per thread.
-func (r *Runner) reporter(runID, total int64,
+func (r *Runner) reporter(jobID, total int64,
 	items, failed, requests *atomic.Int64, done *atomic.Int64) func(context.Context) {
 
 	var mu sync.Mutex
@@ -145,7 +145,7 @@ func (r *Runner) reporter(runID, total int64,
 		// would have said about what it stopped.
 		pub, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
-		_ = r.Bus.Publish(pub, events.Event{Kind: events.RunProgress, RunID: runID, Payload: p})
+		_ = r.Bus.Publish(pub, events.Event{Kind: events.RunProgress, JobID: jobID, Payload: p})
 	}
 }
 
@@ -172,7 +172,7 @@ func (r *Runner) Run(ctx context.Context, j Job) (Result, error) {
 	}
 	total := int64(len(todo))
 
-	_ = r.Bus.Publish(ctx, events.Event{Kind: events.RunStarted, RunID: res.RunID, Payload: j})
+	_ = r.Bus.Publish(ctx, events.Event{Kind: events.RunStarted, JobID: j.ID, Payload: j})
 
 	var items, failed, requests atomic.Int64
 	stopped := r.walk(ctx, j, res.RunID, todo, total, &items, &failed, &requests)
@@ -205,7 +205,7 @@ func (r *Runner) Run(ctx context.Context, j Job) (Result, error) {
 	if err := r.Store.FinishRun(closing, res.RunID, state, res.Requests, res.Items, res.Failed, failure); err != nil {
 		return res, fmt.Errorf("job: closing run %d: %w", res.RunID, err)
 	}
-	_ = r.Bus.Publish(closing, events.Event{Kind: events.RunFinished, RunID: res.RunID, Payload: res})
+	_ = r.Bus.Publish(closing, events.Event{Kind: events.RunFinished, JobID: j.ID, Payload: res})
 	// Read again, after the last event this run publishes. A subscriber that
 	// fell behind far enough to lose the announcement of the end lost it to
 	// this run, and the count the caller logs should be the final one — the
@@ -300,7 +300,7 @@ func (r *Runner) walk(ctx context.Context, j Job, runID int64, todo []store.Item
 
 	var stopped atomic.Bool
 	var done atomic.Int64
-	report := r.reporter(runID, total, items, failed, requests, &done)
+	report := r.reporter(j.ID, total, items, failed, requests, &done)
 	work := make(chan store.ItemRow)
 	var wg sync.WaitGroup
 
@@ -325,7 +325,7 @@ func (r *Runner) walk(ctx context.Context, j Job, runID int64, todo []store.Item
 					state, failure = store.ItemFailed, err.Error()
 					failed.Add(1)
 					_ = r.Bus.Publish(ctx, events.Event{
-						Kind: events.ItemFailed, RunID: runID, Payload: err,
+						Kind: events.ItemFailed, JobID: j.ID, Payload: err,
 					})
 				} else {
 					items.Add(1)

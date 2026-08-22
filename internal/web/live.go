@@ -31,15 +31,15 @@ import (
 // bus, so falling behind is visible rather than silent.
 const followBuffer = 256
 
-// live streams one run's progress until the run ends or the browser leaves.
+// live streams one job's progress until its run ends or the browser leaves.
 func (s *Server) live(w http.ResponseWriter, r *http.Request) {
 	if s.Bus == nil {
 		http.Error(w, "live: this build has no event bus", http.StatusServiceUnavailable)
 		return
 	}
-	runID, err := strconv.ParseInt(r.URL.Query().Get("run"), 10, 64)
+	jobID, err := strconv.ParseInt(r.URL.Query().Get("job"), 10, 64)
 	if err != nil {
-		http.Error(w, "live: which run?", http.StatusBadRequest)
+		http.Error(w, "live: which job?", http.StatusBadRequest)
 		return
 	}
 
@@ -86,11 +86,11 @@ func (s *Server) live(w http.ResponseWriter, r *http.Request) {
 				flusher.Flush()
 				return
 			}
-			if ev.RunID != runID {
-				// Another run's events. The bus has no per-run subscription
+			if ev.JobID != jobID {
+				// Another job's events. The bus has no per-job subscription
 				// and should not grow one for this: a filter here costs a
-				// comparison, and a bus that indexed subscribers by run would
-				// have to know what a run is.
+				// comparison, and a bus that indexed subscribers by job would
+				// have to know what a job is.
 				continue
 			}
 			name, data := renderEvent(ev)

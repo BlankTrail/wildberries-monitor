@@ -155,6 +155,9 @@ func (f *Fetcher) page(ctx context.Context, key job.Key) (int, error) {
 		return requests, err
 	}
 
+	f.scraped(ctx, "фраза «%s», страница %d — товаров %d",
+		key.Phrase, key.Page, len(kept.Products))
+
 	extra, err := f.enrich(ctx, kept.Products, key)
 	return requests + extra, err
 }
@@ -189,6 +192,8 @@ func (f *Fetcher) listing(ctx context.Context, key job.Key) (int, error) {
 	if err := f.link(ctx, env.Products); err != nil {
 		return requests, err
 	}
+	f.scraped(ctx, "%s %d, страница %d — товаров %d",
+		what, key.ID, key.Page, len(env.Products))
 
 	extra, err := f.enrich(ctx, env.Products, key)
 	return requests + extra, err
@@ -242,6 +247,8 @@ func (f *Fetcher) catalog(ctx context.Context, key job.Key) (int, error) {
 	if err := f.link(ctx, env.Products); err != nil {
 		return requests, err
 	}
+	f.scraped(ctx, "категория %d, страница %d — товаров %d",
+		key.ID, key.Page, len(env.Products))
 
 	extra, err := f.enrich(ctx, env.Products, key)
 	return requests + extra, err
@@ -286,6 +293,8 @@ func (f *Fetcher) promo(ctx context.Context, key job.Key) (int, error) {
 	if err := f.link(ctx, env.Products); err != nil {
 		return requests, err
 	}
+	f.scraped(ctx, "акция «%s», страница %d — товаров %d",
+		p.Slug, key.Page, len(env.Products))
 
 	extra, err := f.enrich(ctx, env.Products, key)
 	return requests + extra, err
@@ -311,7 +320,7 @@ func (f *Fetcher) seller(ctx context.Context, key job.Key) (int, error) {
 		if saveErr := f.Store.SaveSeller(ctx, sl); saveErr != nil {
 			return requests, fmt.Errorf("collect: продавец %d: %w", key.ID, saveErr)
 		}
-		f.publish(ctx, events.ItemScraped, sl)
+		f.scraped(ctx, "продавец %d — %s", sl.ID, sl.Name)
 	}
 	if err != nil {
 		return requests, fmt.Errorf("collect: продавец %d: %w", key.ID, err)
@@ -348,6 +357,7 @@ func (f *Fetcher) mainFeed(ctx context.Context, key job.Key) (int, error) {
 	if err := f.link(ctx, env.Products); err != nil {
 		return requests, err
 	}
+	f.scraped(ctx, "главная страница %d — товаров %d", key.Page, len(env.Products))
 
 	extra, err := f.enrich(ctx, env.Products, key)
 	return requests + extra, err
@@ -418,7 +428,7 @@ func (f *Fetcher) product(ctx context.Context, key job.Key) (int, error) {
 	if err := f.link(ctx, []wb.Product{fetch.Product}); err != nil {
 		return requests, err
 	}
-	f.publish(ctx, events.ItemScraped, fetch.Card)
+	f.scraped(ctx, "карточка %d — %s", key.NmID, fetch.Card.Name)
 
 	extra, err := f.signals(ctx, fetch.Card.ImtID, key.NmID)
 	return requests + extra, err
@@ -458,7 +468,8 @@ func (f *Fetcher) ads(ctx context.Context, key job.Key) (int, error) {
 	if _, err := f.Store.SaveShelves(ctx, shelves); err != nil {
 		return 1, fmt.Errorf("collect: saving ads for %q: %w", key.Phrase, err)
 	}
-	f.publish(ctx, events.ItemScraped, shelves)
+	f.scraped(ctx, "реклама по фразе «%s» — полок %d", key.Phrase,
+		len(shelves.Shelves)+len(shelves.Banners))
 	return 1, nil
 }
 
@@ -482,7 +493,7 @@ func (f *Fetcher) shelf(ctx context.Context, key job.Key) (int, error) {
 	if _, err := f.Store.SaveProductShelf(ctx, shelf); err != nil {
 		return 1, fmt.Errorf("collect: сохранение полки товара %d: %w", key.NmID, err)
 	}
-	f.publish(ctx, events.ItemScraped, shelf)
+	f.scraped(ctx, "полка товара %d — товаров %d", key.NmID, len(shelf.Members))
 	return 1, nil
 }
 
@@ -550,6 +561,7 @@ func (f *Fetcher) profile(ctx context.Context, key job.Key) (int, error) {
 	if _, err := f.Store.SaveProduct(ctx, fetched.Product, ""); err != nil {
 		return requests, fmt.Errorf("collect: saving the resolved product: %w", err)
 	}
+	f.scraped(ctx, "профиль по товару %d — %s", key.NmID, name)
 	return requests, nil
 }
 
@@ -627,7 +639,7 @@ func (f *Fetcher) signals(ctx context.Context, imtID, nmID int64) (int, error) {
 			if _, err := f.Store.SaveReviews(ctx, reviews); err != nil {
 				return requests, fmt.Errorf("collect: saving reviews for %d: %w", nmID, err)
 			}
-			f.publish(ctx, events.ItemScraped, reviews)
+			f.scraped(ctx, "отзывы товара %d — %d", nmID, len(reviews.Items))
 		}
 	}
 
@@ -641,7 +653,7 @@ func (f *Fetcher) signals(ctx context.Context, imtID, nmID int64) (int, error) {
 			if _, err := f.Store.SaveQuestions(ctx, questions); err != nil {
 				return requests, fmt.Errorf("collect: saving questions for %d: %w", nmID, err)
 			}
-			f.publish(ctx, events.ItemScraped, questions)
+			f.scraped(ctx, "вопросы товара %d — %d", nmID, len(questions.Items))
 		}
 	}
 	return requests, nil
@@ -673,7 +685,23 @@ func (f *Fetcher) sources() map[wb.FieldSource]bool {
 	return out
 }
 
-func (f *Fetcher) publish(ctx context.Context, kind events.Kind, payload any) {
+// ScrapedForTest emits one line the way a fetch does, so that a screen reading
+// the bus can be checked against what this package actually sends rather than
+// against what a test hand-rolled to look like it.
+func (f *Fetcher) ScrapedForTest(ctx context.Context, format string, args ...any) {
+	f.scraped(ctx, format, args...)
+}
+
+// scraped reports one thing read, as the line the live log shows.
+//
+// A line and not the record. Nothing subscribes to these but that screen, and
+// the screen prints what it is given — given a card it printed the whole of
+// one, so a log meant to be glanced at was a wall of field values.
+//
+// Named for the job, which is what the screen filters on. Unnamed, every item
+// this collector read was dropped by that filter: the live log had never shown
+// a single line in its life.
+func (f *Fetcher) scraped(ctx context.Context, format string, args ...any) {
 	if f.Bus == nil {
 		return
 	}
@@ -681,5 +709,9 @@ func (f *Fetcher) publish(ctx context.Context, kind events.Kind, payload any) {
 	// has already failed the write it was doing, and the run's own error path
 	// carries that. Failing the fetch a second time here would report one
 	// problem twice.
-	_ = f.Bus.Publish(ctx, events.Event{Kind: kind, Payload: payload})
+	_ = f.Bus.Publish(ctx, events.Event{
+		Kind:    events.ItemScraped,
+		JobID:   f.Job.ID,
+		Payload: fmt.Sprintf(format, args...),
+	})
 }

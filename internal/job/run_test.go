@@ -599,3 +599,55 @@ func countRows(t *testing.T, s *store.Store, query string) int {
 	}
 	return n
 }
+
+func TestRun_EverythingItPublishesIsNamedForTheJob(t *testing.T) {
+	// The screen that follows a run filters the bus by the job, because the job
+	// is what a person pressed «Запустить» on. Published under anything else —
+	// the run's own id, or nothing at all — every event is dropped by that
+	// filter, and the panel reports «План составляется…» from the first second
+	// of a run to the last while its log stays empty.
+	f := &recordingFetcher{requests: 1, failOn: map[string]error{"b": errors.New("не далась")}}
+	r, s, b := newRunner(t, []Item{
+		{Kind: "product", Key: "a"},
+		{Kind: "product", Key: "b"},
+	}, f)
+	r.Now = func() time.Time { return time.Unix(0, 0) }
+	j := savedJob(t, s)
+	j.Threads = 1
+
+	seen := map[events.Kind][]int64{}
+	var mu sync.Mutex
+	for _, kind := range []events.Kind{
+		events.RunStarted, events.RunProgress, events.ItemFailed, events.RunFinished,
+	} {
+		if err := b.Subscribe(string(kind), kind, func(_ context.Context, ev events.Event) error {
+			mu.Lock()
+			seen[ev.Kind] = append(seen[ev.Kind], ev.JobID)
+			mu.Unlock()
+			return nil
+		}); err != nil {
+			t.Fatalf("Subscribe: %v", err)
+		}
+	}
+
+	if _, err := r.Run(context.Background(), j); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	for _, kind := range []events.Kind{
+		events.RunStarted, events.RunProgress, events.ItemFailed, events.RunFinished,
+	} {
+		ids := seen[kind]
+		if len(ids) == 0 {
+			t.Errorf("прогон не опубликовал ни одного события %q", kind)
+			continue
+		}
+		for _, got := range ids {
+			if got != j.ID {
+				t.Errorf("событие %q названо заданием %d, а прогон шёл по %d", kind, got, j.ID)
+			}
+		}
+	}
+}

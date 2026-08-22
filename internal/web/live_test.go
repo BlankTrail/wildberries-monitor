@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/BlankTrail/wildberries-monitor/internal/collect"
 	"github.com/BlankTrail/wildberries-monitor/internal/events"
 	"github.com/BlankTrail/wildberries-monitor/internal/job"
 )
@@ -37,9 +38,9 @@ func liveServer(t *testing.T) (*httptest.Server, *events.Bus) {
 
 // openStream connects to /live and returns the response, ready to be read
 // message by message.
-func openStream(ctx context.Context, t *testing.T, ts *httptest.Server, run string) *http.Response {
+func openStream(ctx context.Context, t *testing.T, ts *httptest.Server, job string) *http.Response {
 	t.Helper()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ts.URL+"/live?run="+run, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ts.URL+"/live?job="+job, nil)
 	if err != nil {
 		t.Fatalf("request: %v", err)
 	}
@@ -107,7 +108,7 @@ func TestLive_DeliversARunsProgressWithoutAReload(t *testing.T) {
 	}
 
 	if err := bus.Publish(ctx, events.Event{
-		Kind: events.RunProgress, RunID: 7, Payload: "12 из 40",
+		Kind: events.RunProgress, JobID: 7, Payload: "12 из 40",
 	}); err != nil {
 		t.Fatalf("Publish: %v", err)
 	}
@@ -131,7 +132,7 @@ func TestLive_DrawsTheProgressAndThePortsBehindIt(t *testing.T) {
 
 	res := openStream(ctx, t, ts, "7")
 	if err := bus.Publish(ctx, events.Event{
-		Kind: events.RunProgress, RunID: 7,
+		Kind: events.RunProgress, JobID: 7,
 		Payload: job.Progress{
 			Done: 12, Total: 40, Items: 10, Failed: 2, Requests: 31,
 			Ports: []job.PortStat{
@@ -167,7 +168,7 @@ func TestLive_AProgressBarCannotRunPastItsEnd(t *testing.T) {
 
 	res := openStream(ctx, t, ts, "7")
 	if err := bus.Publish(ctx, events.Event{
-		Kind: events.RunProgress, RunID: 7,
+		Kind: events.RunProgress, JobID: 7,
 		Payload: job.Progress{Done: 9, Total: 6, Items: 9},
 	}); err != nil {
 		t.Fatalf("Publish: %v", err)
@@ -187,7 +188,7 @@ func TestLive_APayloadOfAnotherShapeIsShownRatherThanSwallowed(t *testing.T) {
 
 	res := openStream(ctx, t, ts, "7")
 	if err := bus.Publish(ctx, events.Event{
-		Kind: events.RunProgress, RunID: 7, Payload: "12 из 40",
+		Kind: events.RunProgress, JobID: 7, Payload: "12 из 40",
 	}); err != nil {
 		t.Fatalf("Publish: %v", err)
 	}
@@ -205,11 +206,11 @@ func TestLive_IgnoresAnotherRunsEvents(t *testing.T) {
 
 	res := openStream(ctx, t, ts, "7")
 
-	// The other run first, so that receiving the second message is proof the
+	// The other job first, so that receiving the second message is proof the
 	// first was skipped rather than merely slow.
 	for _, ev := range []events.Event{
-		{Kind: events.RunProgress, RunID: 8, Payload: "чужой прогресс"},
-		{Kind: events.RunProgress, RunID: 7, Payload: "свой прогресс"},
+		{Kind: events.RunProgress, JobID: 8, Payload: "чужой прогресс"},
+		{Kind: events.RunProgress, JobID: 7, Payload: "свой прогресс"},
 	} {
 		if err := bus.Publish(ctx, ev); err != nil {
 			t.Fatalf("Publish: %v", err)
@@ -218,10 +219,10 @@ func TestLive_IgnoresAnotherRunsEvents(t *testing.T) {
 
 	msg := readMessage(t, res)
 	if strings.Contains(msg, "чужой") {
-		t.Errorf("another run's event arrived: %q", msg)
+		t.Errorf("another job's event arrived: %q", msg)
 	}
 	if !strings.Contains(msg, "свой") {
-		t.Errorf("message = %q, want this run's progress", msg)
+		t.Errorf("message = %q, want this job's progress", msg)
 	}
 }
 
@@ -234,7 +235,7 @@ func TestLive_ReleasesItsSubscriptionWhenTheBrowserLeaves(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	res := openStream(ctx, t, ts, "7")
-	if err := bus.Publish(ctx, events.Event{Kind: events.RunProgress, RunID: 7, Payload: "жив"}); err != nil {
+	if err := bus.Publish(ctx, events.Event{Kind: events.RunProgress, JobID: 7, Payload: "жив"}); err != nil {
 		t.Fatalf("Publish: %v", err)
 	}
 	readMessage(t, res)
@@ -250,7 +251,7 @@ func TestLive_ReleasesItsSubscriptionWhenTheBrowserLeaves(t *testing.T) {
 	waitFor(t, func() bool {
 		before := bus.Stats().Dropped
 		for range followBuffer + 10 {
-			_ = bus.Publish(context.Background(), events.Event{Kind: events.RunProgress, RunID: 7})
+			_ = bus.Publish(context.Background(), events.Event{Kind: events.RunProgress, JobID: 7})
 		}
 		return bus.Stats().Dropped == before
 	}, "the subscription was still being fed after the browser left")
@@ -264,7 +265,7 @@ func TestLive_SaysSoWhenTheServerStops(t *testing.T) {
 	defer cancel()
 
 	res := openStream(ctx, t, ts, "7")
-	if err := bus.Publish(ctx, events.Event{Kind: events.RunProgress, RunID: 7, Payload: "идёт"}); err != nil {
+	if err := bus.Publish(ctx, events.Event{Kind: events.RunProgress, JobID: 7, Payload: "идёт"}); err != nil {
 		t.Fatalf("Publish: %v", err)
 	}
 	readMessage(t, res)
@@ -286,7 +287,7 @@ func TestLive_EndsWhenTheRunDoes(t *testing.T) {
 
 	res := openStream(ctx, t, ts, "7")
 	if err := bus.Publish(ctx, events.Event{
-		Kind: events.RunFinished, RunID: 7, Payload: "готово: 40 из 40",
+		Kind: events.RunFinished, JobID: 7, Payload: "готово: 40 из 40",
 	}); err != nil {
 		t.Fatalf("Publish: %v", err)
 	}
@@ -338,7 +339,7 @@ func TestLive_RefusesWithoutARun(t *testing.T) {
 	t.Cleanup(func() { srv.Bus.Close() })
 
 	if got := get(t, srv, "/live", "correct horse").Code; got != http.StatusBadRequest {
-		t.Errorf("no run id = %d, want 400", got)
+		t.Errorf("no job id = %d, want 400", got)
 	}
 }
 
@@ -361,3 +362,55 @@ type nopFlusher struct{ w *strings.Builder }
 func (n nopFlusher) Header() http.Header         { return http.Header{} }
 func (n nopFlusher) Write(b []byte) (int, error) { return n.w.Write(b) }
 func (n nopFlusher) WriteHeader(int)             {}
+
+func TestLive_ThePanelAndTheStreamNameTheSameThing(t *testing.T) {
+	// The panel said which job to follow and the stream filtered on which run,
+	// and the two were never introduced. Everything passed: the stream's own
+	// tests published under the id they then asked for, and the panel's own
+	// tests read the attribute without ever connecting. What a person saw was a
+	// run that reported «План составляется…» from the first second to the last
+	// and a live log that never held a line.
+	ts, bus := liveServer(t)
+
+	// The id the rendered panel tells the browser to follow.
+	panel := runLiveHTML(41)
+	const mark = `data-follow="`
+	at := strings.Index(panel, mark)
+	if at < 0 {
+		t.Fatalf("панель не говорит, за чем следить: %s", panel)
+	}
+	rest := panel[at+len(mark):]
+	follow := rest[:strings.Index(rest, `"`)]
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	res := openStream(ctx, t, ts, follow)
+
+	// Published the way the runner publishes it: under the job.
+	if err := bus.Publish(ctx, events.Event{
+		Kind: events.RunProgress, JobID: 41, Payload: "12 из 40",
+	}); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	if msg := readMessage(t, res); !strings.Contains(msg, "12 из 40") {
+		t.Errorf("панель следит не за тем, что публикует прогон: %q", msg)
+	}
+}
+
+func TestLive_AnItemReadByTheCollectorReachesTheLog(t *testing.T) {
+	// The collector published its items with no job on them at all, so the
+	// stream's filter dropped every one. The live log had never shown a line
+	// in its life, and nothing said so — the events existed, the endpoint
+	// answered, and the two were about different things.
+	ts, bus := liveServer(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	res := openStream(ctx, t, ts, "41")
+
+	fetcher := &collect.Fetcher{Bus: bus, Job: job.Job{ID: 41}}
+	fetcher.ScrapedForTest(ctx, "платье прочитано")
+
+	if msg := readMessage(t, res); !strings.Contains(msg, "платье прочитано") {
+		t.Errorf("прочитанный товар не дошёл до лога: %q", msg)
+	}
+}

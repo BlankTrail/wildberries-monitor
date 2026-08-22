@@ -506,9 +506,9 @@
 
   let live = null;
 
-  function follow(runID) {
+  function follow(jobID) {
     stopFollowing();
-    live = new EventSource(`/live?run=${encodeURIComponent(runID)}`);
+    live = new EventSource(`/live?job=${encodeURIComponent(jobID)}`);
     live.addEventListener("progress", (ev) => {
       const el = document.querySelector("#run-progress");
       if (el) el.innerHTML = ev.data;
@@ -543,8 +543,8 @@
   document.addEventListener("DOMContentLoaded", () => {
     wire(document);
     wireDialog();
-    const run = document.body.dataset.followRun;
-    if (run) follow(run);
+    const job = document.body.dataset.followRun;
+    if (job) follow(job);
   });
 
   // Exposed so a rendered fragment can start following a run it just began.
