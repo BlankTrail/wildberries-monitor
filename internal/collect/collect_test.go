@@ -23,12 +23,15 @@ func ptrTo[T any](v T) *T { return &v }
 // the run's bill, and the estimate the user approved was computed from the
 // same field selection.
 type fakeSite struct {
-	searches  []wb.SearchQuery
-	listings  []int64
-	cards     []int64
-	reviews   []int64
-	questions []int64
-	shelves   []wb.SearchQuery
+	searches []wb.SearchQuery
+	listings []int64
+	// brandListings is the same list for the brand address, kept apart so a
+	// test can tell which storefront was asked.
+	brandListings []int64
+	cards         []int64
+	reviews       []int64
+	questions     []int64
+	shelves       []wb.SearchQuery
 
 	products []wb.Product
 	cardImt  int64
@@ -53,6 +56,18 @@ func (f *fakeSite) SearchPage(_ context.Context, _ wb.Endpoints, q wb.SearchQuer
 
 func (f *fakeSite) SellerCatalogPage(_ context.Context, _ wb.Endpoints, id int64, q wb.SearchQuery) (wb.Envelope, error) {
 	f.listings = append(f.listings, id)
+	f.searches = append(f.searches, q)
+	if f.fail != nil {
+		return wb.Envelope{}, f.fail
+	}
+	return wb.Envelope{Products: f.products}, nil
+}
+
+// BrandCatalogPage is recorded apart from the seller's, which is the whole
+// point of the pair: a brand id sent to the seller address comes back 200 and
+// empty, so a fake that answered both the same way would agree with the bug.
+func (f *fakeSite) BrandCatalogPage(_ context.Context, _ wb.Endpoints, id int64, q wb.SearchQuery) (wb.Envelope, error) {
+	f.brandListings = append(f.brandListings, id)
 	f.searches = append(f.searches, q)
 	if f.fail != nil {
 		return wb.Envelope{}, f.fail
@@ -781,5 +796,39 @@ func TestCatalog_WithoutAQueryItRefusesBeforeSpendingARequest(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "выберите категорию") {
 		t.Errorf("причина = %v — не говорит, что делать", err)
+	}
+}
+
+func TestListing_ABrandGoesToTheBrandAddressAndASellerToTheSellers(t *testing.T) {
+	// The defect: a brand job was planned like a seller job and fetched through
+	// the seller address with the brand id in the supplier parameter. The site
+	// answers that with 200 and «total: 0» — so every brand job ran, spent its
+	// requests and reported a brand with nothing in it. Both directions were
+	// checked against the live site: the same brand id returns its goods on one
+	// address and nothing on the other.
+	for _, c := range []struct {
+		kind       job.Kind
+		wantSeller bool
+	}{
+		{job.KindSeller, true},
+		{job.KindBrand, false},
+	} {
+		site := &fakeSite{products: []wb.Product{product(100)}}
+		f, st := watching(t, site, c.kind)
+
+		if _, err := f.Fetch(t.Context(), job.Item{Key: job.Key{
+			Kind: job.ItemListing, ID: 4242, Dest: "-1257786", AppType: 1, Page: 1,
+		}.String()}); err != nil {
+			t.Fatalf("%s: Fetch: %v", c.kind, err)
+		}
+
+		gotSeller := len(site.listings) == 1 && site.listings[0] == 4242
+		gotBrand := len(site.brandListings) == 1 && site.brandListings[0] == 4242
+		if gotSeller != c.wantSeller || gotBrand == c.wantSeller {
+			t.Errorf("%s: витрина продавца %v, витрина бренда %v", c.kind, gotSeller, gotBrand)
+		}
+		if got := savedIDs(t, st); !got[100] {
+			t.Errorf("%s: товар не сохранён", c.kind)
+		}
 	}
 }

@@ -54,6 +54,10 @@ const (
 	SourceSellerProfile Source = "seller profile"
 	// SourceSellerCatalog is one page of a seller's own storefront.
 	SourceSellerCatalog Source = "seller catalog"
+	// SourceBrandCatalog is one page of a brand's own storefront. Its own
+	// source rather than the seller's, because it is its own address — and
+	// telling them apart is what a timing table exists for.
+	SourceBrandCatalog Source = "brand catalog"
 	// SourceShelves is the advertising placements mixed into one search.
 	SourceShelves Source = "shelves"
 	// SourceBrand is a brand's directory entry.

@@ -38,6 +38,7 @@ import (
 type Site interface {
 	SearchPage(ctx context.Context, eps wb.Endpoints, q wb.SearchQuery) (wb.Envelope, error)
 	SellerCatalogPage(ctx context.Context, eps wb.Endpoints, id int64, q wb.SearchQuery) (wb.Envelope, error)
+	BrandCatalogPage(ctx context.Context, eps wb.Endpoints, id int64, q wb.SearchQuery) (wb.Envelope, error)
 	Card(ctx context.Context, b *wb.Basket, eps wb.Endpoints, nm int64, dest string, app int) (wb.CardFetch, error)
 	Reviews(ctx context.Context, eps wb.Endpoints, imtID int64) (wb.Reviews, error)
 	Questions(ctx context.Context, eps wb.Endpoints, imtID int64, take, skip int) (wb.Questions, error)
@@ -152,16 +153,26 @@ func (f *Fetcher) page(ctx context.Context, key job.Key) (int, error) {
 // recorded for it would be a rank in a result set nobody searched for. The
 // store already reads an empty query that way.
 func (f *Fetcher) listing(ctx context.Context, key job.Key) (int, error) {
-	env, err := f.Site.SellerCatalogPage(ctx, f.Eps, key.ID, wb.SearchQuery{
+	// Which storefront, and it is not a detail: a brand id sent to the seller
+	// address comes back 200 with «total: 0», so every brand job in this
+	// product used to run, spend its requests and report a brand with nothing
+	// in it. The two are separate addresses on the site and separate calls
+	// here.
+	what, fetch := "витрина продавца", f.Site.SellerCatalogPage
+	if f.Job.Kind == job.KindBrand {
+		what, fetch = "витрина бренда", f.Site.BrandCatalogPage
+	}
+
+	env, err := fetch(ctx, f.Eps, key.ID, wb.SearchQuery{
 		Dest: key.Dest, AppType: key.AppType, Page: key.Page,
 	})
 	if err != nil {
-		return 1, fmt.Errorf("collect: listing %d page %d: %w", key.ID, key.Page, err)
+		return 1, fmt.Errorf("collect: %s %d, страница %d: %w", what, key.ID, key.Page, err)
 	}
 	requests := 1
 
 	if _, err := f.Store.SaveSearchPage(ctx, env, ""); err != nil {
-		return requests, fmt.Errorf("collect: saving listing %d page %d: %w", key.ID, key.Page, err)
+		return requests, fmt.Errorf("collect: сохранение: %s %d, страница %d: %w", what, key.ID, key.Page, err)
 	}
 	if err := f.link(ctx, env.Products); err != nil {
 		return requests, err

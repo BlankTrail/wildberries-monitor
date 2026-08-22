@@ -87,6 +87,15 @@ type Endpoints struct {
 	// base address is all this field needs to hold.
 	Shelves string `yaml:"shelves"`
 
+	// BrandCatalog is a brand's own storefront, the twin of SellerCatalog in
+	// the same __internal/u-catalog family.
+	//
+	// Its own field rather than a parameter on the seller one, because they are
+	// two addresses: the seller endpoint answers a brand id with «total: 0»,
+	// which is what made every brand job in this product collect nothing and
+	// report success.
+	BrandCatalog string `yaml:"brand_catalog"`
+
 	// Categories is the catalogue directory: the whole tree of nodes with the
 	// search query that fills each one. See category.go.
 	//
@@ -120,6 +129,7 @@ func DefaultEndpoints() Endpoints {
 		Reviews:       "https://feedback-view-01.wb.ru/feedbacks/v2/{imtId}",
 		Questions:     "https://questions.wildberries.ru/api/v1/questions",
 		SellerCatalog: "https://www.wildberries.ru/__internal/u-catalog/sellers/v4/catalog",
+		BrandCatalog:  "https://www.wildberries.ru/__internal/u-catalog/brands/v4/catalog",
 		Duplicates:    "https://www.wildberries.ru/__internal/meta/duplicates/ru/common/v8/search",
 		Shelves:       "https://www.wildberries.ru/__internal/banners/shelfs/search",
 		Categories:    "https://static-basket-01.wbbasket.ru/vol0/data/main-menu-ru-ru-v3.json",
@@ -216,6 +226,9 @@ func (e Endpoints) Validate() error {
 	}
 	if strings.TrimSpace(e.SellerCatalog) == "" {
 		return errors.New("seller_catalog is empty")
+	}
+	if strings.TrimSpace(e.BrandCatalog) == "" {
+		return errors.New("brand_catalog is empty")
 	}
 	if strings.TrimSpace(e.Duplicates) == "" {
 		return errors.New("duplicates is empty")
