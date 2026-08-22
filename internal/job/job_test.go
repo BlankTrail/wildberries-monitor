@@ -236,17 +236,19 @@ func TestEstimate_AFieldThatCostsNothingChangesNothing(t *testing.T) {
 
 func TestKinds_AreOnlyTheOnesWithASource(t *testing.T) {
 	// The design lists fourteen job types. The ones absent here name sources
-	// this build cannot fetch — promotions, the main page's shelves, a
-	// product's recommendation shelves — and declaring one would let a user
-	// schedule a job that collects nothing, the same mistake the field
-	// catalogue refuses.
+	// this build cannot fetch — promotions and the main page's shelves — and
+	// declaring one would let a user schedule a job that collects nothing, the
+	// same mistake the field catalogue refuses.
 	//
-	// The catalogue node stopped being one of them: the site fills a category
-	// page through the search endpoint this build already speaks, with a query
-	// its own directory publishes per node.
+	// Two stopped being absent. A catalogue node is filled through the search
+	// endpoint this build already speaks, with a query the site's own
+	// directory publishes per node; and a product's «Продавец рекомендует» row
+	// is a static file published per card. The other two shelves section 4.6
+	// names — «с этим покупают» and «комплекты» — are still absent, and
+	// KindShelves says so where it is declared.
 	got := Kinds()
-	if len(got) != 8 {
-		t.Fatalf("Kinds() has %d entries, want 8", len(got))
+	if len(got) != 9 {
+		t.Fatalf("Kinds() has %d entries, want 9", len(got))
 	}
 	seen := map[Kind]bool{}
 	for _, k := range got {
@@ -423,5 +425,46 @@ func TestPlan_ACatalogueJobWalksPagesOfOneNodePerRegion(t *testing.T) {
 	// And the estimate prices it as one walk rather than as one per phrase.
 	if got := j.Estimate(100).Requests; got != 6 {
 		t.Errorf("оценка = %d запросов, ожидалось шесть", got)
+	}
+}
+
+func TestPlan_AShelfJobIsOneItemPerProductAndCarriesNoRegion(t *testing.T) {
+	// The shelf is published per card and does not move with a region or an
+	// audience. A key carrying either would claim a dependency nobody has
+	// observed — and would make one shelf look like several.
+	j := Job{
+		Kind: KindShelves, Articles: []int64{100, 200},
+		Regions: []string{"-1257786", "12358499"}, AppType: 1,
+		Fields: wb.Selection{"nm_id"},
+	}
+	plan, err := StaticPlanner{}.Plan(j)
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if len(plan) != 2 {
+		t.Fatalf("в плане %d позиций, ожидалось две — по одной на артикул, а не на регион", len(plan))
+	}
+	k, err := ParseKey(plan[0].Key)
+	if err != nil {
+		t.Fatalf("ParseKey: %v", err)
+	}
+	if k.Kind != ItemShelf || k.NmID != 100 {
+		t.Errorf("первый ключ = %+v", k)
+	}
+	if k.Dest != "" || k.AppType != 0 {
+		t.Errorf("ключ полки несёт регион или аудиторию: %+v", k)
+	}
+
+	// And the estimate prices it the same way: one file per product, no
+	// region multiplier.
+	if got := j.Estimate(0); got.Requests != 2 || got.Items != 2 || !got.Exact {
+		t.Errorf("оценка = %+v, ожидались два запроса и две позиции точно", got)
+	}
+}
+
+func TestValidate_AShelfJobNeedsTheProductsToLookUnder(t *testing.T) {
+	j := Job{Kind: KindShelves, Regions: []string{"-1257786"}, Fields: wb.Selection{"nm_id"}}
+	if err := j.Validate(); err == nil {
+		t.Error("задание на полки без артикулов принято")
 	}
 }

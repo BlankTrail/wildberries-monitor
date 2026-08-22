@@ -476,7 +476,7 @@ func TestConstructor_ShowsOnlyTheFieldsTheChosenKindUses(t *testing.T) {
 		{"brand_id", []job.Kind{job.KindBrand}},
 		// Positions is the one kind that is a pair: which products, and which
 		// searches to look for them in.
-		{"articles", []job.Kind{job.KindArticles, job.KindPositions}},
+		{"articles", []job.Kind{job.KindArticles, job.KindPositions, job.KindShelves}},
 		{"category_id", []job.Kind{job.KindCatalog}},
 		{"max_pages", []job.Kind{job.KindPhrase, job.KindCatalog, job.KindSeller, job.KindBrand, job.KindPositions}},
 	} {

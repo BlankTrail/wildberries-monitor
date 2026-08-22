@@ -96,6 +96,16 @@ type Endpoints struct {
 	// report success.
 	BrandCatalog string `yaml:"brand_catalog"`
 
+	// ProductShelf is the «Продавец рекомендует» row published under one
+	// product's card — spec section 4.6's type 9, in the one shelf that was
+	// observed. {nm} is the product's article number.
+	//
+	// A static file on the media CDN rather than an API: the volume and the
+	// host are fixed for this dataset, not derived from the article the way a
+	// card's basket path is, which was checked across two products before this
+	// was written down.
+	ProductShelf string `yaml:"product_shelf"`
+
 	// PickupPoint is one delivery point's own record: its address and the
 	// region code the site prices with once it is chosen.
 	//
@@ -141,6 +151,7 @@ func DefaultEndpoints() Endpoints {
 		BrandCatalog:  "https://www.wildberries.ru/__internal/u-catalog/brands/v4/catalog",
 		Duplicates:    "https://www.wildberries.ru/__internal/meta/duplicates/ru/common/v8/search",
 		Shelves:       "https://www.wildberries.ru/__internal/banners/shelfs/search",
+		ProductShelf:  "https://static-basket-08.wbbasket.ru/vol154/content-recommendations/{nm}.json",
 		PickupPoint:   "https://www.wildberries.ru/webapi/spa/poo/{id}/show",
 		Categories:    "https://static-basket-01.wbbasket.ru/vol0/data/main-menu-ru-ru-v3.json",
 	}
@@ -248,6 +259,9 @@ func (e Endpoints) Validate() error {
 	}
 	if strings.TrimSpace(e.Categories) == "" {
 		return errors.New("categories is empty")
+	}
+	if !strings.Contains(e.ProductShelf, "{nm}") {
+		return errors.New("product_shelf template is missing the {nm} placeholder")
 	}
 	if !strings.Contains(e.PickupPoint, "{id}") {
 		return errors.New("pickup_point template is missing the {id} placeholder")

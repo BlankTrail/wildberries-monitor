@@ -44,6 +44,7 @@ var kindLabels = map[job.Kind]string{
 	job.KindArticles:  "Список артикулов",
 	job.KindPhraseAds: "Реклама в выдаче по фразе",
 	job.KindPositions: "Позиции товаров по фразам",
+	job.KindShelves:   "Полка «Продавец рекомендует»",
 }
 
 // kindWhat says what picking a kind will make the job walk.
@@ -60,6 +61,7 @@ var kindWhat = map[job.Kind]string{
 	job.KindArticles:  "Только перечисленные артикулы, без поиска.",
 	job.KindPhraseAds: "Рекламные полки в выдаче по фразе: чей товар и на каком месте.",
 	job.KindPositions: "Где перечисленные артикулы стоят в выдаче по каждой фразе. Чужие товары со страниц не сохраняются.",
+	job.KindShelves:   "Что продавец повесил под своей карточкой: чьи товары и на каком месте. По одному файлу на артикул, без прокси.",
 }
 
 var groupLabels = map[wb.FieldGroup]string{
@@ -377,7 +379,7 @@ func (s *Server) constructorHTML(r *http.Request) (string, error) {
 	b.WriteString(whenAny(
 		field("Артикулы", `<textarea class="bt-textarea" name="articles" rows="3" data-estimate placeholder="по одному в строке"></textarea>`,
 			"По одному в строке. Задание пройдёт ровно по ним."),
-		job.KindArticles, job.KindPositions))
+		job.KindArticles, job.KindPositions, job.KindShelves))
 
 	b.WriteString(`<h3 class="bt-form-head">Где смотреть</h3>`)
 	// The regions across the whole width: it is a list to tick, and squeezed
@@ -666,7 +668,7 @@ func (s *Server) jobFromForm(r *http.Request) (job.Job, error) {
 		j.SupplierID = atoi64(f.Get("supplier_id"))
 	case job.KindBrand:
 		j.BrandID = atoi64(f.Get("brand_id"))
-	case job.KindArticles:
+	case job.KindArticles, job.KindShelves:
 		j.Articles = articleNumbers(f.Get("articles"))
 	case job.KindCatalog:
 		// The node and the query it is walked with, both read now: a job has

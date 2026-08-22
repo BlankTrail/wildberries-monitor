@@ -29,6 +29,7 @@ const (
 	ItemAds     = "ads"     // the paid placements for one phrase in one region
 	ItemProfile = "profile" // resolve what somebody pasted into who they are
 	ItemCatalog = "catalog" // one page of one catalogue node
+	ItemShelf   = "shelf"   // the recommendation row under one product
 )
 
 // keySep separates a key's parts.
@@ -71,6 +72,12 @@ func (k Key) String() string {
 		return strings.Join([]string{ItemProduct, strconv.FormatInt(k.NmID, 10), k.Dest, strconv.Itoa(k.AppType)}, keySep)
 	case ItemProfile:
 		return strings.Join([]string{ItemProfile, strconv.FormatInt(k.NmID, 10)}, keySep)
+	case ItemShelf:
+		// The product and nothing else. The shelf is published per card and
+		// does not move with a region or an audience, so a key carrying either
+		// would claim a dependency nobody has observed — and would make one
+		// shelf look like several.
+		return strings.Join([]string{ItemShelf, strconv.FormatInt(k.NmID, 10)}, keySep)
 	case ItemAds:
 		return strings.Join([]string{ItemAds, k.Phrase, k.Dest, strconv.Itoa(k.AppType)}, keySep)
 	}
@@ -114,13 +121,13 @@ func ParseKey(s string) (Key, error) {
 			return Key{}, fmt.Errorf("job: page key %q: page %q", s, parts[4])
 		}
 		k.Page = page
-	case ItemProfile:
+	case ItemProfile, ItemShelf:
 		if len(parts) != 2 {
-			return Key{}, fmt.Errorf("job: profile key %q has %d parts, want 2", s, len(parts))
+			return Key{}, fmt.Errorf("job: %s key %q has %d parts, want 2", k.Kind, s, len(parts))
 		}
 		nm, err := strconv.ParseInt(parts[1], 10, 64)
 		if err != nil {
-			return Key{}, fmt.Errorf("job: profile key %q: article %q", s, parts[1])
+			return Key{}, fmt.Errorf("job: %s key %q: article %q", k.Kind, s, parts[1])
 		}
 		k.NmID = nm
 
@@ -183,6 +190,18 @@ func (StaticPlanner) Plan(j Job) ([]Item, error) {
 			return nil, fmt.Errorf("job: profile %q carries no article number", j.Input)
 		}
 		return []Item{{Kind: ItemProfile, Key: Key{Kind: ItemProfile, NmID: nm}.String()}}, nil
+	}
+
+	// A shelf hangs under a card and is published per product: it does not
+	// move with a region, so it is planned before the region loop rather than
+	// inside it. Planned inside, a job over three regions would read the same
+	// file three times and store one shelf as three.
+	if j.Kind == KindShelves {
+		out := make([]Item, 0, len(j.Articles))
+		for _, nm := range j.Articles {
+			out = append(out, Item{Kind: ItemShelf, Key: Key{Kind: ItemShelf, NmID: nm}.String()})
+		}
+		return out, nil
 	}
 
 	regions := nonEmpty(j.Regions)

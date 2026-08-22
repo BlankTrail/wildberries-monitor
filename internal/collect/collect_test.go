@@ -5,6 +5,8 @@ package collect
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -830,5 +832,85 @@ func TestListing_ABrandGoesToTheBrandAddressAndASellerToTheSellers(t *testing.T)
 		if got := savedIDs(t, st); !got[100] {
 			t.Errorf("%s: товар не сохранён", c.kind)
 		}
+	}
+}
+
+func TestShelf_ReadsTheRowUnderOneCardAndKeepsThePlaces(t *testing.T) {
+	// Spec section 4.6's type 9, in the one shelf that was observed: «Продавец
+	// рекомендует». The order is the fact worth keeping — «третий в полке» is
+	// a place somebody competes for.
+	var asked string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		asked = r.URL.Path
+		w.Write([]byte(`{"nms":[241450167,824617439,1291739928]}`))
+	}))
+	defer srv.Close()
+
+	f, st := watching(t, &fakeSite{}, job.KindShelves)
+	f.HTTP = srv.Client()
+	f.Eps.ProductShelf = srv.URL + "/vol154/content-recommendations/{nm}.json"
+
+	n, err := f.Fetch(t.Context(), job.Item{Key: job.Key{
+		Kind: job.ItemShelf, NmID: 126050166,
+	}.String()})
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("полка стоила %d запросов, ожидался один", n)
+	}
+	if !strings.Contains(asked, "126050166") {
+		t.Errorf("запрошено %q", asked)
+	}
+
+	members, err := st.ProductShelfMembers(t.Context(), 126050166)
+	if err != nil {
+		t.Fatalf("ProductShelfMembers: %v", err)
+	}
+	want := []int64{241450167, 824617439, 1291739928}
+	if len(members) != len(want) {
+		t.Fatalf("в полке %d товаров, ожидалось %d", len(members), len(want))
+	}
+	for i := range want {
+		if members[i] != want[i] {
+			t.Errorf("место %d = %d, ожидался %d", i+1, members[i], want[i])
+		}
+	}
+}
+
+func TestShelf_ASellerWithNoShelfIsRecordedRatherThanSkipped(t *testing.T) {
+	// A seller who never set a shelf up and a seller whose shelf emptied out
+	// look identical in a store that only records what exists — and only the
+	// second is worth telling somebody about. So the empty reading is written.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	f, st := watching(t, &fakeSite{}, job.KindShelves)
+	f.HTTP = srv.Client()
+	f.Eps.ProductShelf = srv.URL + "/{nm}.json"
+
+	if _, err := f.Fetch(t.Context(), job.Item{Key: job.Key{
+		Kind: job.ItemShelf, NmID: 1,
+	}.String()}); err != nil {
+		t.Fatalf("отсутствие полки выдано за поломку: %v", err)
+	}
+	members, err := st.ProductShelfMembers(t.Context(), 1)
+	if err != nil {
+		t.Fatalf("ProductShelfMembers: %v", err)
+	}
+	if len(members) != 0 {
+		t.Errorf("в пустой полке %d товаров", len(members))
+	}
+	// And a reading exists, or the run recorded nothing at all about a product
+	// it did look at.
+	readings, err := st.CountForTest(t.Context(),
+		`SELECT COUNT(*) FROM shelves WHERE source = 'product' AND source_key = '1'`)
+	if err != nil {
+		t.Fatalf("CountForTest: %v", err)
+	}
+	if readings != 1 {
+		t.Errorf("чтений полки записано %d, ожидалось одно", readings)
 	}
 }

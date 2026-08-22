@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"strconv"
 	"strings"
 
@@ -47,7 +48,12 @@ type Site interface {
 
 // Fetcher does one item of a job.
 type Fetcher struct {
-	Site   Site
+	Site Site
+	// HTTP is for the public files that have no challenge in front of them —
+	// the catalogue directory and a product's shelf. A field rather than
+	// http.DefaultClient reached for inline, so a test can answer without a
+	// network and so one place decides what timeouts a plain fetch runs under.
+	HTTP   *http.Client
 	Store  *store.Store
 	Bus    *events.Bus
 	Basket *wb.Basket
@@ -102,6 +108,8 @@ func (f *Fetcher) fetchKey(ctx context.Context, key job.Key) (int, error) {
 		return f.profile(ctx, key)
 	case job.ItemAds:
 		return f.ads(ctx, key)
+	case job.ItemShelf:
+		return f.shelf(ctx, key)
 	}
 	// Not a default that quietly does nothing: an item kind this build cannot
 	// do would otherwise be marked done, and a run would report success having
@@ -321,6 +329,35 @@ func (f *Fetcher) ads(ctx context.Context, key job.Key) (int, error) {
 		return 1, fmt.Errorf("collect: saving ads for %q: %w", key.Phrase, err)
 	}
 	f.publish(ctx, events.ItemScraped, shelves)
+	return 1, nil
+}
+
+// shelf reads the «Продавец рекомендует» row under one product — spec section
+// 4.6's type 9.
+//
+// Over a plain HTTP client rather than through a worker port, and the reason is
+// the same one the catalogue directory gives: it is a public file on the media
+// CDN with no challenge in front of it, verified from outside a browser before
+// this was written. A run that spent a port on it would be spending a port on a
+// download — and this kind is one file per product, so that would be a port per
+// product for nothing.
+//
+// It costs a request all the same, and the estimate counts it: what is free is
+// the port, not the traffic.
+func (f *Fetcher) shelf(ctx context.Context, key job.Key) (int, error) {
+	shelf, err := wb.FetchProductShelf(ctx, f.HTTP, f.Eps, key.NmID)
+	if err != nil {
+		return 1, fmt.Errorf("collect: полка товара %d: %w", key.NmID, err)
+	}
+
+	// Written even when the site publishes none, and that is the distinction
+	// the whole table turns on: a seller who never set a shelf up and a seller
+	// whose shelf emptied out look identical in a store that only records what
+	// exists, and only the second is worth telling somebody about.
+	if _, err := f.Store.SaveProductShelf(ctx, shelf); err != nil {
+		return 1, fmt.Errorf("collect: сохранение полки товара %d: %w", key.NmID, err)
+	}
+	f.publish(ctx, events.ItemScraped, shelf)
 	return 1, nil
 }
 

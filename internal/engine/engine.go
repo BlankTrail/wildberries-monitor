@@ -20,6 +20,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"strings"
 	"time"
@@ -127,7 +128,11 @@ func (e *Engine) RunnerFor(ctx context.Context, j job.Job) (*job.Runner, func(),
 		// was before anything went wrong.
 		Ports: func() []job.PortStat { return portStats(pool) },
 		Fetcher: &collect.Fetcher{
-			Site:   site,
+			Site: site,
+			// The public files that carry no challenge — a product's shelf, the
+			// catalogue directory. Straight out, no worker port: a port spent
+			// on a download is a port nothing was collected through.
+			HTTP:   http.DefaultClient,
 			Store:  e.Store,
 			Bus:    e.Bus,
 			Basket: wb.NewBasket(site),

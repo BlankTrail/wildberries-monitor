@@ -63,6 +63,15 @@ const (
 	// category rather than one — see CategoryID.
 	KindCatalog Kind = "catalog"
 
+	// KindShelves reads the «Продавец рекомендует» row under each of the
+	// named products — spec section 4.6's type 9.
+	//
+	// One of the three shelves that section names. The other two, «с этим
+	// покупают» and «комплекты», did not appear in the requests of any card
+	// that was looked at, and a shelf nothing can fetch is one somebody would
+	// schedule and never receive.
+	KindShelves Kind = "shelves"
+
 	// KindProfile turns what somebody pasted into «who I am» — spec section
 	// 4.7's entry point and section 4.6's type 11.
 	//
@@ -94,7 +103,8 @@ func Composable() []Kind {
 
 // Kinds lists every kind this build can run, in a stable order.
 func Kinds() []Kind {
-	return []Kind{KindPhrase, KindCatalog, KindSeller, KindBrand, KindArticles, KindPhraseAds, KindPositions, KindProfile}
+	return []Kind{KindPhrase, KindCatalog, KindSeller, KindBrand, KindArticles,
+		KindPhraseAds, KindPositions, KindShelves, KindProfile}
 }
 
 // Job is what to collect.
@@ -245,6 +255,12 @@ func (j Job) Validate() error {
 		if len(j.Articles) == 0 {
 			bad = append(bad, "no article numbers")
 		}
+	case KindShelves:
+		// Whose shelves. There is no search here: the shelf hangs under a
+		// card, so the job is a list of cards.
+		if len(j.Articles) == 0 {
+			bad = append(bad, "no article numbers: a shelf job needs the products to look under")
+		}
 	case KindProfile:
 		// A link that carries no article number is not a refusal this program
 		// can make later: the whole job is resolving it, and «не нашли ничего»
@@ -390,6 +406,11 @@ func (j Job) Estimate(items int) Estimate {
 	case KindProfile:
 		// One card, one answer.
 		e.Items, e.Exact = 1, true
+	case KindShelves:
+		// One request per product, and the size is known before it starts:
+		// what a shelf holds is what the run finds out, but how many shelves
+		// are read is exactly how many articles were named.
+		e.Items, e.Exact = len(j.Articles), true
 	}
 
 	regions := len(nonEmpty(j.Regions))
@@ -416,6 +437,10 @@ func (j Job) Estimate(items int) Estimate {
 		e.Requests += pages * regions
 	case KindArticles:
 		// No walk: the list is the enumeration.
+	case KindShelves:
+		// One published file per product, and it does not move with the
+		// region — so no region multiplier either.
+		e.Requests += len(j.Articles)
 	case KindPhraseAds:
 		e.Requests += regions * max(phrases, 1)
 	}
