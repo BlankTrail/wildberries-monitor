@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/BlankTrail/wildberries-monitor/internal/geo"
 	"github.com/BlankTrail/wildberries-monitor/wb"
 )
 
@@ -77,8 +78,19 @@ func (s *Store) SaveRegion(ctx context.Context, r RegionRow) error {
 // three lines at every call site, and because the one decision in it — that a
 // point's city is the region's name — should be made once.
 func (s *Store) SaveRegionFromPoint(ctx context.Context, p wb.PickupPoint) (RegionRow, error) {
+	// Named by the settlement rather than by the head of the address. The site
+	// writes «Республика Татарстан, Казань, улица Баумана» as often as it
+	// writes «г. Казань, …», and taking the first part of the line called this
+	// code «Республика Татарстан» — which is wrong twice over: it is not a
+	// republic-wide code, and every point in the republic would claim the same
+	// name. See internal/geo, which is the one place that knows how the site
+	// writes an address.
+	name, _ := geo.Parse(p.Address)
+	if name == "" {
+		name = strings.TrimSpace(p.Address)
+	}
 	row := RegionRow{
-		Dest: p.Dest, Name: p.City(), Address: p.Address, PointID: p.ID,
+		Dest: p.Dest, Name: name, Address: p.Address, PointID: p.ID,
 	}
 	if p.Latitude != 0 || p.Longitude != 0 {
 		lat, lon := p.Latitude, p.Longitude

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/BlankTrail/wildberries-monitor/internal/geo"
+	"github.com/BlankTrail/wildberries-monitor/wb"
 )
 
 // directory is a small country: two regions, three settlements, six points.
@@ -16,7 +17,10 @@ func directory(t *testing.T, s *Store) {
 		{ID: 1, Address: "Республика Татарстан, Казань, центральная, 1", Latitude: 55.79, Longitude: 49.11},
 		{ID: 2, Address: "Республика Татарстан, Казань, вторая, 2", Latitude: 55.80, Longitude: 49.12},
 		{ID: 6, Address: "Республика Татарстан, Казань, дальняя, 6", Latitude: 55.95, Longitude: 49.40},
-		{ID: 3, Address: "Республика Татарстан, Набережные Челны, проспект Мира, 1", Latitude: 55.74, Longitude: 52.40},
+		// Alphabetically before Kazan and with fewer points than it: the row
+		// that catches an ordering which is really «по алфавиту» or «по числу
+		// пунктов» wearing the capital's clothes.
+		{ID: 3, Address: "Республика Татарстан, Альметьевск, улица Тимирязева, 15", Latitude: 54.90, Longitude: 52.31},
 		{ID: 4, Address: "г. Москва, Кировоградская, 24", Latitude: 55.75, Longitude: 37.61},
 		{ID: 5, Address: "г. Москва, Пришвина, 3", Latitude: 55.88, Longitude: 37.60},
 	}
@@ -123,6 +127,9 @@ func TestPickupSettlements_TheCapitalIsFirst(t *testing.T) {
 	}
 	if rows[0].Name != "Казань" || !rows[0].Centre {
 		t.Errorf("первым идёт %q (центр=%v)", rows[0].Name, rows[0].Centre)
+	}
+	if rows[1].Name != "Альметьевск" {
+		t.Errorf("вторым идёт %q", rows[1].Name)
 	}
 }
 
@@ -242,8 +249,13 @@ func TestExpandPickup_TheCentralPointIsTheCentralOne(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExpandPickup: %v", err)
 	}
-	if len(got) != 1 || got[0] == 6 {
+	if len(got) != 1 || len(got[0]) == 0 || got[0][0] == 6 {
 		t.Errorf("центральным выбран %v — это самый дальний пункт", got)
+	}
+	// And its understudies come behind it, so a closed central point does not
+	// drop the whole settlement.
+	if len(got[0]) != 3 {
+		t.Errorf("запасных пунктов %d, ожидались все три", len(got[0]))
 	}
 }
 
@@ -260,10 +272,12 @@ func TestExpandPickup_ARandomPointIsOneOfTheSettlementsOwn(t *testing.T) {
 			t.Fatalf("ExpandPickup: %v", err)
 		}
 		if len(got) != 1 {
-			t.Fatalf("выбрано %d пунктов", len(got))
+			t.Fatalf("выбрано %d кодов", len(got))
 		}
-		if got[0] != 1 && got[0] != 2 && got[0] != 6 {
-			t.Fatalf("случайным выбран пункт %d — он не в Казани", got[0])
+		for _, id := range got[0] {
+			if id != 1 && id != 2 && id != 6 {
+				t.Fatalf("случайным выбран пункт %d — он не в Казани", id)
+			}
 		}
 	}
 }
@@ -273,7 +287,7 @@ func TestExpandPickup_ACapitalPresetTakesOnePointPerCity(t *testing.T) {
 	// by «сравнить региональные центры» — it is several thousand requests per
 	// article per run.
 	s := openTestStore(t)
-	got, err := func() ([]int64, error) {
+	got, err := func() ([][]int64, error) {
 		directory(t, s)
 		return s.ExpandPickup(context.Background(), PickupChoice{Scope: ScopeCentres, Pick: PickAll})
 	}()
@@ -311,12 +325,16 @@ func TestExpandPickup_TheHalvesOfTheCountryDoNotOverlap(t *testing.T) {
 		t.Errorf("запад %d + восток %d ≠ всего %d", len(west), len(east), len(all))
 	}
 	in := map[int64]bool{}
-	for _, id := range west {
-		in[id] = true
+	for _, g := range west {
+		for _, id := range g {
+			in[id] = true
+		}
 	}
-	for _, id := range east {
-		if in[id] {
-			t.Errorf("пункт %d попал и в западную, и в восточную половину", id)
+	for _, g := range east {
+		for _, id := range g {
+			if in[id] {
+				t.Errorf("пункт %d попал и в западную, и в восточную половину", id)
+			}
 		}
 	}
 }
@@ -339,5 +357,145 @@ func TestExpandPickup_RefusesAChoiceThatSaysNothing(t *testing.T) {
 		if got, err := s.ExpandPickup(ctx, c); err == nil {
 			t.Errorf("выбор %+v принят и дал %d пунктов", c, len(got))
 		}
+	}
+}
+
+func TestSaveRegionFromPoint_NamedByTheSettlementNotTheHeadOfTheAddress(t *testing.T) {
+	// The site writes «Республика Татарстан, Казань, улица Баумана» as often
+	// as «г. Казань, …». Naming the row from the first part of the line called
+	// a Kazan-specific code «Республика Татарстан» — wrong twice over: it is
+	// not a republic-wide code, and every point in the republic would claim
+	// the same name, so the directory would fill with rows that look identical
+	// and price differently.
+	s := openTestStore(t)
+	for _, c := range []struct{ address, want string }{
+		{"Республика Татарстан, Казань, улица Баумана, 22", "Казань"},
+		{"г. Казань, ул Кремлевская д. 8", "Казань"},
+		{"г. Альметьевск (Республика Татарстан), улица Тимирязева, д. 15", "Альметьевск"},
+		{"г. Москва, Кировоградская улица д. 24", "Москва"},
+	} {
+		row, err := s.SaveRegionFromPoint(context.Background(), wb.PickupPoint{
+			ID: 1, Dest: -1, Address: c.address,
+		})
+		if err != nil {
+			t.Fatalf("SaveRegionFromPoint: %v", err)
+		}
+		if row.Name != c.want {
+			t.Errorf("%q → %q, ожидалось %q", c.address, row.Name, c.want)
+		}
+	}
+}
+
+func TestSaveRegionFromPoint_AnUnreadableAddressStillGetsAName(t *testing.T) {
+	// A row with an empty name is a region a person cannot pick out of a list,
+	// and the whole directory exists to give a code a name.
+	s := openTestStore(t)
+	row, err := s.SaveRegionFromPoint(context.Background(), wb.PickupPoint{
+		ID: 1, Dest: -1, Address: "Кантауровский с/с",
+	})
+	if err != nil {
+		t.Fatalf("SaveRegionFromPoint: %v", err)
+	}
+	if row.Name == "" {
+		t.Error("регион остался без имени")
+	}
+}
+
+func TestExpandPickup_OneWantedCodeIsOneGroup(t *testing.T) {
+	// The grouping is the answer's shape: a group is a region code somebody
+	// wants, and the points in it are the candidates for it. «Все пункты» is a
+	// group per point, because each of those is a code in its own right and
+	// none of them stands in for another — a resolver that treated them as
+	// understudies would ask one point and call the whole city done.
+	s := openTestStore(t)
+	ctx := context.Background()
+	directory(t, s)
+
+	all, err := s.ExpandPickup(ctx, PickupChoice{
+		Scope: ScopeSettlement, Region: "ta", Place: geo.Key("Казань"), Pick: PickAll,
+	})
+	if err != nil {
+		t.Fatalf("ExpandPickup: %v", err)
+	}
+	if len(all) != 3 {
+		t.Fatalf("групп %d, ожидались три — по одной на пункт", len(all))
+	}
+	for _, g := range all {
+		if len(g) != 1 {
+			t.Errorf("у пункта %v есть замена — его код не может дать другой пункт", g)
+		}
+	}
+}
+
+func TestExpandPickup_TheUnderstudiesAreBounded(t *testing.T) {
+	// A capital with a hundred and eighty points, every one of them closed,
+	// must not turn one preset into fifteen thousand requests.
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	var points []geo.Point
+	for i := int64(1); i <= 40; i++ {
+		points = append(points, geo.Point{
+			ID: i, Address: "Республика Татарстан, Казань, улица, 1",
+			Latitude: 55.79 + float64(i)/1000, Longitude: 49.11,
+		})
+	}
+	places, _ := geo.Split(points)
+	if _, err := s.SavePickupDirectory(ctx, places, points); err != nil {
+		t.Fatalf("SavePickupDirectory: %v", err)
+	}
+
+	got, err := s.ExpandPickup(ctx, PickupChoice{
+		Scope: ScopeSettlement, Region: "ta", Place: geo.Key("Казань"), Pick: PickCentral,
+	})
+	if err != nil {
+		t.Fatalf("ExpandPickup: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("групп %d, ожидалась одна", len(got))
+	}
+	if len(got[0]) != pickupFallback {
+		t.Errorf("кандидатов %d, ожидалось %d", len(got[0]), pickupFallback)
+	}
+}
+
+func TestPickupSettlements_TheCapitalOutranksTheBiggerCity(t *testing.T) {
+	// The capital is not always the largest place in its region — Kemerovo is
+	// smaller than Novokuznetsk, Khanty-Mansiysk than Surgut. Ordered by size
+	// the capital sinks below the city somebody was not looking for, and «все
+	// региональные центры» stops being findable by hand.
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	points := []geo.Point{
+		{ID: 1, Address: "Кемеровская область, Кемерово, Советский проспект, 1", Latitude: 55.35, Longitude: 86.09},
+		// Alphabetically first and smallest: after the capital the list is by
+		// size, because the town somebody is looking for is usually a large
+		// one and the search box is there for the rest.
+		{ID: 9, Address: "Кемеровская область, Белово, Советская улица, 1", Latitude: 54.42, Longitude: 86.30},
+	}
+	for i := int64(2); i <= 6; i++ {
+		points = append(points, geo.Point{
+			ID: i, Address: "Кемеровская область, Новокузнецк, проспект Металлургов, 1",
+			Latitude: 53.75 + float64(i)/1000, Longitude: 87.13,
+		})
+	}
+	places, _ := geo.Split(points)
+	if _, err := s.SavePickupDirectory(ctx, places, points); err != nil {
+		t.Fatalf("SavePickupDirectory: %v", err)
+	}
+
+	rows, err := s.PickupSettlements(ctx, "kem", "")
+	if err != nil {
+		t.Fatalf("PickupSettlements: %v", err)
+	}
+	if len(rows) != 3 {
+		t.Fatalf("пунктов %d: %+v", len(rows), rows)
+	}
+	if rows[0].Name != "Кемерово" {
+		t.Errorf("первым идёт %q — центр региона ушёл под более крупный город", rows[0].Name)
+	}
+	if rows[1].Name != "Новокузнецк" {
+		t.Errorf("вторым идёт %q — список за центром не по величине", rows[1].Name)
 	}
 }

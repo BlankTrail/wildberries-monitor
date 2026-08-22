@@ -49,25 +49,6 @@ type PickupPoint struct {
 	Latitude, Longitude float64
 }
 
-// City is the first part of the address, which is what a region is called.
-//
-// The site writes an address as «Казань, Улица Бехтерева 9а» — city first,
-// street after. Taking the head of it gives the name a person picks a region
-// by; the whole address is kept beside it, so a name that comes out wrong is
-// visible rather than silently wrong.
-func (p PickupPoint) City() string {
-	head, _, _ := strings.Cut(p.Address, ",")
-	head = strings.TrimSpace(head)
-	// «г Казань» and «Казань» are the same city written two ways, and a
-	// directory holding both would offer the same region twice.
-	for _, prefix := range []string{"г. ", "г ", "город "} {
-		if after, ok := strings.CutPrefix(head, prefix); ok {
-			return strings.TrimSpace(after)
-		}
-	}
-	return head
-}
-
 // PickupPointURL is one point's own address on the site.
 func (e Endpoints) PickupPointURL(id int64) string {
 	return strings.ReplaceAll(e.PickupPoint, "{id}", strconv.FormatInt(id, 10))

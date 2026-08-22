@@ -25,9 +25,6 @@ func TestDecodePickupPoint_ReadsThePlaceAndItsRegionCode(t *testing.T) {
 	if p.Address != "Казань, Улица Бехтерева 9а" {
 		t.Errorf("адрес = %q", p.Address)
 	}
-	if p.City() != "Казань" {
-		t.Errorf("город = %q — под этим именем регион и выбирают", p.City())
-	}
 	if p.Latitude == 0 || p.Longitude == 0 {
 		t.Errorf("координаты = %v, %v", p.Latitude, p.Longitude)
 	}
@@ -50,26 +47,6 @@ func TestDecodePickupPoint_RefusesWhatCannotNameARegion(t *testing.T) {
 		if _, err := decodePickupPoint([]byte(c.body), 1); err == nil {
 			t.Errorf("%s: принято", c.name)
 		}
-	}
-}
-
-func TestPickupPointCity_ReadsOneCityUnderItsSeveralSpellings(t *testing.T) {
-	// «г Казань» and «Казань» are one city written two ways, and a directory
-	// holding both offers the same region twice.
-	for _, addr := range []string{
-		"Казань, Улица Бехтерева 9а",
-		"г Казань, ул Кремлевская д. 8",
-		"г. Казань, Баумана 22",
-		"город Казань, Баумана 22",
-	} {
-		if got := (PickupPoint{Address: addr}).City(); got != "Казань" {
-			t.Errorf("%q → %q", addr, got)
-		}
-	}
-	// A region written as a region keeps its own name rather than being cut
-	// down to something shorter that means less.
-	if got := (PickupPoint{Address: "Республика Татарстан (Татарстан), Казань, улица Баумана, 22"}).City(); got != "Республика Татарстан (Татарстан)" {
-		t.Errorf("название региона = %q", got)
 	}
 }
 

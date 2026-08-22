@@ -55,56 +55,77 @@ func (a *App) refreshPickupDirectory(ctx context.Context) (int, int, error) {
 	return len(places), written, nil
 }
 
-// resolvePickup asks the site for the region code of each point that has none.
+// resolvePickup asks the site for the region code behind each group.
+//
+// One group is one wanted code and the points that could give it. The first
+// that answers wins and the rest are not asked — which is what keeps the
+// understudies from turning a preset into five times the requests, and what
+// keeps a closed point from quietly dropping a whole region out of «все
+// региональные центры».
 //
 // Sequential on purpose: they go through the standing port, which is one port,
 // and firing them at it in parallel would only queue them behind each other
 // with the pool's cooldown in between.
-func (a *App) resolvePickup(ctx context.Context, ids []int64) (store.PickupResolution, error) {
+func (a *App) resolvePickup(ctx context.Context, groups [][]int64) (store.PickupResolution, error) {
 	var out store.PickupResolution
 	seen := map[int64]bool{}
 
-	for _, id := range ids {
+	for _, group := range groups {
 		if err := ctx.Err(); err != nil {
 			return out, err
 		}
-		row, _, _, err := a.Store.PickupPlace(ctx, id)
+		dest, err := a.resolveGroup(ctx, group, &out)
 		if err != nil {
+			return out, err
+		}
+		if dest == 0 {
+			// Every candidate for this code was closed or unreachable.
 			out.Failed++
 			continue
 		}
-		if row.Dest == 0 {
-			out.Asked++
-			if a.Engine == nil {
-				return out, errors.New("сбор не собран в этой сборке")
-			}
-			point, err := a.Engine.PickupPoint(ctx, id)
-			if err != nil {
-				// A point the site has closed answers «нет такого пункта», and
-				// the published file lists a few of those. One failure is not
-				// a reason to abandon eighty-four other capitals.
-				a.Log.Printf("пункт %d: %v", id, err)
-				out.Failed++
-				continue
-			}
-			if err := a.Store.SetPickupDest(ctx, id, point.Dest); err != nil {
-				return out, err
-			}
-			row.Dest = point.Dest
-
-			// The region directory beside this one is what names a code on
-			// every other screen. Filling it here is what turns «-1257786» in
-			// a table of results into «Казань».
-			if _, err := a.Store.SaveRegionFromPoint(ctx, point); err != nil {
-				return out, err
-			}
-		}
-		if row.Dest == 0 || seen[row.Dest] {
+		if seen[dest] {
 			continue
 		}
-		seen[row.Dest] = true
+		seen[dest] = true
 		out.Resolved++
-		out.Dests = append(out.Dests, row.Dest)
+		out.Dests = append(out.Dests, dest)
 	}
 	return out, nil
+}
+
+// resolveGroup returns the first code any of these points will give.
+func (a *App) resolveGroup(ctx context.Context, group []int64, out *store.PickupResolution) (int64, error) {
+	for _, id := range group {
+		row, _, _, err := a.Store.PickupPlace(ctx, id)
+		if err != nil {
+			continue
+		}
+		if row.Dest != 0 {
+			return row.Dest, nil
+		}
+		if a.Engine == nil {
+			return 0, errors.New("сбор не собран в этой сборке")
+		}
+		out.Asked++
+		out.Tried++
+		point, err := a.Engine.PickupPoint(ctx, id)
+		if err != nil {
+			// A point the site has closed answers «нет такого пункта», and the
+			// published file lists a fifth of the capitals' central points
+			// that way. The next candidate gets a turn.
+			a.Log.Printf("пункт %d: %v", id, err)
+			continue
+		}
+		if err := a.Store.SetPickupDest(ctx, id, point.Dest); err != nil {
+			return 0, err
+		}
+		// The region directory beside this one is what names a code on every
+		// other screen. Filling it here is what turns «-1257786» in a table of
+		// results into «Казань».
+		if _, err := a.Store.SaveRegionFromPoint(ctx, point); err != nil {
+			return 0, err
+		}
+		return point.Dest, nil
+	}
+	return 0, nil
 }

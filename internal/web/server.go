@@ -119,7 +119,7 @@ type Server struct {
 	// keeping what it learns. It is the expensive half of the picker: one
 	// request per point that has never been asked, and nothing at all for the
 	// ones already known.
-	ResolvePickup func(ctx context.Context, ids []int64) (store.PickupResolution, error)
+	ResolvePickup func(ctx context.Context, groups [][]int64) (store.PickupResolution, error)
 
 	CheckTelegram func(ctx context.Context, token string) (username string, err error)
 	// TelegramRoute names the rung currently in use, for the settings screen.

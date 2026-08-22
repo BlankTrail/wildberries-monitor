@@ -240,8 +240,8 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 		// And the expensive half: the region code of every chosen point that
 		// has never been asked for one. See pickup.go — the codes are kept, so
 		// the same point is never paid for twice.
-		ResolvePickup: func(ctx context.Context, ids []int64) (store.PickupResolution, error) {
-			return a.resolvePickup(ctx, ids)
+		ResolvePickup: func(ctx context.Context, groups [][]int64) (store.PickupResolution, error) {
+			return a.resolvePickup(ctx, groups)
 		},
 		CheckBlankTrail: func(ctx context.Context, url, apiKey string) error {
 			client, err := blanktrail.NewClient(url, apiKey)

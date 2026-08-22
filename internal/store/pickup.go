@@ -273,9 +273,10 @@ func (s *Store) PickupPlace(ctx context.Context, id int64) (PickupPlaceRow, stri
 // what says how old the answer is — and a code the site has since changed is
 // the one failure this directory can produce that nothing else would notice.
 func (s *Store) SetPickupDest(ctx context.Context, id, dest int64) error {
-	if id <= 0 {
-		return fmt.Errorf("store: pickup dest: invalid point %d", id)
-	}
+	// No «if id <= 0» here. The row count below already refuses a point that
+	// is not in the directory, and zero never is — a second guard would be a
+	// second place deciding the same thing, and the last pair that did that in
+	// this codebase spent a while hiding each other's mistakes.
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE pickup_places SET dest = ?, dest_at = ? WHERE id = ?`,
 		dest, s.now().UTC().Unix(), id)

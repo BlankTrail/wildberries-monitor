@@ -297,29 +297,29 @@ func (s *Server) addPickup(w http.ResponseWriter, r *http.Request) {
 		Pick:   r.PostFormValue("pick"),
 		Point:  point,
 	}
-	ids, err := s.Store.ExpandPickup(r.Context(), choice)
+	groups, err := s.Store.ExpandPickup(r.Context(), choice)
 	if err != nil {
 		s.writeHTML(w, alert("error", err.Error())+s.pickupBody(r))
 		return
 	}
-	if len(ids) == 0 {
+	if len(groups) == 0 {
 		s.writeHTML(w, alert("neutral", "Под этот выбор не нашлось ни одного пункта выдачи.")+s.pickupBody(r))
 		return
 	}
 
-	got, err := s.ResolvePickup(r.Context(), ids)
+	got, err := s.ResolvePickup(r.Context(), groups)
 	if err != nil {
 		s.writeHTML(w, alert("error", err.Error())+s.pickupBody(r))
 		return
 	}
 
-	msg := fmt.Sprintf("Добавлено регионов: %d (пунктов %d, запросов к сайту %d).",
-		got.Resolved, len(ids), got.Asked)
+	msg := fmt.Sprintf("Добавлено регионов: %d из %d (запросов к сайту %d).",
+		got.Resolved, len(groups), got.Asked)
 	if got.Failed > 0 {
 		// Said rather than swallowed: the published file lists points the site
 		// no longer serves, and a count that quietly shrank would look like a
 		// choice that worked.
-		msg += fmt.Sprintf(" Не ответили %d — сайт больше не обслуживает эти пункты.", got.Failed)
+		msg += fmt.Sprintf(" Не удалось получить код у %d — все их пункты закрыты.", got.Failed)
 	}
 	kind := "success"
 	if got.Resolved == 0 {
