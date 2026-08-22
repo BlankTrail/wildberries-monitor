@@ -272,6 +272,90 @@ func TestStartJob_ComesBackWhileTheRunIsStillGoing(t *testing.T) {
 	settled(t, "прогон не закончился", func() bool { return !a.Scheduler.Running(id) })
 }
 
+func TestStartJob_TheRunOutlivesTheRequestThatAskedForIt(t *testing.T) {
+	// The defect this exists for: the panel handed the run the request's
+	// context, that context ended when the page finished loading, and the
+	// goroutine was cancelled seconds in. What a person saw was «Задание
+	// запущено» followed by «идёт: план составляется» that never moved, and in
+	// the log a configured BlankTrail reporting itself «не настроен» — because
+	// the settings read had failed on the dead context and fallen back.
+	a := newApp(t)
+	configured(t, a)
+
+	reached := make(chan context.Context, 1)
+	release := make(chan struct{})
+	a.Scheduler = job.NewScheduler(&job.Runner{
+		Store: a.Store, Bus: a.Bus, Planner: job.StaticPlanner{},
+		Fetcher: job.FetcherFunc(func(ctx context.Context, _ job.Item) (int, error) {
+			select {
+			case reached <- ctx:
+			default:
+			}
+			<-release
+			return 1, nil
+		}),
+	})
+	id := collectible(t, a, "")
+
+	// A request's context: alive while the answer is written, cancelled the
+	// moment it has been.
+	asking, done := context.WithCancel(t.Context())
+	if err := a.StartJob(asking, id); err != nil {
+		t.Fatalf("StartJob: %v", err)
+	}
+	done()
+
+	var runCtx context.Context
+	select {
+	case runCtx = <-reached:
+	case <-time.After(2 * time.Second):
+		close(release)
+		t.Fatal("прогон не дошёл до первого запроса")
+	}
+	if err := runCtx.Err(); err != nil {
+		close(release)
+		t.Fatalf("прогон идёт на контексте запроса: %v", err)
+	}
+
+	close(release)
+	settled(t, "прогон не закончился", func() bool { return !a.Scheduler.Running(id) })
+
+	runs, err := a.Store.Runs(t.Context(), id, 5)
+	if err != nil {
+		t.Fatalf("Runs: %v", err)
+	}
+	if len(runs) != 1 || runs[0].State != store.RunDone {
+		t.Fatalf("прогон записан как %+v", runs)
+	}
+}
+
+func TestLifetime_WithoutOneTheCallersCancellationIsStillDropped(t *testing.T) {
+	// Run stores the program's context and every run hangs off it. Without a
+	// Run — a test, or a build that drives App itself — there is no longer life
+	// to offer, and the caller's must at least be detached from: a run
+	// cancelled by the request that started it is the whole failure.
+	a := &App{}
+	asking, done := context.WithCancel(t.Context())
+	done()
+
+	if err := a.lifetime(asking).Err(); err != nil {
+		t.Errorf("lifetime без Run отдаёт отменённый контекст: %v", err)
+	}
+
+	// And with one, it is the program's own rather than a copy of it: what
+	// ends the run is shutdown and nothing else.
+	life, stop := context.WithCancel(context.Background())
+	defer stop()
+	a.life.Store(&life)
+	if got := a.lifetime(asking); got != life {
+		t.Error("lifetime не отдаёт контекст программы")
+	}
+	stop()
+	if a.lifetime(asking).Err() == nil {
+		t.Error("остановка программы не доходит до прогона")
+	}
+}
+
 func TestStartJob_RefusesWhileSomebodyIsStillLookingAtTheAnswer(t *testing.T) {
 	// The three refusals that have to come back now rather than on a goroutine
 	// nobody is reading: no proxy configured, no such job, already going.

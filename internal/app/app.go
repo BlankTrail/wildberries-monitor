@@ -76,6 +76,30 @@ type App struct {
 	// been collected and change what runs next.
 	paused    atomic.Bool
 	closeOnce sync.Once
+
+	// life is the program's own context, stored the moment Run takes one.
+	//
+	// A field, which a context is normally not, because a run has to outlive
+	// the thing that asked for it: the panel and the bot both answer somebody
+	// and then let their context end, seconds before a collection that takes
+	// minutes has read its first page. Detaching from the caller with
+	// WithoutCancel would fix that and break the other end — a run nothing can
+	// stop, including shutdown. This is the context that ends when the program
+	// does, and that is the one a run belongs to.
+	life atomic.Pointer[context.Context]
+}
+
+// lifetime is the context a run started by somebody else should hang off.
+//
+// The program's own, when there is one. Without it — a test, or a build that
+// drives App without Run — the caller's context detached from its cancellation:
+// nothing here has a longer life to offer, and a run cancelled by the request
+// that started it is the failure this whole thing exists to prevent.
+func (a *App) lifetime(ctx context.Context) context.Context {
+	if p := a.life.Load(); p != nil {
+		return *p
+	}
+	return context.WithoutCancel(ctx)
 }
 
 // Pause stops or resumes the background round.
@@ -297,6 +321,11 @@ func (a *App) reloadTelegram(ctx context.Context) {
 
 // Run starts the background loops and serves until the context ends.
 func (a *App) Run(ctx context.Context) error {
+	// Before anything can serve a request: this is what a run started from the
+	// panel or the bot lives on, and it has to be there before the first one
+	// can be asked for.
+	a.life.Store(&ctx)
+
 	addr, err := a.Server.ListenAddress(ctx, a.Config.Port, a.Config.LAN)
 	if err != nil {
 		return err

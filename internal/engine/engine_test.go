@@ -104,6 +104,30 @@ func TestCheck_PassesOnceBothHalvesAreThere(t *testing.T) {
 	}
 }
 
+func TestCheck_AFailedReadIsNotReportedAsUnconfigured(t *testing.T) {
+	// The two are opposite instructions. «Не настроен» sends somebody to the
+	// settings screen; a read that failed means the settings are fine and
+	// something else went wrong — and the one that produced this test was a run
+	// carrying a dead context, which reported a configured BlankTrail as
+	// missing and sent its owner to re-enter a key that was already there.
+	e := openEngine(t)
+	configure(t, e, "http://127.0.0.1:8080", "secret")
+
+	dead, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	err := e.Check(dead)
+	if err == nil {
+		t.Fatal("Check на мёртвом контексте отчитался об успехе")
+	}
+	if errors.Is(err, ErrNotConfigured) {
+		t.Errorf("сбой чтения выдан за «не настроен»: %v", err)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("Check = %v — не говорит, что на самом деле случилось", err)
+	}
+}
+
 func TestRunnerFor_RefusesBeforeSpendingAnythingWhenNotConfigured(t *testing.T) {
 	// Cheapest failure first: a settings read before a network call, a network
 	// call before ports are opened. Opening a pool and then discovering there

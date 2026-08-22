@@ -163,8 +163,14 @@ const requestTimeout = 300 * time.Second
 
 // control builds the API client from what the settings screen saved.
 func (e *Engine) control(ctx context.Context) (*blanktrail.Client, error) {
-	addr := strings.TrimSpace(e.Store.SettingOr(ctx, store.SettingBlankTrailURL, store.DefaultBlankTrailURL))
-	key := strings.TrimSpace(e.Store.SettingOr(ctx, store.SettingBlankTrailAPIKey, ""))
+	addr, err := setting(ctx, e.Store, store.SettingBlankTrailURL, store.DefaultBlankTrailURL)
+	if err != nil {
+		return nil, err
+	}
+	key, err := setting(ctx, e.Store, store.SettingBlankTrailAPIKey, "")
+	if err != nil {
+		return nil, err
+	}
 	if addr == "" || key == "" {
 		return nil, ErrNotConfigured
 	}
@@ -173,6 +179,27 @@ func (e *Engine) control(ctx context.Context) (*blanktrail.Client, error) {
 		return nil, fmt.Errorf("engine: %w", err)
 	}
 	return client, nil
+}
+
+// setting reads one setting, and keeps «не задано» apart from «не прочиталось».
+//
+// SettingOr collapses the two, which is right where a missing value has a
+// sensible default and wrong here. It cost a real afternoon: a run started from
+// the panel carried the request's context, that context ended when the page
+// finished loading, and the read that failed because of it came back as the
+// fallback — so a proxy that was configured, and had just answered «проверить
+// связь», reported itself «не настроен» from inside the run. The wrong message
+// is worse than the failure: it sends somebody to the settings screen to fix
+// something that was never broken.
+func setting(ctx context.Context, s *store.Store, key, fallback string) (string, error) {
+	v, err := s.Setting(ctx, key)
+	switch {
+	case errors.Is(err, store.ErrNoSetting):
+		return strings.TrimSpace(fallback), nil
+	case err != nil:
+		return "", fmt.Errorf("engine: %w", err)
+	}
+	return strings.TrimSpace(v), nil
 }
 
 // preflightInput is what the proxy is asked about before a port is opened.

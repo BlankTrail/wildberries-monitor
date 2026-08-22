@@ -91,9 +91,18 @@ func (a *App) JobList(ctx context.Context) ([]store.JobStatus, error) {
 // that there is a proxy configured to collect through. Those are the three
 // refusals a person needs while they are still looking at the answer.
 //
-// ctx is the program's own, not a request's: both callers are handed the loop's
-// context, which ends when the program does. A run started on a context that
-// ended with the message that asked for it would be cancelled a moment later.
+// ctx is the caller's, and only the checks above use it. The run itself is
+// started on the program's own lifetime — see App.lifetime — because both
+// callers are answering somebody: an HTTP handler's context ends when the page
+// finishes loading and a bot command's when the reply is sent, both of them
+// seconds into a collection that takes minutes.
+//
+// This was not a theoretical worry. Handed the request's context, the run's
+// first act — reading the proxy settings — failed with «context canceled», the
+// read fell back to its default, and a BlankTrail that was configured and had
+// just answered «проверить связь» was reported «не настроен» from inside the
+// run. The job sat at «идёт: план составляется» until somebody reloaded the
+// page, because the goroutine had died before it could write anything down.
 func (a *App) StartJob(ctx context.Context, id int64) error {
 	if a.Scheduler == nil || a.Engine == nil {
 		return errors.New("сбор не собран в этой сборке")
@@ -113,7 +122,7 @@ func (a *App) StartJob(ctx context.Context, id int64) error {
 		return job.ErrAlreadyRunning
 	}
 
-	go a.runJob(ctx, j)
+	go a.runJob(a.lifetime(ctx), j)
 	return nil
 }
 
