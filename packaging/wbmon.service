@@ -1,0 +1,69 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# A systemd user unit for running the monitor on a machine nobody logs into.
+#
+# This is not the same thing as the «Автозапуск» checkbox in the settings. That
+# writes a unit of its own to start the monitor when its owner logs in, which is
+# what a laptop wants. This one is for a server: installed by hand, started
+# without a session, and — with lingering enabled — running across reboots with
+# nobody logged in at all.
+#
+#   mkdir -p ~/.config/systemd/user
+#   cp wbmon.service ~/.config/systemd/user/
+#   $EDITOR ~/.config/systemd/user/wbmon.service   # ExecStart, and the port
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now wbmon
+#   sudo loginctl enable-linger "$USER"            # survive logout and reboot
+#
+# The password for the panel is printed on the first start and written to
+# first-run.txt in the data directory:
+#
+#   journalctl --user -u wbmon -n 20
+#
+# A user unit rather than a system one, and the same reasoning as everywhere
+# else in this product: a monitor is one person's tool watching one person's
+# listings, and asking for root to solve a problem nobody has is a worse trade
+# than it looks. The database, the proxy key and the bot token all live under
+# that person's home directory, where their own file permissions already
+# protect them.
+
+[Unit]
+Description=BlankTrail Wildberries monitor
+# The collection is entirely network work, so starting before there is a
+# network buys a minute of failed requests and a log nobody wants to read.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# The absolute path to the binary. No -open: there is no browser on a server,
+# and the panel is reached over the network — which needs -lan, and -lan is
+# refused while the password is still the generated one. Set a password in the
+# settings first, from an ssh tunnel:
+#
+#   ssh -L 8760:127.0.0.1:8760 user@host
+#
+ExecStart=/opt/wbmon/wbmon -open=false
+Restart=on-failure
+# Long enough not to spin on a misconfiguration, short enough that a transient
+# failure is over before anybody notices.
+RestartSec=30s
+
+# The data directory, if it should not be the default (~/.local/share/wbmon).
+# Everything the monitor keeps is under it: the database, the first-run
+# password, the exports and the notification attachments.
+# Environment=WBMON_DATA=/var/lib/wbmon
+
+# What a scraper needs from the system it runs on is a socket and a directory.
+# Everything below says so, and costs nothing if the process is what it says it
+# is — which is the only case where these lines are cheap.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+# The one place it writes. Point this at WBMON_DATA if that is set to something
+# outside the home directory.
+ReadWritePaths=%h/.local/share/wbmon
+
+[Install]
+WantedBy=default.target

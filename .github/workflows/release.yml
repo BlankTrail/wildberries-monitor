@@ -73,6 +73,14 @@ jobs:
             else
               cp packaging/start.sh "$out/"
               chmod +x "${out}/start.sh"
+              # The service file for the platform, and only that one: a Linux
+              # archive carrying a launchd plist is two files somebody has to
+              # work out they do not need.
+              if [ "$goos" = darwin ]; then
+                cp packaging/com.blanktrail.wbmon.plist "$out/"
+              else
+                cp packaging/wbmon.service "$out/"
+              fi
               (cd dist && tar -czf "$(basename "$out").tar.gz" "$(basename "$out")")
             fi
           done

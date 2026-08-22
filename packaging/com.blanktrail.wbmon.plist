@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    SPDX-License-Identifier: AGPL-3.0-or-later
+
+    A launchd agent for running the monitor on a Mac that is left on.
+
+    This is not the same thing as the «Автозапуск» checkbox in the settings:
+    that writes an agent of its own, tied to the binary's current path, and is
+    the right answer for a laptop somebody uses. This one is installed by hand
+    and says where the log goes, which is what a machine nobody sits at needs.
+
+        cp com.blanktrail.wbmon.plist ~/Library/LaunchAgents/
+        $EDITOR ~/Library/LaunchAgents/com.blanktrail.wbmon.plist   # the path
+        launchctl load ~/Library/LaunchAgents/com.blanktrail.wbmon.plist
+
+    The password for the panel is printed on the first start and written to
+    first-run.txt in the data directory:
+
+        tail -n 20 /tmp/wbmon.log
+
+    A LaunchAgent rather than a LaunchDaemon, and the same reasoning as
+    everywhere else here: a monitor is one person's tool watching one person's
+    listings. A daemon would run as root to solve a problem nobody has, and the
+    database, the proxy key and the bot token all live under that person's home
+    directory where their own permissions already protect them.
+
+    RunAtLoad without KeepAlive, deliberately. A person who quits the monitor
+    expects it to stay quit until the next login; KeepAlive would start it again
+    a second later and look like a program that cannot be closed. Add KeepAlive
+    only on a machine that is meant to be a server.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.blanktrail.wbmon</string>
+
+	<key>ProgramArguments</key>
+	<array>
+		<!-- The absolute path to the binary. No -open on a machine nobody is
+		     sitting at: the panel is reached over an ssh tunnel, and opening a
+		     browser at login is what the checkbox in the settings is for. -->
+		<string>/Applications/wbmon/wbmon</string>
+		<string>-open=false</string>
+	</array>
+
+	<key>RunAtLoad</key>
+	<true/>
+
+	<!-- The data directory, if it should not be the default
+	     (~/Library/Application Support/BlankTrail/wbmon).
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>WBMON_DATA</key>
+		<string>/Users/Shared/wbmon</string>
+	</dict>
+	-->
+
+	<!-- Both streams into one file: the address and the password are printed on
+	     the first start, and a person looking for them should not have to know
+	     which stream they came out of.
+
+	     /tmp rather than ~/Library/Logs, because launchd does not expand a
+	     tilde and this file has to be copyable without knowing whose Mac it
+	     lands on. Change it to an absolute path under the home directory if the
+	     log should survive a restart. -->
+	<key>StandardOutPath</key>
+	<string>/tmp/wbmon.log</string>
+	<key>StandardErrorPath</key>
+	<string>/tmp/wbmon.log</string>
+</dict>
+</plist>

@@ -35,6 +35,15 @@ no tray on macOS or Linux — the packages that draw one need CGO there, and CGO
 would end the single-machine cross-compile this project is built around; those
 platforms get the same panel, started by a launchd or systemd unit.
 
+Two ways to have it start on its own, and they are for different machines. The
+**Автозапуск** tick in the settings writes the entry for the account it is
+ticked from — a registry `Run` value, a LaunchAgent, a systemd user unit — and
+is what a laptop wants. The archive also carries `wbmon.service` and
+`com.blanktrail.wbmon.plist`, installed by hand, for a machine nobody logs into:
+they say where the log goes and, with `loginctl enable-linger`, keep the monitor
+running across a reboot with no session open. Each file explains its own
+installation at the top.
+
 The panel asks for no password by default, and that is a decision rather than
 an oversight: it listens on `127.0.0.1` only, so what a password keeps out is
 another account or another program on the same machine. On a shared machine
