@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 )
@@ -389,5 +390,40 @@ func TestChannelRefresh_SurvivesASaveAndDefaultsToHalfAnHour(t *testing.T) {
 	never := ChannelRow{Refresh: -time.Hour}
 	if never.RefreshOrDefault() != DefaultChannelRefresh {
 		t.Errorf("отрицательный интервал принят: %v", never.RefreshOrDefault())
+	}
+}
+
+func TestGatewayNames_AreParsedInOnePlaceAndTidiedThere(t *testing.T) {
+	// The screen that ticks them, the engine that dials them and the table that
+	// prints them all read one column. Three readings of one string is three
+	// chances for a gateway somebody ticked to be missing from the run without
+	// anything saying so.
+	for _, c := range []struct {
+		in   string
+		want []string
+	}{
+		{"de\nnl\nfr", []string{"de", "nl", "fr"}},
+		// Written by a person or by a form that sent blank lines; the set is
+		// what matters either way.
+		{"  de  \n\n nl \n", []string{"de", "nl"}},
+		// A name twice over is one exit handed out twice as often as its
+		// neighbours — a channel that silently weights itself.
+		{"de\nnl\nde", []string{"de", "nl"}},
+		{"", nil},
+		{"   \n  ", nil},
+		// One name is the shape every gateway channel had before there were
+		// sets, and it still reads as one.
+		{"de", []string{"de"}},
+	} {
+		got := ChannelRow{Source: c.in}.GatewayNames()
+		if !slices.Equal(got, c.want) {
+			t.Errorf("GatewayNames(%q) = %v, ожидалось %v", c.in, got, c.want)
+		}
+	}
+
+	// And the round trip, because the form writes what this reads.
+	names := []string{"de", "nl"}
+	if got := (ChannelRow{Source: JoinGatewayNames(names)}).GatewayNames(); !slices.Equal(got, names) {
+		t.Errorf("после записи и чтения %v", got)
 	}
 }

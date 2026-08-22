@@ -182,6 +182,14 @@ func sourceText(c store.ChannelRow) string {
 			out += fmt.Sprintf(", смена не чаще чем раз в %s", humanDuration(c.RotateMinInterval))
 		}
 		return out
+	case store.ChannelGateway:
+		// Every name, not a count: «шлюзов 16» is a number nobody can check,
+		// and which sixteen is the whole question when a run comes out of the
+		// wrong country. An empty set has no case here because it has no
+		// producer — the form refuses to save one and the engine refuses to
+		// build one, each saying so in its own words.
+		return strings.Join(c.GatewayNames(), ", ")
+
 	case store.ChannelList:
 		// How often it is re-read belongs in the row, not only in the form: it
 		// is the half of «перечитывается сам» that a person cannot otherwise
@@ -273,15 +281,10 @@ func (s *Server) channelForm(r *http.Request, form store.ChannelRow, saved []sto
 		b.WriteString(hidden("id", strconv.FormatInt(form.ID, 10)))
 	}
 
-	// Asked of every kind but the gateway, which is named for the configuration
-	// it is: the mixer weighs a channel by its name and watches its health under
-	// that name, so eight gateways ticked at once need eight names and there is
-	// only one sensible set of them — their own.
-	b.WriteString(whenAny(field("Название",
+	b.WriteString(field("Название",
 		`<input class="bt-input" name="name" required placeholder="список провайдера"`+
 			valueAttr(form.Name)+focusIf(editing)+`>`,
-		"По нему прокси узнаётся в логе прогона, и по нему же ему считается вес в смеси — так что двум записям одно имя давать не стоит."),
-		store.ChannelList, store.ChannelRotating, store.ChannelDirect))
+		"По нему прокси узнаётся в логе прогона, и по нему же ему считается вес в смеси — так что двум записям одно имя давать не стоит."))
 
 	// The kind, as cards. Each carries its own description, so the four are no
 	// longer a wall of hints under a dropdown — that wall was here because
@@ -302,7 +305,7 @@ func (s *Server) channelForm(r *http.Request, form store.ChannelRow, saved []sto
 	// names. Above the grid rather than in it: it is a list of everything the
 	// service holds, and a third of a row is not where a list of thirty lines
 	// goes.
-	b.WriteString(whenAny(s.gatewayBox(r.Context(), form, saved), store.ChannelGateway))
+	b.WriteString(whenAny(s.gatewayBox(r.Context(), form), store.ChannelGateway))
 
 	b.WriteString(`<div class="bt-form-grid">`)
 
@@ -385,16 +388,7 @@ func (s *Server) channelForm(r *http.Request, form store.ChannelRow, saved []sto
 		b.WriteString(`<button class="bt-btn bt-btn--ghost" type="button" ` +
 			`data-get="/channels/edit" data-target="#channels-body">Отмена</button>`)
 	default:
-		// One label for four kinds would have to be «Сохранить», and what the
-		// gateway kind does is add as many exits as were ticked. Said plainly,
-		// because eight new rows appearing after one press is a surprise the
-		// button should have prepared the reader for.
-		b.WriteString(whenAny(
-			`<button class="bt-btn bt-btn--primary" type="submit">Добавить отмеченные шлюзы</button>`,
-			store.ChannelGateway))
-		b.WriteString(whenAny(
-			`<button class="bt-btn bt-btn--primary" type="submit">Сохранить прокси</button>`,
-			store.ChannelList, store.ChannelRotating, store.ChannelDirect))
+		b.WriteString(`<button class="bt-btn bt-btn--primary" type="submit">Сохранить прокси</button>`)
 	}
 	b.WriteString(`</div>`)
 	b.WriteString(`</form>`)
@@ -538,11 +532,17 @@ func (s *Server) saveChannel(w http.ResponseWriter, r *http.Request) {
 			row.RotateMinInterval = time.Duration(seconds) * time.Second
 		}
 	case store.ChannelGateway:
-		// Not one record. Every ticked configuration is its own exit, and how
-		// many were ticked is not something the rest of this function is shaped
-		// for — see saveGateways.
-		s.saveGateways(w, r, row)
-		return
+		// The whole set in one record, the way a proxy list is one record over
+		// its whole file. The pool asks a channel for an egress rather than for
+		// a particular gateway, so it hands the set out in turn and a renewal
+		// moves to the next one.
+		names := chosenGateways(r)
+		if len(names) == 0 {
+			s.channelsFragment(w, r, alert("error",
+				"Не отмечено ни одного шлюза — отметьте нужные в списке выше."), row)
+			return
+		}
+		row.Source = store.JoinGatewayNames(names)
 	}
 
 	if _, err := s.Store.SaveChannel(r.Context(), row); err != nil {
@@ -561,84 +561,6 @@ func (s *Server) saveChannel(w http.ResponseWriter, r *http.Request) {
 	// And back to the empty form: the change is in the table above, and a form
 	// still holding it invites saving the same edit twice.
 	s.channelsFragment(w, r, alert("success", saved), store.ChannelRow{})
-}
-
-// saveGateways writes one channel per ticked configuration.
-//
-// One each, and not one record holding a list. The mixer weighs a channel by
-// its name and watches its health under that name, so eight gateways behind one
-// record would share one weight and one verdict: the day one of them stopped,
-// the other seven would lose their share of the run with it. Separate records
-// also mean the row actions this screen already has — проверить, выключить,
-// удалить — go on saying what they say.
-//
-// A record being changed is still one record: what is being asked there is
-// which configuration this exit is, and the list offers that as a choice of one.
-func (s *Server) saveGateways(w http.ResponseWriter, r *http.Request, row store.ChannelRow) {
-	names := chosenGateways(r)
-	if len(names) == 0 {
-		s.channelsFragment(w, r, alert("error",
-			"Не отмечено ни одного шлюза — отметьте нужные в списке выше."), row)
-		return
-	}
-
-	if row.ID != 0 {
-		// The name follows the configuration: an exit called after a gateway it
-		// no longer is would be a line in the log naming the wrong country.
-		row.Source, row.Name = names[0], names[0]
-		if _, err := s.Store.SaveChannel(r.Context(), row); err != nil {
-			s.channelsFragment(w, r, alert("error", saveChannelFault(err)), row)
-			return
-		}
-		s.channelsFragment(w, r, alert("success", "Прокси изменён."), store.ChannelRow{})
-		return
-	}
-
-	// Whatever is already an exit is not offered again by the list, so a name
-	// arriving twice means two tabs raced or the service listed one twice.
-	// Skipped rather than refused: the reader asked for these gateways to be
-	// exits, and they are. This is the only place that decides it, which is why
-	// a name written below is added to this set as it goes.
-	have := map[string]bool{}
-	saved, err := s.Store.Channels(r.Context())
-	if err != nil {
-		s.channelsFragment(w, r, alert("error", err.Error()), row)
-		return
-	}
-	for _, c := range saved {
-		if c.Kind == store.ChannelGateway {
-			have[c.Source] = true
-		}
-	}
-
-	added := 0
-	for _, name := range names {
-		if have[name] {
-			continue
-		}
-		if _, err := s.Store.SaveChannel(r.Context(), store.ChannelRow{
-			Name: name, Kind: store.ChannelGateway, Source: name, Enabled: row.Enabled,
-		}); err != nil {
-			// What was written stays written, and the message names where it
-			// stopped: silently rolling back eight gateways because the ninth
-			// was refused would undo work the reader can see happened.
-			s.channelsFragment(w, r, alert("error",
-				fmt.Sprintf("Шлюз %q не сохранился: %s. Добавлено до него: %d.",
-					name, saveChannelFault(err), added)), store.ChannelRow{})
-			return
-		}
-		have[name] = true
-		added++
-	}
-
-	if added == 0 {
-		s.channelsFragment(w, r, alert("neutral",
-			"Все отмеченные шлюзы уже добавлены."), store.ChannelRow{})
-		return
-	}
-	s.channelsFragment(w, r, alert("success",
-		fmt.Sprintf("Добавлено: %s.", countOf(int64(added), "шлюз", "шлюза", "шлюзов"))),
-		store.ChannelRow{})
 }
 
 // saveChannelFault says a refusal in words the person filling the form can act

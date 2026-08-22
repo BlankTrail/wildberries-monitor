@@ -90,11 +90,10 @@ type gatewayGroup struct {
 	// were added on their own.
 	Label    string
 	Gateways []blanktrail.Gateway
-	// Running and Added are what the heading says about the group without
-	// anybody reading down it: how many are up, and how many are already exits
-	// on this screen.
+	// Running and Chosen are what the heading says about the group without
+	// anybody reading down it: how many are up, and how many this channel holds.
 	Running int
-	Added   int
+	Chosen  int
 }
 
 // groupGateways lays the listing out by subscription.
@@ -103,7 +102,7 @@ type gatewayGroup struct {
 // last, because that group is a remainder rather than something somebody
 // bought. Inside a group, by name, so that the list does not move about between
 // two renders of the same thing.
-func groupGateways(all []blanktrail.Gateway, added map[string]bool) []gatewayGroup {
+func groupGateways(all []blanktrail.Gateway, chosen map[string]bool) []gatewayGroup {
 	byLabel := map[string]*gatewayGroup{}
 	var order []string
 	for _, g := range all {
@@ -118,8 +117,8 @@ func groupGateways(all []blanktrail.Gateway, added map[string]bool) []gatewayGro
 		if g.Running {
 			group.Running++
 		}
-		if added[g.Name] {
-			group.Added++
+		if chosen[g.Name] {
+			group.Chosen++
 		}
 	}
 
@@ -185,9 +184,9 @@ func gatewayLine(g blanktrail.Gateway) string {
 // One or the other and never both. Two ways to name the same configuration is
 // two things to keep in step, and the one somebody filled in is not necessarily
 // the one that would be saved.
-func (s *Server) gatewayBox(ctx context.Context, form store.ChannelRow, saved []store.ChannelRow) string {
+func (s *Server) gatewayBox(ctx context.Context, form store.ChannelRow) string {
 	return `<div id="gateway-box" class="bt-stack">` +
-		s.gatewayBody(ctx, false, form, saved) + `</div>`
+		s.gatewayBody(ctx, false, form) + `</div>`
 }
 
 // gatewayBody is the inside of that region, so the refresh button can replace
@@ -196,7 +195,7 @@ func (s *Server) gatewayBox(ctx context.Context, form store.ChannelRow, saved []
 // the request: only that button asks the service again, and a screen that could
 // be made to do it by adding a word to its address would ask on every reload
 // somebody bookmarked.
-func (s *Server) gatewayBody(ctx context.Context, afresh bool, form store.ChannelRow, saved []store.ChannelRow) string {
+func (s *Server) gatewayBody(ctx context.Context, afresh bool, form store.ChannelRow) string {
 	if s.Gateways == nil {
 		return gatewayManual(form, `<div class="bt-alert bt-alert--neutral">`+
 			`Список шлюзов недоступен в этой сборке — имя можно ввести вручную.</div>`)
@@ -222,23 +221,17 @@ func (s *Server) gatewayBody(ctx context.Context, afresh bool, form store.Channe
 			`У службы нет ни одного шлюза — их заводят в самой BlankTrail.</div>`
 	}
 
-	// Which configurations are already exits on this screen, so that the list
-	// says what is in rather than offering it again. The record being changed
-	// is not one of them: its own gateway is the thing being chosen.
-	added := map[string]bool{}
-	for _, c := range saved {
-		if c.Kind == store.ChannelGateway && c.ID != form.ID {
-			added[c.Source] = true
-		}
+	// What this channel already holds, so the form opens on it: a set somebody
+	// is changing has to come up as it is, or saving after a single change
+	// would drop everything they did not tick again.
+	chosen := map[string]bool{}
+	for _, name := range form.GatewayNames() {
+		chosen[name] = true
 	}
 
-	// Ticking many when exits are being added, one when a record is being
-	// changed: an exit is one gateway, and eight of them are eight exits.
-	many := form.ID == 0
-
-	groups := groupGateways(list.Gateways, added)
-	return gatewayHead(taken, many, len(list.Gateways), len(added)) +
-		gatewayGroupsHTML(groups, many, form, added)
+	groups := groupGateways(list.Gateways, chosen)
+	return gatewayHead(taken, len(list.Gateways), len(chosen)) +
+		gatewayGroupsHTML(groups, chosen)
 }
 
 // gatewayManual is the box for typing a name, with the reason the list is not
@@ -261,12 +254,12 @@ func gatewayManual(form store.ChannelRow, why string) string {
 
 // gatewayHead is the line above the groups: what the whole list comes to, when
 // it was read, and the three things that act on all of it.
-func gatewayHead(taken time.Time, many bool, offered, added int) string {
+func gatewayHead(taken time.Time, offered, chosen int) string {
 	var b strings.Builder
 	b.WriteString(`<div class="bt-picker-head">`)
 	b.WriteString(`<span class="bt-picker-head__name">Шлюзы службы ` +
-		`<span class="bt-dim" data-tally="all">0/` + strconv.Itoa(offered-added) + `</span>` +
-		addedText(added) + `</span>`)
+		`<span class="bt-dim" data-tally="all">` + strconv.Itoa(chosen) + `/` +
+		strconv.Itoa(offered) + `</span></span>`)
 	b.WriteString(`<span class="bt-picker-head__acts">`)
 	if !taken.IsZero() {
 		// When the list was read, because the answer is held for a couple of
@@ -276,32 +269,14 @@ func gatewayHead(taken time.Time, many bool, offered, added int) string {
 			html.EscapeString(taken.Local().Format("15:04")) + `</span>`)
 	}
 	b.WriteString(`<button class="bt-btn bt-btn--ghost bt-btn--sm" type="submit" form="gateways-afresh">Обновить список</button>`)
-	if many {
-		// Only where there is more than one thing to tick. A record being
-		// changed is one gateway, and «все» over a choice of one is a button
-		// whose press cannot be carried out.
-		b.WriteString(`<button class="bt-btn bt-btn--ghost bt-btn--sm" type="button" data-tick="all">Все</button>`)
-		b.WriteString(`<button class="bt-btn bt-btn--ghost bt-btn--sm" type="button" data-tick="none">Никакие</button>`)
-	}
+	b.WriteString(`<button class="bt-btn bt-btn--ghost bt-btn--sm" type="button" data-tick="all">Все</button>`)
+	b.WriteString(`<button class="bt-btn bt-btn--ghost bt-btn--sm" type="button" data-tick="none">Никакие</button>`)
 	b.WriteString(`</span></div>`)
 	return b.String()
 }
 
-// addedText is how many of a group are already exits, said only when some are.
-func addedText(n int) string {
-	if n == 0 {
-		return ""
-	}
-	return ` <span class="bt-dim">добавлено ` + strconv.Itoa(n) + `</span>`
-}
-
 // gatewayGroupsHTML is the subscriptions and what is under each.
-func gatewayGroupsHTML(groups []gatewayGroup, many bool, form store.ChannelRow, added map[string]bool) string {
-	kind := "radio"
-	if many {
-		kind = "checkbox"
-	}
-
+func gatewayGroupsHTML(groups []gatewayGroup, chosen map[string]bool) string {
 	var b strings.Builder
 	for _, g := range groups {
 		label := g.Label
@@ -309,52 +284,31 @@ func gatewayGroupsHTML(groups []gatewayGroup, many bool, form store.ChannelRow, 
 			label = "Добавленные отдельно"
 		}
 		b.WriteString(`<fieldset class="bt-fieldset bt-fieldset--inset" data-gateways>`)
-		// What can still be ticked, and — said separately — what is already in.
-		// One fraction covering both would have to be recomputed in the browser
-		// from a number the browser cannot see, and a tally that drifts from
-		// what is on screen is worse than no tally at all.
 		b.WriteString(`<legend>` + html.EscapeString(label) +
-			` <span class="bt-badge bt-badge--sm bt-badge--neutral" data-tally>0/` +
-			strconv.Itoa(len(g.Gateways)-g.Added) + `</span>` + addedText(g.Added) +
-			` <span class="bt-dim">запущено ` + strconv.Itoa(g.Running) + `</span>`)
-		if many {
-			b.WriteString(` <button class="bt-btn bt-btn--ghost bt-btn--sm" type="button" data-tick="all">Все</button>` +
-				`<button class="bt-btn bt-btn--ghost bt-btn--sm" type="button" data-tick="none">Никакие</button>`)
-		}
+			` <span class="bt-badge bt-badge--sm bt-badge--neutral" data-tally>` +
+			strconv.Itoa(g.Chosen) + `/` + strconv.Itoa(len(g.Gateways)) + `</span>` +
+			` <span class="bt-dim">запущено ` + strconv.Itoa(g.Running) + `</span>` +
+			` <button class="bt-btn bt-btn--ghost bt-btn--sm" type="button" data-tick="all">Все</button>` +
+			`<button class="bt-btn bt-btn--ghost bt-btn--sm" type="button" data-tick="none">Никакие</button>`)
 		b.WriteString(`</legend>`)
 
 		b.WriteString(`<div class="bt-checks">`)
 		for _, gw := range g.Gateways {
-			b.WriteString(gatewayCheck(kind, gw, form, added))
+			b.WriteString(gatewayCheck(gw, chosen))
 		}
 		b.WriteString(`</div></fieldset>`)
 	}
 	return b.String()
 }
 
-// gatewayCheck is one configuration, as the control that chooses it — or, when
-// it is already an exit, as the line that says so.
-//
-// Not a control, because there is nothing for one to do. Left out entirely, the
-// list would disagree with the table above it; drawn as a box, ticking it again
-// would make a duplicate exit and unticking it would say a gateway is not added
-// when it is. Its own row in the table is where it is switched off or removed,
-// which is where every other saved thing on this screen is.
-func gatewayCheck(kind string, g blanktrail.Gateway, form store.ChannelRow, added map[string]bool) string {
-	line := `<span class="bt-mono">` + html.EscapeString(g.Name) + `</span>`
-	tail := `<span class="bt-dim bt-gw-line">` + html.EscapeString(gatewayLine(g)) + `</span>`
-
-	if added[g.Name] {
-		return `<span class="bt-checkbox bt-checkbox--read"><span>` + line +
-			` <span class="bt-badge bt-badge--sm bt-badge--neutral">уже добавлен</span>` +
-			tail + `</span></span>`
-	}
-
+// gatewayCheck is one configuration, as the control that puts it in the set.
+func gatewayCheck(g blanktrail.Gateway, chosen map[string]bool) string {
 	id := "gw-" + strings.NewReplacer(".", "-", " ", "-", `"`, "-").Replace(g.Name)
 	return `<label class="bt-checkbox" for="` + html.EscapeString(id) + `">` +
-		`<input id="` + html.EscapeString(id) + `" type="` + kind + `" name="gateway" value="` +
-		html.EscapeString(g.Name) + `"` + checkedIf(g.Name == form.Source) + `>` +
-		`<span>` + line + tail + `</span></label>`
+		`<input id="` + html.EscapeString(id) + `" type="checkbox" name="gateway" value="` +
+		html.EscapeString(g.Name) + `"` + checkedIf(chosen[g.Name]) + `>` +
+		`<span><span class="bt-mono">` + html.EscapeString(g.Name) + `</span>` +
+		`<span class="bt-dim bt-gw-line">` + html.EscapeString(gatewayLine(g)) + `</span></span></label>`
 }
 
 // chosenGateways is what was ticked, in the order the form sent it.
@@ -388,13 +342,8 @@ func chosenGateways(r *http.Request) []string {
 // changes nothing the program keeps. Only the list is redrawn, so that the
 // rest of the form a person is filling in survives asking.
 func (s *Server) refreshGateways(w http.ResponseWriter, r *http.Request) {
-	saved, err := s.Store.Channels(r.Context())
-	if err != nil {
-		http.Error(w, "channels: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
 	// The record the form is open on, so that a refresh in the middle of
-	// changing one does not lose which one that is.
+	// changing a set does not come back with none of it ticked.
 	var form store.ChannelRow
 	if id, err := strconv.ParseInt(r.URL.Query().Get("id"), 10, 64); err == nil && id != 0 {
 		if row, err := s.Store.Channel(r.Context(), id); err == nil {
@@ -402,5 +351,5 @@ func (s *Server) refreshGateways(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	s.writeHTML(w, s.gatewayBody(r.Context(), true, form, saved))
+	s.writeHTML(w, s.gatewayBody(r.Context(), true, form))
 }

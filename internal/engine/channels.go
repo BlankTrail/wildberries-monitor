@@ -66,10 +66,15 @@ func buildChannel(ctx context.Context, row store.ChannelRow) (blanktrail.Channel
 		return blanktrail.NewDirectChannel(row.Name), nil
 
 	case store.ChannelGateway:
-		if strings.TrimSpace(row.Source) == "" {
-			return nil, fmt.Errorf("не указано имя конфигурации шлюза")
+		// One channel over the whole set, the way a proxy list is one channel
+		// over its file. The pool asks a channel for an egress rather than for
+		// a particular gateway, so the set is handed out in turn and a renewal
+		// moves to another one.
+		names := row.GatewayNames()
+		if len(names) == 0 {
+			return nil, fmt.Errorf("не отмечено ни одного шлюза")
 		}
-		return blanktrail.NewGatewayChannel(row.Name, row.Source), nil
+		return blanktrail.NewGatewayChannel(row.Name, names...), nil
 
 	case store.ChannelList:
 		// The list is read where the user put it and re-read on the rotor's own

@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -176,29 +177,107 @@ func (c *rotatingChannel) Renew(ctx context.Context, cur Egress) (Egress, error)
 
 // --- gateway and direct channels ---
 
-type fixedChannel struct {
+// gatewayMaxFails is how many connection-level failures a gateway takes before
+// the channel stops handing it out. The same three a proxy list allows: one
+// failure is weather, three is the tunnel.
+const gatewayMaxFails = 3
+
+type gatewayChannel struct {
 	name string
-	kind ChannelKind
-	eg   Egress
+	// gws is fixed at construction and read without the lock. Only pos and
+	// fails change while the channel is in use.
+	gws []string
+
+	mu    sync.Mutex
+	pos   int
+	fails map[string]int
 }
 
-// NewGatewayChannel egresses through a named BlankTrail gateway config.
-func NewGatewayChannel(name, gateway string) Channel {
-	return &fixedChannel{name: name, kind: KindGateway, eg: Egress{Gateway: gateway}}
+// NewGatewayChannel egresses through BlankTrail gateway configs, by name.
+//
+// One name is one exit that cannot change: Renew says so rather than pretending,
+// which is what stops the pool asking again for something that will never
+// happen. Several are handed out round-robin, the way a proxy list is — they are
+// one channel because they are one thing a person chose and manages together,
+// and the pool asks a channel for an egress rather than for a particular
+// gateway. There, Renew moves to another one, and a gateway that keeps failing
+// to connect is skipped until the rest have burned out too.
+//
+// Blank names are dropped. A channel that named nothing would hand out an
+// egress with no gateway in it, which is the host's own address wearing the
+// name of a VPN — the one mistake this whole package exists to make impossible.
+func NewGatewayChannel(name string, gateways ...string) Channel {
+	c := &gatewayChannel{name: name, fails: map[string]int{}}
+	for _, g := range gateways {
+		if g = strings.TrimSpace(g); g != "" {
+			c.gws = append(c.gws, g)
+		}
+	}
+	return c
 }
+
+func (c *gatewayChannel) Name() string      { return c.name }
+func (c *gatewayChannel) Kind() ChannelKind { return KindGateway }
+
+func (c *gatewayChannel) Next() (Egress, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	n := len(c.gws)
+	if n == 0 {
+		return Egress{}, false
+	}
+	for range n {
+		g := c.gws[c.pos%n]
+		c.pos = (c.pos + 1) % n
+		if c.fails[g] < gatewayMaxFails {
+			return Egress{Gateway: g}, true
+		}
+	}
+	// Everything is marked bad — forgive all and hand out the next one, so the
+	// caller keeps making progress rather than stalling on a burned-out set.
+	c.fails = map[string]int{}
+	g := c.gws[c.pos%n]
+	c.pos = (c.pos + 1) % n
+	return Egress{Gateway: g}, true
+}
+
+func (c *gatewayChannel) Renew(_ context.Context, cur Egress) (Egress, error) {
+	if len(c.gws) < 2 {
+		return cur, ErrRenewUnsupported
+	}
+	eg, ok := c.Next()
+	if !ok {
+		return Egress{}, fmt.Errorf("blanktrail: channel %q has no gateways left", c.name)
+	}
+	return eg, nil
+}
+
+func (c *gatewayChannel) MarkBad(eg Egress) {
+	// Counted by name, whatever the name is. A name that is not in the set is a
+	// counter nothing ever reads, and screening for it here would be a second
+	// place deciding what this channel holds — the constructor is the first.
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.fails[eg.Gateway]++
+}
+
+func (c *gatewayChannel) Close() {}
+
+// directChannel egresses from the host's own IP.
+type directChannel struct{ name string }
 
 // NewDirectChannel egresses from the host's own IP.
 func NewDirectChannel(name string) Channel {
-	return &fixedChannel{name: name, kind: KindDirect}
+	return &directChannel{name: name}
 }
 
-func (c *fixedChannel) Name() string         { return c.name }
-func (c *fixedChannel) Kind() ChannelKind    { return c.kind }
-func (c *fixedChannel) Next() (Egress, bool) { return c.eg, true }
-func (c *fixedChannel) MarkBad(Egress)       {}
-func (c *fixedChannel) Close()               {}
+func (c *directChannel) Name() string         { return c.name }
+func (c *directChannel) Kind() ChannelKind    { return KindDirect }
+func (c *directChannel) Next() (Egress, bool) { return Egress{}, true }
+func (c *directChannel) MarkBad(Egress)       {}
+func (c *directChannel) Close()               {}
 
-func (c *fixedChannel) Renew(_ context.Context, cur Egress) (Egress, error) {
+func (c *directChannel) Renew(_ context.Context, cur Egress) (Egress, error) {
 	return cur, ErrRenewUnsupported
 }
 

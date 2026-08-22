@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -224,4 +225,88 @@ func names(chs []Channel) []string {
 		out = append(out, c.Name())
 	}
 	return out
+}
+
+func TestGatewayChannel_HandsOutTheSetInTurnAndRenewsWithinIt(t *testing.T) {
+	// A set of gateways somebody chose together is one channel, the way a proxy
+	// list is: the pool asks a channel for an egress rather than for a
+	// particular gateway, so the set is handed out in turn and a renewal moves
+	// to the next one instead of saying it cannot.
+	ch := NewGatewayChannel("подписка", "de", "nl", "fr")
+	defer ch.Close()
+
+	var seen []string
+	for range 3 {
+		eg, ok := ch.Next()
+		if !ok {
+			t.Fatal("канал с тремя шлюзами ничего не выдал")
+		}
+		if eg.Upstream != "" {
+			t.Errorf("выдан upstream %q — шлюз не прокси", eg.Upstream)
+		}
+		seen = append(seen, eg.Gateway)
+	}
+	if !slices.Equal(seen, []string{"de", "nl", "fr"}) {
+		t.Errorf("порядок выдачи = %v", seen)
+	}
+	// And round again, so a fourth port is not a channel that ran out.
+	if eg, ok := ch.Next(); !ok || eg.Gateway != "de" {
+		t.Errorf("четвёртая выдача = %q/%v", eg.Gateway, ok)
+	}
+
+	eg, err := ch.Renew(context.Background(), Egress{Gateway: "de"})
+	if err != nil {
+		t.Fatalf("Renew: %v", err)
+	}
+	if eg.Gateway == "de" {
+		t.Error("обновление вернуло тот же шлюз — выход не сменился")
+	}
+}
+
+func TestGatewayChannel_OneGatewayCannotRenew(t *testing.T) {
+	// One gateway is one exit that does not change. Saying so is what stops the
+	// pool asking again for something that will never happen; pretending would
+	// leave a burned port retrying forever.
+	ch := NewGatewayChannel("одна", "de")
+	defer ch.Close()
+
+	if _, err := ch.Renew(context.Background(), Egress{Gateway: "de"}); !errors.Is(err, ErrRenewUnsupported) {
+		t.Errorf("Renew = %v, ожидалось ErrRenewUnsupported", err)
+	}
+}
+
+func TestGatewayChannel_ABadGatewayIsSkippedUntilTheRestBurnOut(t *testing.T) {
+	// A tunnel that will not connect is not one to keep handing out. But a set
+	// where everything has failed still has to hand something out, or the run
+	// stalls on a channel that is merely having a bad minute.
+	ch := NewGatewayChannel("подписка", "de", "nl")
+	defer ch.Close()
+
+	for range gatewayMaxFails {
+		ch.MarkBad(Egress{Gateway: "de"})
+	}
+	for range 4 {
+		if eg, _ := ch.Next(); eg.Gateway != "nl" {
+			t.Fatalf("выдан отмеченный плохим шлюз %q", eg.Gateway)
+		}
+	}
+
+	for range gatewayMaxFails {
+		ch.MarkBad(Egress{Gateway: "nl"})
+	}
+	if _, ok := ch.Next(); !ok {
+		t.Error("сгоревший набор перестал выдавать что-либо вместо того, чтобы простить")
+	}
+}
+
+func TestGatewayChannel_NamesNothingWhenGivenNothing(t *testing.T) {
+	// An egress with no gateway in it is the host's own address wearing the
+	// name of a VPN — the one mistake this package exists to make impossible.
+	for _, c := range [][]string{nil, {""}, {"   ", ""}} {
+		ch := NewGatewayChannel("пусто", c...)
+		if _, ok := ch.Next(); ok {
+			t.Errorf("канал из %q что-то выдал", c)
+		}
+		ch.Close()
+	}
 }

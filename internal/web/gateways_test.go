@@ -5,6 +5,7 @@ package web
 import (
 	"context"
 	"errors"
+	"html"
 	"net/url"
 	"slices"
 	"strconv"
@@ -88,10 +89,7 @@ func TestGateways_AreTickedTogetherAndGroupedByWhatTheyCameWith(t *testing.T) {
 	if !strings.Contains(box, `data-tally>0/2</span>`) {
 		t.Errorf("нет счётчика по подписке:\n%s", box)
 	}
-	// Nothing is an exit yet, so nothing is said about what is.
-	if strings.Contains(box, "добавлено") {
-		t.Errorf("сказано про добавленные, когда их нет:\n%s", box)
-	}
+
 	if !strings.Contains(box, "запущено 2") {
 		t.Errorf("не сказано, сколько в подписке запущено:\n%s", box)
 	}
@@ -126,139 +124,131 @@ func TestGateways_EachLineSaysWhatChoosingItTurnsOn(t *testing.T) {
 	}
 }
 
-func TestGateways_TickingSeveralAddsSeveralExits(t *testing.T) {
-	// One record per configuration. The mixer weighs a channel by its name and
-	// watches its health under that name, so eight gateways behind one record
-	// would share one weight and one verdict — the day one stopped, the other
-	// seven would lose their share of the run with it.
-	srv := withGateways(t, aSubscription(), nil)
-
-	form := url.Values{"kind": {store.ChannelGateway}, "enabled": {"1"}}
-	form["gateway"] = []string{"Провайдер.DE-Berlin", "Провайдер.NL-Amsterdam", "своими-руками"}
-	body := postForm(t, srv, "/channels", form).Body.String()
-
-	if !strings.Contains(body, "Добавлено: 3 шлюза") {
-		t.Errorf("не сказано, сколько добавлено:\n%s", firstLines(body))
+// gatewayForm is what the form posts for a set of gateways, with overrides.
+func gatewayForm(names []string, over map[string]string) url.Values {
+	form := url.Values{
+		"name":    {"шлюзы подписки"},
+		"kind":    {store.ChannelGateway},
+		"enabled": {"1"},
 	}
-	saved, err := srv.Store.Channels(context.Background())
-	if err != nil {
-		t.Fatalf("Channels: %v", err)
+	form["gateway"] = names
+	for k, v := range over {
+		form.Set(k, v)
 	}
-	if len(saved) != 3 {
-		t.Fatalf("сохранено записей: %d, ожидалось 3", len(saved))
-	}
-	for _, c := range saved {
-		if c.Kind != store.ChannelGateway {
-			t.Errorf("%q сохранён как %q", c.Name, c.Kind)
-		}
-		// Named for the configuration it is: the mixer keys weight on the name,
-		// so three records sharing one would share their health as well.
-		if c.Name != c.Source {
-			t.Errorf("запись %q названа не по шлюзу %q", c.Name, c.Source)
-		}
-		if !c.Enabled {
-			t.Errorf("шлюз %q добавлен выключенным", c.Name)
-		}
-	}
+	return form
 }
 
-func TestGateways_OneAlreadyAddedIsShownAsSuchRatherThanOfferedAgain(t *testing.T) {
-	// Offered again, ticking it a second time either makes a duplicate exit —
-	// two records splitting one gateway's weight — or does nothing at all.
-	// Left out, the list disagrees with the table above it.
-	srv := withGateways(t, aSubscription(), nil)
-	postForm(t, srv, "/channels", url.Values{
-		"kind": {store.ChannelGateway}, "enabled": {"1"},
-		"gateway": {"Провайдер.DE-Berlin"},
-	})
-
-	box := gatewayBoxHTML(t, get(t, srv, "/channels", "correct horse").Body.String())
-	if !strings.Contains(box, "Провайдер.DE-Berlin") {
-		t.Fatalf("добавленный шлюз пропал из списка:\n%s", box)
-	}
-	// Drawn as a line and not as a box: there is nothing a box could do here
-	// that is not either a duplicate exit or a lie about what is added.
-	if strings.Contains(box, `name="gateway" value="Провайдер.DE-Berlin"`) {
-		t.Errorf("добавленный шлюз предлагается снова:\n%s", box)
-	}
-	if !strings.Contains(box, `bt-checkbox--read`) || !strings.Contains(box, "уже добавлен") {
-		t.Errorf("не сказано, что он уже добавлен:\n%s", box)
-	}
-	// The tally counts what can still be ticked, and what is in is said beside
-	// it. One fraction covering both would have to be recomputed in the browser
-	// from a number the browser cannot see.
-	if !strings.Contains(box, `data-tally>0/1</span> <span class="bt-dim">добавлено 1</span>`) {
-		t.Errorf("счётчик не отделяет добавленное от предлагаемого:\n%s", box)
-	}
-	if !strings.Contains(box, `data-tally="all">0/3</span> <span class="bt-dim">добавлено 1</span>`) {
-		t.Errorf("общий счётчик не отделяет добавленное:\n%s", box)
-	}
-
-	// Ticking it again writes nothing, whatever a second tab did in between.
-	body := postForm(t, srv, "/channels", url.Values{
-		"kind": {store.ChannelGateway}, "enabled": {"1"},
-		"gateway": {"Провайдер.DE-Berlin"},
-	}).Body.String()
-	if !strings.Contains(body, "уже добавлены") {
-		t.Errorf("повтор не объяснён:\n%s", firstLines(body))
-	}
+// onlyChannel is the single record the store holds, or a failed test.
+func onlyChannel(t *testing.T, srv *Server) store.ChannelRow {
+	t.Helper()
 	saved, err := srv.Store.Channels(context.Background())
 	if err != nil {
 		t.Fatalf("Channels: %v", err)
 	}
 	if len(saved) != 1 {
-		t.Errorf("повтор создал дубликат: записей %d", len(saved))
+		t.Fatalf("сохранено записей: %d, ожидалась одна: %+v", len(saved), saved)
+	}
+	return saved[0]
+}
+
+func TestGateways_TickingSeveralMakesOneChannelHoldingThemAll(t *testing.T) {
+	// A set of exits somebody chose together is one channel, the way a proxy
+	// list is one channel over its whole file — the pool asks a channel for an
+	// egress, not for a particular gateway, and hands the set out in turn.
+	srv := withGateways(t, aSubscription(), nil)
+
+	body := postForm(t, srv, "/channels", gatewayForm(
+		[]string{"Провайдер.DE-Berlin", "Провайдер.NL-Amsterdam", "своими-руками"}, nil)).Body.String()
+	if !strings.Contains(body, "Прокси сохранён") {
+		t.Errorf("сохранение не подтверждено:\n%s", firstLines(body))
+	}
+
+	saved := onlyChannel(t, srv)
+	if saved.Kind != store.ChannelGateway {
+		t.Errorf("вид записи = %q", saved.Kind)
+	}
+	if saved.Name != "шлюзы подписки" {
+		t.Errorf("имя записи = %q — канал называет человек, как и любой другой", saved.Name)
+	}
+	if got := saved.GatewayNames(); !slices.Equal(got,
+		[]string{"Провайдер.DE-Berlin", "Провайдер.NL-Amsterdam", "своими-руками"}) {
+		t.Errorf("в записи шлюзы %v", got)
+	}
+	// And the table says which ones, by name: «шлюзов 3» is a number nobody can
+	// check, and which three is the whole question when a run comes out of the
+	// wrong country. Read out of the table itself — every name is in the picker
+	// below it whatever the row says.
+	if got := sourceCell(t, get(t, srv, "/channels", "correct horse").Body.String(),
+		"шлюзы подписки"); got != "Провайдер.DE-Berlin, Провайдер.NL-Amsterdam, своими-руками" {
+		t.Errorf("в строке таблицы источник = %q", got)
 	}
 }
 
-func TestGateways_ChangingOneExitChoosesOneConfiguration(t *testing.T) {
-	// Adding is «эти», changing is «этот»: an exit is one gateway, so the same
-	// list offers a choice of one when a record is open.
+func TestGateways_OneNameTwiceIsOneGateway(t *testing.T) {
+	// Two tabs racing, or a service that listed one name twice. Kept, the same
+	// exit is handed out twice as often as its neighbours — a channel that
+	// silently weights itself.
 	srv := withGateways(t, aSubscription(), nil)
-	postForm(t, srv, "/channels", url.Values{
-		"kind": {store.ChannelGateway}, "enabled": {"1"},
-		"gateway": {"Провайдер.DE-Berlin"},
-	})
-	saved, err := srv.Store.Channels(context.Background())
-	if err != nil || len(saved) != 1 {
-		t.Fatalf("Channels: %v (%d)", err, len(saved))
-	}
-	id := strconv.FormatInt(saved[0].ID, 10)
+	postForm(t, srv, "/channels", gatewayForm(
+		[]string{"Провайдер.DE-Berlin", "Провайдер.DE-Berlin"}, nil))
 
-	body := get(t, srv, "/channels/edit?id="+id, "correct horse").Body.String()
+	if got := onlyChannel(t, srv).GatewayNames(); !slices.Equal(got, []string{"Провайдер.DE-Berlin"}) {
+		t.Errorf("в записи шлюзы %v", got)
+	}
+}
+
+func TestGateways_TheFormOpensOnTheSetTheChannelHolds(t *testing.T) {
+	// Coming up empty, saving after a single change would drop everything the
+	// reader did not think to tick again — which is every gateway they chose
+	// the first time.
+	srv := withGateways(t, aSubscription(), nil)
+	postForm(t, srv, "/channels", gatewayForm(
+		[]string{"Провайдер.DE-Berlin", "своими-руками"}, nil))
+	saved := onlyChannel(t, srv)
+
+	body := get(t, srv, "/channels/edit?id="+strconv.FormatInt(saved.ID, 10),
+		"correct horse").Body.String()
 	box := gatewayBoxHTML(t, body)
-	if !strings.Contains(box, `type="radio" name="gateway"`) {
-		t.Errorf("правка записи предлагает отметить несколько:\n%s", box)
-	}
-	// And nothing offers to tick them all: «все» over a choice of one is a
-	// button whose press cannot be carried out.
-	if strings.Contains(box, `data-tick=`) {
-		t.Errorf("при правке одной записи предлагают отметить все:\n%s", box)
-	}
-	// Its own configuration is the one being chosen, not one that is «уже
-	// добавлен» and cannot be touched.
-	if !strings.Contains(box, `name="gateway" value="Провайдер.DE-Berlin" checked`) {
-		t.Errorf("запись не может выбрать собственный шлюз или он не отмечен:\n%s", box)
-	}
-	if strings.Contains(box, "уже добавлен") {
-		t.Errorf("собственный шлюз записи объявлен уже добавленным:\n%s", box)
-	}
 
-	// And changing it renames the exit with it: a record called after a gateway
-	// it no longer is names the wrong country in every line of the log.
-	postForm(t, srv, "/channels", url.Values{
-		"id": {id}, "kind": {store.ChannelGateway}, "enabled": {"1"},
-		"gateway": {"Другой.FR-Paris"},
-	})
-	after, err := srv.Store.Channels(context.Background())
-	if err != nil {
-		t.Fatalf("Channels: %v", err)
+	for _, name := range []string{"Провайдер.DE-Berlin", "своими-руками"} {
+		if !strings.Contains(box, `value="`+name+`" checked`) {
+			t.Errorf("шлюз %q не отмечен при правке:\n%s", name, box)
+		}
 	}
-	if len(after) != 1 {
-		t.Fatalf("правка добавила запись: %d", len(after))
+	if strings.Contains(box, `value="Провайдер.NL-Amsterdam" checked`) {
+		t.Errorf("отмечен шлюз, которого в канале нет:\n%s", box)
 	}
-	if after[0].Source != "Другой.FR-Paris" || after[0].Name != "Другой.FR-Paris" {
-		t.Errorf("запись = %q/%q", after[0].Name, after[0].Source)
+	// Its name comes back too, or saving renames the channel to nothing.
+	if !strings.Contains(body, `value="шлюзы подписки"`) {
+		t.Errorf("имя канала не показано:\n%s", firstLines(body))
+	}
+	// And the tallies say what is in and what there is.
+	if !strings.Contains(box, `data-tally="all">2/4</span>`) {
+		t.Errorf("общий счётчик не считает отмеченное:\n%s", box)
+	}
+	if !strings.Contains(box, `data-tally>1/2</span>`) {
+		t.Errorf("счётчик подписки не считает отмеченное:\n%s", box)
+	}
+}
+
+func TestGateways_ChangingTheSetRewritesTheSameChannel(t *testing.T) {
+	// The set is the channel's own, so changing it is an edit and not a second
+	// channel — and what was unticked has to actually leave.
+	srv := withGateways(t, aSubscription(), nil)
+	postForm(t, srv, "/channels", gatewayForm([]string{"Провайдер.DE-Berlin"}, nil))
+	saved := onlyChannel(t, srv)
+
+	postForm(t, srv, "/channels", gatewayForm(
+		[]string{"Провайдер.NL-Amsterdam", "Другой.FR-Paris"},
+		map[string]string{"id": strconv.FormatInt(saved.ID, 10)}))
+
+	after := onlyChannel(t, srv)
+	if after.ID != saved.ID {
+		t.Errorf("правка пересоздала запись: было %d, стало %d", saved.ID, after.ID)
+	}
+	if got := after.GatewayNames(); !slices.Equal(got,
+		[]string{"Провайдер.NL-Amsterdam", "Другой.FR-Paris"}) {
+		t.Errorf("после правки в записи %v", got)
 	}
 }
 
@@ -267,9 +257,7 @@ func TestGateways_NothingTickedIsSaidRatherThanSavedEmpty(t *testing.T) {
 	// start of a run, which is a long way from the screen that let it be saved.
 	srv := withGateways(t, aSubscription(), nil)
 
-	body := postForm(t, srv, "/channels", url.Values{
-		"kind": {store.ChannelGateway}, "enabled": {"1"},
-	}).Body.String()
+	body := postForm(t, srv, "/channels", gatewayForm(nil, nil)).Body.String()
 	if !strings.Contains(body, "Не отмечено ни одного шлюза") {
 		t.Errorf("пустой выбор принят молча:\n%s", firstLines(body))
 	}
@@ -282,43 +270,21 @@ func TestGateways_NothingTickedIsSaidRatherThanSavedEmpty(t *testing.T) {
 	}
 }
 
-func TestGateways_TheNameIsNotAskedForBecauseItIsTheConfiguration(t *testing.T) {
-	// Eight ticked at once need eight names, and there is only one sensible set
-	// of them. Asking for one would either name eight records alike — which the
-	// mixer reads as one exit's health — or ask the reader for eight names.
+func TestGateways_AreNamedLikeAnyOtherChannel(t *testing.T) {
+	// One channel over a set, so it needs a name the same way a proxy list
+	// does: the mixer weighs a channel by its name and the run's log calls it
+	// that. There is nothing to derive it from — a set of sixteen has no name
+	// of its own — so it is asked for.
 	srv := withGateways(t, aSubscription(), nil)
 	body := get(t, srv, "/channels", "correct horse").Body.String()
 
-	if strings.Contains(groupHTML(body, store.ChannelGateway), `name="name"`) {
-		t.Error("у шлюза спрашивают название")
+	// Not inside any kind's group: every kind needs it.
+	if group := groupAround(body, `name="name"`); group != "" {
+		t.Errorf("поле названия отнесено к видам %q", group)
 	}
-	// The other kinds still need one: a proxy list is not named by anything
-	// else on the screen.
-	kinds := whenOf(t, body, `name="name"`)
-	for _, kind := range []string{store.ChannelList, store.ChannelRotating, store.ChannelDirect} {
-		if !slices.Contains(kinds, kind) {
-			t.Errorf("у вида %q перестали спрашивать название: поле показано для %v", kind, kinds)
-		}
+	if !strings.Contains(body, `name="name" required`) {
+		t.Errorf("названия не требуют:\n%s", firstLines(body))
 	}
-	if slices.Contains(kinds, store.ChannelGateway) {
-		t.Errorf("поле названия всё-таки показано шлюзу: %v", kinds)
-	}
-}
-
-// whenOf is the kinds the group holding mark belongs to.
-func whenOf(t *testing.T, body, mark string) []string {
-	t.Helper()
-	at := strings.Index(body, mark)
-	if at < 0 {
-		t.Fatalf("на экране нет %s", mark)
-	}
-	const open = `data-when="`
-	from := strings.LastIndex(body[:at], open)
-	if from < 0 {
-		t.Fatalf("%s не принадлежит ни одной группе", mark)
-	}
-	rest := body[from+len(open):]
-	return strings.Fields(rest[:strings.Index(rest, `"`)])
 }
 
 func TestGateways_TheListIsHeldAndTheButtonAsksAgain(t *testing.T) {
@@ -434,16 +400,9 @@ func TestGateways_TypedByHandStillMakesAnExit(t *testing.T) {
 	srv := clearedChannels(t)
 	srv.Gateways = nil
 
-	postForm(t, srv, "/channels", url.Values{
-		"kind": {store.ChannelGateway}, "enabled": {"1"},
-		"source": {"вручную-де"},
-	})
-	saved, err := srv.Store.Channels(context.Background())
-	if err != nil {
-		t.Fatalf("Channels: %v", err)
-	}
-	if len(saved) != 1 || saved[0].Source != "вручную-де" {
-		t.Fatalf("сохранено %d: %+v", len(saved), saved)
+	postForm(t, srv, "/channels", gatewayForm(nil, map[string]string{"source": "вручную-де"}))
+	if got := onlyChannel(t, srv).GatewayNames(); !slices.Equal(got, []string{"вручную-де"}) {
+		t.Errorf("сохранено %v", got)
 	}
 }
 
@@ -464,56 +423,40 @@ func TestSubscriptionOf_ReadsWhatTheNameCarries(t *testing.T) {
 	}
 }
 
-func TestGateways_RefreshingWhileChangingARecordKeepsTheRecord(t *testing.T) {
+func TestGateways_RefreshingWhileChangingAChannelKeepsItsSet(t *testing.T) {
 	// The button asks the service again and redraws the list. Redrawn without
-	// knowing which record the form is open on, it comes back as the list for
-	// adding exits — a page of checkboxes where a moment ago there was one
-	// choice, and the record's own configuration no longer ticked anywhere.
+	// knowing which channel the form is open on, it comes back with nothing
+	// ticked — and the next save writes an empty set over what was there.
 	srv := withGateways(t, aSubscription(), nil)
-	postForm(t, srv, "/channels", url.Values{
-		"kind": {store.ChannelGateway}, "enabled": {"1"},
-		"gateway": {"Провайдер.DE-Berlin"},
-	})
-	saved, err := srv.Store.Channels(context.Background())
-	if err != nil || len(saved) != 1 {
-		t.Fatalf("Channels: %v (%d)", err, len(saved))
-	}
-	id := strconv.FormatInt(saved[0].ID, 10)
+	postForm(t, srv, "/channels", gatewayForm(
+		[]string{"Провайдер.DE-Berlin", "своими-руками"}, nil))
+	id := strconv.FormatInt(onlyChannel(t, srv).ID, 10)
 
-	// The form says where its refresh goes, and it carries the record.
 	form := get(t, srv, "/channels/edit?id="+id, "correct horse").Body.String()
 	if !strings.Contains(form, `data-post="/channels/gateways?id=`+id+`"`) {
 		t.Errorf("кнопка обновления не несёт правимую запись:\n%s", firstLines(form))
 	}
 
 	body := postForm(t, srv, "/channels/gateways?id="+id, url.Values{}).Body.String()
-	if !strings.Contains(body, `type="radio" name="gateway"`) {
-		t.Errorf("обновление при правке вернуло список для добавления:\n%s", firstLines(body))
-	}
-	if !strings.Contains(body, `value="Провайдер.DE-Berlin" checked`) {
-		t.Errorf("после обновления шлюз записи не отмечен:\n%s", firstLines(body))
+	for _, name := range []string{"Провайдер.DE-Berlin", "своими-руками"} {
+		if !strings.Contains(body, `value="`+name+`" checked`) {
+			t.Errorf("после обновления шлюз %q не отмечен:\n%s", name, firstLines(body))
+		}
 	}
 }
 
-func TestGateways_OneNameTwiceIsOneExit(t *testing.T) {
-	// The list never draws a gateway twice, so this is two tabs racing or a
-	// service that listed one name twice. Two records of one gateway split the
-	// mixer's weight between halves of the same thing, and both halves report
-	// the same health — which the mixer then counts twice.
-	srv := withGateways(t, aSubscription(), nil)
-
-	form := url.Values{"kind": {store.ChannelGateway}, "enabled": {"1"}}
-	form["gateway"] = []string{"Провайдер.DE-Berlin", "Провайдер.DE-Berlin"}
-	body := postForm(t, srv, "/channels", form).Body.String()
-
-	if !strings.Contains(body, "Добавлено: 1 шлюз.") {
-		t.Errorf("повтор в одной отправке посчитан дважды:\n%s", firstLines(body))
+// sourceCell is the «Источник» of the table row named name.
+func sourceCell(t *testing.T, body, name string) string {
+	t.Helper()
+	at := strings.Index(body, "<td>"+html.EscapeString(name)+"</td>")
+	if at < 0 {
+		t.Fatalf("строки %q в таблице нет:\n%s", name, firstLines(body))
 	}
-	saved, err := srv.Store.Channels(context.Background())
-	if err != nil {
-		t.Fatalf("Channels: %v", err)
+	const open = `<td class="bt-cell-wrap">`
+	from := strings.Index(body[at:], open)
+	if from < 0 {
+		t.Fatalf("у строки %q нет ячейки источника", name)
 	}
-	if len(saved) != 1 {
-		t.Errorf("одно имя дважды дало %d записей", len(saved))
-	}
+	rest := body[at+from+len(open):]
+	return html.UnescapeString(rest[:strings.Index(rest, "</td>")])
 }

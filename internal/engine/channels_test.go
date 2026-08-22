@@ -429,3 +429,40 @@ func TestTestChannel_AChannelThatIsNotThereIsReported(t *testing.T) {
 		t.Error("проверен канал, которого нет")
 	}
 }
+
+func TestChannels_AGatewayChannelCarriesEveryGatewayItNames(t *testing.T) {
+	// A set of gateways is one channel over the whole set, the way a proxy list
+	// is one channel over its whole file. Built from the first name alone — or
+	// from the stored string as it stands — the channel would egress through one
+	// gateway while the screen showed sixteen, and nothing between here and the
+	// run would say which one.
+	e := openEngine(t)
+	saveChannel(t, e, store.ChannelRow{
+		Name: "подписка", Kind: store.ChannelGateway,
+		Source:  store.JoinGatewayNames([]string{"berlin", "amsterdam", "paris"}),
+		Enabled: true,
+	})
+
+	channels, done, err := e.Channels(t.Context())
+	if err != nil {
+		t.Fatalf("Channels: %v", err)
+	}
+	defer done()
+	if len(channels) != 1 {
+		t.Fatalf("построено каналов: %d, ожидался один", len(channels))
+	}
+
+	seen := map[string]bool{}
+	for range 6 {
+		eg, ok := channels[0].Next()
+		if !ok {
+			t.Fatal("канал ничего не выдал")
+		}
+		seen[eg.Gateway] = true
+	}
+	for _, want := range []string{"berlin", "amsterdam", "paris"} {
+		if !seen[want] {
+			t.Errorf("шлюз %q ни разу не выдан: выдавались %v", want, seen)
+		}
+	}
+}

@@ -1382,9 +1382,3 @@ dialog.bt-modal > #settings-body {
   overflow-y: auto;
 }
 
-/* Already an exit: read, not chosen. Drawn quieter, and indented by the width
-   of the box it does not have, so the names still line up down the column. */
-.bt[data-bt-theme="dashboard"] .bt-checkbox--read {
-  color: var(--text-muted);
-  padding-left: calc(var(--space-4) + var(--space-1));
-}

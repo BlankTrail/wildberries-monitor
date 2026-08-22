@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -23,8 +24,10 @@ const (
 	ChannelList = "proxy-list"
 	// ChannelRotating is one entry point plus a link that changes its address.
 	ChannelRotating = "rotating"
-	// ChannelGateway is a VPN configuration held by BlankTrail, named by the
-	// name it has there.
+	// ChannelGateway is one or more VPN configurations held by BlankTrail,
+	// named by the names they have there and written one per line — the same
+	// shape a proxy list has, and for the same reason: a set of exits somebody
+	// chose together is one channel, not one channel each.
 	ChannelGateway = "gateway"
 	// ChannelDirect is the host's own address. Not a placeholder for "none
 	// configured": a person may want it in the mix beside two proxy lists, and
@@ -103,6 +106,32 @@ func (c ChannelRow) RefreshOrDefault() time.Duration {
 	}
 	return c.Refresh
 }
+
+// GatewayNames is the configurations a gateway channel names.
+//
+// Parsed here and nowhere else. The screen that ticks them, the engine that
+// dials them and the table that prints them all read the same column, and three
+// readings of one string is three chances for a gateway somebody ticked to be
+// missing from the run without anything saying so.
+//
+// Blank lines and repeats are dropped: the set is what matters, and a name
+// twice over is one exit handed out twice as often as its neighbours.
+func (c ChannelRow) GatewayNames() []string {
+	var out []string
+	seen := map[string]bool{}
+	for line := range strings.SplitSeq(c.Source, "\n") {
+		name := strings.TrimSpace(line)
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		out = append(out, name)
+	}
+	return out
+}
+
+// JoinGatewayNames is the other direction, for whoever is writing the row.
+func JoinGatewayNames(names []string) string { return strings.Join(names, "\n") }
 
 // Channels lists every saved channel, oldest first.
 //
