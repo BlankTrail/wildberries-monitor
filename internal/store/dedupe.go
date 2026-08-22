@@ -34,7 +34,11 @@ func DefaultRetention() Retention {
 }
 
 // SetRetention replaces this store's thresholds.
-func (s *Store) SetRetention(r Retention) { s.retention = r }
+//
+// Safe to call while a run is writing, which is the whole reason the field is
+// atomic: the settings screen changes these while a collection is consulting
+// AnchorEvery on every product it saves.
+func (s *Store) SetRetention(r Retention) { s.retention.Store(&r) }
 
 // Retention is what this store is currently thinning by.
 //
@@ -67,7 +71,10 @@ func (s *Store) Retention() Retention { return s.retentionOrDefault() }
 // than silently breaking it.
 func (s *Store) retentionOrDefault() Retention {
 	d := DefaultRetention()
-	r := s.retention
+	var r Retention
+	if set := s.retention.Load(); set != nil {
+		r = *set
+	}
 	if r.AnchorEvery <= 0 {
 		r.AnchorEvery = d.AnchorEvery
 	} else if r.AnchorEvery < time.Second {

@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	// The CGO-free SQLite driver, registered by importing it. It is what
@@ -33,11 +34,17 @@ type Store struct {
 	// one second per second.
 	now func() time.Time
 
-	// retention is how long history stays dense. The zero value means the
+	// retention is how long history stays dense. A nil pointer means the
 	// defaults — see retentionOrDefault — so Open does not have to fill it and
 	// a Store built without SetRetention behaves like one built with
 	// DefaultRetention.
-	retention Retention
+	//
+	// Behind an atomic pointer because it is written and read from different
+	// goroutines: the panel changes the thresholds while a run is writing
+	// snapshots that consult AnchorEvery on every product. A plain field would
+	// be a data race over three durations — the kind that surfaces as a
+	// nonsense threshold rather than as a crash.
+	retention atomic.Pointer[Retention]
 }
 
 // Open opens the database at path, creating it if it does not exist.

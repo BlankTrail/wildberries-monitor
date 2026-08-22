@@ -548,7 +548,7 @@ func TestThin_TreatsAnUnsetRetentionAsTheDefault(t *testing.T) {
 	// field has to mean the default and never "delete everything".
 	s := openTestStore(t)
 	freezeClock(s, thinNow)
-	s.retention = Retention{}
+	s.SetRetention(Retention{})
 	seedProduct(t, s, 1)
 
 	putSnapshot(t, s, 1, "-1257786", 1, dayAt(3, 4, 0), 0, "fresh-a")

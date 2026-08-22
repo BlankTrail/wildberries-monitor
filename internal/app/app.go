@@ -440,8 +440,12 @@ func (a *App) Tick(ctx context.Context) {
 		return
 	}
 	// Settings first: a token saved a second ago should be in use this round,
-	// not the next one.
+	// not the next one. The retention thresholds are read here for the same
+	// reason and one more: AnchorEvery is a writing rule, so a threshold
+	// changed in the panel has to reach the store before the next run writes
+	// a snapshot, not only before the next nightly thinning.
 	a.reloadTelegram(ctx)
+	a.Store.SetRetention(a.retention(ctx))
 
 	if a.Worker != nil {
 		if stats, err := a.Worker.Run(ctx); err != nil {
@@ -460,6 +464,12 @@ func (a *App) Tick(ctx context.Context) {
 			a.Log.Printf("команды бота: %v", err)
 		}
 	}
+
+	// Last, and only when nothing is collecting: spec section 5.2's thinning
+	// and VACUUM. See maintain.go — both were written a milestone ago and
+	// neither was ever called, which is the one omission the spec itself calls
+	// «решение, без которого продукт разваливается через месяц».
+	a.maintain(ctx)
 }
 
 // Close releases everything, once.

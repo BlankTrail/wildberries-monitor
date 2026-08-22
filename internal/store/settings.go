@@ -54,6 +54,22 @@ const (
 	// SettingTelegramChat is the default addressee — spec section 8.3's "by
 	// default everything into one chat". A rule may name its own instead.
 	SettingTelegramChat = "telegram.chat"
+
+	// The three thresholds spec section 5.2 says are configurable, in days.
+	//
+	// Days rather than a duration string: what a person is deciding is «сколько
+	// держать подробную историю», and a field that accepts «30» and rejects
+	// «30d» is one they can fill in without reading anything. Zero means the
+	// default, which is what DefaultRetention already means everywhere else.
+	SettingAnchorEveryHours = "history.anchor_every_hours"
+	SettingDailyAfterDays   = "history.daily_after_days"
+	SettingWeeklyAfterDays  = "history.weekly_after_days"
+
+	// SettingLastMaintenance is when the history was last thinned and the file
+	// last rebuilt, as Unix seconds. Kept in settings rather than in a table of
+	// its own: it is one number, it is read once a minute, and a table for it
+	// would be a migration for a value that fits in a settings row.
+	SettingLastMaintenance = "history.last_maintenance"
 )
 
 // Setting value types, matching the CHECK on settings.type.

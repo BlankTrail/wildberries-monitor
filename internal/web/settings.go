@@ -126,6 +126,8 @@ func (s *Server) writeSettingsForm(w http.ResponseWriter, r *http.Request, notic
   <span class="bt-form-hint">` + appHashHint + `</span>
 </details>`)
 
+	b.WriteString(s.historyFields(r))
+
 	// Autostart is asked of the operating system, not read back from a
 	// setting: a registry entry or a unit file can be removed by anything, and
 	// a checkbox that showed a stored intention rather than the truth would
@@ -186,6 +188,14 @@ func (s *Server) saveSettings(w http.ResponseWriter, r *http.Request) {
 	if err := s.Store.SetSetting(ctx, store.SettingBlankTrailURL, url, store.SettingText); err != nil {
 		http.Error(w, "settings: "+err.Error(), http.StatusInternalServerError)
 		return
+	}
+
+	for _, f := range historyThresholds {
+		if err := s.Store.SetSetting(ctx, f.key,
+			strings.TrimSpace(r.FormValue(f.field)), store.SettingInt); err != nil {
+			http.Error(w, "settings: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 
 	if s.Autostart != nil {
