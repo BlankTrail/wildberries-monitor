@@ -26,7 +26,7 @@ import (
 // regionsSection is the directory with the form that adds to it.
 func (s *Server) regionsSection(r *http.Request) string {
 	var b strings.Builder
-	b.WriteString(`<div id="regions-box">`)
+	b.WriteString(`<div class="bt-stack" id="regions-box">`)
 	b.WriteString(s.regionsBody(r))
 	b.WriteString(`</div>`)
 	return b.String()

@@ -101,7 +101,7 @@ func categoryRefreshHTML() string {
 // categoryBox is the picker with its own region around it, so a refresh can
 // replace it without taking the rest of the form with it.
 func (s *Server) categoryBox(r *http.Request, notice string) string {
-	return `<div id="category-box">` + notice + s.categoryControl(r) + `</div>`
+	return `<div class="bt-stack" id="category-box">` + notice + s.categoryControl(r) + `</div>`
 }
 
 // refreshCategories downloads the directory again.

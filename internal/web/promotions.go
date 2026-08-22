@@ -98,7 +98,7 @@ func promotionRefreshHTML() string {
 // promotionBox is the picker with its own region around it, so a refresh can
 // replace it without taking the rest of the form with it.
 func (s *Server) promotionBox(r *http.Request, notice string) string {
-	return `<div id="promotion-box">` + notice + s.promotionControl(r) + `</div>`
+	return `<div class="bt-stack" id="promotion-box">` + notice + s.promotionControl(r) + `</div>`
 }
 
 // refreshPromotions reads the site's list again.

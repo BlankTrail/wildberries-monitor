@@ -27,7 +27,7 @@ import (
 // pickupSection is the whole picker.
 func (s *Server) pickupSection(r *http.Request) string {
 	var b strings.Builder
-	b.WriteString(`<div id="pickup-box">`)
+	b.WriteString(`<div class="bt-stack" id="pickup-box">`)
 	b.WriteString(s.pickupBody(r))
 	b.WriteString(`</div>`)
 	return b.String()

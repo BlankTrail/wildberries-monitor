@@ -564,7 +564,11 @@ dialog.bt-modal > #settings-body {
 }
 
 .bt[data-bt-theme="dashboard"] .bt-form-head {
-  margin: var(--space-5) 0 var(--space-2);
+  /* --space-6, not --space-5: the design system's scale skips five. A custom
+     property that does not exist makes the whole shorthand invalid, so this
+     line used to set no margin at all — which is why every heading on every
+     screen sat flush against the block under it. */
+  margin: var(--space-6) 0 var(--space-2);
   padding-bottom: var(--space-2);
   font-size: .95rem;
   font-weight: 600;
@@ -984,4 +988,98 @@ dialog.bt-modal > #settings-body {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--bg-card-2);
+}
+
+/* ---- vertical rhythm ---------------------------------------------------- */
+
+/* The blocks a card stacks, and the one gap between them.
+ *
+ * The design system styles each of these beautifully and gives none of them a
+ * margin, on the reasonable assumption that whoever arranges them will say how
+ * far apart they go. Nobody had: the headings carried the only separation in
+ * the layout, and a heading's margin is a section break rather than a gap — so
+ * an alert and the table under it touched, and a form's own blocks ran into
+ * each other.
+ *
+ * One rule and one value, applied to what actually stacks. A gap per component
+ * would drift the moment two of them met in an order nobody had tried. */
+.bt[data-bt-theme="dashboard"] .bt-card > .bt-alert,
+.bt[data-bt-theme="dashboard"] .bt-card > .bt-table-wrap,
+.bt[data-bt-theme="dashboard"] .bt-card > .bt-form-grid,
+.bt[data-bt-theme="dashboard"] .bt-card > .bt-checks,
+.bt[data-bt-theme="dashboard"] .bt-card > .bt-log,
+.bt[data-bt-theme="dashboard"] .bt-card > .bt-cols,
+.bt[data-bt-theme="dashboard"] .bt-card > .bt-picker,
+.bt[data-bt-theme="dashboard"] .bt-card > .bt-form,
+.bt[data-bt-theme="dashboard"] .bt-card > .bt-fieldset,
+.bt[data-bt-theme="dashboard"] .bt-form > .bt-alert,
+.bt[data-bt-theme="dashboard"] .bt-form > .bt-table-wrap,
+.bt[data-bt-theme="dashboard"] .bt-form > .bt-form-grid,
+.bt[data-bt-theme="dashboard"] .bt-form > .bt-checks,
+.bt[data-bt-theme="dashboard"] .bt-form > .bt-fieldset,
+.bt[data-bt-theme="dashboard"] .bt-fieldset > .bt-alert,
+.bt[data-bt-theme="dashboard"] .bt-fieldset > .bt-table-wrap,
+.bt[data-bt-theme="dashboard"] .bt-fieldset > .bt-form-grid,
+.bt[data-bt-theme="dashboard"] .bt-fieldset > .bt-checks,
+/* A field standing on its own is a block; one inside a grid is a cell, and the
+   grid's own gap already spaces it. */
+.bt[data-bt-theme="dashboard"] .bt-card > .bt-field,
+.bt[data-bt-theme="dashboard"] .bt-form > .bt-field,
+.bt[data-bt-theme="dashboard"] .bt-fieldset > .bt-field,
+/* The pickers that bring their own region so a refresh can replace them
+   without taking the form with it: a catalogue node, a promotion, a delivery
+   point. They are blocks like any other and were the only ones without a
+   class saying so. */
+.bt[data-bt-theme="dashboard"] .bt-stack {
+  margin-bottom: var(--space-4);
+}
+
+/* And inside one of those regions the same rhythm applies: a picker is a
+   notice, a control and a button, and the three are three things. */
+.bt[data-bt-theme="dashboard"] .bt-stack > .bt-alert,
+.bt[data-bt-theme="dashboard"] .bt-stack > .bt-field,
+.bt[data-bt-theme="dashboard"] .bt-stack > .bt-table-wrap,
+.bt[data-bt-theme="dashboard"] .bt-stack > .bt-form-grid,
+.bt[data-bt-theme="dashboard"] .bt-stack > .bt-cols {
+  margin-bottom: var(--space-3);
+}
+
+.bt[data-bt-theme="dashboard"] .bt-stack > :last-child {
+  margin-bottom: 0;
+}
+
+/* Nothing pads the bottom of its container: the card's own padding is the last
+   gap, and a second one under it reads as an empty row. */
+.bt[data-bt-theme="dashboard"] .bt-card > :last-child,
+.bt[data-bt-theme="dashboard"] .bt-form > :last-child,
+.bt[data-bt-theme="dashboard"] .bt-fieldset > :last-child {
+  margin-bottom: 0;
+}
+
+/* A section heading that opens a card has nothing above it to be separated
+   from, and the card's padding is already that separation. */
+.bt[data-bt-theme="dashboard"] .bt-card > .bt-form-head:first-child,
+.bt[data-bt-theme="dashboard"] .bt-card > h2 + .bt-form-head,
+.bt[data-bt-theme="dashboard"] .bt-card > h3 + .bt-form-head {
+  margin-top: 0;
+}
+
+/* A hint belongs to the control above it, so it sits close to that and clear of
+   whatever comes next. */
+.bt[data-bt-theme="dashboard"] .bt-form-hint {
+  display: block;
+  margin: var(--space-1) 0 var(--space-4);
+}
+
+/* A row of buttons is an act, not a block: it gets air above it and none below,
+   because it is almost always the last thing in its container. */
+.bt[data-bt-theme="dashboard"] .bt-form-actions {
+  margin-top: var(--space-4);
+}
+
+/* A card inside a card is a thing in its own right — a profile, a saved job —
+   and needs to read as separate from the one before it. */
+.bt[data-bt-theme="dashboard"] .bt-card--inset + .bt-card--inset,
+.bt[data-bt-theme="dashboard"] .bt-card > .bt-card--inset {
+  margin-top: var(--space-6);
 }
