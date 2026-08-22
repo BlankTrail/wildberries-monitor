@@ -46,6 +46,7 @@ type Site interface {
 	ProductShelf(ctx context.Context, eps wb.Endpoints, nm int64) (wb.ProductShelf, error)
 	PromotionPage(ctx context.Context, eps wb.Endpoints, p wb.Promotion, q wb.SearchQuery) (wb.Envelope, error)
 	MainFeedPage(ctx context.Context, eps wb.Endpoints, q wb.SearchQuery) (wb.Envelope, error)
+	Seller(ctx context.Context, eps wb.Endpoints, id int64) (wb.Seller, error)
 }
 
 // Fetcher does one item of a job.
@@ -111,6 +112,8 @@ func (f *Fetcher) fetchKey(ctx context.Context, key job.Key) (int, error) {
 		return f.promo(ctx, key)
 	case job.ItemMain:
 		return f.mainFeed(ctx, key)
+	case job.ItemSeller:
+		return f.seller(ctx, key)
 	}
 	// Not a default that quietly does nothing: an item kind this build cannot
 	// do would otherwise be marked done, and a run would report success having
@@ -287,6 +290,41 @@ func (f *Fetcher) promo(ctx context.Context, key job.Key) (int, error) {
 	extra, err := f.enrich(ctx, env.Products, key)
 	return requests + extra, err
 }
+
+// seller reads the seller's own record — who they are, as opposed to what
+// they sell.
+//
+// Section 4.7 asks for it by name: «наименование и организационная форма, ИНН,
+// ОГРН, юридический адрес, рейтинг, число товаров, число отзывов, дата
+// появления». What the site publishes of that is what is stored; the fields it
+// does not publish are absent rather than blank, which is the difference
+// between «не знаем» and «нет».
+//
+// A partly filled record is saved rather than refused. Client.Seller makes two
+// fetches and hands back what it got alongside the error when one of them
+// fails, and a seller known by name but not by rating is worth more than a
+// seller not known at all — the error is reported so the run counts it.
+func (f *Fetcher) seller(ctx context.Context, key job.Key) (int, error) {
+	sl, err := f.Site.Seller(ctx, f.Eps, key.ID)
+	requests := sellerRecordRequests
+	if sl.ID > 0 {
+		if saveErr := f.Store.SaveSeller(ctx, sl); saveErr != nil {
+			return requests, fmt.Errorf("collect: продавец %d: %w", key.ID, saveErr)
+		}
+		f.publish(ctx, events.ItemScraped, sl)
+	}
+	if err != nil {
+		return requests, fmt.Errorf("collect: продавец %d: %w", key.ID, err)
+	}
+	return requests, nil
+}
+
+// sellerRecordRequests is what one seller's record costs: a static file and a
+// profile, both always attempted. Spelled here as well as in internal/job
+// because the run counts what it spent and the estimate counts what it will —
+// two different jobs for one number, and a shared constant between packages
+// that know nothing else about each other would be a dependency for a two.
+const sellerRecordRequests = 2
 
 // mainFeed walks one page of the front page's run of goods — spec section
 // 4.6's type 10.

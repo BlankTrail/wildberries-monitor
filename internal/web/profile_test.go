@@ -83,10 +83,11 @@ func TestProfile_ALinkBecomesAJobThatRunsThroughTheProxy(t *testing.T) {
 	}
 }
 
-func TestProfile_ShowsWhatWasResolvedAndOffersTheStorefront(t *testing.T) {
-	// What the card decided, and the one thing worth doing next. The
-	// storefront is a job rather than a button that collects: it is an
-	// unknown number of pages, and the jobs screen is where a run is priced.
+func TestProfile_ShowsTheStorefrontAndOneButtonToCollectIt(t *testing.T) {
+	// The tab is a storefront, not a resolver with buttons under it. What it
+	// shows is the seller, their goods and what the chain last did; what it
+	// offers is one act, because section 4.7's five stages have an order and a
+	// screen with five buttons does not carry one.
 	srv := newServer(t)
 	ctx := t.Context()
 
@@ -103,26 +104,72 @@ func TestProfile_ShowsWhatWasResolvedAndOffersTheStorefront(t *testing.T) {
 	}
 
 	body := get(t, srv, "/profile", "correct horse").Body.String()
-	for _, want := range []string{"ООО Ромашка", "4242", "141504066"} {
+	for _, want := range []string{"ООО Ромашка", "Собрать всё", "/profile/scan"} {
 		if !strings.Contains(body, want) {
-			t.Errorf("на экране нет %q:\n%s", want, firstLines(body))
+			t.Errorf("на экране нет %q: %s", want, firstLines(body))
 		}
 	}
+	// The seller's own record has not been collected, and the screen says so
+	// rather than drawing empty fields that look like zeroes.
+	if !strings.Contains(body, "ещё не собраны") {
+		t.Error("экран не говорит, что данных о продавце пока нет")
+	}
+}
 
-	// Pressing it makes a storefront job, saved rather than started.
-	if w := postForm(t, srv, "/profile/collect?id="+itoa(id), nil); w.Code != 200 {
-		t.Fatalf("сбор ассортимента = %d", w.Code)
-	}
-	jobs, err := srv.Store.Jobs(ctx)
-	if err != nil || len(jobs) != 1 {
-		t.Fatalf("Jobs: %v, %d", err, len(jobs))
-	}
-	made, err := job.Load(ctx, srv.Store, jobs[0].ID)
+func TestProfile_ThePlanIsTheProfilesOwn(t *testing.T) {
+	// A rescan has to ask the same question it was configured with, so the
+	// regions and the fields belong to the profile rather than to a job
+	// somebody might edit on another screen.
+	srv := newServer(t)
+	ctx := t.Context()
+	seller := int64(4242)
+	id, err := srv.Store.SaveProfile(ctx, store.ProfileRow{Name: "мой", SellerID: &seller})
 	if err != nil {
-		t.Fatalf("Load: %v", err)
+		t.Fatalf("SaveProfile: %v", err)
 	}
-	if made.Kind != job.KindSeller || made.SupplierID != seller {
-		t.Errorf("создано задание %+v", made)
+
+	form := url.Values{}
+	form.Set("regions", "-1257786, -5887751")
+	form.Set("max_pages", "5")
+	form.Set("schedule", "every 24h")
+	form.Set("enabled", "1")
+	form.Add("groups", string(wb.GroupBase))
+	form.Add("groups", string(wb.GroupStock))
+	if w := postForm(t, srv, "/profile/plan?id="+itoa(id), form); w.Code != 200 {
+		t.Fatalf("сохранение настроек = %d", w.Code)
+	}
+
+	got, err := srv.Store.Profile(ctx, id)
+	if err != nil {
+		t.Fatalf("Profile: %v", err)
+	}
+	if len(got.Regions) != 2 || got.Regions[0] != "-1257786" {
+		t.Errorf("регионы = %v", got.Regions)
+	}
+	if got.MaxPages != 5 || got.Schedule != "every 24h" || !got.Enabled {
+		t.Errorf("план = %+v", got)
+	}
+	if len(got.Fields) < len(wb.FieldsOfGroup(wb.GroupBase)) {
+		t.Errorf("полей сохранено %d — группы не развернулись", len(got.Fields))
+	}
+}
+
+func TestProfile_RefusesAPlanWithNoRegion(t *testing.T) {
+	// Every reading in this product is regional. A profile collected for a
+	// region nobody chose has prices belonging to somewhere the user never
+	// named.
+	srv := newServer(t)
+	seller := int64(4242)
+	id, err := srv.Store.SaveProfile(t.Context(), store.ProfileRow{Name: "мой", SellerID: &seller})
+	if err != nil {
+		t.Fatalf("SaveProfile: %v", err)
+	}
+	form := url.Values{}
+	form.Set("regions", "  ")
+	form.Add("groups", string(wb.GroupBase))
+	w := postForm(t, srv, "/profile/plan?id="+itoa(id), form)
+	if !strings.Contains(w.Body.String(), "Не указан ни один регион") {
+		t.Errorf("пустой список регионов принят: %s", firstLines(w.Body.String()))
 	}
 }
 

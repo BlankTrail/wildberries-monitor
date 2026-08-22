@@ -162,10 +162,22 @@ func TestPlan_ASellerAndABrandAreListingsNotSearches(t *testing.T) {
 		Kind: KindSeller, SupplierID: 118143, Regions: []string{"-1257786"},
 		AppType: wb.AppWeb, Fields: wb.Selection{"nm_id"}, MaxPages: 2,
 	}
-	for _, it := range planOf(t, seller) {
+	// The seller's own record leads, once, and the storefront's pages follow.
+	// Two kinds in one plan because they are two different things about one
+	// seller: who they are, and what they sell.
+	items := planOf(t, seller)
+	if len(items) != 3 {
+		t.Fatalf("плановых пунктов %d, ожидались три: запись продавца и две страницы", len(items))
+	}
+	if items[0].Kind != ItemSeller {
+		t.Errorf("первым идёт %q — запись продавца должна быть первой", items[0].Kind)
+	}
+	for _, it := range items[1:] {
 		if it.Kind != ItemListing {
 			t.Errorf("seller item kind = %q, want %q", it.Kind, ItemListing)
 		}
+	}
+	for _, it := range items {
 		k, err := ParseKey(it.Key)
 		if err != nil {
 			t.Fatalf("ParseKey(%q): %v", it.Key, err)

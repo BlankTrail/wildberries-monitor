@@ -5,8 +5,12 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
+
+	"github.com/BlankTrail/wildberries-monitor/wb"
 )
 
 // This file is spec section 4.7's «мой контур»: which seller, which brands and
@@ -25,6 +29,34 @@ const (
 	ProfileProduct = "product"
 )
 
+// Stages of a profile's own collection, in the order they happen.
+//
+// Section 4.7's chain, named so a screen can say where it is. The order is the
+// dependency order and nothing else: phrases are made from cards that have to
+// be collected first, checked against searches that have to be walked, and the
+// competitors fall out of the phrases that survived the check.
+const (
+	// StageIdle is «ничего не идёт». It is also where a finished chain
+	// returns to, because «собрано» is a fact about the data rather than
+	// about a process.
+	StageIdle = ""
+	// StageResolve turns the pasted link into a seller.
+	StageResolve = "resolve"
+	// StageCatalog walks the seller's whole storefront and their own record.
+	StageCatalog = "catalog"
+	// StagePhrases derives the candidate phrases. The one stage that costs no
+	// requests: the words come from cards already collected.
+	StagePhrases = "phrases"
+	// StageCheck takes the positions that turn candidates into working
+	// phrases. The expensive half of section 4.7's onboarding.
+	StageCheck = "check"
+	// StageRivals computes who stands beside those products in those phrases.
+	StageRivals = "rivals"
+	// StageDone and StageFailed are where a chain stops.
+	StageDone   = "done"
+	StageFailed = "failed"
+)
+
 // ProfileRow is one «мой контур».
 type ProfileRow struct {
 	ID          int64
@@ -33,7 +65,84 @@ type ProfileRow struct {
 	SellerID    *int64
 	CreatedAt   int64
 	UpdatedAt   int64
+
+	// Stage is where the collection chain stands, and StageJob is the job it
+	// is waiting on — zero when the stage needs none.
+	Stage    string
+	StageJob int64
+	// CatalogJob and CheckJob are the two jobs the chain reuses. Kept rather
+	// than recreated per run: a rescan that made new ones would fill the jobs
+	// screen with a copy a week, and the history of one storefront would be
+	// split across them.
+	CatalogJob int64
+	CheckJob   int64
+
+	// Regions, Fields and MaxPages are the profile's own answer to «по каким
+	// регионам и что снимать». Held here rather than read back out of the
+	// jobs, so that a rescan asks the same question it was configured with
+	// even if somebody edited a job on another screen.
+	Regions  []string
+	Fields   []string
+	MaxPages int
+
+	// PhrasesPerProduct and PhraseProducts are the two bounds section 4.7
+	// asks for by name. Zero on either means «сколько есть», which is right
+	// for a seller with fifty goods and wrong for one with ten thousand —
+	// so the screen says what the number will be before it is spent.
+	PhrasesPerProduct int
+	PhraseProducts    int
+
+	// Schedule and Enabled are the rescan. A profile can keep its data
+	// without being refreshed, which is what a disabled schedule means.
+	Schedule string
+	Enabled  bool
+
+	// StartedAt and FinishedAt bracket the last chain; Failure is what
+	// stopped it, empty when nothing did.
+	StartedAt  int64
+	FinishedAt int64
+	Failure    string
 }
+
+// Collected reports whether this profile has been through the chain at least
+// once — which is what everything comparative in this product needs before it
+// can say anything.
+func (p ProfileRow) Collected() bool { return p.FinishedAt > 0 }
+
+// Running reports whether the chain is under way.
+func (p ProfileRow) Running() bool {
+	switch p.Stage {
+	case StageIdle, StageDone, StageFailed:
+		return false
+	}
+	return true
+}
+
+// DefaultProfilePlan is what a profile collects before anybody changes it.
+//
+// One region, because a reading has to have one and «-1257786» is the same
+// first guess every other screen in this product starts from. The base, stock
+// and delivery groups, because those are what «мой ассортимент, остатки и
+// сроки» means and they ride on pages the walk pays for anyway — the content
+// and reputation groups are a request per product each, which is a decision
+// with a price and belongs to the person, not to a default.
+func DefaultProfilePlan() ProfileRow {
+	var fields []string
+	for _, g := range []wb.FieldGroup{wb.GroupBase, wb.GroupStock, wb.GroupDelivery} {
+		for _, f := range wb.FieldsOfGroup(g) {
+			fields = append(fields, f.Key)
+		}
+	}
+	return ProfileRow{
+		Regions: []string{DefaultProfileRegion},
+		Fields:  fields,
+		// A storefront ends on its own; this is where to stop if it does not.
+		MaxPages: 20,
+	}
+}
+
+// DefaultProfileRegion is the region a profile starts collecting for.
+const DefaultProfileRegion = "-1257786"
 
 // ErrNoProfile is returned when a profile was asked for and there is none.
 var ErrNoProfile = errors.New("store: no profile")
@@ -50,10 +159,26 @@ func (s *Store) SaveProfile(ctx context.Context, p ProfileRow) (int64, error) {
 		return p.ID, nil
 	}
 
+	// A new profile arrives with a plan already in it, because the button that
+	// collects it is the next thing anybody presses: a profile whose regions
+	// were empty would answer «не указан ни один регион» to the first press,
+	// about a form nobody had reason to open yet.
+	plan := DefaultProfilePlan()
+	regions, err := json.Marshal(plan.Regions)
+	if err != nil {
+		return 0, fmt.Errorf("store: save profile: %w", err)
+	}
+	fields, err := json.Marshal(plan.Fields)
+	if err != nil {
+		return 0, fmt.Errorf("store: save profile: %w", err)
+	}
+
 	res, err := s.db.ExecContext(ctx,
-		`INSERT INTO profiles (name, source_input, seller_id, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?)`,
-		p.Name, p.SourceInput, p.SellerID, now, now)
+		`INSERT INTO profiles (name, source_input, seller_id, created_at, updated_at,
+		                       regions, fields, max_pages)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		p.Name, p.SourceInput, p.SellerID, now, now,
+		string(regions), string(fields), plan.MaxPages)
 	if err != nil {
 		return 0, fmt.Errorf("store: save profile: %w", err)
 	}
@@ -66,8 +191,12 @@ func (s *Store) SaveProfile(ctx context.Context, p ProfileRow) (int64, error) {
 
 // Profiles lists every profile, oldest first.
 func (s *Store) Profiles(ctx context.Context) ([]ProfileRow, error) {
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, name, source_input, seller_id, created_at, updated_at FROM profiles ORDER BY id`)
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, name, source_input, seller_id, created_at, updated_at,
+		       stage, stage_job, catalog_job, check_job, regions, fields, max_pages,
+		       phrases_per_product, phrase_products,
+		       schedule, enabled, started_at, finished_at, failure
+		  FROM profiles ORDER BY id`)
 	if err != nil {
 		return nil, fmt.Errorf("store: profiles: %w", err)
 	}
@@ -75,8 +204,8 @@ func (s *Store) Profiles(ctx context.Context) ([]ProfileRow, error) {
 
 	var out []ProfileRow
 	for rows.Next() {
-		var p ProfileRow
-		if err := rows.Scan(&p.ID, &p.Name, &p.SourceInput, &p.SellerID, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		p, err := scanProfile(rows)
+		if err != nil {
 			return nil, fmt.Errorf("store: profiles: %w", err)
 		}
 		out = append(out, p)
@@ -89,10 +218,12 @@ func (s *Store) Profiles(ctx context.Context) ([]ProfileRow, error) {
 
 // Profile reads one.
 func (s *Store) Profile(ctx context.Context, id int64) (ProfileRow, error) {
-	var p ProfileRow
-	err := s.db.QueryRowContext(ctx,
-		`SELECT id, name, source_input, seller_id, created_at, updated_at FROM profiles WHERE id = ?`, id).
-		Scan(&p.ID, &p.Name, &p.SourceInput, &p.SellerID, &p.CreatedAt, &p.UpdatedAt)
+	p, err := scanProfile(s.db.QueryRowContext(ctx, `
+		SELECT id, name, source_input, seller_id, created_at, updated_at,
+		       stage, stage_job, catalog_job, check_job, regions, fields, max_pages,
+		       phrases_per_product, phrase_products,
+		       schedule, enabled, started_at, finished_at, failure
+		  FROM profiles WHERE id = ?`, id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return ProfileRow{}, fmt.Errorf("%w %d", ErrNoProfile, id)
 	}
@@ -100,6 +231,130 @@ func (s *Store) Profile(ctx context.Context, id int64) (ProfileRow, error) {
 		return ProfileRow{}, fmt.Errorf("store: profile %d: %w", id, err)
 	}
 	return p, nil
+}
+
+// scanProfile reads one row in the column order both queries above use.
+//
+// The scanner interface it takes is channels.go's, which is the same shape and
+// already there: one row is one row whatever table it came out of.
+func scanProfile(row scanner) (ProfileRow, error) {
+	var p ProfileRow
+	var regions, fields string
+	var enabled int64
+	if err := row.Scan(&p.ID, &p.Name, &p.SourceInput, &p.SellerID, &p.CreatedAt, &p.UpdatedAt,
+		&p.Stage, &p.StageJob, &p.CatalogJob, &p.CheckJob, &regions, &fields, &p.MaxPages,
+		&p.PhrasesPerProduct, &p.PhraseProducts,
+		&p.Schedule, &enabled, &p.StartedAt, &p.FinishedAt, &p.Failure); err != nil {
+		return ProfileRow{}, err
+	}
+	p.Enabled = enabled != 0
+	// A list that will not parse is read as an empty one rather than as an
+	// error: it is a profile written by a build that spelled it differently,
+	// and refusing to show the profile at all would hide the seller, the
+	// products and the phrases over a settings field.
+	_ = json.Unmarshal([]byte(regions), &p.Regions)
+	_ = json.Unmarshal([]byte(fields), &p.Fields)
+	return p, nil
+}
+
+// SaveProfilePlan records what a profile collects and how often.
+//
+// Separate from SaveProfile, which the resolver calls: that one writes what
+// the site said, this one writes what the user chose, and a single writer
+// would have each overwriting the other's half every time either ran.
+func (s *Store) SaveProfilePlan(ctx context.Context, p ProfileRow) error {
+	regions, err := json.Marshal(nonEmptyStrings(p.Regions))
+	if err != nil {
+		return fmt.Errorf("store: profile plan %d: %w", p.ID, err)
+	}
+	fields, err := json.Marshal(nonEmptyStrings(p.Fields))
+	if err != nil {
+		return fmt.Errorf("store: profile plan %d: %w", p.ID, err)
+	}
+	enabled := int64(0)
+	if p.Enabled {
+		enabled = 1
+	}
+	if _, err := s.db.ExecContext(ctx, `
+		UPDATE profiles
+		   SET regions = ?, fields = ?, max_pages = ?,
+		       phrases_per_product = ?, phrase_products = ?,
+		       schedule = ?, enabled = ?, updated_at = ?
+		 WHERE id = ?`,
+		string(regions), string(fields), p.MaxPages,
+		max(p.PhrasesPerProduct, 0), max(p.PhraseProducts, 0),
+		strings.TrimSpace(p.Schedule), enabled, s.now().UTC().Unix(), p.ID); err != nil {
+		return fmt.Errorf("store: profile plan %d: %w", p.ID, err)
+	}
+	return nil
+}
+
+// SetProfileStage moves the chain.
+//
+// The stage and the job it waits on together, because they are one fact: a
+// stage with the wrong job under it is a chain waiting on something that
+// finished last week.
+func (s *Store) SetProfileStage(ctx context.Context, id int64, stage string, jobID int64) error {
+	now := s.now().UTC().Unix()
+	switch stage {
+	case StageDone:
+		_, err := s.db.ExecContext(ctx, `
+			UPDATE profiles SET stage = ?, stage_job = 0, finished_at = ?, failure = '', updated_at = ?
+			 WHERE id = ?`, stage, now, now, id)
+		return wrapProfile(id, err)
+	}
+	// Everything else, StageFailed included, moves the stage and leaves
+	// finished_at alone. A chain that broke halfway did not finish, and a
+	// screen that read it as one would say «собрано» about a profile with no
+	// phrases in it — so only the case above touches that column.
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE profiles SET stage = ?, stage_job = ?, updated_at = ? WHERE id = ?`,
+		stage, jobID, now, id)
+	return wrapProfile(id, err)
+}
+
+// StartProfileChain marks the beginning of a pass and clears the last failure.
+func (s *Store) StartProfileChain(ctx context.Context, id int64, stage string, jobID int64) error {
+	now := s.now().UTC().Unix()
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE profiles SET stage = ?, stage_job = ?, started_at = ?, failure = '', updated_at = ?
+		 WHERE id = ?`, stage, jobID, now, now, id)
+	return wrapProfile(id, err)
+}
+
+// FailProfileChain stops the chain with a reason a person can read.
+func (s *Store) FailProfileChain(ctx context.Context, id int64, reason string) error {
+	now := s.now().UTC().Unix()
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE profiles SET stage = ?, failure = ?, updated_at = ? WHERE id = ?`,
+		StageFailed, reason, now, id)
+	return wrapProfile(id, err)
+}
+
+// SetProfileJobs remembers the two jobs the chain reuses.
+func (s *Store) SetProfileJobs(ctx context.Context, id, catalog, check int64) error {
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE profiles SET catalog_job = ?, check_job = ?, updated_at = ? WHERE id = ?`,
+		catalog, check, s.now().UTC().Unix(), id)
+	return wrapProfile(id, err)
+}
+
+func wrapProfile(id int64, err error) error {
+	if err != nil {
+		return fmt.Errorf("store: profile %d: %w", id, err)
+	}
+	return nil
+}
+
+// nonEmptyStrings drops the blanks a form sends for a field nobody filled in.
+func nonEmptyStrings(in []string) []string {
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		if s = strings.TrimSpace(s); s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // AddProfileItem records that an entity belongs to a profile.
@@ -150,4 +405,41 @@ func (s *Store) DeleteProfile(ctx context.Context, id int64) error {
 		return fmt.Errorf("store: delete profile %d: %w", id, err)
 	}
 	return nil
+}
+
+// AdoptSellerProducts marks every product of a profile's seller as the
+// profile's own.
+//
+// The storefront walk collects a seller's whole catalogue into products, and
+// nothing until now said those were mine: only the one card the link resolved
+// to was ever registered. So a profile that had collected four hundred goods
+// still answered «товаров в профиле: 1», and every question downstream — which
+// phrases to derive, whose positions to check, who counts as a neighbour —
+// was answered about that one.
+//
+// Derived from what was collected rather than recorded during the walk: the
+// collector knows nothing about profiles and should not, and «мои товары — те,
+// что продаёт мой продавец» is a fact about the data that stays true whoever
+// collected it.
+//
+// The pinned rows survive. A product hand-added to a profile is a decision
+// somebody made, and a refresh that dropped it would undo that decision every
+// time the storefront was walked.
+func (s *Store) AdoptSellerProducts(ctx context.Context, profileID, sellerID int64) (int, error) {
+	if profileID <= 0 || sellerID <= 0 {
+		return 0, fmt.Errorf("store: adopt: profile %d, seller %d", profileID, sellerID)
+	}
+	res, err := s.db.ExecContext(ctx, `
+		INSERT INTO profile_items (profile_id, kind, entity_id, added_at)
+		SELECT ?, ?, nm_id, ? FROM products WHERE supplier_id = ?
+		ON CONFLICT (profile_id, kind, entity_id) DO NOTHING`,
+		profileID, ProfileProduct, s.now().UTC().Unix(), sellerID)
+	if err != nil {
+		return 0, fmt.Errorf("store: adopt seller %d into profile %d: %w", sellerID, profileID, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("store: adopt seller %d into profile %d: %w", sellerID, profileID, err)
+	}
+	return int(n), nil
 }

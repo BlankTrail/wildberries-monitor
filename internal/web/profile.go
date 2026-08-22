@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/BlankTrail/wildberries-monitor/internal/job"
 	"github.com/BlankTrail/wildberries-monitor/internal/phrase"
@@ -96,44 +97,193 @@ func profileForm() string {
 	return b.String()
 }
 
-// profileCard is one resolved profile and what can be done with it next.
+// profileCard is one profile: who they are, what they sell, and the chain that
+// collected it.
+//
+// The order is the order somebody reads in: what is happening now, then the
+// seller, then the goods, then the phrases and the neighbours those goods
+// produced. The controls are at the bottom because they are what you reach for
+// after looking, not before.
 func (s *Server) profileCard(r *http.Request, p store.ProfileRow) string {
-	ctx := r.Context()
-
 	var b strings.Builder
 	b.WriteString(`<section class="bt-card bt-card--inset"><h3>` + html.EscapeString(p.Name) + `</h3>`)
-	b.WriteString(`<div class="bt-form-grid">`)
-
-	seller := "не определён"
-	if p.SellerID != nil {
-		seller = fmt.Sprint(*p.SellerID)
-	}
-	b.WriteString(field("Продавец", `<div class="bt-figure">`+html.EscapeString(seller)+`</div>`,
-		"Идентификатор продавца, которому принадлежит разобранный товар."))
-
-	products, err := s.Store.ProfileItems(ctx, p.ID, store.ProfileProduct)
-	if err != nil {
-		return b.String() + `<div class="bt-alert bt-alert--error">` + html.EscapeString(err.Error()) + `</div></section>`
-	}
-	b.WriteString(field("Товаров в профиле", fmt.Sprintf(`<div class="bt-figure">%d</div>`, len(products)),
-		"Пока это только разобранный товар. Витрина продавца собирается заданием — кнопкой ниже."))
-	b.WriteString(field("Что вставили", `<div class="bt-mono bt-cell-wrap">`+html.EscapeString(p.SourceInput)+`</div>`, ""))
-	b.WriteString(`</div>`)
-
+	b.WriteString(s.chainState(r, p))
+	b.WriteString(s.sellerCard(r, p))
+	b.WriteString(s.storefrontTable(r, p))
 	b.WriteString(s.phrasesHTML(r, p))
 	b.WriteString(s.competitorsHTML(r, p))
-
-	// The storefront is a job rather than something this button does itself:
-	// it is an unknown number of requests through a licensed proxy, and the
-	// jobs screen is where a run gets priced, scheduled and watched.
-	if p.SellerID != nil {
-		b.WriteString(`<div class="bt-form-actions">`)
-		b.WriteString(action(fmt.Sprintf("/profile/collect?id=%d", p.ID), "#profile-body", "Собрать весь ассортимент"))
-		b.WriteString(action(fmt.Sprintf("/profile/delete?id=%d", p.ID), "#profile-body", "Удалить профиль"))
-		b.WriteString(`</div>`)
+	b.WriteString(s.profilePlanForm(p))
+	b.WriteString(`<div class="bt-form-actions">`)
+	if p.SellerID != nil && !p.Running() {
+		b.WriteString(action(fmt.Sprintf("/profile/scan?id=%d", p.ID), "#profile-body",
+			profileScanLabel(p)))
 	}
+	b.WriteString(action(fmt.Sprintf("/profile/delete?id=%d", p.ID), "#profile-body", "Удалить профиль"))
+	b.WriteString(`</div>`)
 	b.WriteString(`</section>`)
 	return b.String()
+}
+
+// profileScanLabel is what the button says, which depends on whether there is
+// anything to redo.
+func profileScanLabel(p store.ProfileRow) string {
+	if p.Collected() {
+		return "Пересобрать"
+	}
+	return "Собрать всё"
+}
+
+// stageNames are the chain's steps as a person reads them.
+var stageNames = map[string]string{
+	store.StageResolve: "разбираем ссылку",
+	store.StageCatalog: "собираем ассортимент",
+	store.StagePhrases: "подбираем фразы",
+	store.StageCheck:   "проверяем позиции",
+	store.StageRivals:  "считаем конкурентов",
+}
+
+// chainState is what the collection is doing, or what it last did.
+//
+// The stage rather than a spinner, because the stages take different times for
+// different reasons: «собираем ассортимент» is a walk through a storefront and
+// «проверяем позиции» is one search per phrase, and somebody watching a profile
+// with four hundred candidates deserves to know which of the two they are in.
+func (s *Server) chainState(r *http.Request, p store.ProfileRow) string {
+	switch {
+	case p.Running():
+		name := stageNames[p.Stage]
+		if name == "" {
+			name = p.Stage
+		}
+		out := `<div class="bt-alert bt-alert--neutral">Идёт сбор: ` + html.EscapeString(name) + `.`
+		if p.StageJob != 0 {
+			out += ` Ход — на вкладке «Задачи», задание №` + strconv.FormatInt(p.StageJob, 10) + `.`
+		}
+		out += `</div>`
+		// The live stream of the job this stage is waiting on, so the tab
+		// shows progress rather than asking somebody to go and look.
+		if p.StageJob != 0 {
+			out += runLiveHTML(p.StageJob)
+		}
+		return out
+	case p.Stage == store.StageFailed:
+		return alert("error", "Сбор остановился: "+p.Failure+
+			" Исправьте и нажмите «Собрать всё» ещё раз — уже собранное останется.")
+	case p.Collected():
+		return `<div class="bt-alert bt-alert--success bt-alert--sm">` +
+			html.EscapeString("Собрано "+time.Unix(p.FinishedAt, 0).Local().Format("02.01.2006 15:04")+
+				". Всё, что нужно для сравнения с конкурентами, на месте.") + `</div>`
+	case p.SellerID == nil:
+		return `<div class="bt-alert bt-alert--neutral">` +
+			`Ссылка разбирается — как только станет известен продавец, появится кнопка сбора.</div>`
+	}
+	return `<div class="bt-alert bt-alert--neutral">` +
+		`Продавец известен, данные ещё не собраны. Одна кнопка внизу соберёт всё: ассортимент, ` +
+		`остатки и цены по выбранным регионам, данные о продавце, фразы под каждый товар и ` +
+		`конкурентов, которые стоят рядом.</div>`
+}
+
+// profilePlanForm is what the chain collects and how often it repeats.
+//
+// On this screen rather than on the jobs one, because it is a decision about
+// the profile: a rescan has to ask the same question it was configured with,
+// and reading it back out of a job somebody edited elsewhere would let the
+// answer drift.
+func (s *Server) profilePlanForm(p store.ProfileRow) string {
+	var b strings.Builder
+	b.WriteString(`<h4 class="bt-form-head">Что собирать` +
+		info("Эти настройки — профиля, а не задания: по ним же пойдёт каждый повторный сбор.") +
+		`</h4>`)
+	b.WriteString(`<form class="bt-form" data-post="` +
+		fmt.Sprintf("/profile/plan?id=%d", p.ID) + `" data-target="#profile-body">`)
+
+	b.WriteString(`<div class="bt-form-grid">`)
+	b.WriteString(field("Регионы",
+		`<input class="bt-input bt-input--mono" name="regions" value="`+
+			html.EscapeString(strings.Join(p.Regions, ", "))+`" placeholder="`+profileRegion+`">`,
+		"Коды dest через запятую. Каждый регион — отдельный проход: цены, остатки и места "+
+			"в выдаче у Wildberries свои для каждого. Справочник регионов — на вкладке «Задачи»."))
+	b.WriteString(field("Страниц витрины",
+		fmt.Sprintf(`<input class="bt-input" name="max_pages" type="number" min="1" value="%d">`,
+			orDefault(p.MaxPages, profilePages)),
+		"Витрина кончается сама; это предел на случай, если не кончится."))
+	b.WriteString(field("Фраз на товар",
+		fmt.Sprintf(`<input class="bt-input" name="phrases_per_product" type="number" min="0" value="%d" placeholder="20">`,
+			p.PhrasesPerProduct),
+		"Сколько поисковых фраз выводить из названия одного товара. Пусто или 0 — сколько выйдет."))
+	b.WriteString(field("Товаров для фраз",
+		fmt.Sprintf(`<input class="bt-input" name="phrase_products" type="number" min="0" value="%d" placeholder="все">`,
+			p.PhraseProducts),
+		"С какого числа товаров собирать фразы. Проверка стоит один запрос на фразу, "+
+			"так что у большого ассортимента это и есть главная цена сбора."))
+	b.WriteString(field("Пересобирать",
+		`<input class="bt-input bt-input--mono" name="schedule" value="`+
+			html.EscapeString(p.Schedule)+`" placeholder="every 24h">`,
+		"Пусто — только по кнопке. «every 24h», «every 7d» — сбор повторится сам."))
+	b.WriteString(`</div>`)
+
+	b.WriteString(`<div class="bt-field"><label class="bt-checkbox">` +
+		`<input type="checkbox" name="enabled" value="1"` + checkedIf(p.Enabled) + `> ` +
+		`Расписание включено</label>` +
+		`<span class="bt-form-hint">Профиль можно держать без обновления — данные останутся.</span></div>`)
+
+	b.WriteString(`<h5 class="bt-form-head">Поля</h5>`)
+	b.WriteString(profileFieldChecks(p.Fields))
+	b.WriteString(`<div class="bt-form-actions bt-form-actions--tight">` +
+		`<button class="bt-btn bt-btn--secondary bt-btn--sm" type="submit">Сохранить настройки</button></div>`)
+	b.WriteString(`</form>`)
+	return b.String()
+}
+
+// profileFieldChecks is the field selection, by group.
+//
+// The groups rather than the thirty-eight keys: on this screen the question is
+// «что вообще снимать про свои товары», and a list of every column would make a
+// person answer it thirty-eight times.
+func profileFieldChecks(chosen []string) string {
+	have := map[string]bool{}
+	for _, k := range chosen {
+		have[k] = true
+	}
+	var b strings.Builder
+	b.WriteString(`<div class="bt-checks">`)
+	for _, g := range []wb.FieldGroup{
+		wb.GroupBase, wb.GroupStock, wb.GroupDelivery, wb.GroupContent, wb.GroupReputation,
+	} {
+		fields := wb.FieldsOfGroup(g)
+		if len(fields) == 0 {
+			continue
+		}
+		// A group counts as chosen when its first field is: the form ticks and
+		// unticks whole groups, so the two can only differ if somebody built a
+		// selection on the jobs screen — and then the jobs screen is where it
+		// belongs.
+		on := have[fields[0].Key]
+		var keys []string
+		for _, f := range fields {
+			keys = append(keys, f.Key)
+		}
+		b.WriteString(`<label class="bt-checkbox"><input type="checkbox" name="groups" value="` +
+			html.EscapeString(string(g)) + `"` + checkedIf(on) + `> ` +
+			html.EscapeString(groupLabels[g]) +
+			`<span class="bt-dim"> ` + strconv.Itoa(len(keys)) + `</span></label>`)
+	}
+	b.WriteString(`</div>`)
+	return b.String()
+}
+
+func checkedIf(on bool) string {
+	if on {
+		return " checked"
+	}
+	return ""
+}
+
+func orDefault(v, fallback int) int {
+	if v <= 0 {
+		return fallback
+	}
+	return v
 }
 
 // saveProfile starts the resolution of what somebody pasted.
@@ -185,51 +335,108 @@ func (s *Server) saveProfile(w http.ResponseWriter, r *http.Request) {
 		"Разбираем ссылку. Как только карточка прочитана, профиль появится здесь.")+runLiveHTML(id))
 }
 
-// collectProfile makes the storefront job this profile is about.
-func (s *Server) collectProfile(w http.ResponseWriter, r *http.Request) {
+// scanProfile starts the whole chain — section 4.7 as one act.
+//
+// One button rather than five, and this is the difference it makes: before,
+// somebody who pressed «собрать ассортимент» and stopped had products, no
+// phrases and an empty competitor list that looked exactly like a seller with
+// no competitors. The order is in one place now, in internal/app/onboard.go,
+// and it is the same order whether a person asked or the schedule did.
+func (s *Server) scanProfile(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(r.URL.Query().Get("id"), 10, 64)
 	if err != nil {
 		http.Error(w, "profile: which profile?", http.StatusBadRequest)
 		return
 	}
-	p, err := s.Store.Profile(r.Context(), id)
+	if s.ScanProfile == nil {
+		s.profileFragment(w, r, alert("neutral", "Сбор недоступен в этой сборке."))
+		return
+	}
+	if err := s.ScanProfile(r.Context(), id); err != nil {
+		s.profileFragment(w, r, alert("error", err.Error()))
+		return
+	}
+	s.profileFragment(w, r, alert("success",
+		"Сбор запущен. Он идёт этапами — ассортимент, фразы, позиции, конкуренты — "+
+			"и эта вкладка показывает, на каком он сейчас."))
+}
+
+// saveProfilePlan writes what the chain collects and how often.
+func (s *Server) saveProfilePlan(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.URL.Query().Get("id"), 10, 64)
+	if err != nil {
+		http.Error(w, "profile: which profile?", http.StatusBadRequest)
+		return
+	}
+	if err := parseForm(r); err != nil {
+		http.Error(w, "profile: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	ctx := r.Context()
+	p, err := s.Store.Profile(ctx, id)
 	if err != nil {
 		http.Error(w, "profile: "+err.Error(), http.StatusNotFound)
 		return
 	}
-	if p.SellerID == nil {
-		s.profileFragment(w, r, alert("error", "У профиля нет продавца — собирать нечего."))
+
+	regions := splitList(r.PostFormValue("regions"))
+	if len(regions) == 0 {
+		// Refused rather than defaulted: every reading in this product is
+		// regional, and a profile collected for a region nobody chose is one
+		// whose prices belong to somewhere the user never named.
+		s.profileFragment(w, r, alert("error",
+			"Не указан ни один регион. Соберите его на вкладке «Задачи» — там есть конструктор."))
 		return
 	}
+	fields := fieldsOfGroups(r.PostForm["groups"])
+	if len(fields) == 0 {
+		s.profileFragment(w, r, alert("error", "Не выбрано ни одной группы полей."))
+		return
+	}
+	pages, _ := strconv.Atoi(strings.TrimSpace(r.PostFormValue("max_pages")))
+	perProduct, _ := strconv.Atoi(strings.TrimSpace(r.PostFormValue("phrases_per_product")))
+	phraseProducts, _ := strconv.Atoi(strings.TrimSpace(r.PostFormValue("phrase_products")))
 
-	// Saved, not started: a storefront is an unknown number of pages, and the
-	// jobs screen prices it, schedules it and shows what it will cost before
-	// anybody spends a request.
-	//
-	// The base group is ticked and nothing else, for the same reason: the
-	// free fields ride on the pages this walk pays for regardless, and
-	// anything beyond them is a decision with a price that belongs on the
-	// screen where the price is shown.
-
-	jobID, err := job.Save(r.Context(), s.Store, job.Job{
-		Name:       "ассортимент: " + p.Name,
-		Kind:       job.KindSeller,
-		SupplierID: *p.SellerID,
-		Regions:    []string{profileRegion},
-		AppType:    1,
-		MaxPages:   profilePages,
-		Threads:    4,
-		Fields:     baseFields(),
-	})
-	if err != nil {
+	p.Regions, p.Fields, p.MaxPages = regions, fields, pages
+	p.PhrasesPerProduct, p.PhraseProducts = perProduct, phraseProducts
+	p.Schedule = strings.TrimSpace(r.PostFormValue("schedule"))
+	p.Enabled = r.PostFormValue("enabled") != ""
+	if p.Schedule != "" {
+		if _, err := job.ParseSchedule(p.Schedule); err != nil {
+			s.profileFragment(w, r, alert("error", "Расписание не разобрать: "+err.Error()))
+			return
+		}
+	}
+	if err := s.Store.SaveProfilePlan(ctx, p); err != nil {
 		s.profileFragment(w, r, alert("error", err.Error()))
 		return
 	}
-	s.profileFragment(w, r, alert("success", fmt.Sprintf(
-		"Задание на витрину продавца создано (№%d). Отметьте, что снимать, и запустите его на вкладке «Задачи».", jobID)))
+	s.profileFragment(w, r, alert("success", "Настройки профиля сохранены."))
 }
 
-// deleteProfile removes one.
+// splitList reads a comma-separated field.
+func splitList(s string) []string {
+	var out []string
+	for _, part := range strings.Split(s, ",") {
+		if part = strings.TrimSpace(part); part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
+// fieldsOfGroups turns the ticked groups into the field keys they hold.
+func fieldsOfGroups(groups []string) []string {
+	var out []string
+	for _, g := range groups {
+		for _, f := range wb.FieldsOfGroup(wb.FieldGroup(strings.TrimSpace(g))) {
+			out = append(out, f.Key)
+		}
+	}
+	return out
+}
+
+// deleteProfile removes one.// deleteProfile removes one.
 func (s *Server) deleteProfile(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(r.URL.Query().Get("id"), 10, 64)
 	if err != nil {

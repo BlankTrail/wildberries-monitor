@@ -5,6 +5,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -479,3 +480,56 @@ func (s *Store) SaveBrand(ctx context.Context, b wb.Brand) error {
 	}
 	return nil
 }
+
+// SellerRow is a seller's own record as this program keeps it.
+//
+// Every number is a pointer for the reason SaveSeller writes them that way: a
+// seller who has sold nothing and a seller whose profile did not answer are
+// different facts, and a screen that drew both as «0» would be telling the
+// second one a lie about the first.
+type SellerRow struct {
+	ID               int64
+	Name             string
+	FullName         string
+	Type             string
+	Valuation        *float64
+	FeedbackCount    *int64
+	RegisteredAt     *int64
+	ItemCount        *int64
+	DeliveryDuration *int64
+	IsPremium        bool
+	LoyaltyLevel     int64
+	FirstSeenAt      int64
+	LastSeenAt       int64
+}
+
+// Seller reads one seller's record.
+//
+// The reading half of SaveSeller, which had none: the table has been written
+// to since the signals milestone and never read, so «кто этот продавец» was a
+// question the database could answer and no screen could ask.
+func (s *Store) Seller(ctx context.Context, id int64) (SellerRow, error) {
+	var r SellerRow
+	var premium int64
+	err := s.db.QueryRowContext(ctx, `
+		SELECT id, name, full_name, type, valuation, feedback_count, registered_at,
+		       item_count, delivery_duration, is_premium, loyalty_level,
+		       first_seen_at, last_seen_at
+		  FROM sellers WHERE id = ?`, id).
+		Scan(&r.ID, &r.Name, &r.FullName, &r.Type, &r.Valuation, &r.FeedbackCount,
+			&r.RegisteredAt, &r.ItemCount, &r.DeliveryDuration, &premium, &r.LoyaltyLevel,
+			&r.FirstSeenAt, &r.LastSeenAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return SellerRow{}, ErrNoSeller
+	}
+	if err != nil {
+		return SellerRow{}, fmt.Errorf("store: seller %d: %w", id, err)
+	}
+	r.IsPremium = premium != 0
+	return r, nil
+}
+
+// ErrNoSeller is returned when a seller was asked for and the record has not
+// been collected. Distinct from a failure, because it is the ordinary state of
+// a profile whose first run has not finished.
+var ErrNoSeller = errors.New("store: no seller record")

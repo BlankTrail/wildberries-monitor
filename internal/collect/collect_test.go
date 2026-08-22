@@ -38,6 +38,8 @@ type fakeSite struct {
 	// case the collector must not read as a failure.
 	promotions     []wb.Promotion
 	mainFeeds      []wb.SearchQuery
+	sellers        []int64
+	sellerFail     error
 	productShelves []int64
 	shelfOf        func(nm int64) (wb.ProductShelf, error)
 
@@ -74,6 +76,20 @@ func (f *fakeSite) MainFeedPage(_ context.Context, _ wb.Endpoints, q wb.SearchQu
 		return wb.Envelope{}, f.fail
 	}
 	return wb.Envelope{Products: f.products}, nil
+}
+
+// Seller answers with a record shaped the way a half-successful fetch is: a
+// name from the static file and, unless sellerFail says otherwise, the profile
+// numbers beside it.
+func (f *fakeSite) Seller(_ context.Context, _ wb.Endpoints, id int64) (wb.Seller, error) {
+	f.sellers = append(f.sellers, id)
+	if f.sellerFail != nil {
+		// What the real client does: hands back what it managed to read
+		// alongside the error, because a seller known by name is worth more
+		// than a seller not known at all.
+		return wb.Seller{ID: id, Name: "частично"}, f.sellerFail
+	}
+	return wb.Seller{ID: id, Name: "Продавец", FullName: "ООО Продавец", Type: "ООО"}, nil
 }
 
 func (f *fakeSite) ProductShelf(_ context.Context, _ wb.Endpoints, nm int64) (wb.ProductShelf, error) {
@@ -1059,5 +1075,56 @@ func TestMainFeed_IsFiledOutsideTheSeriesTheDetectorReads(t *testing.T) {
 		if k.Query == store.MainFeedQuery {
 			t.Errorf("место на главной попало в разбор изменений: %+v", k)
 		}
+	}
+}
+
+func TestSeller_ReadsWhoTheSellerIsAndKeepsWhatItGot(t *testing.T) {
+	// Section 4.7's «публичные данные продавца». The table has been written to
+	// since the signals milestone by nothing at all: SaveSeller had no caller,
+	// so «кто этот продавец» was a question the schema could answer and no run
+	// ever asked.
+	site := &fakeSite{}
+	f, st := watching(t, site, job.KindSeller)
+
+	n, err := f.Fetch(t.Context(), job.Item{Key: job.Key{
+		Kind: job.ItemSeller, ID: 4242,
+	}.String()})
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("запись продавца стоила %d запросов, ожидались два", n)
+	}
+	if len(site.sellers) != 1 || site.sellers[0] != 4242 {
+		t.Fatalf("спрошены продавцы %v", site.sellers)
+	}
+	got, err := st.Seller(t.Context(), 4242)
+	if err != nil {
+		t.Fatalf("Seller: %v", err)
+	}
+	if got.Name != "Продавец" || got.FullName != "ООО Продавец" {
+		t.Errorf("запись продавца = %+v", got)
+	}
+}
+
+func TestSeller_APartlyReadRecordIsKeptAndTheFailureReported(t *testing.T) {
+	// The client makes two fetches and hands back what it got alongside the
+	// error. A seller known by name is worth more than a seller not known at
+	// all — and the run still counts the failure, because half a record is not
+	// a success.
+	site := &fakeSite{sellerFail: errors.New("профиль не ответил")}
+	f, st := watching(t, site, job.KindSeller)
+
+	if _, err := f.Fetch(t.Context(), job.Item{Key: job.Key{
+		Kind: job.ItemSeller, ID: 4242,
+	}.String()}); err == nil {
+		t.Error("наполовину прочитанная запись выдана за успех")
+	}
+	got, err := st.Seller(t.Context(), 4242)
+	if err != nil {
+		t.Fatalf("Seller: %v — прочитанная половина потеряна", err)
+	}
+	if got.Name != "частично" {
+		t.Errorf("запись = %+v", got)
 	}
 }

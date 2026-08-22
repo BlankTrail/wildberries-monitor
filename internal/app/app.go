@@ -231,6 +231,10 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 			}
 			return a.Engine.PickupPoint(ctx, id)
 		},
+		// Section 4.7's whole chain for one profile, in the one order there is.
+		ScanProfile: func(ctx context.Context, id int64) error {
+			return a.StartProfileChain(a.lifetime(ctx), id)
+		},
 		// The promotions the site is running, with the preset each one's goods
 		// are filed under. A promotion runs for a fortnight, so this is asked
 		// for far more often than the catalogue directory beside it.
@@ -551,6 +555,11 @@ func (a *App) Tick(ctx context.Context) {
 	// nothing moved a phrase out of «кандидат», so the competitive environment,
 	// which is computed from working phrases alone, was empty by construction.
 	a.gradePhrases(ctx)
+
+	// And section 4.7's chain moves one stage: the storefront, the phrases,
+	// the check, the neighbours. See onboard.go — every link of it existed as
+	// its own button, and nothing said in which order they had to be pressed.
+	a.advanceProfiles(ctx)
 
 	if a.Commands != nil && a.Bot.Token != "" {
 		if _, err := a.Commands.Poll(ctx); err != nil && ctx.Err() == nil {

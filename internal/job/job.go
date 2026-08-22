@@ -226,6 +226,14 @@ type Job struct {
 	Enabled bool
 }
 
+// sellerRecordRequests is what learning who a seller is costs.
+//
+// Two: a static record with the name and the organisational form, and a
+// profile with the rating, the review count and the registration date. Both
+// are always attempted, because a seller with one of them missing is a seller
+// half known rather than an error — see wb.Client.Seller.
+const sellerRecordRequests = 2
+
 // phraseCount is how many phrases the job searches for, from whichever of the
 // two sources it uses. Validate refuses a job that filled in both, so at most
 // one of them is ever non-zero here; typed phrases are checked first because
@@ -483,7 +491,12 @@ func (j Job) Estimate(items int) Estimate {
 	case KindCatalog:
 		// One node, so no phrase multiplier: pages by regions and nothing else.
 		e.Requests += pages * regions
-	case KindSeller, KindBrand:
+	case KindSeller:
+		// The storefront's pages, plus the seller's own record. That record is
+		// two requests — a static file and a profile — and it is asked once for
+		// the whole job rather than once per region.
+		e.Requests += pages*regions + sellerRecordRequests
+	case KindBrand:
 		e.Requests += pages * regions
 	case KindArticles:
 		// No walk: the list is the enumeration.

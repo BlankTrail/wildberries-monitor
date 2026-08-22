@@ -116,6 +116,13 @@ type Server struct {
 	// far more often than the catalogue directory beside it.
 	Promotions func(ctx context.Context) (saved, missed int, err error)
 
+	// ScanProfile runs spec section 4.7's whole chain for one profile:
+	// the storefront and the seller's own record, then the phrases derived
+	// from what came back, then the positions that grade them, then the
+	// competitors those positions reveal. One call, because the order matters
+	// and a screen with five buttons on it does not carry an order.
+	ScanProfile func(ctx context.Context, id int64) error
+
 	// PickupDirectory reads the site's whole directory of delivery points and
 	// stores it, returning how many settlements and how many points. One
 	// request for the country — see spec section 4.5's picker.
@@ -263,10 +270,11 @@ func (s *Server) Handler() http.Handler {
 
 	mux.Handle("GET /profile", s.auth(http.HandlerFunc(s.profilePage)))
 	mux.Handle("POST /profile", s.auth(http.HandlerFunc(s.saveProfile)))
-	mux.Handle("POST /profile/collect", s.auth(http.HandlerFunc(s.collectProfile)))
 	mux.Handle("POST /profile/delete", s.auth(http.HandlerFunc(s.deleteProfile)))
 	mux.Handle("POST /profile/phrases", s.auth(http.HandlerFunc(s.makePhrases)))
 	mux.Handle("POST /profile/phrases/check", s.auth(http.HandlerFunc(s.checkPhrases)))
+	mux.Handle("POST /profile/scan", s.auth(http.HandlerFunc(s.scanProfile)))
+	mux.Handle("POST /profile/plan", s.auth(http.HandlerFunc(s.saveProfilePlan)))
 	mux.Handle("POST /profile/phrases/top", s.auth(http.HandlerFunc(s.setPhrasesTopN)))
 	mux.Handle("POST /profile/phrases/delete", s.auth(http.HandlerFunc(s.dropPhrase)))
 	mux.Handle("POST /profile/phrases/collect", s.auth(http.HandlerFunc(s.collectPhrasePages)))

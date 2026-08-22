@@ -32,6 +32,7 @@ const (
 	ItemShelf   = "shelf"   // the recommendation row under one product
 	ItemPromo   = "promo"   // one page of one promotion's goods
 	ItemMain    = "main"    // one page of the front page's feed
+	ItemSeller  = "seller"  // the seller's own record: who they are, not what they sell
 )
 
 // keySep separates a key's parts.
@@ -75,6 +76,10 @@ func (k Key) String() string {
 		// its id: the preset is a parameter the site can renumber, and a resumed
 		// run has to match on what the promotion is.
 		return strings.Join([]string{ItemPromo, strconv.FormatInt(k.ID, 10), k.Dest, strconv.Itoa(k.AppType), strconv.Itoa(k.Page)}, keySep)
+	case ItemSeller:
+		// No region and no page: a seller's own record is one document about a
+		// company, and it does not change with where the reader is standing.
+		return strings.Join([]string{ItemSeller, strconv.FormatInt(k.ID, 10)}, keySep)
 	case ItemMain:
 		// No id: there is one front page. The region and the audience are the
 		// whole of what distinguishes two readings of it.
@@ -134,6 +139,16 @@ func ParseKey(s string) (Key, error) {
 			return Key{}, fmt.Errorf("job: page key %q: page %q", s, parts[4])
 		}
 		k.Page = page
+	case ItemSeller:
+		if len(parts) != 2 {
+			return Key{}, fmt.Errorf("job: seller key %q has %d parts, want 2", s, len(parts))
+		}
+		id, err := strconv.ParseInt(parts[1], 10, 64)
+		if err != nil {
+			return Key{}, fmt.Errorf("job: seller key %q: id %q", s, parts[1])
+		}
+		k.ID = id
+
 	case ItemProfile, ItemShelf:
 		if len(parts) != 2 {
 			return Key{}, fmt.Errorf("job: %s key %q has %d parts, want 2", k.Kind, s, len(parts))
@@ -233,6 +248,17 @@ func (StaticPlanner) Plan(j Job) ([]Item, error) {
 		return out, nil
 	}
 
+	// The seller's own record, planned once and outside the region loop: it is
+	// one document about a company, it does not change with the region, and a
+	// job over three regions that read it three times would spend two requests
+	// to learn the same name.
+	var out []Item
+	if j.Kind == KindSeller && j.SupplierID > 0 {
+		out = append(out, Item{Kind: ItemSeller, Key: Key{
+			Kind: ItemSeller, ID: j.SupplierID,
+		}.String()})
+	}
+
 	regions := nonEmpty(j.Regions)
 	phrases := nonEmpty(j.Phrases)
 	for _, p := range phrases {
@@ -246,7 +272,6 @@ func (StaticPlanner) Plan(j Job) ([]Item, error) {
 		}
 	}
 
-	var out []Item
 	for _, dest := range regions {
 		switch j.Kind {
 		case KindPhrase, KindPositions:
