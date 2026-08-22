@@ -33,6 +33,7 @@ import (
 	"github.com/BlankTrail/wildberries-monitor/blanktrail"
 	"github.com/BlankTrail/wildberries-monitor/internal/events"
 	"github.com/BlankTrail/wildberries-monitor/internal/store"
+	"github.com/BlankTrail/wildberries-monitor/wb"
 )
 
 //go:embed templates/*.html
@@ -102,6 +103,12 @@ type Server struct {
 	// fetch belongs to wb and the wiring to app, and this package's tests must
 	// not need the live CDN to render a picker.
 	Categories func(ctx context.Context) (int, error)
+
+	// PickupPoint reads one of the site's delivery points, which is how a
+	// region gets a name: the point carries the address and the dest code
+	// together. A field for the same reason the rest are — this package's
+	// tests must not need a live Wildberries to render a directory.
+	PickupPoint func(ctx context.Context, id int64) (wb.PickupPoint, error)
 
 	CheckTelegram func(ctx context.Context, token string) (username string, err error)
 	// TelegramRoute names the rung currently in use, for the settings screen.
@@ -271,6 +278,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /jobs", s.auth(http.HandlerFunc(s.saveJobHandler)))
 	mux.Handle("POST /jobs/estimate", s.auth(http.HandlerFunc(s.estimateHandler)))
 	mux.Handle("POST /jobs/categories", s.auth(http.HandlerFunc(s.refreshCategories)))
+	mux.Handle("POST /regions", s.auth(http.HandlerFunc(s.addRegion)))
+	mux.Handle("POST /regions/delete", s.auth(http.HandlerFunc(s.deleteRegion)))
 	mux.Handle("POST /jobs/phrases", s.auth(http.HandlerFunc(s.uploadPhrases)))
 	mux.Handle("GET /jobs/detail", s.auth(http.HandlerFunc(s.jobDetail)))
 	mux.Handle("POST /jobs/run", s.auth(http.HandlerFunc(s.runJobHandler)))

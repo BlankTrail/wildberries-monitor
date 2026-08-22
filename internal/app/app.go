@@ -218,6 +218,16 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 			}
 			return a.Store.SaveCategories(ctx, tree)
 		},
+		// One of the site's delivery points, which is how a region gets a name:
+		// the point carries its address and the dest code the site prices with.
+		// Wired here because it costs a proxy port, and the engine is the one
+		// place in this program that decides to spend one.
+		PickupPoint: func(ctx context.Context, id int64) (wb.PickupPoint, error) {
+			if a.Engine == nil {
+				return wb.PickupPoint{}, errors.New("сбор не собран в этой сборке")
+			}
+			return a.Engine.PickupPoint(ctx, id)
+		},
 		CheckBlankTrail: func(ctx context.Context, url, apiKey string) error {
 			client, err := blanktrail.NewClient(url, apiKey)
 			if err != nil {

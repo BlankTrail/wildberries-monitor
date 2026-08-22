@@ -109,7 +109,11 @@ func (s *Server) jobsHTML(r *http.Request) (string, error) {
 	// Between the list and the constructor: the details of a job are about the
 	// row somebody just clicked, and a region at the bottom would put the
 	// answer off the screen the question was asked from.
-	return s.jobListHTML(list) + `<div id="job-detail"></div>` + constructor, nil
+	// The region directory sits after the constructor rather than inside it:
+	// a form nested in a form is not HTML, and this is the screen where
+	// somebody first meets a bare dest code and wonders what it is.
+	return s.jobListHTML(list) + `<div id="job-detail"></div>` + constructor +
+		`<section class="bt-card">` + s.regionsSection(r) + `</section>`, nil
 }
 
 // jobsFragment re-renders the screen after an action, without the page around
@@ -378,7 +382,7 @@ func (s *Server) constructorHTML(r *http.Request) (string, error) {
 	b.WriteString(`<h3 class="bt-form-head">Где смотреть</h3>`)
 	// The regions across the whole width: it is a list to tick, and squeezed
 	// into a third of the row every line of it wraps.
-	b.WriteString(field("Регионы", s.regionControl(r.Context()),
+	b.WriteString(field("Регионы", s.regionControl(r),
 		"Цена, остаток и место в выдаче — все региональные, поэтому регион обязателен. Строка внизу — то, что сохранится."))
 	b.WriteString(`<div class="bt-form-grid">`)
 	b.WriteString(field("Аудитория", `<input class="bt-input" name="app_type" type="number" value="1" data-estimate>`,
@@ -1127,7 +1131,9 @@ func scheduleControl() string {
 // its data came back with. A list of codes typed from memory would be worse
 // than none, because a wrong dest does not fail: it quietly returns another
 // city's prices, and every number after that is about somewhere else.
-func (s *Server) regionControl(ctx context.Context) string {
+func (s *Server) regionControl(r *http.Request) string {
+	ctx := r.Context()
+	names := s.regionNames(r)
 	const field = `<input class="bt-input bt-input--mono" id="job-regions" name="regions" value="-1257786" data-estimate>`
 
 	dests, err := s.Store.Dests(ctx)
@@ -1158,7 +1164,8 @@ func (s *Server) regionControl(ctx context.Context) string {
 			}
 			fmt.Fprintf(&rows,
 				`<label class="bt-checkbox"><input type="checkbox" value="%s"> <span class="bt-mono">%s</span> %s</label>`,
-				html.EscapeString(d.Code), html.EscapeString(d.Code), html.EscapeString(destUseText(d)))
+				html.EscapeString(d.Code), html.EscapeString(d.Code),
+				html.EscapeString(destUseLabel(names, d)))
 		}
 		if rows.Len() == 0 {
 			continue

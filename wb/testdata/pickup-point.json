@@ -1,0 +1,18 @@
+{
+ "resultState": 0,
+ "value": {
+  "isActive": true,
+  "country": "ru",
+  "address": "Казань, Улица Бехтерева 9а",
+  "coordinates": [55.799722, 49.118775],
+  "rate": 5,
+  "fittingRooms": 2,
+  "radius": 200,
+  "id": "50154728",
+  "typePoint": 8,
+  "dest": -2133462,
+  "dest3": -367666,
+  "sign": "",
+  "props": 0
+ }
+}

@@ -96,6 +96,15 @@ type Endpoints struct {
 	// report success.
 	BrandCatalog string `yaml:"brand_catalog"`
 
+	// PickupPoint is one delivery point's own record: its address and the
+	// region code the site prices with once it is chosen.
+	//
+	// It is how spec section 4.5's «справочник регион → dest» gets built at
+	// all — the site publishes no directory of region codes, and a pickup
+	// point is the one public thing that carries a place and its code
+	// together. {id} is the point's number.
+	PickupPoint string `yaml:"pickup_point"`
+
 	// Categories is the catalogue directory: the whole tree of nodes with the
 	// search query that fills each one. See category.go.
 	//
@@ -132,6 +141,7 @@ func DefaultEndpoints() Endpoints {
 		BrandCatalog:  "https://www.wildberries.ru/__internal/u-catalog/brands/v4/catalog",
 		Duplicates:    "https://www.wildberries.ru/__internal/meta/duplicates/ru/common/v8/search",
 		Shelves:       "https://www.wildberries.ru/__internal/banners/shelfs/search",
+		PickupPoint:   "https://www.wildberries.ru/webapi/spa/poo/{id}/show",
 		Categories:    "https://static-basket-01.wbbasket.ru/vol0/data/main-menu-ru-ru-v3.json",
 	}
 }
@@ -238,6 +248,9 @@ func (e Endpoints) Validate() error {
 	}
 	if strings.TrimSpace(e.Categories) == "" {
 		return errors.New("categories is empty")
+	}
+	if !strings.Contains(e.PickupPoint, "{id}") {
+		return errors.New("pickup_point template is missing the {id} placeholder")
 	}
 	return nil
 }
