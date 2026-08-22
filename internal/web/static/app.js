@@ -318,6 +318,48 @@
       readBack();
     });
 
+    // A region that keeps itself current: fetched once when the page opens
+    // and again every data-live-every seconds. The BlankTrail badge is the
+    // one that needed it — «настроен» is a fact about settings and says
+    // nothing about whether anything is answering, and the badge that could
+    // not tell those apart stayed green while nothing collected.
+    //
+    // Its own content and not #main: this replaces the element it is declared
+    // on, so a poll cannot pull the page out from under whoever is reading it.
+    root.querySelectorAll("[data-live]").forEach((el) => {
+      if (el.dataset.wired) return;
+      el.dataset.wired = "1";
+
+      const refresh = async () => {
+        try {
+          const res = await fetch(el.dataset.live);
+          if (res.ok) el.innerHTML = await res.text();
+        } catch (err) {
+          // The panel itself is unreachable, which the next successful poll
+          // will correct. Overwriting the badge with the fetch's own error
+          // would replace one true statement with a less useful one.
+        }
+      };
+
+      refresh();
+      const every = Number(el.dataset.liveEvery) || 30;
+      // A hidden tab is a tab nobody is reading, and polling one is a request
+      // per tab per interval for an answer nothing displays. The first fetch
+      // above is not skipped that way: a page opened in a background tab would
+      // otherwise keep its first paint until somebody looked at it and then
+      // waited out an interval, which is the stale answer this exists to
+      // replace. Coming back into view asks again, immediately.
+      const tick = () => {
+        if (!document.hidden) refresh();
+      };
+      const timer = setInterval(tick, every * 1000);
+      document.addEventListener("visibilitychange", tick);
+      // A page being restored from the back/forward cache runs neither
+      // DOMContentLoaded nor this, so the timer is stopped rather than left
+      // polling on a page nobody can see.
+      window.addEventListener("pagehide", () => clearInterval(timer));
+    });
+
     // A region the server sent that wants the live stream. Everything below
     // this — the events, the endpoint, the reader — existed already; nothing
     // ever asked for it, so a run said «запущено» and then went quiet until

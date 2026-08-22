@@ -28,9 +28,13 @@
     {{/* The BlankTrail state lives in the header rather than on a screen of
          its own: it is the one fact that explains every other number on the
          page, and a person whose collection stopped should not have to go
-         looking for the reason. */}}
-    <span class="bt-badge {{if .BlankTrailOK}}bt-badge--success{{else}}bt-badge--warning{{end}} bt-badge--soft"
-          title="{{.BlankTrailNote}}">BlankTrail: {{.BlankTrailState}}</span>
+         looking for the reason.
+
+         Painted from settings and then re-asked, because «настроен» and
+         «работает» are different facts and only the second one explains an
+         empty results screen. The round trip is not something to make a page
+         load wait for, so the page loads and the badge catches up. */}}
+    <span id="blanktrail-state" data-live="/blanktrail/state" data-live-every="20">{{.BlankTrail}}</span>
 
     <button class="bt-btn bt-btn--ghost bt-btn--sm" data-open-settings>Настройки</button>
   </div>

@@ -229,6 +229,7 @@ func (s *Server) Handler() http.Handler {
 	// caller there is, while its test posted to it and passed.
 	mux.Handle("GET /settings/check", s.auth(http.HandlerFunc(s.checkSettings)))
 	mux.Handle("GET /settings/telegram", s.auth(http.HandlerFunc(s.checkTelegram)))
+	mux.Handle("GET /blanktrail/state", s.auth(http.HandlerFunc(s.blankTrailLive)))
 
 	mux.Handle("GET /profile", s.auth(http.HandlerFunc(s.profilePage)))
 	mux.Handle("POST /profile", s.auth(http.HandlerFunc(s.saveProfile)))
@@ -320,14 +321,15 @@ func (s *Server) auth(next http.Handler) http.Handler {
 
 // page is what the layout template is given.
 type page struct {
-	Title           string
-	Body            template.HTML
-	Tabs            []Tab
-	BlankTrailOK    bool
-	BlankTrailState string
-	BlankTrailNote  string
-	SourceURL       string
-	FollowRun       string
+	Title string
+	Body  template.HTML
+	Tabs  []Tab
+	// BlankTrail is the header badge, already rendered. Neutral on the first
+	// paint: settings say the integration is configured, and whether anything
+	// answers at that address is what the live check adds.
+	BlankTrail template.HTML
+	SourceURL  string
+	FollowRun  string
 }
 
 // rawHTML marks a string as already-escaped markup.
@@ -354,7 +356,15 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, p page) {
 	}
 	p.SourceURL = SourceURL
 	p.Tabs = s.tabs(r.URL.Path)
-	p.BlankTrailOK, p.BlankTrailState, p.BlankTrailNote = s.blankTrailState(r)
+	// Rendered rather than passed as three fields: the same badge comes back
+	// from /blanktrail/state a moment later, and two spellings of one badge is
+	// how the live one comes to look different from the one it replaces.
+	ok, state, note := s.blankTrailState(r.Context())
+	tone := "warning"
+	if ok {
+		tone = "neutral"
+	}
+	p.BlankTrail = rawHTML(blankTrailBadge(tone, state, note))
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := t.ExecuteTemplate(w, "layout.html", p); err != nil {
@@ -382,20 +392,6 @@ func (s *Server) tabs(current string) []Tab {
 		all[i].Active = all[i].Href == current
 	}
 	return all
-}
-
-// blankTrailState summarises the integration for the header badge.
-func (s *Server) blankTrailState(r *http.Request) (ok bool, state, note string) {
-	url := s.Store.SettingOr(r.Context(), store.SettingBlankTrailURL, store.DefaultBlankTrailURL)
-	key := s.Store.SettingOr(r.Context(), store.SettingBlankTrailAPIKey, "")
-	if key == "" {
-		// The address has a default and the key cannot have one, so the key
-		// is the whole question. Saying «укажите адрес и ключ» over a form
-		// already showing the address is how somebody comes to believe they
-		// filled it in and the panel disagreed.
-		return false, "нет ключа", "Откройте настройки и вставьте ключ API из BlankTrail."
-	}
-	return true, "настроен", url
 }
 
 func (s *Server) now() time.Time {

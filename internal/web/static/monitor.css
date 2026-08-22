@@ -447,6 +447,12 @@ dialog.bt-modal > #settings-body {
   border: 1px solid #bfe5d6;
 }
 
+.bt[data-bt-theme="dashboard"] .bt-badge--soft.bt-badge--error {
+  background: #fdeceb;
+  color: #a11b12;
+  border: 1px solid #f5c6c2;
+}
+
 .bt[data-bt-theme="dashboard"] .bt-badge--soft.bt-badge--accent {
   background: #f3e9fb;
   color: #7b2ff7;
