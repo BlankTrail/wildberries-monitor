@@ -123,6 +123,35 @@ func (s *Server) historyState(r *http.Request) string {
 	return strings.Join(parts, ", ") + "."
 }
 
+// quietFields is spec section 6.3's do-not-disturb window.
+//
+// Whole hours of local time, both ends or neither: a From with no To is
+// somebody halfway through the form, and reading it as «тихо с девяти и до
+// полуночи» would silence a product on a setting nobody finished. Rules marked
+// urgent go out regardless, which is the only thing that mark does.
+func (s *Server) quietFields(r *http.Request) string {
+	ctx := r.Context()
+	var b strings.Builder
+	b.WriteString(`<h4 class="bt-form-head">Тихие часы</h4>`)
+	b.WriteString(`<div class="bt-form-grid">`)
+	for _, f := range []struct{ key, field, label string }{
+		{store.SettingQuietFrom, "quiet_from", "Не беспокоить с"},
+		{store.SettingQuietTo, "quiet_to", "до"},
+	} {
+		b.WriteString(`<div class="bt-field">` +
+			`<label class="bt-label" for="q-` + f.field + `">` + html.EscapeString(f.label) + `, ч</label>` +
+			`<input class="bt-input bt-input--mono" id="q-` + f.field + `" name="` + f.field +
+			`" type="number" min="0" max="23" inputmode="numeric" placeholder="—" value="` +
+			html.EscapeString(s.Store.SettingOr(ctx, f.key, "")) + `">` +
+			`</div>`)
+	}
+	b.WriteString(`</div>`)
+	b.WriteString(`<span class="bt-form-hint">` +
+		`Часы местного времени. Оба пустые — окна нет. ` +
+		`Правила, отмеченные срочными, уходят и в тихие часы; больше эта отметка ничего не делает.</span>`)
+	return b.String()
+}
+
 // megabytes renders a file size the way a person reads one.
 func megabytes(n int64) string {
 	const mb = 1 << 20

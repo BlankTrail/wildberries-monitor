@@ -691,3 +691,21 @@ func TestTargets_TheAddressIsFilledInFromTheSettings(t *testing.T) {
 		t.Errorf("адрес не подставлен из настроек:\n%s", body)
 	}
 }
+
+func TestRules_SaysWhichScopeCannotFireInThisBuild(t *testing.T) {
+	// A snapshot does not record which job collected it — the same product is
+	// legitimately collected by several — so the change detector has no job to
+	// match a rule against and one scoped that way never fires. A scope that
+	// silently never fires reads as «ничего не меняется», which is the one
+	// wrong conclusion a monitor can lead somebody to.
+	srv := newServer(t)
+	body := get(t, srv, "/rules", "correct horse").Body.String()
+
+	if !strings.Contains(body, "не срабатывает") {
+		t.Errorf("охват по заданию предложен молча:\n%s", firstLines(body))
+	}
+	// And it says what to use instead, or the note is only a complaint.
+	if !strings.Contains(body, "фильтр") && !strings.Contains(body, "фильтром") {
+		t.Errorf("не сказано, чем заменить:\n%s", firstLines(body))
+	}
+}

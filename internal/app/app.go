@@ -459,6 +459,14 @@ func (a *App) Tick(ctx context.Context) {
 
 	a.runDue(ctx)
 
+	// After the runs are started and before the queue is looked at again next
+	// round: what a finished run collected becomes changes, changes meet the
+	// rules, and a rule that fires puts a message in the outbox the worker
+	// above will send. See changes.go — until now nothing in this program ever
+	// called the rules engine, so no rule could fire and every rule's log was
+	// empty by construction.
+	a.detectChanges(ctx)
+
 	if a.Commands != nil && a.Bot.Token != "" {
 		if _, err := a.Commands.Poll(ctx); err != nil && ctx.Err() == nil {
 			a.Log.Printf("команды бота: %v", err)

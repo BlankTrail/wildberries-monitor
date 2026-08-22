@@ -65,6 +65,21 @@ const (
 	SettingDailyAfterDays   = "history.daily_after_days"
 	SettingWeeklyAfterDays  = "history.weekly_after_days"
 
+	// SettingQuietFrom and SettingQuietTo are spec section 6.3's do-not-disturb
+	// window, in whole hours of local time. Both or neither: a From with no To
+	// is somebody halfway through the form, and reading it as «тихо с девяти и
+	// до полуночи» would silence a product on a setting nobody finished.
+	SettingQuietFrom = "notify.quiet_from"
+	SettingQuietTo   = "notify.quiet_to"
+
+	// SettingChangesSeenUpTo is how far the change detector has read, as Unix
+	// seconds. Everything newer is what the next pass looks at.
+	//
+	// A watermark rather than a per-run marker: the same product is
+	// legitimately collected by several jobs, two runs that finish together are
+	// one pass, and a run interrupted halfway is picked up by the next one.
+	SettingChangesSeenUpTo = "notify.changes_seen_up_to"
+
 	// SettingLastMaintenance is when the history was last thinned and the file
 	// last rebuilt, as Unix seconds. Kept in settings rather than in a table of
 	// its own: it is one number, it is read once a minute, and a table for it

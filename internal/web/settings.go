@@ -127,6 +127,7 @@ func (s *Server) writeSettingsForm(w http.ResponseWriter, r *http.Request, notic
 </details>`)
 
 	b.WriteString(s.historyFields(r))
+	b.WriteString(s.quietFields(r))
 
 	// Autostart is asked of the operating system, not read back from a
 	// setting: a registry entry or a unit file can be removed by anything, and
@@ -193,6 +194,16 @@ func (s *Server) saveSettings(w http.ResponseWriter, r *http.Request) {
 	for _, f := range historyThresholds {
 		if err := s.Store.SetSetting(ctx, f.key,
 			strings.TrimSpace(r.FormValue(f.field)), store.SettingInt); err != nil {
+			http.Error(w, "settings: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+	for key, field := range map[string]string{
+		store.SettingQuietFrom: "quiet_from",
+		store.SettingQuietTo:   "quiet_to",
+	} {
+		if err := s.Store.SetSetting(ctx, key,
+			strings.TrimSpace(r.FormValue(field)), store.SettingInt); err != nil {
 			http.Error(w, "settings: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
