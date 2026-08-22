@@ -135,6 +135,9 @@ func (f *Fetcher) page(ctx context.Context, key job.Key) (int, error) {
 	if _, err := f.Store.SaveSearchPage(ctx, kept, key.Phrase); err != nil {
 		return requests, fmt.Errorf("collect: saving search %q page %d: %w", key.Phrase, key.Page, err)
 	}
+	if err := f.link(ctx, kept.Products); err != nil {
+		return requests, err
+	}
 
 	extra, err := f.enrich(ctx, kept.Products, key)
 	return requests + extra, err
@@ -156,6 +159,9 @@ func (f *Fetcher) listing(ctx context.Context, key job.Key) (int, error) {
 
 	if _, err := f.Store.SaveSearchPage(ctx, env, ""); err != nil {
 		return requests, fmt.Errorf("collect: saving listing %d page %d: %w", key.ID, key.Page, err)
+	}
+	if err := f.link(ctx, env.Products); err != nil {
+		return requests, err
 	}
 
 	extra, err := f.enrich(ctx, env.Products, key)
@@ -179,10 +185,36 @@ func (f *Fetcher) product(ctx context.Context, key job.Key) (int, error) {
 	if _, err := f.Store.SaveCard(ctx, fetch); err != nil {
 		return requests, fmt.Errorf("collect: saving card %d: %w", key.NmID, err)
 	}
+	if err := f.link(ctx, []wb.Product{fetch.Product}); err != nil {
+		return requests, err
+	}
 	f.publish(ctx, events.ItemScraped, fetch.Card)
 
 	extra, err := f.signals(ctx, fetch.Card.ImtID, key.NmID)
 	return requests + extra, err
+}
+
+// link records that this job collects these products.
+//
+// Written beside the save rather than inside it, because the store's save takes
+// a product and this is a fact about the run: the same product saved by a
+// profile resolution or by a shelf has no job behind it, and a row claiming
+// otherwise would be one no rule can use.
+//
+// A failure here fails the item. The alternative is a rule scoped to this job
+// silently not covering a product the job is plainly collecting — which is the
+// exact defect this table exists to end, reappearing as an intermittent one.
+func (f *Fetcher) link(ctx context.Context, products []wb.Product) error {
+	// No guard on a job of zero here. What «нет задания за этой записью» means
+	// is decided once, in the store — a second guard here would be a second
+	// place deciding it, and the last pair that did that spent a while hiding
+	// each other's mistakes.
+	for _, p := range products {
+		if err := f.Store.LinkJobProduct(ctx, f.Job.ID, p.ID); err != nil {
+			return fmt.Errorf("collect: %w", err)
+		}
+	}
+	return nil
 }
 
 // ads reads the paid placements for one phrase in one region.

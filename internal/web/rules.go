@@ -393,18 +393,10 @@ func ruleForm(targets []store.TargetRow, jobs []store.JobStatus) string {
 		field("Идентификатор продавца", `<input class="bt-input" name="scope_id" type="number" min="1" placeholder="1234567">`,
 			"Номер продавца — то же, что в адресе его витрины."),
 		rules.ScopeSeller))
-	// Named as not working rather than quietly offered: a snapshot does not
-	// record which job collected it — the same product is legitimately
-	// collected by several — so the change detector has no job to match against
-	// and a rule scoped this way never fires. Left on the screen because the
-	// scope is stored and will start working the day a reading carries its job;
-	// said out loud because a rule that silently never fires reads as «ничего не
-	// меняется», which is the one wrong conclusion a monitor can lead somebody
-	// to.
 	b.WriteString(whenAny(
 		field("Задание", jobChooser(jobs),
-			"В этой сборке не срабатывает: снимок не помнит, каким заданием он собран. "+
-				"Тот же охват даётся фильтром по бренду или охватом по продавцу."),
+			"Накроет всё, что собирает это задание — по товарам, которые оно уже приносило. "+
+				"Товар, который собирают несколько заданий, накрывает каждое из них."),
 		rules.ScopeJob))
 
 	var filter strings.Builder

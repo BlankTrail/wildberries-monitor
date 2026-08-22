@@ -13,6 +13,7 @@ package rules
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -69,7 +70,7 @@ func (s Scope) Covers(ev Event) bool {
 	case ScopeSeller:
 		return ev.SupplierID == s.ID
 	case ScopeJob:
-		return ev.JobID == s.ID
+		return slices.Contains(ev.JobIDs, s.ID)
 	case ScopeFilter:
 		f := s.Filter
 		if f.Brand != "" && !strings.EqualFold(f.Brand, ev.Brand) {

@@ -157,12 +157,17 @@ func (a *App) applySeries(ctx context.Context, e *rules.Engine, all []rules.Rule
 	if err != nil {
 		return 0, newest, err
 	}
+	jobs, err := a.Store.JobsOfProduct(ctx, key.NmID)
+	if err != nil {
+		return 0, newest, err
+	}
 
 	fired := 0
 	for _, c := range changes {
 		n, err := e.Apply(ctx, all, rules.Event{
 			Change: c, Now: now,
 			Brand: facts.Brand, SupplierID: facts.SupplierID, SubjectID: facts.SubjectID,
+			JobIDs: jobs,
 		})
 		if err != nil {
 			return fired, newest, err
@@ -200,12 +205,17 @@ func (a *App) applyPlacement(ctx context.Context, e *rules.Engine, all []rules.R
 	if err != nil {
 		return 0, newest, err
 	}
+	jobs, err := a.Store.JobsOfProduct(ctx, key.NmID)
+	if err != nil {
+		return 0, newest, err
+	}
 
 	fired := 0
 	for _, c := range changes {
 		n, err := e.Apply(ctx, all, rules.Event{
 			Change: c,
 			Brand:  facts.Brand, SupplierID: facts.SupplierID, SubjectID: facts.SubjectID,
+			JobIDs: jobs,
 		})
 		if err != nil {
 			return fired, newest, err

@@ -658,3 +658,61 @@ func TestProfile_ResolvesALinkIntoWhoTheUserIs(t *testing.T) {
 		t.Error("разрешённый товар не сохранён")
 	}
 }
+
+func TestSearch_RecordsWhichJobCollectedWhat(t *testing.T) {
+	// A rule scoped to a job asks «что собирает это задание», and until the run
+	// wrote this down nothing could answer it: a snapshot exists only when
+	// something changed, so a product read by two jobs carried whichever of
+	// them happened to catch the move.
+	site := &fakeSite{products: []wb.Product{product(100), product(200)}}
+	f, st := watching(t, site, job.KindPhrase)
+
+	// A real row, because the link is a foreign key on both ends — a test with
+	// an invented id would be testing the database's refusal.
+	id, err := st.SaveJob(t.Context(), store.JobRow{
+		Name: "кроссовки", Type: string(job.KindPhrase),
+		Params: `{"phrases":["кроссовки"]}`, Fields: `["nm_id"]`,
+		Regions: `["-1257786"]`, Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("SaveJob: %v", err)
+	}
+	f.Job.ID = id
+
+	if _, err := f.Fetch(t.Context(), job.Item{Key: job.Key{
+		Kind: job.ItemPage, Phrase: "кроссовки", Dest: "-1257786", AppType: 1, Page: 1,
+	}.String()}); err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+
+	for _, nm := range []int64{100, 200} {
+		jobs, err := st.JobsOfProduct(t.Context(), nm)
+		if err != nil {
+			t.Fatalf("JobsOfProduct: %v", err)
+		}
+		if len(jobs) != 1 || jobs[0] != id {
+			t.Errorf("товар %d: задания = %v, ожидалось [%d]", nm, jobs, id)
+		}
+	}
+}
+
+func TestSearch_ARunWithNoJobBehindItLinksNothing(t *testing.T) {
+	// Every test in this package builds a Fetcher without a job row, and so
+	// does the profile screen's own resolution. A link claiming job nought
+	// collects a product is a row no rule can use and no foreign key can hold —
+	// so the save must go through untouched rather than fail on it.
+	site := &fakeSite{products: []wb.Product{product(100)}}
+	f, st := watching(t, site, job.KindPhrase)
+
+	if _, err := f.Fetch(t.Context(), job.Item{Key: job.Key{
+		Kind: job.ItemPage, Phrase: "кроссовки", Dest: "-1257786", AppType: 1, Page: 1,
+	}.String()}); err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if got := savedIDs(t, st); !got[100] {
+		t.Error("товар не сохранён")
+	}
+	if jobs, _ := st.JobsOfProduct(t.Context(), 100); len(jobs) != 0 {
+		t.Errorf("связь без задания записана: %v", jobs)
+	}
+}

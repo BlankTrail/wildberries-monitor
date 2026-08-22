@@ -335,3 +335,62 @@ func TestReadingOf_ARatingIsRoundedRatherThanTruncated(t *testing.T) {
 		t.Errorf("отсутствующий рейтинг стал %d", *none.Rating)
 	}
 }
+
+func TestDetectChanges_ARuleScopedToAJobFires(t *testing.T) {
+	// The scope the screen offered and nothing could resolve: a rule scoped to
+	// a job never fired, and the person who chose it concluded that nothing
+	// about their products was changing.
+	a := newApp(t)
+	ctx := t.Context()
+
+	jobID := collectible(t, a, "")
+	target, err := a.Store.SaveTarget(ctx, store.TargetRow{
+		Name: "я", Kind: "telegram", Address: "42", Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("SaveTarget: %v", err)
+	}
+	if _, err := rules.Save(ctx, a.Store, rules.Rule{
+		Name:    "по заданию",
+		Kind:    track.PriceChanged,
+		Scope:   rules.Scope{Kind: rules.ScopeJob, ID: jobID},
+		Targets: []int64{target},
+		Enabled: true,
+	}); err != nil {
+		t.Fatalf("rules.Save: %v", err)
+	}
+
+	first := time.Now().Add(-2 * time.Hour)
+	atWatermark(t, a, first.Add(-time.Hour))
+	if _, err := a.Store.SaveProduct(ctx, priced(100, 129900, first), ""); err != nil {
+		t.Fatalf("SaveProduct: %v", err)
+	}
+	if _, err := a.Store.SaveProduct(ctx, priced(100, 99900, first.Add(time.Hour)), ""); err != nil {
+		t.Fatalf("SaveProduct: %v", err)
+	}
+
+	// Nothing yet: the job has not been recorded as collecting this product,
+	// and «всё, что собирает это задание» about a product it does not collect
+	// is a false sentence.
+	a.detectChanges(ctx)
+	if events, _ := a.Store.RecentEvents(ctx, 10); len(events) != 0 {
+		t.Fatalf("правило накрыло товар, которого задание не собирает: %+v", events)
+	}
+
+	if err := a.Store.LinkJobProduct(ctx, jobID, 100); err != nil {
+		t.Fatalf("LinkJobProduct: %v", err)
+	}
+	atWatermark(t, a, first.Add(-time.Hour))
+	a.detectChanges(ctx)
+
+	events, err := a.Store.RecentEvents(ctx, 10)
+	if err != nil {
+		t.Fatalf("RecentEvents: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("сработок %d, ожидалась одна", len(events))
+	}
+	if events[0].SuppressedBy != "" {
+		t.Errorf("сработка подавлена: %q", events[0].SuppressedBy)
+	}
+}

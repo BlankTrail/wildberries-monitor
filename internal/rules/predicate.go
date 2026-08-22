@@ -289,6 +289,11 @@ type Event struct {
 	Brand      string
 	SupplierID int64
 	SubjectID  int64
-	// JobID is which job's run produced the change, for a rule scoped to one.
-	JobID int64
+	// JobIDs are the jobs that collect this product, for a rule scoped to one.
+	//
+	// Several, and that is not a compromise: the same article is legitimately
+	// watched by an article list and turns up in a phrase job's results, and a
+	// rule scoped to either of them covers it. A single id would have to pick
+	// one of the two and would be wrong about the other.
+	JobIDs []int64
 }

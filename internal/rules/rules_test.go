@@ -26,7 +26,7 @@ func priceFall() Event {
 			PriceSale: p(int64(99900)), PriceBase: p(int64(199900)), DiscountPct: p(int64(50)),
 			TotalQuantity: p(int64(4)), Rating: p(int64(475)), Feedbacks: p(int64(311)),
 		},
-		Brand: "BrandCo", SupplierID: 4242, SubjectID: 115, JobID: 9,
+		Brand: "BrandCo", SupplierID: 4242, SubjectID: 115, JobIDs: []int64{9},
 	}
 }
 
@@ -387,5 +387,30 @@ func TestMatches_HonoursTheScopeAndNotOnlyTheKind(t *testing.T) {
 	r.Scope = Scope{Kind: ScopeSeller, ID: 4242}
 	if !r.Matches(priceFall()) {
 		t.Error("a rule scoped to this product's seller did not match")
+	}
+}
+
+func TestScope_AJobCoversAProductAnyOfItsJobsCollects(t *testing.T) {
+	// The same article is legitimately watched by an article list and turns up
+	// in a phrase job's results. A scope that could only hold one job id would
+	// have to pick one of the two and be wrong about the other — and the rule
+	// would silently not fire, which reads as «ничего не меняется».
+	ev := priceFall()
+	ev.JobIDs = []int64{3, 9, 14}
+
+	for _, id := range []int64{3, 9, 14} {
+		if !(Scope{Kind: ScopeJob, ID: id}).Covers(ev) {
+			t.Errorf("задание %d не накрывает товар, который оно собирает", id)
+		}
+	}
+	if (Scope{Kind: ScopeJob, ID: 7}).Covers(ev) {
+		t.Error("задание, которое этот товар не собирает, всё равно его накрыло")
+	}
+	// A product no job collects is covered by no job scope. Nothing to fall
+	// back on: «всё, что собирает это задание» about a product it does not
+	// collect is a false sentence.
+	ev.JobIDs = nil
+	if (Scope{Kind: ScopeJob, ID: 3}).Covers(ev) {
+		t.Error("охват по заданию накрыл товар, которого ни одно задание не собирает")
 	}
 }

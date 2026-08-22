@@ -692,20 +692,23 @@ func TestTargets_TheAddressIsFilledInFromTheSettings(t *testing.T) {
 	}
 }
 
-func TestRules_SaysWhichScopeCannotFireInThisBuild(t *testing.T) {
-	// A snapshot does not record which job collected it — the same product is
-	// legitimately collected by several — so the change detector has no job to
-	// match a rule against and one scoped that way never fires. A scope that
-	// silently never fires reads as «ничего не меняется», which is the one
-	// wrong conclusion a monitor can lead somebody to.
+func TestRules_EveryScopeOnTheScreenCanActuallyFire(t *testing.T) {
+	// The job scope was offered for a while and could not fire: nothing
+	// recorded which job collected a product. It can now — see job_products —
+	// and the screen no longer carries the apology it did while that was true.
+	//
+	// The general rule this pins is the one this project keeps: a control that
+	// silently does nothing is worse than an absent one, because the person
+	// concludes the answer is «ничего не меняется».
 	srv := newServer(t)
 	body := get(t, srv, "/rules", "correct horse").Body.String()
 
-	if !strings.Contains(body, "не срабатывает") {
-		t.Errorf("охват по заданию предложен молча:\n%s", firstLines(body))
+	if strings.Contains(body, "не срабатывает") {
+		t.Errorf("на экране предложен охват, который не работает:\n%s", firstLines(body))
 	}
-	// And it says what to use instead, or the note is only a complaint.
-	if !strings.Contains(body, "фильтр") && !strings.Contains(body, "фильтром") {
-		t.Errorf("не сказано, чем заменить:\n%s", firstLines(body))
+	for _, kind := range scopeOrder() {
+		if !strings.Contains(body, `value="`+string(kind)+`"`) {
+			t.Errorf("охвата %q нет на экране", kind)
+		}
 	}
 }
