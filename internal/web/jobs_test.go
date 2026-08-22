@@ -386,7 +386,7 @@ func TestThousands_MakesABigNumberLookBig(t *testing.T) {
 		{"0", "0"}, {"999", "999"}, {"1000", "1 000"},
 		{"34000", "34 000"}, {"1234567", "1 234 567"},
 	} {
-		n := 0
+		n := int64(0)
 		fmt.Sscanf(c.in, "%d", &n)
 		if got := thousands(n); got != c.want {
 			t.Errorf("thousands(%s) = %q, want %q", c.in, got, c.want)

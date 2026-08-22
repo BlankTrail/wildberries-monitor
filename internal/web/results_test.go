@@ -9,6 +9,7 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"html"
 	"net/http"
 	"strings"
 	"testing"
@@ -84,17 +85,270 @@ func TestResults_ShowsWhatWasCollected(t *testing.T) {
 	}
 }
 
-func TestResults_SaysWhenTheTableIsOnlyAWindow(t *testing.T) {
+func TestResults_SaysWhichRowsOfHowMany(t *testing.T) {
 	// A person who thinks they are looking at everything draws conclusions
-	// from a sample.
-	srv := resultsServer(t, tableRows+5)
+	// from a sample. The table shows a page; the line under it is what says so,
+	// and it says it as the two numbers somebody is actually asking about —
+	// which rows are on the screen, and how many there are.
+	srv := resultsServer(t, resultsPageSize+5)
 	body := get(t, srv, "/results", "correct horse").Body.String()
 
-	if !strings.Contains(body, fmt.Sprintf("первые %d", tableRows)) {
-		t.Errorf("a truncated table does not say so: %q", firstLines(body))
+	if !strings.Contains(body, "Показаны 1–"+itoa(resultsPageSize)) {
+		t.Errorf("таблица не говорит, какие строки показаны: %q", firstLines(body))
 	}
-	if got := strings.Count(body, "<tr>"); got > tableRows+1 {
-		t.Errorf("the table drew %d rows, want at most %d", got, tableRows)
+	if got := strings.Count(body, "<tr>"); got > resultsPageSize+1 {
+		t.Errorf("нарисовано %d строк, ожидалось не больше %d", got, resultsPageSize)
+	}
+	// And there is a way to the rest of them.
+	if !strings.Contains(body, "bt-page") {
+		t.Errorf("страниц больше одной, а перехода на них нет: %q", firstLines(body))
+	}
+}
+
+func TestResults_ThePagerWalksAndKeepsTheConditions(t *testing.T) {
+	// A page of a different question is a page of somebody else's answer, so
+	// changing a condition returns to the first page — and turning the page
+	// must not lose the condition that was in force.
+	total := resultsPageSize*2 + 10
+	srv := resultsServer(t, total)
+
+	second := get(t, srv, "/results/table?page=2", "correct horse").Body.String()
+	if !strings.Contains(second, "Показаны "+itoa(resultsPageSize+1)+"–") {
+		t.Errorf("вторая страница начинается не там: %q", firstLines(second))
+	}
+
+	// The last page is a page and not a rounding: with 210 readings there are
+	// three of them, and the third holds the ten a floor would drop. It also
+	// says how many are on it rather than how many fit on it.
+	last := get(t, srv, "/results/table?page=3", "correct horse").Body.String()
+	if !strings.Contains(last, "Показаны "+itoa(2*resultsPageSize+1)+"–"+itoa(int64(total))) {
+		t.Errorf("последняя страница потеряна или сосчитана как полная: %q", firstLines(last))
+	}
+
+	// A page past the end is bounded rather than answered with an empty screen
+	// that looks like an empty database.
+	far := get(t, srv, "/results/table?page=999", "correct horse").Body.String()
+	if strings.Count(far, "<tr>") <= 1 {
+		t.Errorf("страница за концом отдана пустой: %q", firstLines(far))
+	}
+
+	// And the button that turns the page asks for the page it names, carrying
+	// the condition in force with it. A pager whose every button led back to
+	// page one would look exactly like this one.
+	filtered := get(t, srv, "/results/table?brand=BrandCo", "correct horse").Body.String()
+	href := pageLink(t, filtered, "2")
+	if !strings.Contains(href, "page=2") {
+		t.Errorf("кнопка второй страницы не просит вторую страницу: %q", href)
+	}
+	if !strings.Contains(href, "brand=BrandCo") {
+		t.Errorf("переход на страницу теряет условие: %q", href)
+	}
+}
+
+// pageLink is the address behind the pager button whose label contains mark.
+func pageLink(t *testing.T, body, mark string) string {
+	t.Helper()
+	for _, part := range strings.Split(body, `<button class="bt-page"`)[1:] {
+		end := strings.Index(part, "</button>")
+		if end < 0 || !strings.HasSuffix(part[:end], ">"+mark) {
+			continue
+		}
+		return attr(t, part[:end], "data-get")
+	}
+	t.Fatalf("кнопки страницы %q нет: %q", mark, firstLines(body))
+	return ""
+}
+
+// attr pulls one attribute out of a fragment of markup.
+func attr(t *testing.T, fragment, name string) string {
+	t.Helper()
+	i := strings.Index(fragment, name+`="`)
+	if i < 0 {
+		t.Fatalf("в %q нет атрибута %s", fragment, name)
+	}
+	rest := fragment[i+len(name)+2:]
+	end := strings.Index(rest, `"`)
+	if end < 0 {
+		t.Fatalf("атрибут %s не закрыт: %q", name, fragment)
+	}
+	return html.UnescapeString(rest[:end])
+}
+
+func TestResults_SortingOrdersAndTurnsRound(t *testing.T) {
+	// Three states and not two: the third click gives «как было» back, which is
+	// a thing a person wants and has no other way to ask for.
+	srv := resultsServer(t, 5)
+
+	plain := get(t, srv, "/results/table", "correct horse").Body.String()
+	if strings.Contains(plain, "bt-sort--on") {
+		t.Error("без сортировки колонка помечена как сортирующая")
+	}
+	asc := get(t, srv, "/results/table?sort=nm_id", "correct horse").Body.String()
+	if !strings.Contains(asc, "bt-sort--on") {
+		t.Errorf("сортировка не отмечена на колонке: %q", firstLines(asc))
+	}
+	// A column the store cannot order by is drawn as a heading and not as a
+	// promise about what the next click does.
+	if !strings.Contains(plain, "<th>") {
+		t.Error("несортируемых колонок не осталось — проверять нечего")
+	}
+
+	// The three states, read off the header the arrow is on: nothing asks for
+	// ascending, ascending asks for descending, descending gives «как было»
+	// back. Two states would leave a person no way to unsort a table.
+	if got := sortLink(t, plain, "Артикул"); strings.Contains(got, "desc=") ||
+		!strings.Contains(got, "sort=nm_id") {
+		t.Errorf("первый щелчок просит не по возрастанию: %q", got)
+	}
+	if got := sortLink(t, asc, "Артикул"); !strings.Contains(got, "desc=1") {
+		t.Errorf("второй щелчок не переворачивает: %q", got)
+	}
+	desc := get(t, srv, "/results/table?sort=nm_id&desc=1", "correct horse").Body.String()
+	if got := sortLink(t, desc, "Артикул"); strings.Contains(got, "sort=nm_id") {
+		t.Errorf("третий щелчок не возвращает исходный порядок: %q", got)
+	}
+}
+
+// sortLink is the address behind the heading whose label is name.
+func sortLink(t *testing.T, body, name string) string {
+	t.Helper()
+	for _, part := range strings.Split(body, `<button class="bt-sort`)[1:] {
+		end := strings.Index(part, "</button>")
+		if end < 0 || !strings.Contains(part[:end], ">"+name) {
+			continue
+		}
+		return attr(t, part[:end], "data-get")
+	}
+	t.Fatalf("колонки %q с сортировкой нет: %q", name, firstLines(body))
+	return ""
+}
+
+func TestResults_ACellIsTheWayIntoWhatItSays(t *testing.T) {
+	// «Покажи мне всё этого бренда» is the thought that follows reading one, and
+	// the value is already on the screen. Making the cell the control saves
+	// retyping into a box what the eye is resting on.
+	srv := resultsServer(t, 4)
+	body := get(t, srv, "/results/table", "correct horse").Body.String()
+
+	if !strings.Contains(body, `class="bt-narrow"`) {
+		t.Fatalf("по значению в таблице не сузить: %q", firstLines(body))
+	}
+	href := narrowLink(t, body, "BrandCo")
+	if !strings.Contains(href, "brand=BrandCo") {
+		t.Errorf("щелчок по бренду сужает не по бренду: %q", href)
+	}
+
+	// A seller narrows by their number and not by their name: two sellers may
+	// print the same name and only one of them was clicked.
+	if got := narrowLink(t, body, "ООО Ромашка"); !strings.Contains(got, "supplier_id=4242") {
+		t.Errorf("щелчок по продавцу сужает не по его номеру: %q", got)
+	}
+
+	// And the narrowing it offers is one that works.
+	narrowed := get(t, srv, href, "correct horse").Body.String()
+	if strings.Count(narrowed, "<tr>") <= 1 {
+		t.Errorf("сужение по бренду отдало пустую таблицу: %q", firstLines(narrowed))
+	}
+}
+
+// narrowLink is the address behind the cell whose text is value.
+func narrowLink(t *testing.T, body, value string) string {
+	t.Helper()
+	for _, part := range strings.Split(body, `<button class="bt-narrow"`)[1:] {
+		end := strings.Index(part, "</button>")
+		if end < 0 || !strings.Contains(part[:end], ">"+html.EscapeString(value)) {
+			continue
+		}
+		return attr(t, part[:end], "data-get")
+	}
+	t.Fatalf("ячейки %q, по которой можно сузить, нет: %q", value, firstLines(body))
+	return ""
+}
+
+func TestResults_TheConditionsInForceAreShownAndRemovable(t *testing.T) {
+	// The filter is the qualification currently in force, written out as it
+	// reads. A form with five boxes can say what narrowed the table; only this
+	// can say how to undo it, in the same place.
+	srv := resultsServer(t, 4)
+
+	bare := get(t, srv, "/results/table", "correct horse").Body.String()
+	if strings.Contains(bare, "bt-chip\"") {
+		t.Error("без условий нарисованы условия")
+	}
+	if strings.Contains(bare, "Сбросить всё") {
+		t.Error("сбрасывать нечего, а кнопка есть")
+	}
+
+	filtered := get(t, srv, "/results/table?brand=Acme", "correct horse").Body.String()
+	if !strings.Contains(filtered, "Acme") || !strings.Contains(filtered, "bt-chip") {
+		t.Errorf("условие не показано: %q", firstLines(filtered))
+	}
+	if !strings.Contains(filtered, "Сбросить всё") {
+		t.Error("условие есть, а сбросить его нечем")
+	}
+
+	// Removing a condition returns to the first page. Kept, the page number is
+	// a page of the wider answer nobody asked to start at — usually an empty
+	// one, because the answer that had nine pages now has two.
+	deep := get(t, srv, "/results/table?brand=Acme&page=4", "correct horse").Body.String()
+	i := strings.Index(deep, `<button class="bt-chip"`)
+	if i < 0 {
+		t.Fatalf("условие не показано: %q", firstLines(deep))
+	}
+	if got := attr(t, deep[i:], "data-get"); strings.Contains(got, "page=") {
+		t.Errorf("снятие условия оставляет страницу: %q", got)
+	}
+}
+
+func TestResults_SearchLooksInTheFourThingsAPersonRemembers(t *testing.T) {
+	// A name, a brand, a seller and an article number: the four things
+	// somebody can recall about a product they saw once.
+	srv := resultsServer(t, 4)
+	body := get(t, srv, "/results/table?q=Acme", "correct horse").Body.String()
+	if !strings.Contains(body, "bt-chip") {
+		t.Errorf("поиск не показан условием: %q", firstLines(body))
+	}
+}
+
+func TestResults_SearchingInsideAFilteredViewNarrowsItRatherThanReplacingIt(t *testing.T) {
+	// The box sits above a table that is already qualified. A search that
+	// dropped the qualification would answer a question nobody asked, and the
+	// only sign of it would be more rows than before.
+	srv := resultsServer(t, 4)
+	body := get(t, srv, "/results/table?brand=BrandCo&dest=-1257786", "correct horse").Body.String()
+
+	from := strings.Index(body, `<form class="bt-searchbar"`)
+	if from < 0 {
+		t.Fatalf("строки поиска нет: %q", firstLines(body))
+	}
+	bar := body[from : from+strings.Index(body[from:], "</form>")]
+	for _, want := range []string{
+		`name="brand" value="BrandCo"`,
+		`name="dest" value="-1257786"`,
+	} {
+		if !strings.Contains(bar, want) {
+			t.Errorf("поиск не несёт условие %s: %q", want, bar)
+		}
+	}
+	// The search itself is the field, not a hidden copy of itself.
+	if strings.Contains(bar, `type="hidden" name="q"`) {
+		t.Errorf("поиск продублирован скрытым полем: %q", bar)
+	}
+}
+
+func TestResults_ArrivingOnAFilteredLinkShowsWhatIsFilteringIt(t *testing.T) {
+	// The rest of the conditions live behind a disclosure, which is right for
+	// somebody who came to read a table. It is wrong for somebody handed a link
+	// with a condition already in force: they see a short table and no reason.
+	srv := resultsServer(t, 4)
+
+	bare := get(t, srv, "/results/table", "correct horse").Body.String()
+	if strings.Contains(bare, `<details class="bt-more" open>`) {
+		t.Error("условий нет, а раскрыто")
+	}
+	filtered := get(t, srv, "/results/table?dest=-1257786", "correct horse").Body.String()
+	if !strings.Contains(filtered, `<details class="bt-more" open>`) {
+		t.Errorf("условие в силе, а его не видно: %q", firstLines(filtered))
 	}
 }
 
@@ -292,5 +546,41 @@ func TestSelectionFromQuery_NoChoiceMeansTheWholeCatalogue(t *testing.T) {
 	}
 	if got := selectionFromQuery(map[string][]string{"fields": {"nm_id"}}); len(got) != 1 {
 		t.Errorf("an explicit choice gave %v", got)
+	}
+}
+
+func TestResults_TheRegionListOffersOnlyRegionsWithSomethingInThem(t *testing.T) {
+	// A region is a code nobody remembers, so the box is a list and the list is
+	// named from the directory. What it must not offer is a region nothing was
+	// collected for: choosing it has one outcome, an empty table, and a filter
+	// whose choices include dead ends teaches people not to trust it.
+	srv := resultsServer(t, 3) // seeds readings for -1257786 and nothing else
+	ctx := context.Background()
+	for _, r := range []store.RegionRow{
+		{Dest: -1257786, Name: "Москва"},
+		{Dest: -2133463, Name: "Казань"}, // in the directory, never collected
+	} {
+		if err := srv.Store.SaveRegion(ctx, r); err != nil {
+			t.Fatalf("SaveRegion: %v", err)
+		}
+	}
+
+	body := get(t, srv, "/results/table", "correct horse").Body.String()
+	from := strings.Index(body, `<select class="bt-input" name="dest">`)
+	if from < 0 {
+		t.Fatalf("регион выбирается не списком: %q", firstLines(body))
+	}
+	list := body[from : from+strings.Index(body[from:], "</select>")]
+
+	if !strings.Contains(list, "Москва") {
+		t.Errorf("регион, по которому есть чтения, не предложен: %q", list)
+	}
+	if strings.Contains(list, "Казань") {
+		t.Errorf("предложен регион, по которому ничего не собрано: %q", list)
+	}
+	// And the name is what is offered, not the code somebody would have to
+	// recognise.
+	if !strings.Contains(list, `value="-1257786"`) {
+		t.Errorf("у названия нет кода, который оно означает: %q", list)
 	}
 }

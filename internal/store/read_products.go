@@ -89,8 +89,29 @@ type ProductFilter struct {
 	// overall.
 	Latest bool
 
-	// Limit caps how many rows the stream yields. Zero means no cap.
-	Limit int
+	// Search is free text matched against the words on a product: its name,
+	// its brand, its seller, and its article number. Taken as given — the
+	// screen that collected it from a person is where typing is tidied up, and
+	// two places trimming the same string is one place too many to look when a
+	// search returns nothing.
+	//
+	// One box rather than four, because that is the question people ask —
+	// «покажи мне эти» — and because the four fields it covers are the four a
+	// person can actually remember about a product they saw.
+	Search string
+
+	// Sort is the column to order by, as a field key, and Desc turns it round.
+	// An empty Sort is the stable order the table has always had, which is the
+	// key itself: a table whose rows move between two identical requests is
+	// one nobody can point at.
+	Sort string
+	Desc bool
+
+	// Limit caps how many rows the stream yields, and Offset skips that many
+	// first. Zero limit means no cap; the offset is meaningless without one
+	// and is ignored there, because a page without a size is the whole thing.
+	Limit  int
+	Offset int
 }
 
 // rowScanner is what *sql.Rows and *sql.Row have in common. One scan function
@@ -211,6 +232,24 @@ func productsQuery(f ProductFilter) (string, []any) {
 		where = append(where, "s.app_type = ?")
 		args = append(args, *f.AppType)
 	}
+	if q := f.Search; q != "" {
+		// Four columns and one term, «содержит», folded in every alphabet —
+		// see fold.go for why that is a function of this program's own rather
+		// than LIKE, which folds case for ASCII and leaves «Платье» unfound by
+		// «платье».
+		//
+		// The article number is one of the four so that typing part of one
+		// works the way typing part of a name does: 12605 finds 126050166, and
+		// a person reading a number off a screen rarely reads all nine digits.
+		where = append(where, "("+
+			containsFunc+"(p.name, ?) OR "+
+			containsFunc+"(p.brand, ?) OR "+
+			containsFunc+"(p.supplier_name, ?) OR "+
+			"CAST(p.nm_id AS TEXT) LIKE ?)")
+		// The number keeps LIKE: digits have no case to fold, so SQLite's own
+		// operator is correct here and one fewer thing to explain.
+		args = append(args, q, q, q, "%"+q+"%")
+	}
 	if f.From != 0 {
 		where = append(where, "s.ts >= ?")
 		args = append(args, f.From)
@@ -248,7 +287,7 @@ func productsQuery(f ProductFilter) (string, []any) {
 		// latest among the rows the filter selected.
 		q += "\nWHERE recency = 1"
 	}
-	q += "\nORDER BY nm_id, dest, app_type, ts, snapshot_id"
+	q += "\nORDER BY " + orderBy(f)
 	// LIMIT belongs on this outer half, never pushed into the inner one:
 	// pushed inward it would cap the rows before recency = 1 is applied, and
 	// "the first hundred products" would become "the first hundred snapshots,
@@ -256,6 +295,10 @@ func productsQuery(f ProductFilter) (string, []any) {
 	if f.Limit > 0 {
 		q += "\nLIMIT ?"
 		args = append(args, f.Limit)
+		if f.Offset > 0 {
+			q += " OFFSET ?"
+			args = append(args, f.Offset)
+		}
 	}
 	return q, args
 }
@@ -311,6 +354,81 @@ func streamRows[T any](ctx context.Context, db *sql.DB, what, query string, args
 			yield(zero, fmt.Errorf("store: %s: %w", what, err))
 		}
 	}
+}
+
+// sortable is the columns a table may be ordered by, and the alias each of
+// them is called in the outer query.
+//
+// A whitelist and not a formatted parameter, for the ordinary reason: the sort
+// arrives in a URL, and a query that pasted it in would let a link choose what
+// SQL runs. Keyed on the field's own key, so the header a person clicks and the
+// column it orders by are named the same thing in both halves of the program.
+//
+// What is missing from it is as deliberate: rank, page, the sizes, the
+// warehouses and everything from the card live in other tables and are gathered
+// per row rather than selected, so ordering by them would mean ordering by a
+// column this query does not have.
+var sortable = map[string]string{
+	"ts":             "ts",
+	"nm_id":          "nm_id",
+	"name":           "name",
+	"brand":          "brand",
+	"supplier_id":    "supplier_id",
+	"supplier_name":  "supplier_name",
+	"dest":           "dest",
+	"app_type":       "app_type",
+	"rating":         "rating",
+	"feedbacks":      "feedbacks",
+	"total_quantity": "total_quantity",
+	"price_sale":     "price_sale",
+	"price_base":     "price_base",
+	"discount_pct":   "discount_pct",
+}
+
+// Sortable reports whether a column can be ordered by, so a screen can draw the
+// arrow on the headers that have one and leave the rest alone.
+func Sortable(key string) bool { _, ok := sortable[key]; return ok }
+
+// orderBy is the ORDER BY clause for one filter.
+//
+// The key always ends it, whatever was asked for. Two readings that tie on the
+// sorted column would otherwise come back in whatever order the engine felt
+// like, and a table that reshuffles its ties between two identical requests is
+// one where page two shows a row page one already did.
+func orderBy(f ProductFilter) string {
+	tail := "nm_id, dest, app_type, ts, snapshot_id"
+	col, ok := sortable[f.Sort]
+	if !ok {
+		return tail
+	}
+	dir := " ASC"
+	if f.Desc {
+		dir = " DESC"
+	}
+	// NULLs last in both directions. A price the site never sent is not the
+	// cheapest thing in the shop, and a column of empty cells at the top is a
+	// sort that answered a different question.
+	return col + " IS NULL, " + col + dir + ", " + tail
+}
+
+// CountProducts is how many readings the filter selects.
+//
+// Its own query rather than a count of what streamed, because the stream is
+// capped: the table shows a page and the number under it has to be the whole.
+// The window function is kept for the same reason it is in the stream — with
+// Latest set, «сколько всего» means how many series there are and not how many
+// readings they hold.
+func (s *Store) CountProducts(ctx context.Context, f ProductFilter) (int64, error) {
+	// The page has no bearing on the total.
+	f.Limit, f.Offset, f.Sort = 0, 0, ""
+	inner, args := productsQuery(f)
+
+	var n int64
+	if err := s.db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM ("+inner+")", args...).Scan(&n); err != nil {
+		return 0, fmt.Errorf("store: count products: %w", err)
+	}
+	return n, nil
 }
 
 // Products streams every reading the filter selects, in a stable order.

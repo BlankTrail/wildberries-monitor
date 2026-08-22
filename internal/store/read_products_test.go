@@ -883,3 +883,210 @@ func TestDests_ARegionChosenInThePickerCanBeCollectedFor(t *testing.T) {
 		t.Errorf("незадействованный код показан как используемый: %+v", got)
 	}
 }
+
+func TestProducts_SearchLooksInTheFourThingsAPersonRemembers(t *testing.T) {
+	// A name, a brand, a seller and an article number. The number is matched as
+	// text so that part of one works the way part of a name does: 12605 finds
+	// 126050166, and nobody reads all nine digits off a screen. Case is folded
+	// in every alphabet, which SQLite's own LIKE does only for ASCII — «Платье»
+	// unfound by «платье» is a search box that looks like every other search
+	// box and quietly refuses what people type.
+	s := openTestStore(t)
+	ctx := context.Background()
+	at := time.Unix(1_700_000_000, 0).UTC()
+
+	for _, p := range []wb.Product{
+		{ID: 126050166, Name: "Платье летнее", Brand: "SHIMA", SupplierName: "ООО Ромашка",
+			Dest: "-1257786", AppType: 1, FetchedAt: at,
+			Sizes: []wb.Size{{Name: "M", PriceProduct: ptrTo(int64(100000))}}},
+		{ID: 200, Name: "Куртка зимняя", Brand: "Nord", SupplierName: "ИП Иванов",
+			Dest: "-1257786", AppType: 1, FetchedAt: at,
+			Sizes: []wb.Size{{Name: "M", PriceProduct: ptrTo(int64(500000))}}},
+	} {
+		if _, err := s.SaveProduct(ctx, p, ""); err != nil {
+			t.Fatalf("SaveProduct: %v", err)
+		}
+	}
+
+	for _, c := range []struct {
+		query string
+		want  int64
+	}{
+		{"платье", 126050166},
+		{"SHIMA", 126050166},
+		{"Ромашка", 126050166},
+		{"12605", 126050166},
+		{"куртка", 200},
+	} {
+		got := collectIDs(t, s, ProductFilter{Search: c.query})
+		if len(got) != 1 || got[0] != c.want {
+			t.Errorf("поиск %q дал %v, ожидался %d", c.query, got, c.want)
+		}
+	}
+	if got := collectIDs(t, s, ProductFilter{Search: "щшгнекуп"}); len(got) != 0 {
+		t.Errorf("поиск по бессмыслице дал %v", got)
+	}
+}
+
+func TestProducts_SortOrdersAndKeepsTheEmptiesOutOfTheWay(t *testing.T) {
+	// A price the site never sent is not the cheapest thing in the shop, and a
+	// column of empty cells at the top is a sort that answered a different
+	// question.
+	s := openTestStore(t)
+	ctx := context.Background()
+	at := time.Unix(1_700_000_000, 0).UTC()
+
+	for _, p := range []wb.Product{
+		{ID: 100, Name: "дорогой", Dest: "-1", AppType: 1, FetchedAt: at,
+			Sizes: []wb.Size{{Name: "M", PriceProduct: ptrTo(int64(500000))}}},
+		{ID: 200, Name: "дешёвый", Dest: "-1", AppType: 1, FetchedAt: at,
+			Sizes: []wb.Size{{Name: "M", PriceProduct: ptrTo(int64(100000))}}},
+		{ID: 300, Name: "без цены", Dest: "-1", AppType: 1, FetchedAt: at,
+			Sizes: []wb.Size{{Name: "M"}}},
+	} {
+		if _, err := s.SaveProduct(ctx, p, ""); err != nil {
+			t.Fatalf("SaveProduct: %v", err)
+		}
+	}
+
+	asc := collectIDs(t, s, ProductFilter{Sort: "price_sale"})
+	if len(asc) != 3 || asc[0] != 200 || asc[1] != 100 || asc[2] != 300 {
+		t.Errorf("по возрастанию = %v, ожидалось [200 100 300]", asc)
+	}
+	desc := collectIDs(t, s, ProductFilter{Sort: "price_sale", Desc: true})
+	if len(desc) != 3 || desc[0] != 100 || desc[1] != 200 || desc[2] != 300 {
+		t.Errorf("по убыванию = %v — пустая цена должна остаться в конце", desc)
+	}
+	// A column nothing can be ordered by is ignored rather than pasted into the
+	// query: the sort arrives in a URL.
+	junk := collectIDs(t, s, ProductFilter{Sort: "nm_id; DROP TABLE products"})
+	if len(junk) != 3 {
+		t.Errorf("непонятная сортировка сломала выборку: %v", junk)
+	}
+	if !Sortable("price_sale") || Sortable("nm_id; DROP TABLE products") {
+		t.Error("Sortable отвечает не то, что делает запрос")
+	}
+}
+
+func TestProducts_ThePageIsAWindowAndTheCountIsTheWhole(t *testing.T) {
+	// The table shows a page and the number under it has to be the whole, or
+	// «показаны 1–100 из 100» is what a person reads about two thousand rows.
+	s := openTestStore(t)
+	ctx := context.Background()
+	at := time.Unix(1_700_000_000, 0).UTC()
+	for i := int64(1); i <= 25; i++ {
+		if _, err := s.SaveProduct(ctx, wb.Product{
+			ID: i, Name: "товар", Dest: "-1", AppType: 1, FetchedAt: at,
+			Sizes: []wb.Size{{Name: "M", PriceProduct: ptrTo(i * 1000)}},
+		}, ""); err != nil {
+			t.Fatalf("SaveProduct: %v", err)
+		}
+	}
+
+	total, err := s.CountProducts(ctx, ProductFilter{})
+	if err != nil {
+		t.Fatalf("CountProducts: %v", err)
+	}
+	if total != 25 {
+		t.Fatalf("всего %d, ожидалось 25", total)
+	}
+
+	first := collectIDs(t, s, ProductFilter{Sort: "nm_id", Limit: 10})
+	second := collectIDs(t, s, ProductFilter{Sort: "nm_id", Limit: 10, Offset: 10})
+	third := collectIDs(t, s, ProductFilter{Sort: "nm_id", Limit: 10, Offset: 20})
+	if len(first) != 10 || len(second) != 10 || len(third) != 5 {
+		t.Fatalf("страницы = %d, %d, %d", len(first), len(second), len(third))
+	}
+	seen := map[int64]bool{}
+	for _, page := range [][]int64{first, second, third} {
+		for _, id := range page {
+			if seen[id] {
+				t.Errorf("товар %d встретился на двух страницах", id)
+			}
+			seen[id] = true
+		}
+	}
+	if len(seen) != 25 {
+		t.Errorf("страницы покрыли %d товаров из 25", len(seen))
+	}
+
+	// And the count is about the filter, not about the page.
+	narrowed, err := s.CountProducts(ctx, ProductFilter{NmIDs: []int64{1, 2, 3}, Limit: 1})
+	if err != nil {
+		t.Fatalf("CountProducts: %v", err)
+	}
+	if narrowed != 3 {
+		t.Errorf("счёт с ограничением = %d, ожидалось 3", narrowed)
+	}
+}
+
+// collectIDs drains a filtered stream into the article numbers it yielded.
+func collectIDs(t *testing.T, s *Store, f ProductFilter) []int64 {
+	t.Helper()
+	var out []int64
+	for row, err := range s.Products(context.Background(), f) {
+		if err != nil {
+			t.Fatalf("Products: %v", err)
+		}
+		out = append(out, row.NmID)
+	}
+	return out
+}
+
+func TestProducts_TiesKeepTheirOrderSoAPageDoesNotRepeatARow(t *testing.T) {
+	// Sorting by a column every row shares leaves the engine free to return
+	// them in whatever order it likes, and «whatever it likes» differs between
+	// two queries that differ only by OFFSET. The reader sees a row on page one
+	// and again on page two, and no row at all where it should have been.
+	s := openTestStore(t)
+	ctx := context.Background()
+	base := time.Date(2026, 8, 18, 6, 0, 0, 0, time.UTC)
+	for i := range 12 {
+		if _, err := s.SaveProduct(ctx, wb.Product{
+			ID:    int64(700 + i%4), // four products, three readings each
+			Name:  "Куртка",
+			Brand: "ОдинНаВсех", // the tie
+			Dest:  "-1257786", AppType: 1,
+			FetchedAt: base.Add(time.Duration(i) * time.Hour),
+			Sizes:     []wb.Size{{Name: "M", PriceProduct: ptrTo(int64(100000 + i))}},
+		}, ""); err != nil {
+			t.Fatalf("SaveProduct: %v", err)
+		}
+	}
+
+	page := func(offset int) []ProductRow {
+		var out []ProductRow
+		for row, err := range s.Products(ctx, ProductFilter{
+			Sort: "brand", Limit: 6, Offset: offset,
+		}) {
+			if err != nil {
+				t.Fatalf("Products: %v", err)
+			}
+			out = append(out, row)
+		}
+		return out
+	}
+	first, second := page(0), page(6)
+	if len(first) != 6 || len(second) != 6 {
+		t.Fatalf("страницы вышли по %d и %d строк", len(first), len(second))
+	}
+
+	seen := map[string]bool{}
+	for _, r := range append(append([]ProductRow{}, first...), second...) {
+		key := strconv.FormatInt(r.NmID, 10) + "/" + r.Dest + "/" +
+			strconv.Itoa(r.AppType) + "/" + strconv.FormatInt(r.TS, 10)
+		if seen[key] {
+			t.Fatalf("строка %s попала на обе страницы", key)
+		}
+		seen[key] = true
+	}
+
+	// And the order inside the tie is the documented one — by article, so that
+	// two identical requests answer identically.
+	for i := 1; i < len(first); i++ {
+		if first[i].NmID < first[i-1].NmID {
+			t.Fatalf("внутри равных значений порядок не по артикулу: %d после %d",
+				first[i].NmID, first[i-1].NmID)
+		}
+	}
+}

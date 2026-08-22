@@ -66,20 +66,33 @@ func (s *Server) resultsHTML(r *http.Request) (string, error) {
 		return "", fmt.Errorf("неизвестные поля: %s", strings.Join(unknown, ", "))
 	}
 
+	// The total first: it is what the chips line says, what the pager divides,
+	// and what tells an empty screen apart from an empty database.
+	total, err := s.Store.CountProducts(r.Context(), filter)
+	if err != nil {
+		return "", err
+	}
+	page := pageFrom(q, total)
+
 	var b strings.Builder
 	b.WriteString(`<section id="results-body" class="bt-card"><h2>Результаты</h2>`)
-	b.WriteString(filterForm(q))
+	b.WriteString(s.resultsSearch(r, q, total))
 
-	b.WriteString(`<div class="bt-table-wrap"><table class="bt-table"><thead><tr>`)
+	filter.Limit = resultsPageSize
+	filter.Offset = (page - 1) * resultsPageSize
+	// Read once for the whole table rather than per cell: it is a query, and a
+	// hundred rows would make it a hundred.
+	names := s.regionNames(r)
+
+	b.WriteString(`<div class="bt-table-wrap"><table class="bt-table bt-table--results"><thead><tr>`)
 	for _, c := range cols {
-		b.WriteString(`<th>` + html.EscapeString(c.Name) + `</th>`)
+		b.WriteString(sortHeader(q, c))
 	}
 	b.WriteString(`</tr></thead><tbody>`)
 
-	// The same streaming read the export uses, stopped early. Nothing is
+	// The same streaming read the export uses, one page of it. Nothing is
 	// collected: a filter a user got wrong must cost one screenful, not a
 	// million rows in memory before the first one is drawn.
-	filter.Limit = tableRows
 	shown := 0
 	for row, err := range s.Store.Products(r.Context(), filter) {
 		if err != nil {
@@ -87,27 +100,216 @@ func (s *Server) resultsHTML(r *http.Request) (string, error) {
 		}
 		b.WriteString(`<tr>`)
 		for _, c := range cols {
-			b.WriteString(`<td>` + html.EscapeString(cellText(row, c)) + `</td>`)
+			b.WriteString(resultsCell(q, names, row, c))
 		}
 		b.WriteString(`</tr>`)
 		shown++
 	}
 	b.WriteString(`</tbody></table></div>`)
 
-	switch shown {
-	case 0:
-		b.WriteString(`<div class="bt-alert bt-alert--neutral">Под этот фильтр ничего не собрано.</div>`)
-	case tableRows:
-		// Said plainly rather than implied by a truncated table. A person who
-		// thinks they are looking at everything draws conclusions from a
-		// sample.
-		fmt.Fprintf(&b,
-			`<div class="bt-alert bt-alert--neutral">Показаны первые %d строк. Полностью — выгрузкой.</div>`, tableRows)
+	if shown == 0 {
+		if total == 0 {
+			b.WriteString(`<div class="bt-alert bt-alert--neutral">` +
+				`Под эти условия ничего не собрано. Уберите лишнее из строки выше — ` +
+				`каждое условие снимается щелчком по нему.</div>`)
+		} else {
+			// The page is past the end, which happens when a filter narrows
+			// under somebody standing on page nine.
+			b.WriteString(`<div class="bt-alert bt-alert--neutral">` +
+				`На этой странице пусто — условия сузились. ` +
+				`<button class="bt-linklike" type="button" data-get="` +
+				html.EscapeString(resultsURL(withParam(q, "page", "1"))) +
+				`" data-target="#results-body">К первой странице</button></div>`)
+		}
 	}
-
+	b.WriteString(pager(q, page, total, shown))
 	b.WriteString(s.exportButtons(r, q))
 	b.WriteString(`</section>`)
 	return b.String(), nil
+}
+
+// pageFrom reads which page is being asked for, bounded by how many there are.
+//
+// Bounded rather than trusted: a page number out of a link somebody kept is one
+// the table may no longer have, and an offset past the end is an empty screen
+// that looks like an empty database.
+func pageFrom(q url.Values, total int64) int {
+	page, err := strconv.Atoi(strings.TrimSpace(q.Get("page")))
+	if err != nil || page < 1 {
+		return 1
+	}
+	if last := lastPage(total); page > last {
+		return last
+	}
+	return page
+}
+
+// lastPage is how many pages the total makes, never fewer than one: a table
+// with nothing in it still has a page, and it is the one somebody is looking at.
+func lastPage(total int64) int {
+	if total <= 0 {
+		return 1
+	}
+	return int((total + resultsPageSize - 1) / resultsPageSize)
+}
+
+// sortHeader is one column heading, and the link that orders by it.
+//
+// Only the columns the store can order by get one. A heading that looked
+// clickable and did nothing would be worse than one that does not: the arrow is
+// a promise about what the next click does.
+func sortHeader(q url.Values, c wb.Field) string {
+	name := html.EscapeString(c.Name)
+	if !store.Sortable(c.Key) {
+		return `<th>` + name + `</th>`
+	}
+
+	active := q.Get("sort") == c.Key
+	desc := q.Get("desc") != ""
+	next := withParam(q, "sort", c.Key)
+	arrow := `<span class="bt-sort__mark" aria-hidden="true">↕</span>`
+	class := "bt-sort"
+	switch {
+	case active && !desc:
+		next.Set("desc", "1")
+		arrow = `<span class="bt-sort__mark" aria-hidden="true">↑</span>`
+		class = "bt-sort bt-sort--on"
+	case active && desc:
+		// Third click clears it rather than cycling forever: «как было» is a
+		// state a person wants back and has no other way to ask for.
+		next.Del("sort")
+		next.Del("desc")
+		arrow = `<span class="bt-sort__mark" aria-hidden="true">↓</span>`
+		class = "bt-sort bt-sort--on"
+	default:
+		next.Del("desc")
+	}
+
+	return `<th><button class="` + class + `" type="button" data-get="` +
+		html.EscapeString(resultsURL(next)) + `" data-target="#results-body">` +
+		name + arrow + `</button></th>`
+}
+
+// resultsCell is one cell, and a way into the table where the value is one
+// somebody narrows by.
+//
+// A brand and a seller are the two things a person reads in this table and
+// immediately wants only: «покажи мне всё этого бренда» is the next thought
+// after seeing one. Making the cell the control is what saves them from
+// retyping into a box what is already on the screen in front of them.
+func resultsCell(q url.Values, names map[int64]string, row store.ProductRow, c wb.Field) string {
+	text := cellText(row, c)
+	if text == "" {
+		return `<td></td>`
+	}
+	// What the cell says and what it narrows by are not always the same
+	// string. A region reads as «Казань» and narrows by «-1257786»: the code is
+	// what every reading is filed under and the name is the only half a person
+	// recognises. The export keeps the code, because a spreadsheet column that
+	// changed its values when somebody filled in a directory would be a column
+	// nobody could join on.
+	value := text
+	if c.Key == "dest" {
+		text = regionLabel(names, value)
+	}
+
+	var narrowed url.Values
+	switch c.Key {
+	case "brand":
+		narrowed = withParam(q, "brand", text)
+	case "supplier_name":
+		if row.SupplierID != nil {
+			// By the number, not by the name: two sellers may print the same
+			// name and only one of them is the one that was clicked.
+			narrowed = withParam(q, "supplier_id", strconv.FormatInt(*row.SupplierID, 10))
+		}
+	case "supplier_id":
+		narrowed = withParam(q, "supplier_id", text)
+	case "dest":
+		narrowed = withParam(q, "dest", value)
+	}
+	if narrowed == nil {
+		return `<td>` + html.EscapeString(text) + `</td>`
+	}
+	return `<td><button class="bt-narrow" type="button" data-get="` +
+		html.EscapeString(resultsURL(narrowed)) + `" data-target="#results-body" ` +
+		`title="Показать только это">` + html.EscapeString(text) + `</button></td>`
+}
+
+// pager is the strip under the table.
+//
+// It says which rows are on the screen before it says which page they are on,
+// because «51–100 из 2199» is the sentence somebody is actually reading and
+// «страница 2» is how they got there.
+func pager(q url.Values, page int, total int64, shown int) string {
+	last := lastPage(total)
+	if total == 0 {
+		return ""
+	}
+
+	first := (page-1)*resultsPageSize + 1
+	var b strings.Builder
+	b.WriteString(`<div class="bt-pager">`)
+	b.WriteString(`<span class="bt-pager__range">` + html.EscapeString(fmt.Sprintf(
+		"Показаны %s–%s из %s", thousands(int64(first)),
+		thousands(int64(first+shown-1)), thousands(total))) + `</span>`)
+
+	if last > 1 {
+		b.WriteString(`<div class="bt-pager__pages">`)
+		step := func(to int, label string, on bool) {
+			if !on {
+				b.WriteString(`<span class="bt-page bt-page--off">` + label + `</span>`)
+				return
+			}
+			b.WriteString(`<button class="bt-page" type="button" data-get="` +
+				html.EscapeString(resultsURL(withParam(q, "page", strconv.Itoa(to)))) +
+				`" data-target="#results-body">` + label + `</button>`)
+		}
+		step(page-1, "‹", page > 1)
+		for _, n := range pageNumbers(page, last) {
+			if n == 0 {
+				b.WriteString(`<span class="bt-page bt-page--gap">…</span>`)
+				continue
+			}
+			if n == page {
+				b.WriteString(`<span class="bt-page bt-page--now">` + strconv.Itoa(n) + `</span>`)
+				continue
+			}
+			step(n, strconv.Itoa(n), true)
+		}
+		step(page+1, "›", page < last)
+		b.WriteString(`</div>`)
+	}
+	b.WriteString(`</div>`)
+	return b.String()
+}
+
+// pageNumbers is the strip's own arithmetic: the first, the last, a window
+// around where somebody is, and a gap for what is left out.
+//
+// Zero stands for the gap. A strip that printed every page of a two-hundred
+// page table would be longer than the table.
+func pageNumbers(page, last int) []int {
+	var out []int
+	push := func(n int) {
+		if len(out) > 0 && out[len(out)-1] == n {
+			return
+		}
+		if len(out) > 0 && n-out[len(out)-1] > 1 {
+			out = append(out, 0)
+		}
+		out = append(out, n)
+	}
+	push(1)
+	for n := page - pagesShown; n <= page+pagesShown; n++ {
+		if n > 1 && n < last {
+			push(n)
+		}
+	}
+	if last > 1 {
+		push(last)
+	}
+	return out
 }
 
 // cellText renders one value the way the table shows it.
@@ -148,37 +350,6 @@ func cellText(row store.ProductRow, col wb.Field) string {
 	return text
 }
 
-// filterForm is the narrowing a person actually does.
-func filterForm(q url.Values) string {
-	var b strings.Builder
-	b.WriteString(`<form class="bt-fieldset bt-form" data-get-form="/results/table" data-target="#results-body">`)
-	// The five of them side by side. Stacked, the filter was half a screen of
-	// empty boxes above the thing somebody came to look at.
-	b.WriteString(`<div class="bt-form-grid">`)
-	b.WriteString(field("Артикулы", `<input class="bt-input bt-input--mono" name="nm_ids" value="`+
-		html.EscapeString(q.Get("nm_ids"))+`" placeholder="через запятую">`, ""))
-	b.WriteString(field("Бренд", `<input class="bt-input" name="brand" value="`+
-		html.EscapeString(q.Get("brand"))+`">`, ""))
-	b.WriteString(field("Регион", `<input class="bt-input bt-input--mono" name="dest" value="`+
-		html.EscapeString(q.Get("dest"))+`">`, ""))
-	b.WriteString(field("С даты", `<input class="bt-input" name="from" type="date" value="`+
-		html.EscapeString(q.Get("from"))+`">`, ""))
-	b.WriteString(field("По дату", `<input class="bt-input" name="to" type="date" value="`+
-		html.EscapeString(q.Get("to"))+`">`, ""))
-
-	b.WriteString(`</div>`)
-
-	checked := ""
-	if q.Get("latest") != "" {
-		checked = " checked"
-	}
-	b.WriteString(`<label class="bt-checkbox"><input type="checkbox" name="latest" value="1"` + checked +
-		`> Только последнее чтение каждого товара</label>`)
-	b.WriteString(`<div class="bt-form-actions"><button class="bt-btn bt-btn--primary" type="submit">Показать</button></div>`)
-	b.WriteString(`</form>`)
-	return b.String()
-}
-
 // exportFormats are spec section 5.3's destinations, in the order the buttons
 // appear: the four files a person opens, then the three a program loads.
 var exportFormats = []struct{ key, label string }{
@@ -199,7 +370,8 @@ func (s *Server) exportButtons(r *http.Request, q url.Values) string {
 	var b strings.Builder
 	// A row, not a column: a .bt-field stacks what it holds, and five stacked
 	// links became five full-width bars where a row of five choices belongs.
-	b.WriteString(`<div class="bt-field bt-field--row"><span class="bt-label">Выгрузить</span>`)
+	b.WriteString(`<div class="bt-field bt-field--row"><span class="bt-label">Выгрузить` +
+		info("Выгружается всё, что подходит под условия, а не страница на экране.") + `</span>`)
 	for _, f := range exportFormats {
 		sep := "&"
 		if q.Encode() == "" {
@@ -375,6 +547,9 @@ func filterFromQuery(q url.Values) store.ProductFilter {
 		Brand:  strings.TrimSpace(q.Get("brand")),
 		Dest:   strings.TrimSpace(q.Get("dest")),
 		Latest: q.Get("latest") != "",
+		Search: strings.TrimSpace(q.Get("q")),
+		Sort:   strings.TrimSpace(q.Get("sort")),
+		Desc:   q.Get("desc") != "",
 	}
 	for _, s := range splitCommas(q.Get("nm_ids")) {
 		if n, err := strconv.ParseInt(s, 10, 64); err == nil {

@@ -587,7 +587,7 @@ func estimateHTML(j job.Job) string {
 	return fmt.Sprintf(`<div class="bt-alert bt-alert--neutral">
 	  <strong>%d полей, %s%s запросов, примерно %s.</strong>%s
 	</div>`,
-		len(j.Fields), about, thousands(e.Requests), humanDuration(e.Duration), note)
+		len(j.Fields), about, thousands(int64(e.Requests)), humanDuration(e.Duration), note)
 }
 
 // assumedItems is how many products the estimate should assume.
@@ -918,8 +918,8 @@ func atoi64(s string) int64 {
 // approves a run on.
 const groupSep = " "
 
-func thousands(n int) string {
-	s := strconv.Itoa(n)
+func thousands(n int64) string {
+	s := strconv.FormatInt(n, 10)
 	if len(s) <= 3 {
 		return s
 	}
@@ -1210,13 +1210,15 @@ func (s *Server) regionControl(r *http.Request) string {
 
 // destUseText says why a code is on the list.
 func destUseText(d store.DestUse) string {
+	jobs := countOf(int64(d.Jobs), "задание", "задания", "заданий")
+	readings := countOf(d.Readings, "чтение", "чтения", "чтений")
 	switch {
 	case d.Jobs > 0 && d.Readings > 0:
-		return fmt.Sprintf("— заданий %d, чтений %d", d.Jobs, d.Readings)
+		return fmt.Sprintf("— %s, %s", jobs, readings)
 	case d.Jobs > 0:
-		return fmt.Sprintf("— заданий %d, ещё ничего не собрано", d.Jobs)
+		return fmt.Sprintf("— %s, ещё ничего не собрано", jobs)
 	default:
-		return fmt.Sprintf("— чтений %d", d.Readings)
+		return fmt.Sprintf("— %s", readings)
 	}
 }
 

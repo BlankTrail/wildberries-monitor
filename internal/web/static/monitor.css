@@ -1083,3 +1083,250 @@ dialog.bt-modal > #settings-body {
 .bt[data-bt-theme="dashboard"] .bt-card > .bt-card--inset {
   margin-top: var(--space-6);
 }
+
+/* ---- the results filter -------------------------------------------------- */
+
+/* A row in this table is never just a product: it is a reading, and a reading
+ * is always qualified — this article, in this region, for this audience, at
+ * this moment. So the filter is not a form somebody fills in and forgets. It is
+ * that qualification, written out, with every part of it removable where it is
+ * written.
+ *
+ * The search box is the whole of what most people want, so it is the whole of
+ * what most people see. */
+.bt[data-bt-theme="dashboard"] .bt-searchbar {
+  display: flex;
+  gap: var(--space-2);
+  align-items: stretch;
+  margin-bottom: var(--space-3);
+}
+
+.bt[data-bt-theme="dashboard"] .bt-searchbar__input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* The line that says what the table is currently answering. It reads left to
+   right as a sentence — how many, then each condition — and every condition is
+   the control that removes it. */
+.bt[data-bt-theme="dashboard"] .bt-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+  margin-bottom: var(--space-3);
+  font-size: .82rem;
+}
+
+.bt[data-bt-theme="dashboard"] .bt-chips__count {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* One condition. Its own label in front of its value, because «SHIMA HOME» on
+   its own does not say which column it narrowed — and with four of them on the
+   line, guessing is what a reader would otherwise be doing. */
+.bt[data-bt-theme="dashboard"] .bt-chip {
+  display: inline-flex;
+  gap: var(--space-1);
+  align-items: baseline;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--border-bright);
+  border-radius: 999px;
+  background: var(--bg-card-2);
+  color: var(--text);
+  font: inherit;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.bt[data-bt-theme="dashboard"] .bt-chip:hover {
+  border-color: var(--border-focus);
+  background: var(--bg-input);
+}
+
+.bt[data-bt-theme="dashboard"] .bt-chip__label {
+  color: var(--text-muted);
+}
+
+.bt[data-bt-theme="dashboard"] .bt-chip__x {
+  margin-left: var(--space-1);
+  color: var(--text-muted);
+  font-size: 1.05em;
+  line-height: 1;
+}
+
+.bt[data-bt-theme="dashboard"] .bt-chip:hover .bt-chip__x {
+  color: var(--accent);
+}
+
+/* Shown only when there is something to reset — see resultsChips. A permanent
+   one is a control that does nothing most of the time. */
+.bt[data-bt-theme="dashboard"] .bt-chips__reset {
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-link);
+  font: inherit;
+  cursor: pointer;
+}
+
+.bt[data-bt-theme="dashboard"] .bt-chips__reset:hover {
+  text-decoration: underline;
+}
+
+/* The rest of the conditions, folded away: things somebody sets once and
+   leaves, which should not take the top of a screen they came to read a table
+   on. Opened by the server when one of them is in force. */
+.bt[data-bt-theme="dashboard"] .bt-more {
+  margin-bottom: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card-2);
+}
+
+.bt[data-bt-theme="dashboard"] .bt-more > summary {
+  padding: var(--space-2) var(--space-3);
+  color: var(--text-muted);
+  font-size: .85rem;
+  cursor: pointer;
+}
+
+.bt[data-bt-theme="dashboard"] .bt-more > summary:hover {
+  color: var(--text);
+}
+
+.bt[data-bt-theme="dashboard"] .bt-more[open] > summary {
+  border-bottom: 1px solid var(--border);
+}
+
+.bt[data-bt-theme="dashboard"] .bt-more > .bt-form {
+  padding: var(--space-3);
+}
+
+/* ---- sorting and narrowing inside the table ------------------------------ */
+
+/* A heading that orders by its column. Only the columns the store can order by
+   get one: an arrow is a promise about what the next click does. */
+.bt[data-bt-theme="dashboard"] .bt-sort {
+  display: inline-flex;
+  gap: var(--space-1);
+  align-items: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.bt[data-bt-theme="dashboard"] .bt-sort__mark {
+  color: var(--text-muted);
+  font-size: .8em;
+  opacity: .45;
+}
+
+.bt[data-bt-theme="dashboard"] .bt-sort:hover .bt-sort__mark {
+  opacity: 1;
+}
+
+.bt[data-bt-theme="dashboard"] .bt-sort--on {
+  color: var(--accent);
+}
+
+.bt[data-bt-theme="dashboard"] .bt-sort--on .bt-sort__mark {
+  color: var(--accent);
+  opacity: 1;
+}
+
+/* A cell whose value is one somebody narrows by. It reads as text until it is
+   pointed at, because a table of four hundred underlined cells is a table
+   nobody can read down. */
+.bt[data-bt-theme="dashboard"] .bt-narrow {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.bt[data-bt-theme="dashboard"] .bt-narrow:hover {
+  color: var(--text-link);
+  text-decoration: underline;
+}
+
+/* ---- the pager ----------------------------------------------------------- */
+
+/* Which rows are on the screen comes before which page they are on: «51–100 из
+   2199» is the sentence somebody reads, and the page number is how they got
+   there. */
+.bt[data-bt-theme="dashboard"] .bt-pager {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  align-items: center;
+  justify-content: space-between;
+  margin-top: var(--space-3);
+}
+
+.bt[data-bt-theme="dashboard"] .bt-pager__range {
+  color: var(--text-muted);
+  font-size: .85rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.bt[data-bt-theme="dashboard"] .bt-pager__pages {
+  display: flex;
+  gap: var(--space-1);
+  align-items: center;
+}
+
+.bt[data-bt-theme="dashboard"] .bt-page {
+  min-width: 2rem;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+  color: var(--text);
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  cursor: pointer;
+}
+
+.bt[data-bt-theme="dashboard"] .bt-page:hover {
+  border-color: var(--border-focus);
+  background: var(--bg-input);
+}
+
+.bt[data-bt-theme="dashboard"] .bt-page--now {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+  cursor: default;
+}
+
+.bt[data-bt-theme="dashboard"] .bt-page--off,
+.bt[data-bt-theme="dashboard"] .bt-page--gap {
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: default;
+  opacity: .5;
+}
+
+/* A results table is wide and read down a column, so the rows need to be
+   scannable rather than roomy. */
+.bt[data-bt-theme="dashboard"] .bt-table--results td,
+.bt[data-bt-theme="dashboard"] .bt-table--results th {
+  white-space: nowrap;
+}
+
+.bt[data-bt-theme="dashboard"] .bt-table--results td:nth-child(2) {
+  max-width: 26rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
