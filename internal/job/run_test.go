@@ -198,6 +198,115 @@ func TestRun_LosingSomeItemsIsStillAFinishedRun(t *testing.T) {
 	}
 }
 
+func TestRun_SaysHowFarItHasGot(t *testing.T) {
+	// events.RunProgress was declared, the run screen rendered it, and nothing
+	// ever published one — so a run reading its tenth page still said «План
+	// составляется…» to the person watching it. Spec section 7's screen 4 asks
+	// for progress, a live log and per-port statistics; only the log was real.
+	f := &recordingFetcher{requests: 2, failOn: map[string]error{"b": errors.New("не далась")}}
+	r, s, b := newRunner(t, []Item{
+		{Kind: "product", Key: "a"},
+		{Kind: "product", Key: "b"},
+		{Kind: "product", Key: "c"},
+	}, f)
+	// Every item reported, rather than one a second: this test is about what
+	// is published, and a throttle would make it about timing.
+	r.Now = func() time.Time { return time.Unix(0, 0) }
+	r.Ports = func() []PortStat {
+		return []PortStat{{Port: 20001, Channel: "Прямое соединение", Requests: 3}}
+	}
+	j := savedJob(t, s)
+	j.Threads = 1
+
+	var seen []Progress
+	var mu sync.Mutex
+	if err := b.Subscribe("progress", events.RunProgress, func(_ context.Context, ev events.Event) error {
+		p, ok := ev.Payload.(Progress)
+		if !ok {
+			t.Errorf("прогресс приехал как %T", ev.Payload)
+			return nil
+		}
+		mu.Lock()
+		seen = append(seen, p)
+		mu.Unlock()
+		return nil
+	}); err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+
+	if _, err := r.Run(context.Background(), j); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(seen) == 0 {
+		t.Fatal("прогон не сказал ни слова о том, как он идёт")
+	}
+	// The last one is the frame that stays on the screen of a finished run,
+	// and «2 из 3» left there is the one thing worse than no progress at all.
+	last := seen[len(seen)-1]
+	if last.Done != 3 || last.Total != 3 {
+		t.Errorf("последний прогресс = %d из %d, ожидалось 3 из 3", last.Done, last.Total)
+	}
+	if last.Items != 2 || last.Failed != 1 {
+		t.Errorf("собрано %d, отказов %d — ожидалось 2 и 1", last.Items, last.Failed)
+	}
+	if last.Requests != 6 {
+		t.Errorf("запросов %d, ожидалось 6", last.Requests)
+	}
+	// And the statistics section 7 asks for, when there is a pool to ask.
+	if len(last.Ports) != 1 || last.Ports[0].Port != 20001 {
+		t.Errorf("порты в отчёте = %+v", last.Ports)
+	}
+}
+
+func TestRun_ReportsTheLastItemEvenWhenItIsThrottled(t *testing.T) {
+	// A run of a hundred thousand items must not publish a hundred thousand
+	// events — the bus hands every asynchronous subscriber a buffer, and a
+	// burst that overruns one is dropped and counted against the run. But the
+	// final frame is the one that stays on the screen, so it is never the one
+	// the throttle eats.
+	f := &recordingFetcher{}
+	plan := make([]Item, 20)
+	for i := range plan {
+		plan[i] = Item{Kind: "product", Key: string(rune('a' + i))}
+	}
+	r, s, b := newRunner(t, plan, f)
+	// A clock that never moves: every publish after the first is inside the
+	// same window, so only the throttle's own exceptions can get through.
+	r.Now = func() time.Time { return time.Unix(1000, 0) }
+	j := savedJob(t, s)
+	j.Threads = 1
+
+	var mu sync.Mutex
+	var seen []Progress
+	if err := b.Subscribe("progress", events.RunProgress, func(_ context.Context, ev events.Event) error {
+		if p, ok := ev.Payload.(Progress); ok {
+			mu.Lock()
+			seen = append(seen, p)
+			mu.Unlock()
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+
+	if _, err := r.Run(context.Background(), j); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(seen) != 2 {
+		t.Fatalf("отчётов %d, ожидалось два: первый и последний", len(seen))
+	}
+	if seen[len(seen)-1].Done != 20 {
+		t.Errorf("последний отчёт = %d из %d — конец прогона потерян",
+			seen[len(seen)-1].Done, seen[len(seen)-1].Total)
+	}
+}
+
 func TestRun_ResumesFromWhatIsLeftRatherThanFromTheStart(t *testing.T) {
 	// Section 10's promise, and the reason the plan is written before the work
 	// starts. A resumed run that began again would pay twice for everything

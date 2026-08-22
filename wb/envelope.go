@@ -22,6 +22,9 @@ func decodeEnvelope(b []byte) (Envelope, error) {
 			Products []json.RawMessage `json:"products"`
 			Total    *int64            `json:"total"`
 		} `json:"data"`
+		// SearchResult is the site's own way of saying a query matched
+		// nothing. See the branch below.
+		SearchResult map[string]json.RawMessage `json:"search_result"`
 	}
 	if err := json.Unmarshal(b, &raw); err != nil {
 		return Envelope{}, fmt.Errorf("wb: decode search envelope: %w", err)
@@ -47,6 +50,29 @@ func decodeEnvelope(b []byte) (Envelope, error) {
 		if total == nil {
 			total = raw.Data.Total
 		}
+	case raw.SearchResult != nil && len(raw.SearchResult) == 0 && raw.Data == nil:
+		// A query that matched nothing. The site answers it with a different
+		// envelope entirely — no products key, no total, and an empty
+		// search_result object beside the query it echoes back — and read as a
+		// broken response it turns a legitimate answer into a run full of
+		// decode failures. A phrase that stops returning results is exactly
+		// what somebody is monitoring for; «ничего не найдено» is the finding,
+		// not the fault.
+		//
+		// Narrow on purpose, because the mistake this whole switch exists to
+		// prevent is reading a wrong-shaped response as an empty result set.
+		// Three things have to hold at once: no products anywhere, no data
+		// object (the filters response has one, with a total in the millions),
+		// and a search_result that is empty rather than merely present. A
+		// search_result carrying anything at all falls through to the error
+		// below — a shape nobody has observed is not a shape to guess at.
+		//
+		// Total stays nil rather than becoming zero: the site said nothing
+		// about how many results exist, and a zero here would be this
+		// package's opinion rather than the site's. Products is a non-nil
+		// empty slice, which is the whole distinction the switch is built on.
+		return Envelope{Products: []Product{}}, nil
+
 	default:
 		// raw.Products is nil both when the key is absent and when it is
 		// present with a JSON null value — encoding/json leaves a slice nil

@@ -61,6 +61,51 @@ func TestDecodeEnvelope_EmptyResultIsNotAnError(t *testing.T) {
 	}
 }
 
+func TestDecodeEnvelope_AQueryThatMatchedNothingIsAnAnswer(t *testing.T) {
+	// The site answers a query with no results with a different envelope
+	// entirely: no products key, no total, and an empty search_result object
+	// beside the query it echoes back. Captured from a live request — see
+	// testdata/search_empty.json.
+	//
+	// Read as a broken response it turned a legitimate answer into a run full
+	// of decode failures, which is the worst possible way to report it: a
+	// phrase that stops returning results is exactly what somebody sets a
+	// monitor up to notice.
+	env, err := decodeEnvelope(readFixture(t, "search_empty.json"))
+	if err != nil {
+		t.Fatalf("«ничего не найдено» прочитано как поломка: %v", err)
+	}
+	if env.Products == nil {
+		t.Fatal("товары nil, а не пустой список — «не спрашивали» вместо «нет ничего»")
+	}
+	if len(env.Products) != 0 {
+		t.Errorf("товаров %d, ожидалось ни одного", len(env.Products))
+	}
+	// The site said nothing about how many results exist, so neither does
+	// this. A zero here would be this package's opinion.
+	if env.Total != nil {
+		t.Errorf("Total = %d — сайт про общее число ничего не говорил", *env.Total)
+	}
+}
+
+func TestDecodeEnvelope_ASearchResultWithAnythingInItIsNotAnEmptyAnswer(t *testing.T) {
+	// The narrowness is the point. The mistake this whole switch exists to
+	// prevent is reading a wrong-shaped response as «нашли ноль» — so a
+	// search_result carrying anything at all is a shape nobody has observed,
+	// and a shape nobody has observed is not one to guess at.
+	for _, body := range []string{
+		`{"search_result":{"products":[{"id":1}]},"name":"платье"}`,
+		`{"search_result":{"total":42},"name":"платье"}`,
+		// With a data object it is the filters response, whose total runs to
+		// millions — the very case the switch was built around.
+		`{"search_result":{},"data":{"filters":[],"total":1424599}}`,
+	} {
+		if _, err := decodeEnvelope([]byte(body)); err == nil {
+			t.Errorf("%s прочитано как пустая выдача", body)
+		}
+	}
+}
+
 func TestDecodeEnvelope_RejectsGarbage(t *testing.T) {
 	_, err := decodeEnvelope([]byte("<html>wall</html>"))
 	if err == nil {

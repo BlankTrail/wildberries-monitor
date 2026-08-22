@@ -121,6 +121,11 @@ func (e *Engine) RunnerFor(ctx context.Context, j job.Job) (*job.Runner, func(),
 		Store:   e.Store,
 		Bus:     e.Bus,
 		Planner: job.StaticPlanner{},
+		// Spec section 7's screen 4: statistics per port and per channel. Read
+		// live rather than snapshotted — quarantines happen while the run is
+		// going, and a table taken before it started would show the pool as it
+		// was before anything went wrong.
+		Ports: func() []job.PortStat { return portStats(pool) },
 		Fetcher: &collect.Fetcher{
 			Site:   site,
 			Store:  e.Store,
@@ -142,6 +147,23 @@ func (e *Engine) RunnerFor(ctx context.Context, j job.Job) (*job.Runner, func(),
 		}
 		closeChannels()
 	}, nil
+}
+
+// portStats is the pool's own report in the shape the runner publishes.
+//
+// A conversion rather than a shared type: internal/job knows nothing about
+// proxies and is tested without one, and a package that describes what a run
+// is doing should not have to import the SDK to do it.
+func portStats(pool *blanktrail.Pool) []job.PortStat {
+	reports := pool.PortReports()
+	out := make([]job.PortStat, 0, len(reports))
+	for _, r := range reports {
+		out = append(out, job.PortStat{
+			Port: r.Num, Channel: r.Channel, Requests: r.Requests,
+			Quarantined: r.Quarantined, Gone: r.Gone,
+		})
+	}
+	return out
 }
 
 // portsPerThread is how many proxy ports one thread gets.

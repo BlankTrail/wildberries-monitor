@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/BlankTrail/wildberries-monitor/internal/events"
+	"github.com/BlankTrail/wildberries-monitor/internal/job"
 )
 
 // This file is the live half of the interface: what a run is doing, arriving
@@ -129,10 +130,92 @@ func renderEvent(ev events.Event) (name, data string) {
 	return "", ""
 }
 
-// progressHTML renders the progress line.
+// progressHTML renders the progress line and the port table beneath it.
+//
+// Spec section 7's screen 4 asks for both. Counts and not a percentage: «43%»
+// over a run that has failed everything it touched reads like progress, and
+// the question somebody watching is asking is whether to press stop.
+//
+// A payload of another shape is printed as it arrives rather than dropped. The
+// bus is untyped by design, and a screen that silently showed nothing would
+// hide the wiring mistake instead of reporting it.
 func progressHTML(payload any) string {
-	return `<div class="bt-progress"><span class="bt-progress-label">` +
-		html.EscapeString(fmt.Sprintf("%v", payload)) + `</span></div>`
+	p, ok := payload.(job.Progress)
+	if !ok {
+		return `<div class="bt-alert bt-alert--neutral">` +
+			html.EscapeString(fmt.Sprintf("%v", payload)) + `</div>`
+	}
+
+	// The design system's own bar, not a hand-rolled one. This panel has
+	// already been bitten once by borrowing a class for what it was not (see
+	// .bt-mono); inventing one it does not style is the same mistake from the
+	// other end.
+	var b strings.Builder
+	b.WriteString(`<div class="bt-progress"><div class="bt-progress__meta">`)
+	fmt.Fprintf(&b, `<span>%d из %d</span><span>собрано %d`, p.Done, p.Total, p.Items)
+	if p.Failed > 0 {
+		// Beside the collected count and not only in the log: a run losing
+		// every item looks exactly like a run doing fine until this number.
+		fmt.Fprintf(&b, `, отказов %d`, p.Failed)
+	}
+	fmt.Fprintf(&b, `, запросов %d</span></div>`, p.Requests)
+	if p.Total > 0 {
+		// The same two numbers, drawn. Capped, because a resumed run can
+		// finish more items than the remainder it was handed.
+		width := min(p.Done*100/p.Total, 100)
+		fmt.Fprintf(&b, `<div class="bt-progress__track">`+
+			`<span class="bt-progress__fill" style="width:%d%%"></span></div>`, width)
+	}
+	b.WriteString(`</div>`)
+	b.WriteString(portsHTML(p.Ports))
+	return b.String()
+}
+
+// portsHTML is section 7's «статистика по портам и каналам».
+//
+// Per port rather than a pool total, because the totals of a run that used one
+// of its eight ports and one that spread evenly are identical and mean
+// opposite things — only the second is using what it is paying for. The
+// channel is on every line because that is the choice somebody can act on: a
+// channel whose ports keep being quarantined is a channel to take out of the
+// mix.
+func portsHTML(ports []job.PortStat) string {
+	if len(ports) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString(`<h4 class="bt-form-head">Порты и каналы</h4>`)
+	b.WriteString(`<div class="bt-table-wrap"><table class="bt-table"><thead><tr>` +
+		`<th>Порт</th><th>Канал</th><th class="bt-num">Запросов</th><th>Состояние</th>` +
+		`</tr></thead><tbody>`)
+	for _, pt := range ports {
+		channel := pt.Channel
+		if channel == "" {
+			// A pool with no channels goes out from this machine's own
+			// address, which is a channel like any other and should read like
+			// one rather than as a blank cell.
+			channel = "прямое соединение"
+		}
+		fmt.Fprintf(&b, `<tr><td class="bt-mono">%d</td><td>%s</td><td class="bt-num">%d</td><td>%s</td></tr>`,
+			pt.Port, html.EscapeString(channel), pt.Requests, portStateHTML(pt))
+	}
+	b.WriteString(`</tbody></table></div>`)
+	return b.String()
+}
+
+// portStateHTML says what the pool is doing with a port.
+func portStateHTML(pt job.PortStat) string {
+	switch {
+	case pt.Gone:
+		// Told apart from a quarantine on purpose: this one is not a verdict
+		// the pool reached about the port's behaviour, it is a fact it was
+		// told — and it points at the proxy rather than at the target.
+		return `<span class="bt-badge bt-badge--error bt-badge--sm">закрыт снаружи</span>`
+	case pt.Quarantined:
+		return `<span class="bt-badge bt-badge--warning bt-badge--sm">в карантине</span>`
+	default:
+		return `<span class="bt-badge bt-badge--success bt-badge--sm">работает</span>`
+	}
 }
 
 // writeEvent writes one SSE message.

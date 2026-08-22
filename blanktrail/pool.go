@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"math/rand"
 	"net/http"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -256,6 +257,60 @@ func (p *Pool) Stats() Stats {
 	}
 	st.Available = st.Ports - st.Quarantined
 	return st
+}
+
+// PortReport is one port's own line of the pool's statistics.
+//
+// Separate from Stats, which totals the pool: a run whose requests all went
+// through one of eight ports and a run that spread them evenly have identical
+// totals and nothing else in common, and only the second is using what it is
+// paying for. The channel travels with the port because that is the choice an
+// operator can act on — a channel whose ports keep being quarantined is a
+// channel to take out of the mix.
+type PortReport struct {
+	Num int
+	// Channel is the name of the channel this port exits through, as the mix
+	// was configured. Empty for a pool with no channels at all, which is the
+	// host's own address.
+	Channel string
+	// Requests is how many requests this port has served.
+	Requests int
+	// Quarantined is set while the pool is not handing this port out.
+	Quarantined bool
+	// Gone is set for a port the proxy stopped listing — closed from outside,
+	// or lost with a restart. It cannot come back, which is why it is told
+	// apart from a quarantine.
+	Gone bool
+}
+
+// PortReports is one line per port, in port order.
+//
+// The egress address is deliberately not here. What an operator decides from
+// is which channel is misbehaving, and a screen that printed every proxy's
+// address would be one screenshot away from publishing a proxy list.
+func (p *Pool) PortReports() []PortReport {
+	p.mu.Lock()
+	ports := make([]*poolPort, 0, len(p.ports))
+	for _, pt := range p.ports {
+		ports = append(ports, pt)
+	}
+	p.mu.Unlock()
+
+	out := make([]PortReport, 0, len(ports))
+	for _, pt := range ports {
+		pt.mu.Lock()
+		rep := PortReport{
+			Num: pt.num, Requests: pt.requests,
+			Quarantined: pt.quarantined, Gone: pt.gone,
+		}
+		pt.mu.Unlock()
+		if pt.ch != nil {
+			rep.Channel = pt.ch.Name()
+		}
+		out = append(out, rep)
+	}
+	slices.SortFunc(out, func(a, b PortReport) int { return a.Num - b.Num })
+	return out
 }
 
 // NewPool opens Threads × PortsPerThread ports and returns a ready pool. On any

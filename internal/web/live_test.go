@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/BlankTrail/wildberries-monitor/internal/events"
+	"github.com/BlankTrail/wildberries-monitor/internal/job"
 )
 
 // liveServer is a server with a bus, listening on a real port.
@@ -117,6 +118,81 @@ func TestLive_DeliversARunsProgressWithoutAReload(t *testing.T) {
 	}
 	if !strings.Contains(msg, "12 из 40") {
 		t.Errorf("message = %q, want it to carry the payload", msg)
+	}
+}
+
+func TestLive_DrawsTheProgressAndThePortsBehindIt(t *testing.T) {
+	// Spec section 7's screen 4: progress, a live log, statistics per port and
+	// per channel. The first and the third arrived only once something started
+	// publishing them — the bus declared the event and nobody ever sent one.
+	ts, bus := liveServer(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	res := openStream(ctx, t, ts, "7")
+	if err := bus.Publish(ctx, events.Event{
+		Kind: events.RunProgress, RunID: 7,
+		Payload: job.Progress{
+			Done: 12, Total: 40, Items: 10, Failed: 2, Requests: 31,
+			Ports: []job.PortStat{
+				{Port: 20001, Channel: "Мобильные", Requests: 20},
+				{Port: 20002, Requests: 11, Quarantined: true},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+
+	msg := readMessage(t, res)
+	for _, want := range []string{
+		"12 из 40", "собрано 10", "отказов 2", "запросов 31",
+		"20001", "Мобильные", "20002", "прямое соединение", "в карантине",
+	} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("в отчёте нет %q:\n%s", want, msg)
+		}
+	}
+	// The bar is the two numbers drawn, so it has to agree with them.
+	if !strings.Contains(msg, "width:30%") {
+		t.Errorf("полоса не соответствует счёту:\n%s", msg)
+	}
+}
+
+func TestLive_AProgressBarCannotRunPastItsEnd(t *testing.T) {
+	// A resumed run finishes more items than the remainder it was handed, and
+	// a bar drawn at 150% overflows its card.
+	ts, bus := liveServer(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	res := openStream(ctx, t, ts, "7")
+	if err := bus.Publish(ctx, events.Event{
+		Kind: events.RunProgress, RunID: 7,
+		Payload: job.Progress{Done: 9, Total: 6, Items: 9},
+	}); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	if msg := readMessage(t, res); !strings.Contains(msg, "width:100%") {
+		t.Errorf("полоса вышла за карточку:\n%s", msg)
+	}
+}
+
+func TestLive_APayloadOfAnotherShapeIsShownRatherThanSwallowed(t *testing.T) {
+	// The bus is untyped by design. A screen that silently rendered nothing
+	// would hide the wiring mistake instead of reporting it — which is exactly
+	// how «План составляется…» survived a whole milestone.
+	ts, bus := liveServer(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	res := openStream(ctx, t, ts, "7")
+	if err := bus.Publish(ctx, events.Event{
+		Kind: events.RunProgress, RunID: 7, Payload: "12 из 40",
+	}); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	if msg := readMessage(t, res); !strings.Contains(msg, "12 из 40") {
+		t.Errorf("непонятный отчёт проглочен:\n%s", msg)
 	}
 }
 

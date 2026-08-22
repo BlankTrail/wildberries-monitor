@@ -71,8 +71,82 @@ type Runner struct {
 	Planner Planner
 	Fetcher Fetcher
 
+	// Ports reports the run's proxy ports, for spec section 7's per-port and
+	// per-channel statistics. Optional: a build with no pool — every test in
+	// this package — leaves it nil and the progress it publishes simply
+	// carries no port table.
+	//
+	// A function rather than a value because it is a live reading: quarantines
+	// happen during the run, and a snapshot taken when the runner was built
+	// would show the pool as it was before anything went wrong.
+	Ports func() []PortStat
+
 	// Now is the clock. Replaced in tests; nothing else writes it.
 	Now func() time.Time
+}
+
+// now is the runner's clock: Now when a test replaced it, the wall otherwise.
+//
+// Runner.Now was declared and never read, which is its own small bug — a test
+// that set it would have been setting nothing. The throttle below is the first
+// thing here that has to be steerable from a test.
+func (r *Runner) now() time.Time {
+	if r.Now != nil {
+		return r.Now()
+	}
+	return time.Now()
+}
+
+// progressEvery bounds how often a run reports itself.
+//
+// A publish per item is right for the twenty-item job somebody is watching and
+// wrong for the hundred-thousand-item one: the bus hands every asynchronous
+// subscriber its own buffer, and a burst that overruns one is dropped and
+// counted against the run. Once a second is faster than anybody reads and
+// slower than any plan can outrun.
+//
+// The last item is always reported regardless, because «199 из 200» left on
+// the screen of a finished run is the one frame that matters.
+const progressEvery = time.Second
+
+// reporter builds the function walk calls after each item.
+//
+// Closed over the counters rather than given them each time: what it publishes
+// has to be one consistent reading of all of them, and assembling that in the
+// caller would put the throttle there too — in the hot loop, once per item,
+// per thread.
+func (r *Runner) reporter(runID, total int64,
+	items, failed, requests *atomic.Int64, done *atomic.Int64) func(context.Context) {
+
+	var mu sync.Mutex
+	var last time.Time
+
+	return func(ctx context.Context) {
+		finished := done.Add(1)
+
+		mu.Lock()
+		now := r.now()
+		if finished < total && now.Sub(last) < progressEvery {
+			mu.Unlock()
+			return
+		}
+		last = now
+		mu.Unlock()
+
+		p := Progress{
+			Done: finished, Total: total,
+			Items: items.Load(), Failed: failed.Load(), Requests: requests.Load(),
+		}
+		if r.Ports != nil {
+			p.Ports = r.Ports()
+		}
+		// The publish is on a context of its own for the same reason closing
+		// the run is: a stop must not also cancel the last thing the screen
+		// would have said about what it stopped.
+		pub, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		_ = r.Bus.Publish(pub, events.Event{Kind: events.RunProgress, RunID: runID, Payload: p})
+	}
 }
 
 // ErrStopped is returned when a run ended because it was asked to.
@@ -96,11 +170,12 @@ func (r *Runner) Run(ctx context.Context, j Job) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
+	total := int64(len(todo))
 
 	_ = r.Bus.Publish(ctx, events.Event{Kind: events.RunStarted, RunID: res.RunID, Payload: j})
 
 	var items, failed, requests atomic.Int64
-	stopped := r.walk(ctx, j, res.RunID, todo, &items, &failed, &requests)
+	stopped := r.walk(ctx, j, res.RunID, todo, total, &items, &failed, &requests)
 
 	res.Items, res.Failed, res.Requests = items.Load(), failed.Load(), requests.Load()
 	res.Dropped = r.Bus.Stats().Dropped
@@ -131,6 +206,12 @@ func (r *Runner) Run(ctx context.Context, j Job) (Result, error) {
 		return res, fmt.Errorf("job: closing run %d: %w", res.RunID, err)
 	}
 	_ = r.Bus.Publish(closing, events.Event{Kind: events.RunFinished, RunID: res.RunID, Payload: res})
+	// Read again, after the last event this run publishes. A subscriber that
+	// fell behind far enough to lose the announcement of the end lost it to
+	// this run, and the count the caller logs should be the final one — the
+	// payload above necessarily carries the count as it stood a line earlier,
+	// which is the closest a value can come to holding its own consequences.
+	res.Dropped = r.Bus.Stats().Dropped
 	return res, runErr
 }
 
@@ -209,7 +290,7 @@ func (r *Runner) phrasesOfList(ctx context.Context, listID int64) ([]string, err
 
 // walk does the items, with the job's own concurrency and delay. It reports
 // whether the run ended because it was asked to stop.
-func (r *Runner) walk(ctx context.Context, j Job, runID int64, todo []store.ItemRow,
+func (r *Runner) walk(ctx context.Context, j Job, runID int64, todo []store.ItemRow, total int64,
 	items, failed, requests *atomic.Int64) bool {
 
 	threads := j.Threads
@@ -218,6 +299,8 @@ func (r *Runner) walk(ctx context.Context, j Job, runID int64, todo []store.Item
 	}
 
 	var stopped atomic.Bool
+	var done atomic.Int64
+	report := r.reporter(runID, total, items, failed, requests, &done)
 	work := make(chan store.ItemRow)
 	var wg sync.WaitGroup
 
@@ -255,6 +338,11 @@ func (r *Runner) walk(ctx context.Context, j Job, runID int64, todo []store.Item
 				rec, cancelRec := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 				_ = r.Store.FinishItem(rec, runID, row.Position, state, failure)
 				cancelRec()
+
+				// After the item is recorded, so that what the screen shows is
+				// what a crash would leave behind rather than one item ahead
+				// of it.
+				report(ctx)
 
 				if j.Delay > 0 {
 					select {
