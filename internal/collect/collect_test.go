@@ -36,6 +36,7 @@ type fakeSite struct {
 	// shelfOf answers for them. A nil shelfOf gives the answer the live site
 	// gives most of the time — a named shelf with nobody in it — which is the
 	// case the collector must not read as a failure.
+	promotions     []wb.Promotion
 	productShelves []int64
 	shelfOf        func(nm int64) (wb.ProductShelf, error)
 
@@ -50,6 +51,18 @@ type fakeSite struct {
 	// cardFail fails only the card fetches, so a test can let a page succeed
 	// and every card on it fail — which is the case worth pinning.
 	cardFail error
+}
+
+// PromotionPage records which promotion was walked and answers with whatever
+// promoPage was set to — the same products the search fake gives, unless a
+// test wants its own.
+func (f *fakeSite) PromotionPage(_ context.Context, _ wb.Endpoints, p wb.Promotion, q wb.SearchQuery) (wb.Envelope, error) {
+	f.promotions = append(f.promotions, p)
+	f.searches = append(f.searches, q)
+	if f.fail != nil {
+		return wb.Envelope{}, f.fail
+	}
+	return wb.Envelope{Products: f.products}, nil
 }
 
 func (f *fakeSite) ProductShelf(_ context.Context, _ wb.Endpoints, nm int64) (wb.ProductShelf, error) {
@@ -916,5 +929,83 @@ func TestShelf_ASellerWithNoShelfIsRecordedRatherThanSkipped(t *testing.T) {
 	}
 	if readings != 1 {
 		t.Errorf("чтений полки записано %d, ожидалось одно", readings)
+	}
+}
+
+func TestPromo_RecordsThePlaceUnderThePromotionRatherThanThePreset(t *testing.T) {
+	// A preset is a number the site can reissue; the slug is what the
+	// promotion is. A position table keyed on the preset would silently start
+	// a new series the day WB renumbered it — and «третий в акции» has to keep
+	// meaning the same thing next season.
+	site := &fakeSite{products: []wb.Product{
+		{ID: 100, Name: "первый", Rank: 1},
+		{ID: 200, Name: "второй", Rank: 2},
+	}}
+	f, st := watching(t, site, job.KindPromotion)
+	f.Job.PromotionID = 1005032
+	f.Job.PromotionSlug = "vse-dlya-uborki"
+	f.Job.PromotionShard = "promo/bucket_6"
+	f.Job.PromotionQuery = "preset=1005032"
+
+	n, err := f.Fetch(t.Context(), job.Item{Key: job.Key{
+		Kind: job.ItemPromo, ID: 1005032, Dest: "-1257786", AppType: 1, Page: 1,
+	}.String()})
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if n < 1 {
+		t.Errorf("страница акции стоила %d запросов", n)
+	}
+	if len(site.promotions) != 1 || site.promotions[0].Slug != "vse-dlya-uborki" {
+		t.Fatalf("спрошены акции %+v", site.promotions)
+	}
+	if site.promotions[0].Shard != "promo/bucket_6" || site.promotions[0].Query != "preset=1005032" {
+		t.Errorf("акция запрошена по адресу %+v", site.promotions[0])
+	}
+
+	got, err := st.CountForTest(t.Context(),
+		`SELECT COUNT(*) FROM positions WHERE query = 'promo:vse-dlya-uborki'`)
+	if err != nil {
+		t.Fatalf("CountForTest: %v", err)
+	}
+	if got != 2 {
+		t.Errorf("мест в акции записано %d, ожидались два", got)
+	}
+}
+
+func TestPromo_RefusesAJobWithNoPresetBeforeSpendingARequest(t *testing.T) {
+	// An address with a hole in it is one the site answers with somebody
+	// else's goods rather than an error, which reads like a promotion that
+	// changed its contents overnight.
+	site := &fakeSite{}
+	f, _ := watching(t, site, job.KindPromotion)
+	f.Job.PromotionSlug = "vse-dlya-uborki"
+
+	n, err := f.Fetch(t.Context(), job.Item{Key: job.Key{
+		Kind: job.ItemPromo, ID: 1, Dest: "-1257786", AppType: 1, Page: 1,
+	}.String()})
+	if err == nil {
+		t.Fatal("акция без пресета собрана")
+	}
+	if n != 0 {
+		t.Errorf("на отказ потрачено %d запросов", n)
+	}
+	if len(site.promotions) != 0 {
+		t.Errorf("сайт всё-таки спросили: %+v", site.promotions)
+	}
+}
+
+func TestPromotionOf_TellsAPromotionFromAPhrase(t *testing.T) {
+	// The positions table holds three kinds of sentence. A screen that could
+	// not tell them apart would draw «третий в акции» as a search rank, and a
+	// product would appear to fall out of the results on the day the promotion
+	// closed.
+	if got, ok := PromotionOf("promo:vse-dlya-uborki"); !ok || got != "vse-dlya-uborki" {
+		t.Errorf("PromotionOf = %q, %v", got, ok)
+	}
+	for _, q := range []string{"платье летнее", "cat:8126", "promo:", "", "promo"} {
+		if got, ok := PromotionOf(q); ok {
+			t.Errorf("%q прочитано как акция %q", q, got)
+		}
 	}
 }

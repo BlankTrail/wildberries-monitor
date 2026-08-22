@@ -342,16 +342,26 @@ func readAtText(ts int64) string {
 
 // positionTitle names a position series the way it should be read.
 //
-// A rank in a catalogue node and a rank in a search are different sentences
-// about different things, and the positions table holds both — the node's under
-// a key of its own (see collect.CatalogNode). Drawn as a phrase, «cat:8126» is
-// something a person has to decode; drawn as its category, it is the thing they
-// picked.
+// A rank in a catalogue node, a rank in a promotion and a rank in a search are
+// three different sentences, and the positions table holds all of them — the
+// first two under keys of their own (see collect.CatalogNode and
+// collect.PromotionOf). Drawn as a phrase, «cat:8126» is something a person has
+// to decode; drawn as its category, it is the thing they picked.
 //
 // The name is looked up rather than stored beside the position: the directory
 // is a cache of somebody else's document, and a category WB renamed should read
 // under its new name rather than under the one it had on the day of the run.
 func positionTitle(ctx context.Context, st *store.Store, query string) string {
+	if slug, ok := collect.PromotionOf(query); ok {
+		// A place in a promotion is the third sentence this table holds, and
+		// the one that dates fastest: a promotion ends, and a series that read
+		// as a phrase would show a product falling out of the results on the
+		// day it closed.
+		if p, err := st.Promotion(ctx, slug); err == nil {
+			return "акция: " + p.Name
+		}
+		return "акция «" + slug + "» (уже не идёт)"
+	}
 	id, ok := collect.CatalogNode(query)
 	if !ok {
 		return query

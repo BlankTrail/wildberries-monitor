@@ -49,6 +49,13 @@ type params struct {
 	CategoryID    int64  `json:"category_id,omitempty"`
 	CategoryQuery string `json:"category_query,omitempty"`
 
+	// The promotion a KindPromotion job walks: its identity, and where its goods
+	// are kept. See Job.PromotionSlug for why all four are stored.
+	PromotionID    int64  `json:"promotion_id,omitempty"`
+	PromotionSlug  string `json:"promotion_slug,omitempty"`
+	PromotionShard string `json:"promotion_shard,omitempty"`
+	PromotionQuery string `json:"promotion_query,omitempty"`
+
 	MaxPages int `json:"max_pages,omitempty"`
 }
 
@@ -73,6 +80,10 @@ func Save(ctx context.Context, s *store.Store, j Job) (int64, error) {
 		Input:           j.Input,
 		CategoryID:      j.CategoryID,
 		CategoryQuery:   j.CategoryQuery,
+		PromotionID:     j.PromotionID,
+		PromotionSlug:   j.PromotionSlug,
+		PromotionShard:  j.PromotionShard,
+		PromotionQuery:  j.PromotionQuery,
 		MaxPages:        j.MaxPages,
 	})
 	if err != nil {
@@ -145,6 +156,10 @@ func fromRow(row store.JobRow) (Job, error) {
 		Input:           p.Input,
 		CategoryID:      p.CategoryID,
 		CategoryQuery:   p.CategoryQuery,
+		PromotionID:     p.PromotionID,
+		PromotionSlug:   p.PromotionSlug,
+		PromotionShard:  p.PromotionShard,
+		PromotionQuery:  p.PromotionQuery,
 		MaxPages:        p.MaxPages,
 		Threads:         row.Threads,
 		Delay:           time.Duration(row.DelayMS) * time.Millisecond,

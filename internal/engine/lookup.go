@@ -53,3 +53,23 @@ func (e *Engine) Categories(ctx context.Context) ([]wb.Category, error) {
 	}
 	return site.Categories(ctx, e.Endpoints)
 }
+
+// Promotions reads the site's list of what it is running — spec section 4.6's
+// type 8. See wb/promotion.go.
+func (e *Engine) Promotions(ctx context.Context) ([]wb.PromotionRef, error) {
+	site, err := e.Service(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return site.Promotions(ctx, e.Endpoints)
+}
+
+// Promotion reads one promotion's own record: the preset its goods are filed
+// under and the shard of the index they live in.
+func (e *Engine) Promotion(ctx context.Context, slug string) (wb.Promotion, error) {
+	site, err := e.Service(ctx)
+	if err != nil {
+		return wb.Promotion{}, err
+	}
+	return site.Promotion(ctx, e.Endpoints, slug)
+}

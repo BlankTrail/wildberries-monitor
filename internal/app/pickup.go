@@ -129,3 +129,53 @@ func (a *App) resolveGroup(ctx context.Context, group []int64, out *store.Pickup
 	}
 	return 0, nil
 }
+
+// refreshPromotions reads the site's list of what it is running.
+//
+// One request for the list and one per promotion, because the list carries a
+// name and a link and nothing else: where a promotion's goods are kept is in
+// the promotion's own record, and there is no rule that turns a slug into a
+// preset. A dozen requests, made when somebody presses the button.
+//
+// A promotion whose record will not read is left out and counted rather than
+// stored empty: offered in the picker it would make a job that runs, spends its
+// pages and collects nothing.
+func (a *App) refreshPromotions(ctx context.Context) (int, int, error) {
+	if a.Engine == nil {
+		return 0, 0, errors.New("сбор не собран в этой сборке")
+	}
+	list, err := a.Engine.Promotions(ctx)
+	if err != nil {
+		return 0, 0, err
+	}
+
+	rows := make([]store.PromotionRow, 0, len(list))
+	missed := 0
+	for _, ref := range list {
+		if err := ctx.Err(); err != nil {
+			return 0, 0, err
+		}
+		p, err := a.Engine.Promotion(ctx, ref.Slug)
+		if err != nil {
+			a.Log.Printf("акция %q: %v", ref.Slug, err)
+			missed++
+			continue
+		}
+		name := p.Name
+		if name == "" {
+			// The record's own name is the better one — it is what the site
+			// calls the promotion on its page — but the banner's is what a
+			// person saw, and either beats a slug.
+			name = ref.Name
+		}
+		rows = append(rows, store.PromotionRow{
+			Slug: p.Slug, Name: name, ID: p.ID, Shard: p.Shard, Query: p.Query,
+		})
+	}
+
+	saved, err := a.Store.SavePromotions(ctx, rows)
+	if err != nil {
+		return 0, 0, err
+	}
+	return saved, missed, nil
+}

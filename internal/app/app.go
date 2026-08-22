@@ -231,6 +231,12 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 			}
 			return a.Engine.PickupPoint(ctx, id)
 		},
+		// The promotions the site is running, with the preset each one's goods
+		// are filed under. A promotion runs for a fortnight, so this is asked
+		// for far more often than the catalogue directory beside it.
+		Promotions: func(ctx context.Context) (int, int, error) {
+			return a.refreshPromotions(ctx)
+		},
 		// The site's whole directory of delivery points: one request for the
 		// country, so the picker can offer five thousand settlements without a
 		// network call per keystroke.

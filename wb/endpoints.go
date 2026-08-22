@@ -115,6 +115,23 @@ type Endpoints struct {
 	// together. {id} is the point's number.
 	PickupPoint string `yaml:"pickup_point"`
 
+	// Promotions is the site's own list of what it is running: a file of
+	// banners, each with a name and a link into a promotion. Spec section
+	// 4.6's type 8 starts here.
+	Promotions string `yaml:"promotions"`
+
+	// Promotion is one promotion's own record, by the slug from that list. It
+	// holds the two things nothing else does — the preset its goods are filed
+	// under and the shard of the search index they live in. {slug} is the tail
+	// of the promotion's own address.
+	Promotion string `yaml:"promotion"`
+
+	// PromoCatalog is one page of a promotion's goods: the same u-search
+	// family as an ordinary search, asked for a preset instead of a phrase.
+	// {shard} and {query} come from the record above, {app} and {dest} from
+	// the job.
+	PromoCatalog string `yaml:"promo_catalog"`
+
 	// PickupPoints is the site's own directory of every delivery point it
 	// has: address, coordinates and number, for the whole country at once.
 	//
@@ -148,6 +165,15 @@ const searchTemplate = "https://www.wildberries.ru/__internal/u-search/exactmatc
 	"&hide_dtype=15&hide_vflags=4294967296&inheritFilters=true&lang=ru&locale=ru" +
 	"&query={query}&resultset=catalog&sort=popular&spp=30&suppressSpellcheck=false"
 
+// promoCatalogTemplate is one page of a promotion's goods.
+//
+// Kept whole, parameters and all, for the reason searchTemplate is: the exact
+// parameter set is what the edge was observed to accept, and this one was read
+// off the site's own request rather than adapted from the search.
+const promoCatalogTemplate = "https://www.wildberries.ru/__internal/u-search/{shard}/v4/catalog" +
+	"?ab_testing=false&appType={app}&curr=rub&dest={dest}" +
+	"&hide_vflags=4294967296&lang=ru&{query}&sort=popular&spp=30"
+
 // DefaultEndpoints returns the built-in addresses.
 func DefaultEndpoints() Endpoints {
 	return Endpoints{
@@ -164,6 +190,9 @@ func DefaultEndpoints() Endpoints {
 		ProductShelf:  "https://static-basket-08.wbbasket.ru/vol154/content-recommendations/{nm}.json",
 		PickupPoint:   "https://www.wildberries.ru/webapi/spa/poo/{id}/show",
 		PickupPoints:  "https://static-basket-01.wbbasket.ru/vol0/data/all-poo-fr-v3.json",
+		Promotions:    "https://static-basket-01.wbbasket.ru/vol0/data/banners-promo-ru-v2.json",
+		Promotion:     "https://static-basket-01.wbbasket.ru/vol0/data/promotions/{slug}-v3.json",
+		PromoCatalog:  promoCatalogTemplate,
 		Categories:    "https://static-basket-01.wbbasket.ru/vol0/data/main-menu-ru-ru-v3.json",
 	}
 }
@@ -279,6 +308,17 @@ func (e Endpoints) Validate() error {
 	}
 	if strings.TrimSpace(e.PickupPoints) == "" {
 		return errors.New("pickup_points is empty")
+	}
+	if strings.TrimSpace(e.Promotions) == "" {
+		return errors.New("promotions is empty")
+	}
+	if !strings.Contains(e.Promotion, "{slug}") {
+		return errors.New("promotion template is missing the {slug} placeholder")
+	}
+	for _, ph := range []string{"{shard}", "{query}", "{dest}"} {
+		if !strings.Contains(e.PromoCatalog, ph) {
+			return errors.New("promo_catalog template is missing the " + ph + " placeholder")
+		}
 	}
 	return nil
 }

@@ -63,6 +63,15 @@ const (
 	// category rather than one — see CategoryID.
 	KindCatalog Kind = "catalog"
 
+	// KindPromotion walks one promotion's goods — spec section 4.6's type 8.
+	//
+	// One promotion per job rather than a list of them, and that is deliberate:
+	// a promotion is a listing with its own paging and its own places, and two
+	// of them in one job would produce a single run whose «сколько страниц»
+	// means nothing. It is also how the estimate stays honest — the page count
+	// is per listing, and a job over five promotions could not be priced.
+	KindPromotion Kind = "promotion"
+
 	// KindShelves reads the «Продавец рекомендует» row under each of the
 	// named products — spec section 4.6's type 9.
 	//
@@ -104,7 +113,7 @@ func Composable() []Kind {
 // Kinds lists every kind this build can run, in a stable order.
 func Kinds() []Kind {
 	return []Kind{KindPhrase, KindCatalog, KindSeller, KindBrand, KindArticles,
-		KindPhraseAds, KindPositions, KindShelves, KindProfile}
+		KindPhraseAds, KindPositions, KindPromotion, KindShelves, KindProfile}
 }
 
 // Job is what to collect.
@@ -143,6 +152,23 @@ type Job struct {
 	// query no longer names it.
 	CategoryID    int64
 	CategoryQuery string
+
+	// PromotionSlug is the promotion a KindPromotion job walks, and
+	// PromotionShard and PromotionQuery are where its goods are kept.
+	//
+	// The same split as the catalogue node above and for the same reason: the
+	// slug is the promotion's identity — what the positions are recorded
+	// against and what the constructor re-picks to refresh the rest — while
+	// the shard and the preset are what the request carries, copied when the
+	// job is saved so that a plan can be built without touching a table.
+	//
+	// PromotionID is kept beside them because it is what the site calls the
+	// promotion in its own record, and a person comparing this program's rows
+	// against the site has nothing else to compare by.
+	PromotionID    int64
+	PromotionSlug  string
+	PromotionShard string
+	PromotionQuery string
 
 	// PhraseListID points at an uploaded file of phrases instead of Phrases.
 	// The two are alternatives: a handful typed into the form travels in the
@@ -260,6 +286,16 @@ func (j Job) Validate() error {
 		// card, so the job is a list of cards.
 		if len(j.Articles) == 0 {
 			bad = append(bad, "no article numbers: a shelf job needs the products to look under")
+		}
+	case KindPromotion:
+		// Which promotion, and where its goods are kept. All three, because a
+		// job with the slug alone cannot build a request and a job with the
+		// preset alone cannot say what it is collecting.
+		if strings.TrimSpace(j.PromotionSlug) == "" {
+			bad = append(bad, "no promotion: choose one from the list")
+		}
+		if strings.TrimSpace(j.PromotionShard) == "" || strings.TrimSpace(j.PromotionQuery) == "" {
+			bad = append(bad, "the promotion has no preset saved with it — pick it again")
 		}
 	case KindProfile:
 		// A link that carries no article number is not a refusal this program
@@ -437,6 +473,10 @@ func (j Job) Estimate(items int) Estimate {
 		e.Requests += pages * regions
 	case KindArticles:
 		// No walk: the list is the enumeration.
+	case KindPromotion:
+		// One request per page, the same as a search: a promotion is a listing
+		// in the same index, asked for a preset instead of a phrase.
+		e.Requests += pages * regions
 	case KindShelves:
 		// One published file per product, and it does not move with the
 		// region — so no region multiplier either.

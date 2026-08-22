@@ -30,6 +30,7 @@ const (
 	ItemProfile = "profile" // resolve what somebody pasted into who they are
 	ItemCatalog = "catalog" // one page of one catalogue node
 	ItemShelf   = "shelf"   // the recommendation row under one product
+	ItemPromo   = "promo"   // one page of one promotion's goods
 )
 
 // keySep separates a key's parts.
@@ -68,6 +69,11 @@ func (k Key) String() string {
 		// run matches on this, and so does the position a product is recorded
 		// at.
 		return strings.Join([]string{ItemCatalog, strconv.FormatInt(k.ID, 10), k.Dest, strconv.Itoa(k.AppType), strconv.Itoa(k.Page)}, keySep)
+	case ItemPromo:
+		// The promotion's own number, for the same reason a catalogue node carries
+		// its id: the preset is a parameter the site can renumber, and a resumed
+		// run has to match on what the promotion is.
+		return strings.Join([]string{ItemPromo, strconv.FormatInt(k.ID, 10), k.Dest, strconv.Itoa(k.AppType), strconv.Itoa(k.Page)}, keySep)
 	case ItemProduct:
 		return strings.Join([]string{ItemProduct, strconv.FormatInt(k.NmID, 10), k.Dest, strconv.Itoa(k.AppType)}, keySep)
 	case ItemProfile:
@@ -97,11 +103,13 @@ func ParseKey(s string) (Key, error) {
 	}
 	k := Key{Kind: parts[0]}
 	switch k.Kind {
-	case ItemPage, ItemListing, ItemCatalog:
+	case ItemPage, ItemListing, ItemCatalog, ItemPromo:
 		if len(parts) != 5 {
 			return Key{}, fmt.Errorf("job: %s key %q has %d parts, want 5", k.Kind, s, len(parts))
 		}
-		if k.Kind == ItemListing || k.Kind == ItemCatalog {
+		// Everything in this family but a search carries a number where the
+		// search carries its phrase.
+		if k.Kind != ItemPage {
 			id, idErr := strconv.ParseInt(parts[1], 10, 64)
 			if idErr != nil {
 				return Key{}, fmt.Errorf("job: %s key %q: id %q", k.Kind, s, parts[1])
@@ -232,6 +240,12 @@ func (StaticPlanner) Plan(j Job) ([]Item, error) {
 			for page := 1; page <= j.MaxPages; page++ {
 				out = append(out, Item{Kind: ItemCatalog, Key: Key{
 					Kind: ItemCatalog, ID: j.CategoryID, Dest: dest, AppType: j.AppType, Page: page,
+				}.String()})
+			}
+		case KindPromotion:
+			for page := 1; page <= j.MaxPages; page++ {
+				out = append(out, Item{Kind: ItemPromo, Key: Key{
+					Kind: ItemPromo, ID: j.PromotionID, Dest: dest, AppType: j.AppType, Page: page,
 				}.String()})
 			}
 		case KindSeller, KindBrand:

@@ -44,6 +44,7 @@ type Site interface {
 	Questions(ctx context.Context, eps wb.Endpoints, imtID int64, take, skip int) (wb.Questions, error)
 	Shelves(ctx context.Context, eps wb.Endpoints, q wb.SearchQuery) (wb.Shelves, error)
 	ProductShelf(ctx context.Context, eps wb.Endpoints, nm int64) (wb.ProductShelf, error)
+	PromotionPage(ctx context.Context, eps wb.Endpoints, p wb.Promotion, q wb.SearchQuery) (wb.Envelope, error)
 }
 
 // Fetcher does one item of a job.
@@ -105,6 +106,8 @@ func (f *Fetcher) fetchKey(ctx context.Context, key job.Key) (int, error) {
 		return f.ads(ctx, key)
 	case job.ItemShelf:
 		return f.shelf(ctx, key)
+	case job.ItemPromo:
+		return f.promo(ctx, key)
 	}
 	// Not a default that quietly does nothing: an item kind this build cannot
 	// do would otherwise be marked done, and a run would report success having
@@ -236,6 +239,70 @@ func (f *Fetcher) catalog(ctx context.Context, key job.Key) (int, error) {
 
 	extra, err := f.enrich(ctx, env.Products, key)
 	return requests + extra, err
+}
+
+// promo walks one page of a promotion's goods — spec section 4.6's type 8.
+//
+// The same shape as a catalogue node and for the same reason: it is a listing
+// in the same index, asked for a preset instead of a phrase. What differs is
+// what the place means — «третий в акции» is a fact about a promotion that
+// ends, and it is recorded under the promotion rather than under the preset,
+// because a preset is a number the site can reissue.
+func (f *Fetcher) promo(ctx context.Context, key job.Key) (int, error) {
+	p := wb.Promotion{
+		ID:    f.Job.PromotionID,
+		Slug:  strings.TrimSpace(f.Job.PromotionSlug),
+		Shard: strings.TrimSpace(f.Job.PromotionShard),
+		Query: strings.TrimSpace(f.Job.PromotionQuery),
+	}
+	if p.Shard == "" || p.Query == "" {
+		// Refused before the request rather than after: an address with a hole
+		// in it is one the site answers with somebody else's goods, which
+		// reads like a promotion that changed its contents.
+		return 0, fmt.Errorf("collect: акция %q: у задания не сохранён пресет — выберите акцию заново", p.Slug)
+	}
+
+	env, err := f.Site.PromotionPage(ctx, f.Eps, p, wb.SearchQuery{
+		Dest: key.Dest, AppType: key.AppType, Page: key.Page,
+	})
+	if err != nil {
+		return 1, fmt.Errorf("collect: акция %q страница %d: %w", p.Slug, key.Page, err)
+	}
+	requests := 1
+
+	// The place a product holds inside the promotion, recorded under the
+	// promotion's own name rather than under the preset. The preset is a
+	// number the site can reissue; the slug is what the promotion is, and
+	// «третий в акции» has to keep meaning the same thing next season.
+	if _, err := f.Store.SaveSearchPage(ctx, env, promoQueryKey(p.Slug)); err != nil {
+		return requests, fmt.Errorf("collect: сохранение акции %q страница %d: %w", p.Slug, key.Page, err)
+	}
+	if err := f.link(ctx, env.Products); err != nil {
+		return requests, err
+	}
+
+	extra, err := f.enrich(ctx, env.Products, key)
+	return requests + extra, err
+}
+
+// promoPrefix marks a position recorded inside a promotion rather than inside
+// a search. See promo above.
+const promoPrefix = "promo:"
+
+// promoQueryKey is the query column's value for a promotion's positions.
+func promoQueryKey(slug string) string { return promoPrefix + slug }
+
+// PromotionOf reports the promotion a position belongs to, and whether it is
+// one at all. The reading half of promoQueryKey, exported because the screens
+// that draw a position history have to tell «место в акции» from «место по
+// фразе» — an acction ends, and a series that mixed the two would show a
+// product falling out of the results on the day the promotion closed.
+func PromotionOf(query string) (string, bool) {
+	rest, ok := strings.CutPrefix(query, promoPrefix)
+	if !ok || rest == "" {
+		return "", false
+	}
+	return rest, true
 }
 
 // catalogPrefix marks a position recorded inside a catalogue node rather than

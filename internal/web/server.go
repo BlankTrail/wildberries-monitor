@@ -110,6 +110,12 @@ type Server struct {
 	// tests must not need a live Wildberries to render a directory.
 	PickupPoint func(ctx context.Context, id int64) (wb.PickupPoint, error)
 
+	// Promotions reads the site's list of what it is running and stores it,
+	// returning how many landed and how many could not be read. Spec section
+	// 4.6's type 8 — a promotion runs for a fortnight, so this is refreshed
+	// far more often than the catalogue directory beside it.
+	Promotions func(ctx context.Context) (saved, missed int, err error)
+
 	// PickupDirectory reads the site's whole directory of delivery points and
 	// stores it, returning how many settlements and how many points. One
 	// request for the country — see spec section 4.5's picker.
@@ -289,6 +295,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /jobs", s.auth(http.HandlerFunc(s.jobsPage)))
 	mux.Handle("POST /jobs", s.auth(http.HandlerFunc(s.saveJobHandler)))
 	mux.Handle("POST /jobs/estimate", s.auth(http.HandlerFunc(s.estimateHandler)))
+	mux.Handle("POST /jobs/promotions", s.auth(http.HandlerFunc(s.refreshPromotions)))
 	mux.Handle("POST /jobs/categories", s.auth(http.HandlerFunc(s.refreshCategories)))
 	mux.Handle("POST /regions", s.auth(http.HandlerFunc(s.addRegion)))
 	mux.Handle("GET /pickup/settlements", s.auth(http.HandlerFunc(s.pickupSettlements)))

@@ -44,6 +44,7 @@ var kindLabels = map[job.Kind]string{
 	job.KindArticles:  "Список артикулов",
 	job.KindPhraseAds: "Реклама в выдаче по фразе",
 	job.KindPositions: "Позиции товаров по фразам",
+	job.KindPromotion: "Состав акции",
 	job.KindShelves:   "Полка «Продавец рекомендует»",
 }
 
@@ -61,6 +62,7 @@ var kindWhat = map[job.Kind]string{
 	job.KindArticles:  "Только перечисленные артикулы, без поиска.",
 	job.KindPhraseAds: "Рекламные полки в выдаче по фразе: чей товар и на каком месте.",
 	job.KindPositions: "Где перечисленные артикулы стоят в выдаче по каждой фразе. Чужие товары со страниц не сохраняются.",
+	job.KindPromotion: "Товары одной акции и место каждого в ней. Видно, кто зашёл в акцию и с какой ценой.",
 	job.KindShelves:   "Что продавец повесил под своей карточкой: чьи товары и на каком месте. По одному файлу на артикул, без прокси.",
 }
 
@@ -366,6 +368,8 @@ func (s *Server) constructorHTML(r *http.Request) (string, error) {
 		job.KindPhrase, job.KindPhraseAds, job.KindPositions))
 
 	b.WriteString(whenAny(s.categoryBox(r, ""), job.KindCatalog))
+
+	b.WriteString(whenAny(s.promotionBox(r, ""), job.KindPromotion))
 
 	b.WriteString(whenAny(
 		field("Артикул продавца", `<input class="bt-input" name="supplier_id" type="number" min="1" data-estimate>`,
@@ -680,11 +684,23 @@ func (s *Server) jobFromForm(r *http.Request) (job.Job, error) {
 			return job.Job{}, err
 		}
 		j.CategoryID, j.CategoryQuery = c.ID, c.SearchQuery
+	case job.KindPromotion:
+		// The promotion and where its goods are kept, both read now and for
+		// the same reason as a catalogue node's query — with one difference
+		// that matters more here: a promotion runs for a fortnight, so a list
+		// read last month names presets that have stopped answering.
+		p, err := s.promotionOf(r, f.Get("promotion_slug"))
+		if err != nil {
+			return job.Job{}, err
+		}
+		j.PromotionID, j.PromotionSlug = p.ID, p.Slug
+		j.PromotionShard, j.PromotionQuery = p.Shard, p.Query
 	}
 	// Paging bounds a walk that has pages. The article and advert kinds have
 	// none, and a page count stored against them is a number no run reads.
 	switch j.Kind {
-	case job.KindPhrase, job.KindCatalog, job.KindSeller, job.KindBrand, job.KindPositions:
+	case job.KindPhrase, job.KindCatalog, job.KindSeller, job.KindBrand,
+		job.KindPositions, job.KindPromotion:
 		j.MaxPages = int(atoi64(f.Get("max_pages")))
 	}
 

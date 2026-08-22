@@ -60,6 +60,11 @@ const (
 	SourceBrandCatalog Source = "brand catalog"
 	// SourceShelves is the advertising placements mixed into one search.
 	SourceShelves Source = "shelves"
+	// SourcePromotion is one page of a promotion's goods. Its own source
+	// rather than the search's, because it is its own address and its own
+	// index shard — and a timing table that folded them together could not
+	// say which of the two went slow.
+	SourcePromotion Source = "promotion"
 	// SourceBrand is a brand's directory entry.
 	SourceBrand Source = "brand"
 )

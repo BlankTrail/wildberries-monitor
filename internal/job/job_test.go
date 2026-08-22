@@ -236,19 +236,20 @@ func TestEstimate_AFieldThatCostsNothingChangesNothing(t *testing.T) {
 
 func TestKinds_AreOnlyTheOnesWithASource(t *testing.T) {
 	// The design lists fourteen job types. The ones absent here name sources
-	// this build cannot fetch — promotions and the main page's shelves — and
-	// declaring one would let a user schedule a job that collects nothing, the
-	// same mistake the field catalogue refuses.
+	// this build cannot fetch — the main page's shelves — and declaring one
+	// would let a user schedule a job that collects nothing, the same mistake
+	// the field catalogue refuses.
 	//
-	// Two stopped being absent. A catalogue node is filled through the search
-	// endpoint this build already speaks, with a query the site's own
-	// directory publishes per node; and a product's «Продавец рекомендует» row
-	// is a static file published per card. The other two shelves section 4.6
-	// names — «с этим покупают» and «комплекты» — are still absent, and
-	// KindShelves says so where it is declared.
+	// Three stopped being absent. A catalogue node is filled through the search
+	// endpoint this build already speaks, with a query the site's own directory
+	// publishes per node; a product's «Продавец рекомендует» row is a static
+	// file published per card; and a promotion's goods come from the same
+	// search index under the preset the promotion's own record names. The other
+	// two shelves section 4.6 names — «с этим покупают» and «комплекты» — are
+	// still absent, and KindShelves says so where it is declared.
 	got := Kinds()
-	if len(got) != 9 {
-		t.Fatalf("Kinds() has %d entries, want 9", len(got))
+	if len(got) != 10 {
+		t.Fatalf("Kinds() has %d entries, want 10", len(got))
 	}
 	seen := map[Kind]bool{}
 	for _, k := range got {
@@ -466,5 +467,71 @@ func TestValidate_AShelfJobNeedsTheProductsToLookUnder(t *testing.T) {
 	j := Job{Kind: KindShelves, Regions: []string{"-1257786"}, Fields: wb.Selection{"nm_id"}}
 	if err := j.Validate(); err == nil {
 		t.Error("задание на полки без артикулов принято")
+	}
+}
+
+func TestValidate_APromotionJobNeedsBothTheNameAndTheAddress(t *testing.T) {
+	// Which promotion, and where its goods are kept. A job with the slug alone
+	// cannot build a request; a job with the preset alone cannot say what it is
+	// collecting, and its positions would be filed under an empty name.
+	base := Job{Kind: KindPromotion, Regions: []string{"-1257786"}, MaxPages: 1,
+		Fields: wb.Selection{"nm_id"}}
+	for _, c := range []struct {
+		name string
+		mod  func(*Job)
+	}{
+		{"без акции", func(j *Job) { j.PromotionShard, j.PromotionQuery = "promo/bucket_6", "preset=1" }},
+		{"без шарда", func(j *Job) { j.PromotionSlug, j.PromotionQuery = "x", "preset=1" }},
+		{"без пресета", func(j *Job) { j.PromotionSlug, j.PromotionShard = "x", "promo/bucket_6" }},
+		{"пустое всё", func(j *Job) {}},
+	} {
+		j := base
+		c.mod(&j)
+		if err := j.Validate(); err == nil {
+			t.Errorf("%s: задание принято", c.name)
+		}
+	}
+
+	whole := base
+	whole.PromotionSlug, whole.PromotionShard, whole.PromotionQuery = "x", "promo/bucket_6", "preset=1"
+	if err := whole.Validate(); err != nil {
+		t.Errorf("полное задание отклонено: %v", err)
+	}
+}
+
+func TestPlan_APromotionIsWalkedPageByPage(t *testing.T) {
+	// A promotion is a listing with paging, like a catalogue node. A plan that
+	// asked for page one three times would report three items done and collect
+	// the same hundred goods three times.
+	j := Job{Kind: KindPromotion, PromotionID: 1005032, PromotionSlug: "x",
+		PromotionShard: "promo/bucket_6", PromotionQuery: "preset=1005032",
+		Regions: []string{"-1257786", "-5887751"}, MaxPages: 3, AppType: 1,
+		Fields: wb.Selection{"nm_id"}}
+
+	items, err := StaticPlanner{}.Plan(j)
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if len(items) != 6 {
+		t.Fatalf("пунктов %d, ожидалось шесть — три страницы на два региона", len(items))
+	}
+	pages := map[int]int{}
+	for _, it := range items {
+		k, err := ParseKey(it.Key)
+		if err != nil {
+			t.Fatalf("ParseKey %q: %v", it.Key, err)
+		}
+		if k.Kind != ItemPromo {
+			t.Errorf("пункт вида %q", k.Kind)
+		}
+		if k.ID != 1005032 {
+			t.Errorf("пункт про акцию %d", k.ID)
+		}
+		pages[k.Page]++
+	}
+	for page := 1; page <= 3; page++ {
+		if pages[page] != 2 {
+			t.Errorf("страница %d запланирована %d раз, ожидалось два (по региону)", page, pages[page])
+		}
 	}
 }
