@@ -315,6 +315,8 @@ func TestSettings_NeverRendersTheKeyItStored(t *testing.T) {
 	// would put the key in the page source, and the masking would have bought
 	// nothing.
 	srv := newServer(t)
+	// Shaped like a key and unmistakably not one. A test fixture that looks
+	// plausible is a test fixture somebody pastes a real value into.
 	const key = "not-a-real-key-0000000000000000"
 	if err := srv.Store.SetSetting(context.Background(), store.SettingBlankTrailAPIKey, key, store.SettingSecret); err != nil {
 		t.Fatalf("SetSetting: %v", err)

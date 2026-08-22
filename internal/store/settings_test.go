@@ -48,6 +48,8 @@ func TestSettingsForDisplay_MasksASecretAndNothingElse(t *testing.T) {
 	// is an API key in the screenshot the user pastes into a support chat.
 	s := openTestStore(t)
 	ctx := context.Background()
+	// Shaped like a key and unmistakably not one. A test fixture that looks
+	// plausible is a test fixture somebody pastes a real value into.
 	const key = "not-a-real-key-0000000000000000"
 
 	if err := s.SetSetting(ctx, SettingBlankTrailAPIKey, key, SettingSecret); err != nil {
