@@ -250,8 +250,18 @@ func TestSQLText_RowsAreBatchedRatherThanOnePerStatement(t *testing.T) {
 	}
 	out := dump(t, DialectPostgres, Options{}, cols, rows...)
 
-	if got := strings.Count(out, "INSERT INTO"); got != 2 {
-		t.Errorf("INSERT-ов %d, ожидалось 2: полная пачка и остаток", got)
+	statements := strings.Split(out, "INSERT INTO")[1:]
+	if len(statements) != 2 {
+		t.Fatalf("INSERT-ов %d, ожидалось 2: полная пачка и остаток", len(statements))
+	}
+	// The size of the batch and not only that there was more than one of them:
+	// a flush one row late still produces two statements, and the whole point
+	// of the constant is which row it happens on.
+	if got := strings.Count(statements[0], "\n  ("); got != sqlBatch {
+		t.Errorf("в первой пачке строк %d, ожидалось %d", got, sqlBatch)
+	}
+	if got := strings.Count(statements[1], "\n  ("); got != 3 {
+		t.Errorf("в остатке строк %d, ожидалось 3", got)
 	}
 	if !strings.Contains(out, "(1)") || !strings.Contains(out, "(503)") {
 		t.Errorf("потеряна первая или последняя строка:\n%s", firstAndLast(out))

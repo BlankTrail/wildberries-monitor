@@ -155,6 +155,38 @@ func TestRun_RefusesToOpenTheNetworkWithAGeneratedPassword(t *testing.T) {
 	}
 }
 
+func TestRun_HandsRunsTheProgramsOwnLifetime(t *testing.T) {
+	// A run started from the panel hangs off this and not off the request that
+	// asked for it. Both ends matter: without the program's context a run
+	// would be cancelled by the page that started it, and without it being the
+	// program's — a detached one would do for that — shutdown could no longer
+	// stop a collection, and the tray's «выход» would leave one running.
+	a := newApp(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+
+	served := make(chan error, 1)
+	go func() { served <- a.Run(ctx) }()
+
+	settled(t, "программа не запомнила своё время жизни", func() bool {
+		return a.life.Load() != nil
+	})
+	// The caller's is irrelevant by then: what comes back is the program's.
+	spent, done := context.WithCancel(t.Context())
+	done()
+	if a.lifetime(spent).Err() != nil {
+		t.Fatal("прогон получил бы уже отменённый контекст")
+	}
+
+	cancel()
+	settled(t, "остановка программы не доходит до прогонов", func() bool {
+		return a.lifetime(spent).Err() != nil
+	})
+	if err := <-served; err != nil {
+		t.Errorf("Run = %v", err)
+	}
+}
+
 func TestTick_PicksUpATokenSavedAMomentAgo(t *testing.T) {
 	// Without this, configuring Telegram would need a restart — which on
 	// Windows means finding the tray icon and on a server means an ssh
