@@ -804,3 +804,22 @@ dialog.bt-modal > #settings-body {
   font-size: .8rem;
   line-height: 1.5;
 }
+
+/* ---- comparison deltas -------------------------------------------------- */
+
+/* Which side of a difference is the winning one is not obvious from the sign:
+   fewer places is better, dearer is worse, more reviews is better. The colour
+   says which, so a column of numbers reads without a legend. */
+.bt[data-bt-theme="dashboard"] .bt-delta--good {
+  color: #0f6f4d;
+  font-weight: 600;
+}
+
+.bt[data-bt-theme="dashboard"] .bt-delta--bad {
+  color: #b91c1c;
+  font-weight: 600;
+}
+
+.bt[data-bt-theme="dashboard"] .bt-delta--even {
+  color: var(--text-muted);
+}

@@ -241,6 +241,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /profile/competitors", s.auth(http.HandlerFunc(s.findCompetitors)))
 	mux.Handle("POST /profile/competitors/pin", s.auth(http.HandlerFunc(s.markCompetitor)))
 	mux.Handle("POST /profile/competitors/exclude", s.auth(http.HandlerFunc(s.markCompetitor)))
+	mux.Handle("GET /compare", s.auth(http.HandlerFunc(s.comparePage)))
+	mux.Handle("POST /compare/recompute", s.auth(http.HandlerFunc(s.recompare)))
 	mux.Handle("GET /rules", s.auth(http.HandlerFunc(s.rulesPage)))
 	mux.Handle("POST /rules", s.auth(http.HandlerFunc(s.saveRule)))
 	mux.Handle("GET /rules/log", s.auth(http.HandlerFunc(s.ruleLog)))
@@ -370,6 +372,7 @@ func (s *Server) tabs(current string) []Tab {
 		{Label: "Обзор", Href: "/"},
 		{Label: "Мой профиль", Href: "/profile"},
 		{Label: "Задачи", Href: "/jobs"},
+		{Label: "Сравнение", Href: "/compare"},
 		{Label: "Отслеживание", Href: "/track"},
 		{Label: "Уведомления", Href: "/rules"},
 		{Label: "Прокси", Href: "/channels"},
