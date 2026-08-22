@@ -179,14 +179,16 @@ func filterForm(q url.Values) string {
 	return b.String()
 }
 
-// exportFormats are the five spec section 5.3 names, in the order the buttons
-// appear.
+// exportFormats are spec section 5.3's destinations, in the order the buttons
+// appear: the four files a person opens, then the three a program loads.
 var exportFormats = []struct{ key, label string }{
 	{"csv", "CSV"},
 	{"xlsx", "XLSX"},
 	{"json", "JSON"},
 	{"jsonl", "JSONL"},
 	{"sqlite", "SQLite"},
+	{"postgres", "PostgreSQL"},
+	{"mysql", "MySQL"},
 }
 
 func exportButtons(q url.Values) string {
@@ -321,6 +323,11 @@ func formatMeta(format string) (mime, ext string, err error) {
 		mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 	case "sqlite":
 		mime = "application/vnd.sqlite3"
+	case "postgres", "mysql":
+		// The registered type for a file of SQL statements. text/plain would
+		// also be true and would make a browser show a million INSERTs instead
+		// of saving them.
+		mime = "application/sql"
 	}
 	return mime, ext, nil
 }

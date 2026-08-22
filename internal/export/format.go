@@ -24,6 +24,12 @@ import (
 // the header is finished last — so it takes a path rather than a writer. See
 // NewSQLite, and see Extension, which does know about it, because a caller
 // choosing a filename has to.
+//
+// postgres and mysql are two names for one writer and one file suffix. They
+// are separate names rather than a dialect option because a person choosing
+// «выгрузить» is choosing where the data is going, not configuring a format —
+// and because a dump applied to the wrong server fails on its first statement
+// with a syntax error that says nothing about which end was wrong.
 func NewWriter(format string, w io.Writer, o Options) (Writer, error) {
 	switch format {
 	case "csv", "":
@@ -34,6 +40,8 @@ func NewWriter(format string, w io.Writer, o Options) (Writer, error) {
 		return NewJSONL(w, o)
 	case "xlsx":
 		return NewXLSX(w, o)
+	case DialectPostgres, DialectMySQL:
+		return NewSQLText(w, format, o)
 	}
 	return nil, fmt.Errorf("формат %q этой сборке неизвестен", format)
 }
@@ -55,6 +63,11 @@ func Extension(format string) (string, error) {
 		return "xlsx", nil
 	case "sqlite":
 		return "sqlite", nil
+	case DialectPostgres, DialectMySQL:
+		// One suffix for both: what is inside is SQL either way, and the
+		// dialect is named in the file's first line, where a person about to
+		// pipe it into a server can see it.
+		return "sql", nil
 	}
 	return "", fmt.Errorf("формат %q этой сборке неизвестен", format)
 }

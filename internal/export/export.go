@@ -112,7 +112,7 @@ type Options struct {
 	Decimal    rune
 	Encoding   string // "utf-8", "utf-8-bom", "windows-1251"
 	IncludeRaw bool   // JSON/JSONL only: keep WB's own response beside the parsed fields
-	Table      string // SQLite only: destination table name
+	Table      string // SQLite and SQL only: destination table name
 }
 
 // Columns turns a selection into the column set, in catalogue order.
