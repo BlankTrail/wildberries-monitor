@@ -162,7 +162,7 @@ func (s *Server) firingsHTML(ctx context.Context, events []store.RuleEventRow) s
 			}
 			state = `<span class="bt-badge bt-badge--neutral bt-badge--sm">` + html.EscapeString(label) + `</span>`
 		}
-		fmt.Fprintf(&b, `<tr><td>%s</td><td>%s</td><td>%s</td><td class="bt-code">%d</td><td>%s</td></tr>`,
+		fmt.Fprintf(&b, `<tr><td>%s</td><td>%s</td><td>%s</td><td class="bt-mono">%d</td><td>%s</td></tr>`,
 			html.EscapeString(readAtText(e.FiredAt)), html.EscapeString(name),
 			html.EscapeString(kindLabel(track.Kind(e.Kind))), e.NmID, state)
 	}

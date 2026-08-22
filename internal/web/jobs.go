@@ -998,7 +998,7 @@ func (s *Server) failuresHTML(ctx context.Context, run store.RunRow) string {
 		if reason == "" {
 			reason = "причина не записана"
 		}
-		fmt.Fprintf(&b, `<tr><td class="bt-code">%s</td><td class="bt-num">%d</td><td class="bt-cell-wrap">%s</td></tr>`,
+		fmt.Fprintf(&b, `<tr><td class="bt-mono">%s</td><td class="bt-num">%d</td><td class="bt-cell-wrap">%s</td></tr>`,
 			html.EscapeString(it.Key), it.Attempts, html.EscapeString(reason))
 	}
 	b.WriteString(`</tbody></table></div>`)
@@ -1018,9 +1018,16 @@ func runStateHTML(run store.RunRow) string {
 		return `<span class="bt-badge bt-badge--error bt-badge--sm">с ошибкой</span>`
 	case store.RunStopped:
 		return `<span class="bt-badge bt-badge--warning bt-badge--sm">остановлено</span>`
-	default:
-		return `<span class="bt-badge bt-badge--neutral bt-badge--sm">завершено</span>`
 	}
+	if run.Errors > 0 {
+		// Finished, and not cleanly. A plain «завершено» over a run that lost
+		// half its items is the sentence that keeps somebody from looking at
+		// the list right below it.
+		return fmt.Sprintf(
+			`<span class="bt-badge bt-badge--warning bt-badge--sm">завершено с отказами</span> %d`,
+			run.Errors)
+	}
+	return `<span class="bt-badge bt-badge--neutral bt-badge--sm">завершено</span>`
 }
 
 // runLength is how long an attempt took, or that it is still going.
@@ -1137,7 +1144,7 @@ func (s *Server) regionControl(ctx context.Context) string {
 				continue
 			}
 			fmt.Fprintf(&rows,
-				`<label class="bt-checkbox"><input type="checkbox" value="%s"> <span class="bt-code">%s</span> %s</label>`,
+				`<label class="bt-checkbox"><input type="checkbox" value="%s"> <span class="bt-mono">%s</span> %s</label>`,
 				html.EscapeString(d.Code), html.EscapeString(d.Code), html.EscapeString(destUseText(d)))
 		}
 		if rows.Len() == 0 {

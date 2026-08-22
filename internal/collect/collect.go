@@ -209,7 +209,18 @@ func (f *Fetcher) ads(ctx context.Context, key job.Key) (int, error) {
 // unknown number of requests on a button somebody pressed to find out what
 // the link was.
 func (f *Fetcher) profile(ctx context.Context, key job.Key) (int, error) {
-	fetched, err := f.Site.Card(ctx, f.Basket, f.Eps, key.NmID, "", 0)
+	// The job's own region and audience, not empty strings. Resolving who
+	// somebody is does not depend on a region — which is why the item key
+	// carries none — but the request that does the resolving is the card
+	// detail endpoint, and that endpoint answers an empty dest with 400. The
+	// first build of this asked with no region at all, and every profile a
+	// person pasted came back «status 400 (other)».
+	dest := f.Job.FirstRegion()
+	if dest == "" {
+		return 0, fmt.Errorf("collect: profile %d: у задания не указан регион, "+
+			"а карточка без него не читается — пересоздайте разбор ссылки", key.NmID)
+	}
+	fetched, err := f.Site.Card(ctx, f.Basket, f.Eps, key.NmID, dest, f.Job.AppType)
 	if err != nil {
 		return 1, fmt.Errorf("collect: profile card %d: %w", key.NmID, err)
 	}

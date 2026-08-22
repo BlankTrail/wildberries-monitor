@@ -380,3 +380,32 @@ func TestCompetitors_TheirPagesAreCollectedByAPhraseJob(t *testing.T) {
 		t.Errorf("фразы задания = %v", made.Phrases)
 	}
 }
+
+func TestProfile_TheJobItSavesNamesARegion(t *testing.T) {
+	// The screen saved a job with no region at all, and the card detail
+	// endpoint answers an empty dest with 400 — so every link anybody pasted
+	// produced a job that could not succeed, from a screen that never asked.
+	// Checked on the saved job rather than on the request, because this is the
+	// end that was wrong: the fetcher had nothing to be given.
+	srv := newServer(t)
+	if w := postForm(t, srv, "/profile", url.Values{
+		"input": {"https://www.wildberries.ru/catalog/190496459/detail.aspx"},
+	}); w.Code != 200 {
+		t.Fatalf("сохранение профиля = %d", w.Code)
+	}
+
+	jobs, err := srv.Store.Jobs(t.Context())
+	if err != nil || len(jobs) != 1 {
+		t.Fatalf("Jobs: %v, %d", err, len(jobs))
+	}
+	j, err := job.Load(t.Context(), srv.Store, jobs[0].ID)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if j.FirstRegion() == "" {
+		t.Error("у разбора ссылки нет региона — карточка по такому заданию не читается")
+	}
+	if j.AppType == 0 {
+		t.Error("у разбора ссылки не выбрана аудитория")
+	}
+}

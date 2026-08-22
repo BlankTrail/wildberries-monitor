@@ -143,6 +143,61 @@ func TestRun_OneItemsFailureIsNotTheRuns(t *testing.T) {
 	}
 }
 
+func TestRun_CollectingNothingIsAFailureRatherThanAnEmptyResult(t *testing.T) {
+	// «Завершено» over a run that lost every item reads like an empty answer —
+	// «нашли ноль товаров» — and sends its owner looking for the filter that
+	// hid them instead of at the reason printed right beside it. The run that
+	// produced this test lost its one item to «status 400 (other)» and was
+	// filed as finished.
+	boom := errors.New("card 1 detail: status 400 (other)")
+	f := &recordingFetcher{failOn: map[string]error{"a": boom, "b": boom}}
+	r, s, _ := newRunner(t, []Item{{Kind: "product", Key: "a"}, {Kind: "product", Key: "b"}}, f)
+	j := savedJob(t, s)
+
+	res, err := r.Run(context.Background(), j)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Items != 0 || res.Failed != 2 {
+		t.Fatalf("прогон = %+v, ожидалось ноль собранного и два отказа", res)
+	}
+
+	runs, err := s.Runs(context.Background(), j.ID, 5)
+	if err != nil || len(runs) != 1 {
+		t.Fatalf("Runs: %v, %d", err, len(runs))
+	}
+	if runs[0].State != store.RunFailed {
+		t.Errorf("прогон записан как %q — ни одной позиции не собрано", runs[0].State)
+	}
+	if runs[0].Error == "" {
+		t.Error("не записано, почему прогон считается неудачным")
+	}
+}
+
+func TestRun_LosingSomeItemsIsStillAFinishedRun(t *testing.T) {
+	// The other side of the same line, and the reason it is a line rather than
+	// «есть отказы — значит провал»: a walk that collected most of its plan did
+	// finish, and an error badge over a week of good readings is its own kind
+	// of lie.
+	f := &recordingFetcher{failOn: map[string]error{"a": errors.New("одна страница не далась")}}
+	r, s, _ := newRunner(t, []Item{{Kind: "product", Key: "a"}, {Kind: "product", Key: "b"}}, f)
+	j := savedJob(t, s)
+
+	if _, err := r.Run(context.Background(), j); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	runs, err := s.Runs(context.Background(), j.ID, 5)
+	if err != nil || len(runs) != 1 {
+		t.Fatalf("Runs: %v, %d", err, len(runs))
+	}
+	if runs[0].State != store.RunDone {
+		t.Errorf("прогон записан как %q — часть плана собрана", runs[0].State)
+	}
+	if runs[0].Errors != 1 {
+		t.Errorf("отказов записано %d, ожидался один", runs[0].Errors)
+	}
+}
+
 func TestRun_ResumesFromWhatIsLeftRatherThanFromTheStart(t *testing.T) {
 	// Section 10's promise, and the reason the plan is written before the work
 	// starts. A resumed run that began again would pay twice for everything

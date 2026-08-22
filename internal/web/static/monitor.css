@@ -126,7 +126,17 @@
    proportional digits does not line up, and a table of prices that does not
    line up is a table nobody reads down. */
 .bt-table,
-.bt-code,
+/* An identifier read as a value rather than as prose: an article number, a
+   region code, a line of a run's log. Not .bt-code — that is the design
+   system's code *block*, a near-black panel with a title bar, and borrowing it
+   for a table cell drew every article number as a black pill with black text
+   on it. The panel wanted the monospace and none of the chrome, and this is
+   the monospace. */
+.bt-mono {
+  font-family: var(--font-mono);
+}
+
+.bt-mono,
 .bt input[type="number"],
 .bt .bt-tabular {
   font-variant-numeric: tabular-nums;

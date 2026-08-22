@@ -96,7 +96,7 @@ func compareTable(rows []store.BenchmarkRow) string {
 		`</tr></thead><tbody>`)
 
 	for _, r := range rows {
-		fmt.Fprintf(&b, `<tr><td class="bt-code">%d</td><td>%s</td><td>%s</td>`,
+		fmt.Fprintf(&b, `<tr><td class="bt-mono">%d</td><td>%s</td><td>%s</td>`,
 			r.NmID, html.EscapeString(r.Query), html.EscapeString(baselineText(r)))
 
 		// Position: fewer is better, which is the one column where a smaller

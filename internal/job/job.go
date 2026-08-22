@@ -158,6 +158,21 @@ func (j Job) phraseCount() int {
 	return j.PhraseListCount
 }
 
+// FirstRegion is the region a job that makes a single request is made for.
+//
+// Every reading in this product is regional — a price and a place both are —
+// so there is no such thing as a request without one. A job that enumerates
+// walks Regions in full; a job that resolves one card asks about one region,
+// and this is which.
+func (j Job) FirstRegion() string {
+	for _, r := range j.Regions {
+		if s := strings.TrimSpace(r); s != "" {
+			return s
+		}
+	}
+	return ""
+}
+
 // Validate reports every reason a job cannot run, rather than the first.
 //
 // All of them at once because this is what the task constructor shows: a

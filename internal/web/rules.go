@@ -622,7 +622,7 @@ func (s *Server) targetsSection(ctx context.Context, targets []store.TargetRow) 
 				state = `<span class="bt-badge bt-badge--neutral bt-badge--sm">выключен</span>`
 				switchLabel = "Включить"
 			}
-			fmt.Fprintf(&b, `<tr><td>%s</td><td>%s</td><td class="bt-code">%s</td><td>%s</td><td class="bt-row-actions">%s%s</td></tr>`,
+			fmt.Fprintf(&b, `<tr><td>%s</td><td>%s</td><td class="bt-mono">%s</td><td>%s</td><td class="bt-row-actions">%s%s</td></tr>`,
 				html.EscapeString(name), html.EscapeString(targetKindLabel(t.Kind)),
 				html.EscapeString(t.Address), state,
 				action("/rules/targets/toggle?id="+fmt.Sprint(t.ID), "#rules-body", switchLabel),

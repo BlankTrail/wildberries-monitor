@@ -107,9 +107,18 @@ func (r *Runner) Run(ctx context.Context, j Job) (Result, error) {
 
 	state, runErr := store.RunDone, error(nil)
 	failure := ""
-	if stopped {
+	switch {
+	case stopped:
 		state, runErr = store.RunStopped, ErrStopped
 		failure = ErrStopped.Error()
+	case res.Items == 0 && res.Failed > 0:
+		// A run that walked its whole plan and collected nothing is not a
+		// finished run, whatever it did with its time. Reported as «завершено»
+		// it reads like an empty result — «нашли ноль товаров» — and the
+		// person goes looking for the filter that hid them instead of at the
+		// reason beside it. Every item failed; that is a failure.
+		state = store.RunFailed
+		failure = fmt.Sprintf("ничего не собрано: отказов %d", res.Failed)
 	}
 	// Closed on a context of its own. The cancellation that stopped the run
 	// must not also stop the bookkeeping about it: a run left in "running"

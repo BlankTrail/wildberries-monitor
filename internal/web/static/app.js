@@ -452,7 +452,7 @@
       const el = document.querySelector("#run-log");
       if (!el) return;
       const line = document.createElement("div");
-      line.className = "bt-code";
+      line.className = "bt-mono";
       line.textContent = ev.data;
       el.prepend(line);
       // Bounded on purpose: a run of a million items would otherwise grow the

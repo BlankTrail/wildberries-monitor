@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -707,4 +708,74 @@ func countRowsForTest(t *testing.T, s *Store, query string) int {
 		t.Fatalf("count: %v", err)
 	}
 	return n
+}
+
+func TestMigration0013_GivesAnOldProfileJobTheRegionItCannotRunWithout(t *testing.T) {
+	// A profile job saved by the first build of that screen carries no region,
+	// and the card detail endpoint answers an empty dest with 400 — so it is a
+	// job that can only ever fail. Fixed in the panel; this is for the ones
+	// already in somebody's database, so that «Запустить» works rather than
+	// making them paste the link a second time.
+	//
+	// The migration's own text, run against rows made after it applied,
+	// because that is the state it exists for and a migration cannot be
+	// replayed any other way.
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	old, err := s.SaveJob(ctx, JobRow{
+		Name: "профиль: 190496459", Type: "profile",
+		Params: `{"input":"190496459"}`, Fields: `["nm_id"]`, Regions: `[]`, Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("SaveJob: %v", err)
+	}
+	chosen, err := s.SaveJob(ctx, JobRow{
+		Name: "профиль: 1", Type: "profile",
+		Params: `{"input":"1","app_type":32}`, Fields: `["nm_id"]`,
+		Regions: `["12358499"]`, Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("SaveJob: %v", err)
+	}
+	other, err := s.SaveJob(ctx, JobRow{
+		Name: "фраза", Type: "phrase",
+		Params: `{"phrases":["платье"]}`, Fields: `["nm_id"]`, Regions: `[]`, Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("SaveJob: %v", err)
+	}
+
+	sql, err := migrationFS.ReadFile("migrations/0013_profile_jobs_carry_a_region.sql")
+	if err != nil {
+		t.Fatalf("миграция не читается: %v", err)
+	}
+	if _, err := s.db.ExecContext(ctx, string(sql)); err != nil {
+		t.Fatalf("прогон миграции: %v", err)
+	}
+
+	regionOf := func(id int64) (string, string) {
+		t.Helper()
+		var regions, params string
+		if err := s.db.QueryRowContext(ctx,
+			`SELECT regions, params FROM jobs WHERE id = ?`, id).Scan(&regions, &params); err != nil {
+			t.Fatalf("чтение задания %d: %v", id, err)
+		}
+		return regions, params
+	}
+
+	if regions, params := regionOf(old); regions == "[]" {
+		t.Errorf("у старого разбора ссылки регион всё ещё пуст: %s", regions)
+	} else if !strings.Contains(params, `"app_type":1`) {
+		t.Errorf("аудитория не записана: %s", params)
+	}
+
+	// A region somebody chose is not a region for a migration to have an
+	// opinion about, and neither is a job of another kind.
+	if regions, params := regionOf(chosen); regions != `["12358499"]` || !strings.Contains(params, `"app_type":32`) {
+		t.Errorf("выбранные настройки перезаписаны: %s / %s", regions, params)
+	}
+	if regions, _ := regionOf(other); regions != "[]" {
+		t.Errorf("миграция тронула задание другого вида: %s", regions)
+	}
 }

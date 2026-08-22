@@ -674,6 +674,26 @@ func TestPages_PostOnlyFromForms(t *testing.T) {
 	}
 }
 
+func TestPages_NoBlockClassOnAnInlineValue(t *testing.T) {
+	// .bt-code is the design system's code *block*: a near-black panel with a
+	// title bar, drawn for a dark page. The panel borrowed it to mean «this is
+	// an identifier, set it in monospace», and on a light ground every article
+	// number and every failed item came out as a black pill with black text on
+	// it — unreadable, and reported as such.
+	//
+	// .bt-mono is the class that means what was meant. Checked here rather than
+	// left to somebody opening the right screen with the right data on it:
+	// nothing about the wrong one throws, and a table cell is only wrong once
+	// there is a row in it.
+	srv := populated(t)
+	for _, path := range []string{"/", "/jobs", "/profile", "/compare", "/rules", "/channels", "/results"} {
+		body := get(t, srv, path, "correct horse").Body.String()
+		if strings.Contains(body, `class="bt-code`) || strings.Contains(body, ` bt-code"`) {
+			t.Errorf("%s: значение отрисовано классом блока кода — на светлом фоне это чёрная плашка", path)
+		}
+	}
+}
+
 // indexesOf lists every place a substring occurs.
 func indexesOf(s, sub string) []int {
 	var out []int

@@ -32,6 +32,11 @@ type fakeSite struct {
 
 	products []wb.Product
 	cardImt  int64
+	// cardDest and cardApp are what the last card fetch was asked for. An
+	// empty region is a request the real site answers with 400, so a test that
+	// only counted card fetches could not tell a working call from that one.
+	cardDest string
+	cardApp  int
 	fail     error
 	// cardFail fails only the card fetches, so a test can let a page succeed
 	// and every card on it fail — which is the case worth pinning.
@@ -57,6 +62,7 @@ func (f *fakeSite) SellerCatalogPage(_ context.Context, _ wb.Endpoints, id int64
 
 func (f *fakeSite) Card(_ context.Context, _ *wb.Basket, _ wb.Endpoints, nm int64, dest string, app int) (wb.CardFetch, error) {
 	f.cards = append(f.cards, nm)
+	f.cardDest, f.cardApp = dest, app
 	if f.fail != nil {
 		return wb.CardFetch{}, f.fail
 	}
@@ -531,6 +537,62 @@ func TestPage_EveryOtherKindKeepsThePageItWalked(t *testing.T) {
 	}
 }
 
+func TestProfile_AsksAboutARegionRatherThanAboutNone(t *testing.T) {
+	// The defect: the profile resolver asked for the card with an empty dest,
+	// and the card detail endpoint answers that with 400. Every link anybody
+	// pasted came back «status 400 (other)» — a screen that could never work,
+	// and nothing in the suite could tell, because a fake site answers an
+	// empty region as happily as a real one.
+	site := &fakeSite{products: []wb.Product{product(141504066)}, cardImt: 777}
+	f := &Fetcher{
+		Site: site, Store: openStore(t),
+		Job: job.Job{
+			Kind:    job.KindProfile,
+			Input:   "141504066",
+			Regions: []string{"", "  ", "-1257786"},
+			AppType: 32,
+		},
+	}
+
+	if _, err := f.Fetch(t.Context(), job.Item{Key: job.Key{
+		Kind: job.ItemProfile, NmID: 141504066,
+	}.String()}); err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if site.cardDest != "-1257786" {
+		t.Errorf("карточка запрошена для региона %q — сайт отвечает на такой 400", site.cardDest)
+	}
+	// And as the audience the job is for: a price read as Android and a price
+	// read as Web are different facts.
+	if site.cardApp != 32 {
+		t.Errorf("карточка запрошена как аудитория %d, а задание про 32", site.cardApp)
+	}
+}
+
+func TestProfile_WithoutARegionSaysSoInsteadOfSpendingARequest(t *testing.T) {
+	// A profile job saved by the first build of the screen carries no region
+	// at all. Asking anyway costs a request to be told 400 by the site, and
+	// the answer a person then reads says nothing about what to do.
+	site := &fakeSite{products: []wb.Product{product(141504066)}, cardImt: 777}
+	f := &Fetcher{
+		Site: site, Store: openStore(t),
+		Job: job.Job{Kind: job.KindProfile, Input: "141504066"},
+	}
+
+	n, err := f.Fetch(t.Context(), job.Item{Key: job.Key{
+		Kind: job.ItemProfile, NmID: 141504066,
+	}.String()})
+	if err == nil {
+		t.Fatal("запрос без региона ушёл на сайт")
+	}
+	if n != 0 {
+		t.Errorf("отказ до запроса стоил %d запросов", n)
+	}
+	if !strings.Contains(err.Error(), "регион") {
+		t.Errorf("причина = %v — не говорит, чего не хватает", err)
+	}
+}
+
 func TestProfile_ResolvesALinkIntoWhoTheUserIs(t *testing.T) {
 	// Spec section 4.7's entry point: one card, because the card is what
 	// knows who owns the product. Everything this program can compare needs
@@ -540,8 +602,10 @@ func TestProfile_ResolvesALinkIntoWhoTheUserIs(t *testing.T) {
 	f := &Fetcher{
 		Site: site, Store: st,
 		Job: job.Job{
-			Kind:  job.KindProfile,
-			Input: "https://www.wildberries.ru/catalog/141504066/detail.aspx",
+			Kind:    job.KindProfile,
+			Input:   "https://www.wildberries.ru/catalog/141504066/detail.aspx",
+			Regions: []string{"-1257786"},
+			AppType: 1,
 		},
 	}
 

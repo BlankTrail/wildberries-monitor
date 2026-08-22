@@ -116,7 +116,7 @@ func (s *Server) profileCard(r *http.Request, p store.ProfileRow) string {
 	}
 	b.WriteString(field("Товаров в профиле", fmt.Sprintf(`<div class="bt-figure">%d</div>`, len(products)),
 		"Пока это только разобранный товар. Витрина продавца собирается заданием — кнопкой ниже."))
-	b.WriteString(field("Что вставили", `<div class="bt-code bt-cell-wrap">`+html.EscapeString(p.SourceInput)+`</div>`, ""))
+	b.WriteString(field("Что вставили", `<div class="bt-mono bt-cell-wrap">`+html.EscapeString(p.SourceInput)+`</div>`, ""))
 	b.WriteString(`</div>`)
 
 	b.WriteString(s.phrasesHTML(r, p))
@@ -154,9 +154,15 @@ func (s *Server) saveProfile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	j := job.Job{
-		Name:    "профиль: " + input,
-		Kind:    job.KindProfile,
-		Input:   input,
+		Name:  "профиль: " + input,
+		Kind:  job.KindProfile,
+		Input: input,
+		// A region and an audience, because a card is read for one of each
+		// and the site refuses a request that names neither. The same first
+		// guess the storefront job below starts from, and the same one the
+		// jobs form pre-fills.
+		Regions: []string{profileRegion},
+		AppType: wb.AppWeb,
 		Fields:  wb.Selection{"nm_id"},
 		Threads: 1,
 	}
@@ -479,7 +485,7 @@ func (s *Server) competitorsHTML(r *http.Request, p store.ProfileRow) string {
 			case c.Pinned:
 				state = `<span class="bt-badge bt-badge--success bt-badge--sm">закреплён</span>`
 			}
-			fmt.Fprintf(&b, `<tr><td class="bt-code">%d</td><td class="bt-num">%d</td><td class="bt-num">%s</td><td>%s</td><td class="bt-row-actions">%s%s</td></tr>`,
+			fmt.Fprintf(&b, `<tr><td class="bt-mono">%d</td><td class="bt-num">%d</td><td class="bt-num">%s</td><td>%s</td><td class="bt-row-actions">%s%s</td></tr>`,
 				c.EntityID, c.Adjacency, delta, state,
 				action(fmt.Sprintf("/profile/competitors/pin?id=%d&entity=%d&on=%t", p.ID, c.EntityID, !c.Pinned),
 					"#profile-body", pinLabel(c.Pinned)),
