@@ -66,6 +66,11 @@ type Fetcher struct {
 	// ReviewsPerCard bounds one card's review window. Zero means the site's
 	// own default, which is what Client.Reviews asks for.
 	ReviewsPerCard int
+
+	// depth is where each paginated source was found to end. See depth.go: a
+	// job asks for as many pages as somebody was willing to pay for, and the
+	// walk finds out how many there actually are.
+	depth depth
 }
 
 // Fetch does one item and reports how many requests it cost.
@@ -123,6 +128,9 @@ func (f *Fetcher) fetchKey(ctx context.Context, key job.Key) (int, error) {
 
 // page walks one page of a search result.
 func (f *Fetcher) page(ctx context.Context, key job.Key) (int, error) {
+	if f.depth.past(key) {
+		return f.beyondTheEnd(ctx, key, fmt.Sprintf("фраза «%s»", key.Phrase))
+	}
 	env, err := f.Site.SearchPage(ctx, f.Eps, wb.SearchQuery{
 		Query: key.Phrase, Dest: key.Dest, AppType: key.AppType, Page: key.Page,
 	})
@@ -155,6 +163,9 @@ func (f *Fetcher) page(ctx context.Context, key job.Key) (int, error) {
 		return requests, err
 	}
 
+	if len(env.Products) == 0 {
+		f.depth.ends(key)
+	}
 	f.scraped(ctx, "фраза «%s», страница %d — товаров %d",
 		key.Phrase, key.Page, len(kept.Products))
 
@@ -177,6 +188,9 @@ func (f *Fetcher) listing(ctx context.Context, key job.Key) (int, error) {
 	if f.Job.Kind == job.KindBrand {
 		what, fetch = "витрина бренда", f.Site.BrandCatalogPage
 	}
+	if f.depth.past(key) {
+		return f.beyondTheEnd(ctx, key, fmt.Sprintf("%s %d", what, key.ID))
+	}
 
 	env, err := fetch(ctx, f.Eps, key.ID, wb.SearchQuery{
 		Dest: key.Dest, AppType: key.AppType, Page: key.Page,
@@ -194,6 +208,11 @@ func (f *Fetcher) listing(ctx context.Context, key job.Key) (int, error) {
 	}
 	f.scraped(ctx, "%s %d, страница %d — товаров %d",
 		what, key.ID, key.Page, len(env.Products))
+	if len(env.Products) == 0 {
+		// Fetched, decoded, and holding nothing: this is where the storefront
+		// ends. A refusal never gets here — the error returned above.
+		f.depth.ends(key)
+	}
 
 	extra, err := f.enrich(ctx, env.Products, key)
 	return requests + extra, err
@@ -211,6 +230,9 @@ func (f *Fetcher) listing(ctx context.Context, key job.Key) (int, error) {
 // is what the node is; the query is a sentence WB can reword, and a resumed run
 // matching on it would treat a reworded category as a new one.
 func (f *Fetcher) catalog(ctx context.Context, key job.Key) (int, error) {
+	if f.depth.past(key) {
+		return f.beyondTheEnd(ctx, key, fmt.Sprintf("категория %d", key.ID))
+	}
 	query := strings.TrimSpace(f.Job.CategoryQuery)
 	if query == "" {
 		// Refused before the request rather than after: an empty query asks
@@ -247,6 +269,9 @@ func (f *Fetcher) catalog(ctx context.Context, key job.Key) (int, error) {
 	if err := f.link(ctx, env.Products); err != nil {
 		return requests, err
 	}
+	if len(env.Products) == 0 {
+		f.depth.ends(key)
+	}
 	f.scraped(ctx, "категория %d, страница %d — товаров %d",
 		key.ID, key.Page, len(env.Products))
 
@@ -267,6 +292,9 @@ func (f *Fetcher) promo(ctx context.Context, key job.Key) (int, error) {
 		Slug:  strings.TrimSpace(f.Job.PromotionSlug),
 		Shard: strings.TrimSpace(f.Job.PromotionShard),
 		Query: strings.TrimSpace(f.Job.PromotionQuery),
+	}
+	if f.depth.past(key) {
+		return f.beyondTheEnd(ctx, key, fmt.Sprintf("акция «%s»", p.Slug))
 	}
 	if p.Shard == "" || p.Query == "" {
 		// Refused before the request rather than after: an address with a hole
@@ -292,6 +320,9 @@ func (f *Fetcher) promo(ctx context.Context, key job.Key) (int, error) {
 	}
 	if err := f.link(ctx, env.Products); err != nil {
 		return requests, err
+	}
+	if len(env.Products) == 0 {
+		f.depth.ends(key)
 	}
 	f.scraped(ctx, "акция «%s», страница %d — товаров %d",
 		p.Slug, key.Page, len(env.Products))
@@ -343,6 +374,9 @@ const sellerRecordRequests = 2
 // from it would report a fall every time somebody looked. See
 // store.PositionMainFeed, which is where that exclusion is made.
 func (f *Fetcher) mainFeed(ctx context.Context, key job.Key) (int, error) {
+	if f.depth.past(key) {
+		return f.beyondTheEnd(ctx, key, "главная")
+	}
 	env, err := f.Site.MainFeedPage(ctx, f.Eps, wb.SearchQuery{
 		Dest: key.Dest, AppType: key.AppType, Page: key.Page,
 	})
@@ -356,6 +390,9 @@ func (f *Fetcher) mainFeed(ctx context.Context, key job.Key) (int, error) {
 	}
 	if err := f.link(ctx, env.Products); err != nil {
 		return requests, err
+	}
+	if len(env.Products) == 0 {
+		f.depth.ends(key)
 	}
 	f.scraped(ctx, "главная страница %d — товаров %d", key.Page, len(env.Products))
 
