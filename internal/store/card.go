@@ -187,14 +187,20 @@ func upsertCardRow(ctx context.Context, tx *sql.Tx, c wb.Card, now int64) error 
 
 	_, err := tx.ExecContext(ctx, `
 		INSERT INTO products (
-		    nm_id, imt_id, name, brand, supplier_id,
+		    nm_id, imt_id, name, card_name, brand, supplier_id,
 		    slug, subject_name, subject_root_name, vendor_code,
 		    description, contents, season, colour_names,
 		    card_created, card_updated, first_seen_at, last_seen_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(nm_id) DO UPDATE SET
 		    imt_id            = COALESCE(excluded.imt_id, products.imt_id),
-		    name              = CASE WHEN excluded.name <> '' THEN excluded.name ELSE products.name END,
+		    -- The shared column only when nothing has filled it: a product met
+		    -- by an article list has no listing to take a name from, and one
+		    -- met by a search already has the name its results carry. Written
+		    -- unconditionally, as it was, this and the search reading took
+		    -- turns overwriting each other with two spellings of one product.
+		    name              = CASE WHEN products.name = '' THEN excluded.name ELSE products.name END,
+		    card_name         = CASE WHEN excluded.card_name <> '' THEN excluded.card_name ELSE products.card_name END,
 		    brand             = CASE WHEN excluded.brand <> '' THEN excluded.brand ELSE products.brand END,
 		    supplier_id       = COALESCE(excluded.supplier_id, products.supplier_id),
 		    slug              = excluded.slug,
@@ -208,7 +214,7 @@ func upsertCardRow(ctx context.Context, tx *sql.Tx, c wb.Card, now int64) error 
 		    card_created      = excluded.card_created,
 		    card_updated      = excluded.card_updated,
 		    last_seen_at      = excluded.last_seen_at`,
-		c.NmID, imtID, c.Name, c.BrandName, supplierID,
+		c.NmID, imtID, c.Name, c.Name, c.BrandName, supplierID,
 		c.Slug, c.SubjectName, c.SubjectRootName, c.VendorCode,
 		c.Description, c.Contents, c.Season, c.ColorNames,
 		c.CreatedAt, c.UpdatedAt, now, now)

@@ -32,16 +32,14 @@ import (
 // audience, and folding it in would make «продавец переписал карточку» fire
 // on a day the seller did nothing at all.
 //
-// The name is not here either, and that one is a limitation rather than a
-// choice. Every field below is written by the card and by nothing else, so
-// what is on file is what the card last said. The name is not: a search
-// reading writes it too, from the listing, and the card writes it from imt_name
-// — two spellings of one product that Wildberries does not promise to keep
-// identical. Compared, the row would report «название изменилось» every time a
-// search reading and a card reading alternate, which on a storefront walk is
-// every day. A rename is a real edit and this misses it; announcing one daily
-// that nobody made is worse.
+// The name here is card_name, not name. They used to be one column that both
+// halves of a product wrote — a search reading from the listing, a card from
+// imt_name — so it flipped between two spellings Wildberries does not promise
+// to keep identical, and comparing it reported a rename every time the two
+// kinds of reading alternated. Migration 0030 gave the card its own; this
+// compares that one, and a rename is a real edit that is now caught.
 type cardContent struct {
+	Name        string
 	Description string
 	Contents    string
 	Season      string
@@ -65,6 +63,7 @@ func contentOf(c wb.Card) cardContent {
 		opts.WriteString(strings.TrimSpace(o.Value))
 	}
 	return cardContent{
+		Name:        strings.TrimSpace(c.Name),
 		Description: strings.TrimSpace(c.Description),
 		Contents:    strings.TrimSpace(c.Contents),
 		Season:      strings.TrimSpace(c.Season),
@@ -85,6 +84,7 @@ func editedParts(was, now cardContent) []string {
 		label    string
 		was, now string
 	}{
+		{"название", was.Name, now.Name},
 		{"описание", was.Description, now.Description},
 		{"характеристики", was.Options, now.Options},
 		{"комплектация", was.Contents, now.Contents},
@@ -107,10 +107,10 @@ func editedParts(was, now cardContent) []string {
 func contentBefore(ctx context.Context, tx *sql.Tx, nmID int64) (cardContent, bool, error) {
 	var c cardContent
 	err := tx.QueryRowContext(ctx, `
-		SELECT COALESCE(description, ''), COALESCE(contents, ''),
+		SELECT COALESCE(card_name, ''), COALESCE(description, ''), COALESCE(contents, ''),
 		       COALESCE(season, ''), COALESCE(colour_names, ''), COALESCE(vendor_code, '')
 		  FROM products WHERE nm_id = ?`, nmID).
-		Scan(&c.Description, &c.Contents, &c.Season, &c.Colours, &c.VendorCode)
+		Scan(&c.Name, &c.Description, &c.Contents, &c.Season, &c.Colours, &c.VendorCode)
 	if err == sql.ErrNoRows {
 		return cardContent{}, false, nil
 	}
@@ -144,6 +144,15 @@ func contentBefore(ctx context.Context, tx *sql.Tx, nmID int64) (cardContent, bo
 		return cardContent{}, false, fmt.Errorf("store: card options of %d: %w", nmID, err)
 	}
 	c.Options = opts.String()
+
+	// No card name means no card has been read for this row — it was written
+	// by search readings alone, or it predates migration 0030 and the column
+	// it would have filled did not exist yet. Either way there is no earlier
+	// version of what the seller wrote, and treating «пусто» as one would
+	// report a rename on the first card reading of every such product.
+	if c.Name == "" {
+		return c, false, nil
+	}
 	return c, true, nil
 }
 

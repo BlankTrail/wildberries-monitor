@@ -1,0 +1,26 @@
+-- The card's own name, kept apart from the one the results carry.
+--
+-- One products row is written by two halves of one product. A search reading
+-- fills it from the listing; a card fills it from imt_name. Wildberries does
+-- not promise the two are spelled the same, and they often are not — so the
+-- name column has been flipping between them for as long as both halves have
+-- existed, settling on whichever reading happened last.
+--
+-- Nothing visible depended on it: every screen that shows a name shows it from
+-- the same row, so a person sees one of the two spellings and has no way to
+-- know there was another. What did depend on it is spec section 6.1's
+-- ContentChanged, which could not compare the name at all — every alternation
+-- of a search reading and a card reading looked like the seller renaming their
+-- product, which on a storefront walk is every day.
+--
+-- So the card gets its own column and stops fighting for the shared one. name
+-- stays what it always was — the name to show — and the card fills it only
+-- when nothing has yet, so a product first met by an article list still has
+-- one.
+--
+-- Empty for the rows already here. They have a name in the shared column, and
+-- which half wrote it is exactly what this database cannot say; the first card
+-- reading fills this one, and until then nothing compares against it — see
+-- contentBefore, which treats an empty card name as «не читали» rather than as
+-- «называлось пусто».
+ALTER TABLE products ADD COLUMN card_name TEXT NOT NULL DEFAULT '';

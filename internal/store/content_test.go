@@ -174,3 +174,153 @@ func TestContent_ASearchReadingBetweenTwoCardReadingsIsNotAnEdit(t *testing.T) {
 		t.Errorf("чтение выдачи между двумя чтениями карточки объявлено правкой: %+v", edits)
 	}
 }
+
+func TestContent_ARenameIsCaughtNowThatTheCardHasItsOwnName(t *testing.T) {
+	// The gap the previous build had to leave open. Both halves of a product
+	// wrote one name column, so comparing it reported a rename every time a
+	// search reading and a card reading alternated — and leaving it out meant
+	// a real rename went unnoticed. The card has its own column now.
+	s := openTestStore(t)
+	ctx := context.Background()
+	at := time.Date(2026, 8, 20, 9, 0, 0, 0, time.UTC)
+
+	cardRead(t, s, at.Add(-time.Hour), nil)
+	cardRead(t, s, at, func(c *wb.Card) { c.Name = "Куртка зимняя, новое название" })
+
+	edits, err := s.EditedCardsSince(ctx, 0)
+	if err != nil {
+		t.Fatalf("EditedCardsSince: %v", err)
+	}
+	if len(edits) != 1 {
+		t.Fatalf("правок %d, ожидалась одна: %+v", len(edits), edits)
+	}
+	if edits[0].What != "название" {
+		t.Errorf("изменено %q, ожидалось «название»", edits[0].What)
+	}
+}
+
+func TestContent_TheTwoNamesAreKeptApartInTheRow(t *testing.T) {
+	// One products row, two halves of one product. The shared column is the
+	// name to show and belongs to whichever reading filled it first; the
+	// card's own spelling lives beside it and stops overwriting it.
+	s := openTestStore(t)
+	ctx := context.Background()
+	at := time.Date(2026, 8, 20, 9, 0, 0, 0, time.UTC)
+
+	// A search meets it first and names it.
+	s.SetClock(func() time.Time { return at.Add(-time.Hour) })
+	p := sampleProduct()
+	p.Name = "Так называет выдача"
+	if _, err := s.SaveProduct(ctx, p, ""); err != nil {
+		t.Fatalf("SaveProduct: %v", err)
+	}
+
+	// Then a card of that same product, which spells it differently. Only the
+	// card — the way an article list reads one — so that what is being watched
+	// is the card against the listing rather than one listing against another.
+	cardOnly(t, s, at, p.ID, func(c *wb.Card) { c.Name = "Так называет карточка" })
+
+	var shown, card string
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT name, card_name FROM products WHERE nm_id = ?`, p.ID).Scan(&shown, &card); err != nil {
+		t.Fatalf("read the row: %v", err)
+	}
+	if shown != "Так называет выдача" {
+		t.Errorf("показываемое имя = %q — карточка снова перебила выдачу", shown)
+	}
+	if card != "Так называет карточка" {
+		t.Errorf("имя карточки = %q", card)
+	}
+}
+
+func TestContent_AProductMetOnlyByItsCardStillHasANameToShow(t *testing.T) {
+	// The other side of «карточка не перебивает выдачу»: a product an article
+	// list collected has no listing to take a name from, and a results table
+	// of blank cells would be the price of the separation.
+	s := openTestStore(t)
+	ctx := context.Background()
+	at := time.Date(2026, 8, 20, 9, 0, 0, 0, time.UTC)
+
+	cardOnly(t, s, at, 424242, func(c *wb.Card) { c.Name = "Только из карточки" })
+
+	var shown string
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT name FROM products WHERE nm_id = ?`, int64(424242)).Scan(&shown); err != nil {
+		t.Fatalf("read the row: %v", err)
+	}
+	if shown != "Только из карточки" {
+		t.Errorf("показываемое имя = %q, ожидалось имя из карточки", shown)
+	}
+}
+
+// cardOnly saves one reading of a card and nothing else, the way an article
+// list reads one: the static half without the listing beside it.
+func cardOnly(t *testing.T, s *Store, at time.Time, nmID int64, edit func(*wb.Card)) {
+	t.Helper()
+	s.SetClock(func() time.Time { return at })
+	c := sampleCard()
+	c.NmID = nmID
+	if edit != nil {
+		edit(&c)
+	}
+	if _, err := s.SaveCard(context.Background(), wb.CardFetch{Card: c}); err != nil {
+		t.Fatalf("SaveCard: %v", err)
+	}
+}
+
+func TestContent_ACardFillsANameASearchLeftEmpty(t *testing.T) {
+	// The listing does not always carry one. The card is then the only thing
+	// that knows what the product is called, and a results table of blank
+	// cells is not the price of keeping the two apart.
+	s := openTestStore(t)
+	ctx := context.Background()
+	at := time.Date(2026, 8, 20, 9, 0, 0, 0, time.UTC)
+
+	s.SetClock(func() time.Time { return at.Add(-time.Hour) })
+	p := sampleProduct()
+	p.ID, p.Name = 424243, ""
+	if _, err := s.SaveProduct(ctx, p, ""); err != nil {
+		t.Fatalf("SaveProduct: %v", err)
+	}
+
+	cardOnly(t, s, at, p.ID, func(c *wb.Card) { c.Name = "Имя из карточки" })
+
+	var shown string
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT name FROM products WHERE nm_id = ?`, p.ID).Scan(&shown); err != nil {
+		t.Fatalf("read the row: %v", err)
+	}
+	if shown != "Имя из карточки" {
+		t.Errorf("показываемое имя = %q, а выдача его не назвала", shown)
+	}
+}
+
+func TestContent_TheFirstCardOfASearchKnownProductIsNotARename(t *testing.T) {
+	// A row written by search readings alone has no card name, and «пусто» is
+	// not what the card said — it is that no card has been read. Compared
+	// against the first card's name it would report a rename on the first card
+	// reading of every product an article list was added to, which after an
+	// upgrade is all of them at once.
+	s := openTestStore(t)
+	ctx := context.Background()
+	at := time.Date(2026, 8, 20, 9, 0, 0, 0, time.UTC)
+
+	s.SetClock(func() time.Time { return at.Add(-time.Hour) })
+	p := sampleProduct()
+	p.ID = 424244
+	if _, err := s.SaveProduct(ctx, p, ""); err != nil {
+		t.Fatalf("SaveProduct: %v", err)
+	}
+
+	cardOnly(t, s, at, p.ID, func(c *wb.Card) { c.Name = "Как называет карточка" })
+
+	edits, err := s.EditedCardsSince(ctx, 0)
+	if err != nil {
+		t.Fatalf("EditedCardsSince: %v", err)
+	}
+	for _, e := range edits {
+		if e.NmID == p.ID {
+			t.Errorf("первое чтение карточки объявлено переименованием: %+v", e)
+		}
+	}
+}
