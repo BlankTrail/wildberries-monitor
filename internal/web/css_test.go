@@ -3,6 +3,7 @@
 package web
 
 import (
+	"os"
 	"regexp"
 	"sort"
 	"strings"
@@ -161,5 +162,49 @@ func TestStyles_TheRegionListScrollsRatherThanStretchingThePage(t *testing.T) {
 	}
 	if !strings.Contains(block, "max-height") || !strings.Contains(block, "overflow-y") {
 		t.Error("список регионов не ограничен по высоте — он растянет страницу")
+	}
+}
+
+func TestStyles_TheLongTablesScrollInsideThemselves(t *testing.T) {
+	// Two lists grow without bound: a profile's phrases, which a storefront of
+	// eight hundred goods runs into thousands, and a run's ports, which
+	// sixteen threads make thirty-two of. Both stood between the thing above
+	// them and the thing below, and pushed everything after them off the
+	// screen — including the live log, which is the part somebody watching a
+	// run is watching.
+	ours, err := staticFS.ReadFile("static/monitor.css")
+	if err != nil {
+		t.Fatalf("monitor.css: %v", err)
+	}
+	css := string(ours)
+	block := ruleBody(css, ".bt-table-wrap--capped {")
+	if block == "" {
+		t.Fatal("в monitor.css нет правила для длинных таблиц")
+	}
+	if !strings.Contains(block, "max-height") || !strings.Contains(block, "overflow-y") {
+		t.Error("длинная таблица не ограничена по высоте — она растянет страницу")
+	}
+	// And the header stays: a scrolled table whose columns have lost their
+	// names is a table nobody can read.
+	head := ruleBody(css, ".bt-table-wrap--capped thead th {")
+	if !strings.Contains(head, "sticky") {
+		t.Error("шапка длинной таблицы уезжает вместе с содержимым")
+	}
+}
+
+func TestScreens_TheTablesThatGrowAreCapped(t *testing.T) {
+	// The class is only worth having where it is used. A source-level check,
+	// because the ports table is drawn from a live run's progress and the
+	// phrases table needs a profile with phrases behind it — and what is being
+	// guarded is one class name on two tables, which is exactly what a redraw
+	// of either would drop.
+	for _, file := range []string{"profile.go", "live.go"} {
+		src, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatalf("read %s: %v", file, err)
+		}
+		if !strings.Contains(string(src), "bt-table-wrap--capped") {
+			t.Errorf("%s: длинная таблица снова без ограничения высоты", file)
+		}
 	}
 }

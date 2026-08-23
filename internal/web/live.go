@@ -255,7 +255,11 @@ func portsHTML(ports []job.PortStat) string {
 	}
 	var b strings.Builder
 	b.WriteString(`<h4 class="bt-form-head">Порты и каналы</h4>`)
-	b.WriteString(`<div class="bt-table-wrap"><table class="bt-table"><thead><tr>` +
+	// Capped and scrolling, like the phrases. A run in sixteen threads holds
+	// thirty-two ports, and a row each pushed the live log — the part somebody
+	// is actually watching — off the bottom of the screen.
+	b.WriteString(`<div class="bt-table-wrap bt-table-wrap--capped">` +
+		`<table class="bt-table"><thead><tr>` +
 		`<th>Порт</th><th>Канал</th><th class="bt-num">Запросов</th><th>Состояние</th>` +
 		`</tr></thead><tbody>`)
 	for _, pt := range ports {

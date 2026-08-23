@@ -1504,3 +1504,24 @@ dialog.bt-modal > #settings-body {
   max-height: 18rem;
   overflow-y: auto;
 }
+
+/* ---- long tables -------------------------------------------------------- */
+
+/* A capped table scrolls inside itself instead of pushing the page.
+
+   The phrases of a profile are the case this exists for: eight hundred goods
+   produce thousands of them, and the list stood between the storefront above
+   it and the competitors, the settings and the buttons below — all of which
+   went a screen and a half down. The header stays put, because a scrolled
+   table whose columns have lost their names is a table nobody can read. */
+.bt-table-wrap--capped {
+  max-height: 24rem;
+  overflow-y: auto;
+}
+
+.bt-table-wrap--capped thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bg-card);
+}

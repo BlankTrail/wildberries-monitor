@@ -798,3 +798,43 @@ func TestProfile_TheDirectoryIsUnderTheFieldThatAsksForACode(t *testing.T) {
 		t.Error("справочник ниже остальных настроек, а не под полем регионов")
 	}
 }
+
+func TestProfileScreen_ThePhrasesTableNamesItsProduct(t *testing.T) {
+	// A checked phrase is tied to one product, and one phrase gets checked for
+	// every product of the profile — so the list showed the same words at rank
+	// 1, then again at rank 4, with no column saying which product each row was
+	// about. Read down the page that is one row printed twice, and it was
+	// reported as duplicates.
+	srv := newServer(t)
+	ctx := t.Context()
+
+	id, err := srv.Store.SaveProfile(ctx, store.ProfileRow{Name: "мой"})
+	if err != nil {
+		t.Fatalf("SaveProfile: %v", err)
+	}
+	for _, c := range []struct {
+		nm   int64
+		rank int64
+	}{{100, 1}, {101, 4}} {
+		rank := c.rank
+		if err := srv.Store.SavePhrase(ctx, store.PhraseRow{
+			ProfileID: id, Text: "женское платье",
+			State: store.PhraseWorking, Origin: store.PhraseGenerated,
+			NmID: c.nm, Dest: "-1257786", BestRank: &rank,
+		}); err != nil {
+			t.Fatalf("SavePhrase %d: %v", c.nm, err)
+		}
+	}
+
+	body := get(t, srv, "/profile", "").Body.String()
+	if !strings.Contains(body, `<th class="bt-num">Товар</th>`) {
+		t.Fatalf("в таблице фраз нет колонки товара: %s", firstLines(body))
+	}
+	// And both articles appear: a heading over a column that names one product
+	// for every row would pass the check above and still read as duplicates.
+	for _, nm := range []string{"100", "101"} {
+		if !strings.Contains(body, `<td class="bt-mono bt-num">`+nm+`</td>`) {
+			t.Errorf("строка фразы не называет товар %s", nm)
+		}
+	}
+}

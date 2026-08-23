@@ -653,16 +653,31 @@ func (s *Server) phrasesHTML(r *http.Request, p store.ProfileRow) string {
 			`Они собираются из карточек товаров и расширяются подсказками поиска Wildberries — ` +
 			`это часть общего сбора.</div>`)
 	} else {
-		b.WriteString(`<div class="bt-table-wrap"><table class="bt-table"><thead><tr>` +
-			`<th>Фраза</th><th>Состояние</th><th>Откуда</th><th class="bt-num">Лучшее место</th><th></th>` +
+		// Capped and scrolling. A profile of eight hundred goods produces
+		// thousands of phrases, and a table of them pushed everything under it
+		// — the competitors, the settings, the buttons — a screen and a half
+		// down the page.
+		b.WriteString(`<div class="bt-table-wrap bt-table-wrap--capped">` +
+			`<table class="bt-table"><thead><tr>` +
+			`<th>Фраза</th><th class="bt-num">Товар</th><th>Состояние</th><th>Откуда</th>` +
+			`<th class="bt-num">Лучшее место</th><th></th>` +
 			`</tr></thead><tbody>`)
 		for _, ph := range shown {
 			rank := "—"
 			if ph.BestRank != nil {
 				rank = fmt.Sprint(*ph.BestRank)
 			}
-			fmt.Fprintf(&b, `<tr><td>%s</td><td>%s</td><td>%s</td><td class="bt-num">%s</td><td class="bt-row-actions">%s</td></tr>`,
-				html.EscapeString(ph.Text), phraseStateHTML(ph.State),
+			// Which product the phrase was derived for. A phrase belongs to
+			// one, and without the column the same phrase under three goods
+			// reads as the same row printed three times — which is what it
+			// looked like, and what somebody reported as duplicates.
+			product := "—"
+			if ph.NmID != 0 {
+				product = fmt.Sprint(ph.NmID)
+			}
+			fmt.Fprintf(&b, `<tr><td>%s</td><td class="bt-mono bt-num">%s</td><td>%s</td><td>%s</td>`+
+				`<td class="bt-num">%s</td><td class="bt-row-actions">%s</td></tr>`,
+				html.EscapeString(ph.Text), product, phraseStateHTML(ph.State),
 				html.EscapeString(phraseOriginText(ph.Origin)), rank,
 				action(fmt.Sprintf("/profile/phrases/delete?id=%d", ph.ID), "#profile-body", "Убрать"))
 		}
