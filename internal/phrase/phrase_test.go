@@ -49,7 +49,10 @@ func TestCandidates_TheMostSpecificComeFirst(t *testing.T) {
 	if len(got) < 3 {
 		t.Fatalf("фраз %d: %v", len(got), got)
 	}
-	if got[0] != "платье летнее горошек" {
+	// The name as the seller wrote it, little words and all. «платье летнее
+	// горошек» is what this used to produce, and it is not a phrase anybody
+	// types — the preposition is what makes it one.
+	if got[0] != "платье летнее в горошек" {
 		t.Errorf("первой оказалась %q, ожидалось название целиком", got[0])
 	}
 	// And the bare category is not the first thing anybody checks.
@@ -58,15 +61,25 @@ func TestCandidates_TheMostSpecificComeFirst(t *testing.T) {
 	}
 }
 
-func TestCandidates_DropTheWordsThatAreNotSearches(t *testing.T) {
-	// «в» is not a search and never was; a size is.
+func TestCandidates_KeepTheLittleWordsThatHoldAPhraseTogether(t *testing.T) {
+	// «в» is not a search on its own and never was — but taken out of the
+	// middle of a name it does not leave a shorter search, it leaves a
+	// telegram. «Топ на бретелях в спортивном стиле» came out as «топ
+	// бретелях спортивном стиле», and every run cut from it read like one.
+	//
+	// So they go from the ends of a run and stay inside it.
 	got := Candidates(Source{Name: "Куртка для мужчин 48 размер", Subject: "Куртка"})
 	for _, phrase := range got {
-		for _, w := range strings.Fields(phrase) {
-			if stopWords[w] {
-				t.Errorf("в фразе %q осталось служебное слово %q", phrase, w)
-			}
+		fields := strings.Fields(phrase)
+		if stopWords[fields[0]] {
+			t.Errorf("фраза %q начинается со служебного слова", phrase)
 		}
+		if stopWords[fields[len(fields)-1]] {
+			t.Errorf("фраза %q кончается служебным словом", phrase)
+		}
+	}
+	if !slices.Contains(got, "куртка для мужчин") {
+		t.Errorf("«куртка для мужчин» не предложена: %v", got)
 	}
 	if !slices.ContainsFunc(got, func(p string) bool { return strings.Contains(p, "48") }) {
 		t.Errorf("размер выброшен вместе со служебными словами: %v", got)
@@ -141,5 +154,87 @@ func TestClean_RefusesASentence(t *testing.T) {
 	// suggestion that refines one of them is not thrown away.
 	if got := Clean("платье летнее женское больших размеров"); got == "" {
 		t.Error("уточнённая подсказка отвергнута как предложение")
+	}
+}
+
+func TestCandidates_AreThingsAPersonWouldActuallyType(t *testing.T) {
+	// The list this produced for a real card, and why it was worth changing.
+	// «Топ на бретелях в спортивном стиле в рубчик», subject «Топы», gave
+	// «топы стиле», «топы рубчик», «топы спортивном», «топы топ» — the subject
+	// in the nominative plural with a word of the name in whatever case it
+	// happened to be written in. Nobody types those, so every one of them was
+	// a request spent to learn that the product is not found by a phrase that
+	// does not exist.
+	got := Candidates(Source{
+		Name:    "Топ на бретелях в спортивном стиле в рубчик",
+		Subject: "Топы",
+		Brand:   "KODALIFE",
+		Options: []string{"женский", "облегающий", "круглый"},
+	})
+
+	for _, nonsense := range []string{
+		"топы стиле", "топы рубчик", "топы спортивном", "топы топ",
+		"топы бретелях", "топы женский", "топы облегающий", "топы круглый",
+		"топ бретелях", "бретелях спортивном стиле рубчик",
+	} {
+		if slices.Contains(got, nonsense) {
+			t.Errorf("предложена фраза, которую никто не набирает: %q", nonsense)
+		}
+	}
+
+	// And the ones that are phrases are there. The name whole is not among
+	// them — five words of description is not a search, and the ceiling that
+	// keeps it out is the same one that has always been there.
+	for _, real := range []string{
+		"топ на бретелях",
+		"топ на бретелях в спортивном стиле",
+		"топы",
+		"kodalife топы",
+	} {
+		if !slices.Contains(got, real) {
+			t.Errorf("не предложена настоящая фраза %q: %v", real, got)
+		}
+	}
+}
+
+func TestCandidates_ANameThatStartsOrEndsWithALittleWord(t *testing.T) {
+	// «В дорогу сумка» is written that way often enough, and «сумка для» is
+	// the other end of the same thing. A phrase that begins or ends on a
+	// preposition is not one anybody types, however it got there.
+	got := Candidates(Source{Name: "В дорогу сумка дорожная для", Subject: "Сумки"})
+	for _, phrase := range got {
+		fields := strings.Fields(phrase)
+		if stopWords[fields[0]] {
+			t.Errorf("фраза %q начинается со служебного слова", phrase)
+		}
+		if stopWords[fields[len(fields)-1]] {
+			t.Errorf("фраза %q кончается служебным словом", phrase)
+		}
+	}
+}
+
+func TestCandidates_ASingleWordOfTheNameIsNotAPhrase(t *testing.T) {
+	// The subject is already the one-word search, and it is the right one: it
+	// is the category's own word. A one-word prefix of the name is the same
+	// search in whatever form the seller happened to write it — «топ» beside
+	// «топы» — and it costs a request to learn that.
+	got := Candidates(Source{
+		Name:    "Топ на бретелях в спортивном стиле",
+		Subject: "Топы",
+	})
+	for _, phrase := range got {
+		if len(strings.Fields(phrase)) == 1 && phrase != "топы" {
+			t.Errorf("одиночное слово названия предложено как фраза: %q", phrase)
+		}
+	}
+}
+
+func TestCandidates_TheWholeNameIsMeasuredInWordsThatMeanSomething(t *testing.T) {
+	// Four words plus the prepositions between them is still a search; the
+	// ceiling is about how much a person types, and «для» is not what makes a
+	// phrase long.
+	got := Candidates(Source{Name: "Куртка для мужчин 48 размер", Subject: "Куртка"})
+	if !slices.Contains(got, "куртка для мужчин 48 размер") {
+		t.Errorf("название целиком не предложено, хотя в нём четыре значащих слова: %v", got)
 	}
 }

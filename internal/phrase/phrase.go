@@ -15,7 +15,6 @@
 package phrase
 
 import (
-	"slices"
 	"strings"
 	"unicode"
 )
@@ -86,49 +85,48 @@ func Candidates(src Source) []string {
 		out = append(out, phrase)
 	}
 
-	name := words(src.Name)
+	name := tokens(src.Name)
 	subject := words(src.Subject)
 	brand := words(src.Brand)
 
 	// The name itself, when it is short enough to be a search rather than a
 	// description.
-	if len(name) > 0 && len(name) <= maxWords {
-		add(strings.Join(name, " "))
+	if run := trimRun(name); contentWords(run) > 0 && contentWords(run) <= maxWords {
+		add(strings.Join(run, " "))
 	}
 
-	// What the thing is, plus what the seller called it: «платье летнее»,
-	// «платье в горошек». This is the shape of most real searches.
+	// The beginnings of the name, longest first.
+	//
+	// Beginnings and not every run inside it, which is the second half of what
+	// made these unreadable. A Russian card name starts with the thing itself
+	// and adds to it — «топ на бретелях в спортивном стиле» — so a prefix is a
+	// phrase and a slice out of the middle is a fragment in whatever case it
+	// happened to be written in. «бретелях в спортивном» is a run of that name
+	// and nobody has ever typed it.
+	//
+	// What this does not fix, said plainly: a prefix can still end on an
+	// adjective whose noun is the next word — «топ на бретелях в спортивном».
+	// Telling that from «топ на бретелях» needs to know that «спортивном» is an
+	// adjective, which needs Russian morphology, which is a dictionary this
+	// program does not carry. It is a truncation of the seller's own name
+	// rather than an invention, and it costs one request to find out.
+	for size := min(maxWords, contentWords(name)); size >= 2; size-- {
+		if run := prefix(name, size); contentWords(run) == size {
+			add(strings.Join(run, " "))
+		}
+	}
+
+	// What the thing is: one word, and the broadest search that is still about
+	// this product. After the name, because a one-word search returns a
+	// category rather than a product.
 	if len(subject) > 0 {
 		add(strings.Join(subject, " "))
-		for _, w := range name {
-			if !slices.Contains(subject, w) {
-				add(strings.Join(subject, " ") + " " + w)
-			}
-		}
-	}
-
-	// Runs of the name, longest first: a buyer who knows what they want types
-	// two or three words of it.
-	for size := min(maxWords, len(name)); size >= 2; size-- {
-		for i := 0; i+size <= len(name); i++ {
-			add(strings.Join(name[i:i+size], " "))
-		}
 	}
 
 	// The brand with the subject, which is how somebody looks for this exact
 	// maker's version of the thing.
 	if len(brand) > 0 && len(subject) > 0 {
 		add(strings.Join(brand, " ") + " " + strings.Join(subject, " "))
-	}
-
-	// Characteristics: colour, material, purpose. Each with the subject,
-	// because a characteristic alone is not a search for a product.
-	for _, opt := range src.Options {
-		value := words(opt)
-		if len(value) == 0 || len(value) > 2 || len(subject) == 0 {
-			continue
-		}
-		add(strings.Join(subject, " ") + " " + strings.Join(value, " "))
 	}
 
 	// The wider category last: it is the broadest search there is, and the
@@ -139,6 +137,84 @@ func Candidates(src Source) []string {
 	}
 
 	return out
+}
+
+// tokens is a card's name as the words of a search, in the order it wrote
+// them and with nothing taken out of the middle.
+//
+// The difference from words() is the whole of what makes a candidate readable.
+// words() drops «на» and «в», which is right for a subject or a brand — those
+// are one or two words and the little ones are noise. Inside a name it is the
+// opposite: «Топ на бретелях в спортивном стиле» became «топ бретелях
+// спортивном стиле», and every run cut out of it read like a telegram.
+//
+// Case folded and punctuation dropped, as before, so that «Платье, летнее!» is
+// the same phrase as «платье летнее».
+func tokens(s string) []string {
+	fields := strings.FieldsFunc(strings.ToLower(s), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	})
+
+	var out []string
+	for _, f := range fields {
+		if stopWords[f] || isContent(f) {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// isContent reports whether a token carries meaning of its own.
+func isContent(f string) bool {
+	if stopWords[f] {
+		return false
+	}
+	// Two-letter words are kept only when they are numbers: «40» is a size,
+	// «на» is not a search.
+	return len([]rune(f)) >= 3 || isDigits(f)
+}
+
+// trimRun drops the little words from the ends of a run.
+//
+// «в спортивном стиле» is a phrase; «в спортивном» and «стиле в» are the
+// halves of one, and a search box is not where anybody types them.
+func trimRun(run []string) []string {
+	for len(run) > 0 && !isContent(run[0]) {
+		run = run[1:]
+	}
+	for len(run) > 0 && !isContent(run[len(run)-1]) {
+		run = run[:len(run)-1]
+	}
+	return run
+}
+
+// prefix is the start of a name up to n words that mean something, with the
+// little words in between kept and none left hanging off the end.
+func prefix(name []string, n int) []string {
+	seen := 0
+	for i, w := range name {
+		if isContent(w) {
+			seen++
+		}
+		if seen == n {
+			return trimRun(name[:i+1])
+		}
+	}
+	return trimRun(name)
+}
+
+// contentWords counts the words in a run that mean anything.
+//
+// A run has to have two of them to be a phrase rather than a word with a
+// preposition stuck to it.
+func contentWords(run []string) int {
+	n := 0
+	for _, w := range run {
+		if isContent(w) {
+			n++
+		}
+	}
+	return n
 }
 
 // words normalises a piece of a card into the words a search is made of.
