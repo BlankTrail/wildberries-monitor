@@ -224,7 +224,7 @@ func TestSave_KeepsWhichChannelsAndHowManyAttempts(t *testing.T) {
 	id, err := Save(ctx, s, Job{
 		Name: "через два", Kind: KindPhrase, Phrases: []string{"платье"},
 		Regions: []string{"-1257786"}, Fields: wb.Selection{"nm_id"}, MaxPages: 1,
-		Channels: []int64{7, 0, 9}, Attempts: 10,
+		Channels: []int64{7, 9}, Attempts: 10,
 	})
 	if err != nil {
 		t.Fatalf("Save: %v", err)
@@ -234,8 +234,10 @@ func TestSave_KeepsWhichChannelsAndHowManyAttempts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	// The zero is dropped: a form posts an empty box as an empty value, and
-	// channel nought is an exit nothing can build.
+	// Exactly what it was handed. The empty box a checkbox group posts reads
+	// as nought and is dropped by the screen that posted it — see idList — so
+	// a nought arriving here is a caller's mistake, and swallowing it quietly
+	// would be this layer hiding it.
 	if !slices.Equal(got.Channels, []int64{7, 9}) {
 		t.Errorf("каналы = %v, ожидались [7 9]", got.Channels)
 	}

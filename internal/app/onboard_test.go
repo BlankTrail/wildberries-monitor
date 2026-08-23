@@ -1054,7 +1054,7 @@ func TestResolveProfile_OnePressCollectsTheWholeProfile(t *testing.T) {
 	configured(t, a)
 	resolving(t, a, 4242)
 
-	id, err := a.ResolveProfile(ctx, "https://www.wildberries.ru/catalog/141504066/detail.aspx")
+	id, err := a.ResolveProfile(ctx, "https://www.wildberries.ru/catalog/141504066/detail.aspx", store.RunControls{})
 	if err != nil {
 		t.Fatalf("ResolveProfile: %v", err)
 	}
@@ -1118,7 +1118,7 @@ func TestResolveProfile_ASecondPasteIsTheSameProfile(t *testing.T) {
 	configured(t, a)
 	resolving(t, a, 4242)
 
-	first, err := a.ResolveProfile(ctx, "141504066")
+	first, err := a.ResolveProfile(ctx, "141504066", store.RunControls{})
 	if err != nil {
 		t.Fatalf("ResolveProfile: %v", err)
 	}
@@ -1130,7 +1130,7 @@ func TestResolveProfile_ASecondPasteIsTheSameProfile(t *testing.T) {
 	}
 
 	// The same card, pasted as a full link this time.
-	again, err := a.ResolveProfile(ctx, "https://www.wildberries.ru/catalog/141504066/detail.aspx")
+	again, err := a.ResolveProfile(ctx, "https://www.wildberries.ru/catalog/141504066/detail.aspx", store.RunControls{})
 	if err != nil {
 		t.Fatalf("ResolveProfile: %v", err)
 	}
@@ -1159,7 +1159,7 @@ func TestProfileChain_AdvancesWhenARunFinishes(t *testing.T) {
 	configured(t, a)
 	resolving(t, a, 4242)
 
-	id, err := a.ResolveProfile(ctx, "141504066")
+	id, err := a.ResolveProfile(ctx, "141504066", store.RunControls{})
 	if err != nil {
 		t.Fatalf("ResolveProfile: %v", err)
 	}
@@ -1296,7 +1296,7 @@ func TestResolveProfile_ReadsTheCardAgainEvenWhenTheSellerIsKnown(t *testing.T) 
 	}
 
 	// The paste: the same profile, read again from the link.
-	if _, err := a.ResolveProfile(ctx, "141504066"); err != nil {
+	if _, err := a.ResolveProfile(ctx, "141504066", store.RunControls{}); err != nil {
 		t.Fatalf("ResolveProfile: %v", err)
 	}
 	byPaste, _ := a.Store.Profile(ctx, p.ID)
@@ -1483,5 +1483,46 @@ func TestProfileChain_TheResolveStaysOnOneThread(t *testing.T) {
 	}
 	if made.Threads != 1 {
 		t.Errorf("разбор ссылки идёт в %d потоков", made.Threads)
+	}
+}
+
+func TestResolveProfile_TheAnswersGivenWithTheLinkReachTheFirstRun(t *testing.T) {
+	// «Разобрать» starts the whole collection, so the settings offered beside
+	// that box have to be on the profile before the chain builds anything.
+	// Saved after it — the shape this had for a while, because they could only
+	// be set on the profile's own card — the first run of every profile went
+	// through every proxy on the build's own retry budget, whatever was asked.
+	a := newApp(t)
+	ctx := t.Context()
+	configured(t, a)
+	resolving(t, a, 4242)
+
+	id, err := a.ResolveProfile(ctx, "141504066", store.RunControls{
+		Threads: 9, Attempts: 10, Channels: []int64{3, 5},
+	})
+	if err != nil {
+		t.Fatalf("ResolveProfile: %v", err)
+	}
+
+	p, err := a.Store.Profile(ctx, id)
+	if err != nil {
+		t.Fatalf("Profile: %v", err)
+	}
+	if p.Threads != 9 || p.Attempts != 10 || !slices.Equal(p.Channels, []int64{3, 5}) {
+		t.Errorf("профиль сохранён как потоки=%d повторы=%d каналы=%v",
+			p.Threads, p.Attempts, p.Channels)
+	}
+
+	// And the very first job the chain built — the resolve — already has them.
+	// It stays on one thread by its own rule; the other two are the answers.
+	made, err := job.Load(ctx, a.Store, p.ResolveJob)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if made.Attempts != 10 {
+		t.Errorf("у разбора ссылки повторов %d, просили 10", made.Attempts)
+	}
+	if !slices.Equal(made.Channels, []int64{3, 5}) {
+		t.Errorf("разбор ссылки идёт через %v, просили [3 5]", made.Channels)
 	}
 }

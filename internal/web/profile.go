@@ -111,24 +111,71 @@ func (s *Server) profileHTML(r *http.Request) (string, error) {
 		b.WriteString(s.profileCard(r, p))
 	}
 
-	b.WriteString(profileForm())
+	b.WriteString(s.profileForm(r))
 	// Every form the region directory's controls name, at the very end and
 	// outside all the others.
 	b.WriteString(regionHelpForms())
 	return b.String(), nil
 }
 
-// profileForm is the one line the screen exists for.
-func profileForm() string {
+// profileForm is the one line the screen exists for, and the three answers
+// about how the collection it starts should be run.
+//
+// Folded away, because the line is the point and the defaults are right for
+// most people. Not absent, though, which is what they were: this press starts
+// the whole chain, so anything that could only be set on the profile's own
+// card afterwards arrived too late for the collection it was meant to govern.
+func (s *Server) profileForm(r *http.Request) string {
 	var b strings.Builder
 	b.WriteString(`<h3 class="bt-form-head">Разобрать ссылку</h3>`)
 	b.WriteString(`<form class="bt-fieldset bt-form" data-post="/profile" data-target="#profile-body">`)
 	b.WriteString(field("Ссылка или артикул",
 		`<input class="bt-input" name="input" required placeholder="https://www.wildberries.ru/catalog/141504066/detail.aspx">`,
 		"Ссылка на карточку товара или сам артикул. Из ссылки берётся номер после /catalog/, поэтому адрес из строки браузера подойдёт как есть."))
+	b.WriteString(s.runControls(r, store.RunControls{}))
 	b.WriteString(`<div class="bt-form-actions"><button class="bt-btn bt-btn--primary" type="submit">Разобрать</button></div>`)
 	b.WriteString(`</form>`)
 	return b.String()
+}
+
+// runControls draws the three answers about how a profile's collection is run.
+//
+// One function for both places that ask them — this screen's first press and
+// the profile's own card — so the two cannot drift into offering different
+// settings for the same collection.
+func (s *Server) runControls(r *http.Request, c store.RunControls) string {
+	var b strings.Builder
+	b.WriteString(`<details class="bt-more"><summary>Как выполнять запросы: потоки, прокси, повторы</summary>`)
+	b.WriteString(`<div class="bt-form-grid">`)
+	b.WriteString(field("Потоков",
+		fmt.Sprintf(`<input class="bt-input" name="threads" type="number" min="1" value="%s" placeholder="%d">`,
+			numberOrBlank(c.Threads), store.DefaultProfileThreads),
+		fmt.Sprintf("Во сколько потоков идут задания этого профиля. Пусто — %d. "+
+			"Каждый поток стоит двух портов у службы, открытых до первого запроса, "+
+			"так что это число с ценой. Разбор ссылки всегда в один поток: он читает одну карточку.",
+			store.DefaultProfileThreads)))
+	b.WriteString(field("Повторов запроса",
+		fmt.Sprintf(`<input class="bt-input" name="attempts" type="number" min="1" value="%s" placeholder="%d">`,
+			numberOrBlank(c.Attempts), wb.DefaultAttemptsPooled),
+		fmt.Sprintf("Сколько раз повторить один запрос, прежде чем считать его отказом. "+
+			"Пусто — %d с прокси и %d без них. Повтор идёт через другой порт, а если адрес "+
+			"один — порт меняет отпечаток и личность, оставаясь на том же адресе.",
+			wb.DefaultAttemptsPooled, wb.DefaultAttemptsDirect)))
+	b.WriteString(`</div>`)
+	b.WriteString(field("Через какие прокси", s.channelPicker(r, "channels", c.Channels),
+		"Ничего не отмечено — через все включённые. Отметьте, если этот профиль должен "+
+			"собираться только через определённые выходы."))
+	b.WriteString(`</details>`)
+	return b.String()
+}
+
+// runControlsFrom reads them back off whichever form posted them.
+func runControlsFrom(r *http.Request) store.RunControls {
+	return store.RunControls{
+		Threads:  int(atoi64(r.PostFormValue("threads"))),
+		Attempts: int(atoi64(r.PostFormValue("attempts"))),
+		Channels: idList(r.PostForm["channels"]),
+	}
 }
 
 // profileCard is one profile: who they are, what they sell, and the chain that
@@ -290,31 +337,17 @@ func (s *Server) profilePlanForm(r *http.Request, p store.ProfileRow) string {
 		fmt.Sprintf(`<input class="bt-input" name="suggest_limit" type="number" min="0" value="%d" placeholder="все">`,
 			p.SuggestLimit),
 		"Один запрос на фразу. 0 — спросить обо всех."))
-	b.WriteString(field("Потоков",
-		fmt.Sprintf(`<input class="bt-input" name="threads" type="number" min="1" value="%d" placeholder="%d">`,
-			profileThreads(p), store.DefaultProfileThreads),
-		fmt.Sprintf("Во сколько потоков идут задания этого профиля. Пусто — %d. "+
-			"Каждый поток стоит двух портов у службы, открытых до первого запроса, "+
-			"так что это число с ценой. Разбор ссылки всегда в один поток: он читает одну карточку.",
-			store.DefaultProfileThreads)))
-	b.WriteString(field("Повторов запроса",
-		fmt.Sprintf(`<input class="bt-input" name="attempts" type="number" min="1" value="%s" placeholder="%d">`,
-			numberOrBlank(p.Attempts), wb.DefaultAttemptsPooled),
-		fmt.Sprintf("Сколько раз повторить один запрос, прежде чем считать его отказом. "+
-			"Пусто — %d с прокси и %d без них. Повтор идёт через другой порт, а если адрес "+
-			"один — порт меняет отпечаток и личность, оставаясь на том же адресе.",
-			wb.DefaultAttemptsPooled, wb.DefaultAttemptsDirect)))
 	b.WriteString(field("Пересобирать",
 		`<input class="bt-input bt-input--mono" name="schedule" value="`+
 			html.EscapeString(p.Schedule)+`" placeholder="every 24h">`,
 		"Пусто — только по кнопке. «every 24h», «every 7d» — сбор повторится сам."))
 	b.WriteString(`</div>`)
-	// Which exits this profile's own jobs go through. After the grid rather
-	// than in it: a list of proxies is a list, and a third of a row is where a
-	// number goes.
-	b.WriteString(field("Через какие прокси", s.channelPicker(r, "channels", p.Channels),
-		"Ничего не отмечено — через все включённые. Отметьте, если этот профиль должен "+
-			"собираться только через определённые выходы."))
+	// The same three the first press offers, drawn by the same function: two
+	// screens asking the same question in two shapes is two places to change
+	// and one of them will be missed.
+	b.WriteString(s.runControls(r, store.RunControls{
+		Threads: p.Threads, Attempts: p.Attempts, Channels: p.Channels,
+	}))
 
 	b.WriteString(`<div class="bt-field"><label class="bt-checkbox">` +
 		`<input type="checkbox" name="enabled" value="1"` + checkedIf(p.Enabled) + `> ` +
@@ -399,7 +432,7 @@ func (s *Server) saveProfile(w http.ResponseWriter, r *http.Request) {
 	// The whole chain, not a job. Building the resolve job here was the shape
 	// of the defect: nothing was waiting on it, so the run that learned who the
 	// seller was handed that fact to nobody and the profile stopped there.
-	if _, err := s.ResolveProfile(r.Context(), input); err != nil {
+	if _, err := s.ResolveProfile(r.Context(), input, runControlsFrom(r)); err != nil {
 		s.profileFragment(w, r, alert("error", err.Error()))
 		return
 	}
@@ -484,9 +517,7 @@ func (s *Server) saveProfilePlan(w http.ResponseWriter, r *http.Request) {
 			"Не указан ни один регион. Соберите его на вкладке «Задачи» — там есть конструктор."))
 		return
 	}
-	p.Threads = int(atoi64(r.PostFormValue("threads")))
-	p.Attempts = int(atoi64(r.PostFormValue("attempts")))
-	p.Channels = idList(r.PostForm["channels"])
+	runControlsFrom(r).Apply(&p)
 
 	fields := fieldsOfGroups(r.PostForm["groups"])
 	if len(fields) == 0 {

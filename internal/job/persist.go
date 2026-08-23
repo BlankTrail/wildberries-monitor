@@ -64,21 +64,6 @@ type params struct {
 	Attempts int `json:"attempts,omitempty"`
 }
 
-// nonZero drops the zeros from a list of ids.
-//
-// A form posts an empty box as an empty value, and a zero channel id is a
-// channel that does not exist — stored, it would be a job naming an exit
-// nothing can build.
-func nonZero(in []int64) []int64 {
-	var out []int64
-	for _, v := range in {
-		if v != 0 {
-			out = append(out, v)
-		}
-	}
-	return out
-}
-
 // Save writes a job and returns its id.
 //
 // Validate is called first, and its failure is returned rather than stored:
@@ -121,7 +106,7 @@ func Save(ctx context.Context, s *store.Store, j Job) (int64, error) {
 	// The column has been here since the schema was written and every save put
 	// "[]" in it, so no job could ever name a channel and the run used every
 	// enabled one. It carries the answer now.
-	channels, err := json.Marshal(nonZero(j.Channels))
+	channels, err := json.Marshal(j.Channels)
 	if err != nil {
 		return 0, fmt.Errorf("job: save: %w", err)
 	}

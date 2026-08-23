@@ -63,7 +63,7 @@ func TestProfile_ThePasteAsksForTheWholeProfileAndShowsIt(t *testing.T) {
 	// back — the card, the stage, and something to watch.
 	srv := newServer(t)
 	var asked string
-	srv.ResolveProfile = func(ctx context.Context, input string) (int64, error) {
+	srv.ResolveProfile = func(ctx context.Context, input string, _ store.RunControls) (int64, error) {
 		asked = input
 		// What the app does: the row exists before this answer is written, so
 		// the fragment below has something to draw.
@@ -465,7 +465,7 @@ func TestProfile_ARefusedPasteSaysWhyAndKeepsTheScreen(t *testing.T) {
 	// everything past it belongs to the app. Both arrive as a line on the
 	// screen rather than as a status the browser renders as its own error.
 	srv := newServer(t)
-	srv.ResolveProfile = func(context.Context, string) (int64, error) {
+	srv.ResolveProfile = func(context.Context, string, store.RunControls) (int64, error) {
 		return 0, errors.New("карточка не прочиталась")
 	}
 
@@ -602,5 +602,82 @@ func TestProfile_TheJobsThisScreenBuildsCarryTheProfilesAnswers(t *testing.T) {
 		if len(made.Channels) != 1 || made.Channels[0] != 3 {
 			t.Errorf("%s: каналы %v, профиль просил [3]", path, made.Channels)
 		}
+	}
+}
+
+func TestProfile_TheFirstPressCarriesTheRunControls(t *testing.T) {
+	// «Разобрать» starts the whole chain, not just the resolve. Settings that
+	// could only be given afterwards, on the profile's own card, arrived after
+	// the collection they were meant to govern had already started — so the
+	// first run of every profile went in four threads through every proxy,
+	// whatever the person wanted.
+	srv := newServer(t)
+	var got store.RunControls
+	srv.ResolveProfile = func(ctx context.Context, input string, run store.RunControls) (int64, error) {
+		got = run
+		return srv.Store.SaveProfile(ctx, store.ProfileRow{Name: input, SourceInput: input})
+	}
+
+	postForm(t, srv, "/profile", url.Values{
+		"input":    {"141504066"},
+		"threads":  {"9"},
+		"attempts": {"10"},
+		"channels": {"", "3"},
+	})
+
+	if got.Threads != 9 {
+		t.Errorf("потоков %d, форма просила 9", got.Threads)
+	}
+	if got.Attempts != 10 {
+		t.Errorf("повторов %d, форма просила 10", got.Attempts)
+	}
+	if len(got.Channels) != 1 || got.Channels[0] != 3 {
+		t.Errorf("каналы %v, форма просила [3]", got.Channels)
+	}
+}
+
+func TestProfile_TheFirstScreenOffersTheRunControls(t *testing.T) {
+	// On the screen that starts everything, and folded away: the line is the
+	// point of that screen and the defaults suit most people. Absent is the
+	// state this replaces.
+	srv := newServer(t)
+	body := get(t, srv, "/profile", "").Body.String()
+
+	for _, want := range []string{`name="threads"`, `name="attempts"`, `name="channels"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("на первом экране нет поля %s:\n%s", want, firstLines(body))
+		}
+	}
+	if !strings.Contains(body, "<summary>Как выполнять запросы") {
+		t.Error("настройки прогона не свёрнуты — форма из одной строки перестала быть формой из одной строки")
+	}
+}
+
+func TestProfile_TheCardShowsTheRunControlsAlreadyChosen(t *testing.T) {
+	// Coming back to the screen has to show what was chosen, not the defaults:
+	// a form that forgets is one somebody re-fills every time, and the second
+	// filling is the one that silently disagrees with the first.
+	srv := newServer(t)
+	ctx := t.Context()
+
+	id, err := srv.Store.SaveProfile(ctx, store.ProfileRow{Name: "мой", SourceInput: "141504066"})
+	if err != nil {
+		t.Fatalf("SaveProfile: %v", err)
+	}
+	p, err := srv.Store.Profile(ctx, id)
+	if err != nil {
+		t.Fatalf("Profile: %v", err)
+	}
+	p.Threads, p.Attempts = 9, 10
+	if err := srv.Store.SaveProfilePlan(ctx, p); err != nil {
+		t.Fatalf("SaveProfilePlan: %v", err)
+	}
+
+	body := get(t, srv, "/profile", "").Body.String()
+	if !strings.Contains(body, `name="threads" type="number" min="1" value="9"`) {
+		t.Errorf("карточка профиля не показывает выбранные 9 потоков:\n%s", firstLines(body))
+	}
+	if !strings.Contains(body, `name="attempts" type="number" min="1" value="10"`) {
+		t.Error("карточка профиля не показывает выбранные 10 повторов")
 	}
 }

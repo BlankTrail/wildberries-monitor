@@ -120,7 +120,7 @@ func (a *App) StartProfileChain(ctx context.Context, id int64) error {
 // resolve that inserted a row every time gave them a twin per attempt: two
 // cards, two «Собрать всё», two schedules, and the plan they had configured on
 // the first one left behind.
-func (a *App) ResolveProfile(ctx context.Context, input string) (int64, error) {
+func (a *App) ResolveProfile(ctx context.Context, input string, run store.RunControls) (int64, error) {
 	input = strings.TrimSpace(input)
 	nm, ok := wb.NmID(input)
 	if !ok {
@@ -149,6 +149,14 @@ func (a *App) ResolveProfile(ctx context.Context, input string) (int64, error) {
 		if p, err = a.Store.Profile(ctx, id); err != nil {
 			return 0, err
 		}
+	}
+
+	// Before the chain and not after it: this press starts the collection, so
+	// answers saved once it is running would reach the second stage at best and
+	// the first one never.
+	run.Apply(&p)
+	if err := a.Store.SaveProfilePlan(ctx, p); err != nil {
+		return 0, err
 	}
 
 	// From the resolve, because the link is what was just pasted: the card may

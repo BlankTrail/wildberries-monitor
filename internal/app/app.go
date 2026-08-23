@@ -286,8 +286,8 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 		// And the press that starts it all: a pasted link becomes a profile and
 		// the whole chain, rather than a job the panel built by hand and nobody
 		// was waiting on.
-		ResolveProfile: func(ctx context.Context, input string) (int64, error) {
-			return a.ResolveProfile(a.lifetime(ctx), input)
+		ResolveProfile: func(ctx context.Context, input string, run store.RunControls) (int64, error) {
+			return a.ResolveProfile(a.lifetime(ctx), input, run)
 		},
 		// One nudge for one profile, which is what the screen asks for when a
 		// run it was watching ends.

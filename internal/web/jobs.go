@@ -1004,14 +1004,20 @@ func splitLines(s string) []string {
 }
 
 // idList is a set of store ids as a form posts them: one value per ticked box.
-// idList is a set of checkboxes read as ids. The empty value a form posts
-// alongside them reads as nought and is dropped where every job passes —
-// job.Save — rather than here as well: two places dropping the same thing is
-// one place nobody tests.
+// idList is a set of checkboxes read as ids.
+//
+// The empty value a form posts alongside them reads as nought, and nought is
+// not an id — it is an artefact of HTML, so this is where it goes. It was
+// dropped a layer down, in job.Save, for a while: that covered every job and
+// left the one thing that is not a job — a profile's own list of exits — with
+// a nought in it, and left the rule stated in the persistence layer with a
+// reason that is about forms.
 func idList(values []string) []int64 {
 	var out []int64
 	for _, v := range values {
-		out = append(out, atoi64(v))
+		if id := atoi64(v); id != 0 {
+			out = append(out, id)
+		}
 	}
 	return out
 }

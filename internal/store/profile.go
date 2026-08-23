@@ -62,6 +62,25 @@ const (
 )
 
 // ProfileRow is one «мой контур».
+// RunControls is how a collection is run rather than what it collects: in how
+// many threads, through which exits, with how many attempts per request.
+//
+// Its own type because the answers are given before the profile exists. The
+// press that pastes a link starts the whole chain, so a screen that could only
+// set these afterwards was a screen where the first collection always ran on
+// the defaults — which is what «нет возможности задать» meant on the one
+// screen that starts everything.
+type RunControls struct {
+	Threads  int
+	Attempts int
+	Channels []int64
+}
+
+// Apply writes these answers onto a profile row.
+func (c RunControls) Apply(p *ProfileRow) {
+	p.Threads, p.Attempts, p.Channels = c.Threads, c.Attempts, c.Channels
+}
+
 type ProfileRow struct {
 	ID          int64
 	Name        string

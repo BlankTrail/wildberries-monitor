@@ -128,7 +128,7 @@ type Server struct {
 	// the stages is the app's, and a panel that made the first job by hand
 	// handed the run to nobody — which is exactly how a pasted link used to end
 	// at a card read and nothing more.
-	ResolveProfile func(ctx context.Context, input string) (int64, error)
+	ResolveProfile func(ctx context.Context, input string, run store.RunControls) (int64, error)
 
 	// StepProfile moves one profile's chain as far as it can go right now. The
 	// screen asks for it when a run it was watching ends, so that what it draws
