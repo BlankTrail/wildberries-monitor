@@ -86,6 +86,13 @@ func (a *App) detectChanges(ctx context.Context) {
 		highest = max(highest, at)
 	}
 
+	if n, at, err := a.applyAssortment(ctx, engine, all, since); err != nil {
+		a.Log.Printf("правила: ассортимент: %v", err)
+	} else {
+		fired += n
+		highest = max(highest, at)
+	}
+
 	if n, at, err := a.applyNewCompetitors(ctx, engine, all, since); err != nil {
 		a.Log.Printf("правила: новые конкуренты: %v", err)
 	} else {
@@ -322,6 +329,99 @@ func (a *App) applyPromotion(ctx context.Context, e *rules.Engine, all []rules.R
 		fired += n
 	}
 	return fired, newest, nil
+}
+
+// applyAssortment tells the rules what a storefront gained and lost.
+//
+// Spec section 6.1's assortment group, and the reason it was absent: every
+// other change in this package is about one product's numbers over two
+// readings, and «продавец завёл новый товар» is not about a product at all.
+// It is about a set, and the set is what a storefront job walks — so this is
+// read off the walk rather than diffed out of two cards.
+//
+// Completed walks only. A run that was stopped, or that failed half its pages,
+// has met a fraction of the storefront, and every product it did not reach
+// looks exactly like a product the seller withdrew: one flaky evening would
+// become a hundred «товар пропал» messages about goods still on sale.
+func (a *App) applyAssortment(ctx context.Context, e *rules.Engine, all []rules.Rule, since int64) (int, int64, error) {
+	walks, err := a.Store.AssortmentWalksSince(ctx, since)
+	if err != nil {
+		return 0, 0, err
+	}
+
+	fired, highest := 0, int64(0)
+	for _, w := range walks {
+		highest = max(highest, w.StartedAt)
+		added, gone, err := a.Store.AssortmentDiff(ctx, w)
+		if err != nil {
+			return fired, highest, err
+		}
+		if len(added) == 0 && len(gone) == 0 {
+			continue
+		}
+
+		for _, nm := range added {
+			n, err := a.tellAbout(ctx, e, all, track.ProductAdded, nm, w)
+			if err != nil {
+				return fired, highest, err
+			}
+			fired += n
+		}
+		for _, nm := range gone {
+			n, err := a.tellAbout(ctx, e, all, track.ProductRemoved, nm, w)
+			if err != nil {
+				return fired, highest, err
+			}
+			fired += n
+		}
+
+		// And the storefront as a whole, once, with how far it moved. One
+		// message about a seller who added forty goods overnight is a thing to
+		// read; forty messages is a thing to mute — and both are wanted, which
+		// is why they are separate kinds rather than one.
+		n, err := e.Apply(ctx, all, rules.Event{
+			Change: track.Change{
+				Kind: track.AssortmentSizeChanged, TS: w.StartedAt,
+				Subject:   walkSubject(w),
+				Was:       int64(len(gone)),
+				Now:       int64(len(added)),
+				HadBefore: true, HasNow: true,
+				Unit: track.UnitItems,
+			},
+			JobIDs: []int64{w.JobID},
+		})
+		if err != nil {
+			return fired, highest, err
+		}
+		fired += n
+	}
+	return fired, highest, nil
+}
+
+// tellAbout runs the rules over one product a walk gained or lost.
+func (a *App) tellAbout(ctx context.Context, e *rules.Engine, all []rules.Rule,
+	kind track.Kind, nmID int64, w store.AssortmentWalk) (int, error) {
+
+	facts, err := a.Store.Facts(ctx, nmID)
+	if err != nil {
+		return 0, err
+	}
+	return e.Apply(ctx, all, rules.Event{
+		Change: track.Change{
+			Kind: kind, NmID: nmID, TS: w.StartedAt,
+			Subject: walkSubject(w), Unit: track.UnitItems,
+		},
+		Brand: facts.Brand, SupplierID: facts.SupplierID, SubjectID: facts.SubjectID,
+		JobIDs: []int64{w.JobID},
+	})
+}
+
+// walkSubject names which storefront a change is about.
+func walkSubject(w store.AssortmentWalk) string {
+	if w.Kind == store.JobKindBrand {
+		return "бренд"
+	}
+	return "продавец"
 }
 
 // applyNewCompetitors tells the rules about sellers that turned up in a

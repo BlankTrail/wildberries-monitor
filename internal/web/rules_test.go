@@ -71,7 +71,7 @@ func TestRules_OffersOnlyTheChangesThisBuildCanNotice(t *testing.T) {
 			t.Errorf("%q has no label on screen", k)
 		}
 	}
-	for _, absent := range []string{"outranked-by-ad", "shelf-lost", "product-added"} {
+	for _, absent := range []string{"outranked-by-ad", "shelf-lost", "content-changed"} {
 		if strings.Contains(body, `value="`+absent+`"`) {
 			t.Errorf("the constructor offers %q, which nothing in this build emits", absent)
 		}

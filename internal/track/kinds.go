@@ -29,13 +29,17 @@ package track
 //     «сверху встало платное размещение» cannot be told from «органика
 //     просела». The shelf trio needs a per-product recommendation shelf
 //     history keyed the way placements are, which nothing collects yet.
-//   - Assortment (ProductAdded, ProductRemoved, ContentChanged,
-//     BrandAssortmentChanged). These are about a storefront's shape rather
-//     than a product's numbers, and the diff in this package is written
-//     against one product at a time.
+//   - ContentChanged. The card's static half — what the seller wrote — is
+//     stored as one row per product and overwritten on every reading, so
+//     there is no earlier version to compare against. It needs a history of
+//     the card, or a comparison made at the moment of writing, and neither
+//     exists yet. The rest of the assortment group is here: see
+//     AssortmentSizeChanged below, which stands where spec section 6.1 says
+//     BrandAssortmentChanged — the same fact, and named for what it is
+//     rather than for one of the two kinds of storefront it happens on.
 type Kind string
 
-// The twenty-seven kinds this build can emit, grouped by what they are about. The
+// The thirty kinds this build can emit, grouped by what they are about. The
 // spec section 6.1 names that are absent are listed on Kind above, with
 // the reason each of them has no producer here.
 //
@@ -98,6 +102,13 @@ const (
 	// And the one comparison that is not a diff of a pairing over time: a
 	// seller appearing in the environment at all.
 	NewCompetitorInEnvironment Kind = "new-competitor-in-environment"
+
+	// Assortment: what a storefront had, one walk to the next. Not about one
+	// product's numbers but about a set, which is why they are read off the
+	// walk rather than diffed out of two readings of a card.
+	ProductAdded          Kind = "product-added"
+	ProductRemoved        Kind = "product-removed"
+	AssortmentSizeChanged Kind = "assortment-size-changed"
 )
 
 // Unit says what the two numbers on a change are counted in.
@@ -144,5 +155,6 @@ func Kinds() []Kind {
 		RatingFellBelowMedian, ContentGapWidened,
 		CompetitorJoinedPromo, WorkingPhraseLost,
 		NewCompetitorInEnvironment,
+		ProductAdded, ProductRemoved, AssortmentSizeChanged,
 	}
 }

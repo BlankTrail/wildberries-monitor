@@ -614,3 +614,102 @@ func TestDetectChanges_ACompetitorRecomputedIsNotANewOne(t *testing.T) {
 		t.Errorf("сработок %d — пересчёт объявил знакомого конкурента новым: %+v", len(events), events)
 	}
 }
+
+// storefrontWalk records one completed walk of a seller's goods: the run, and
+// the products it met.
+func storefrontWalk(t *testing.T, a *App, jobID int64, at time.Time, nmIDs ...int64) {
+	t.Helper()
+	ctx := t.Context()
+
+	// The real lifecycle, so the run looks exactly like one the runner left
+	// behind: started at a moment, finished cleanly, with the products it met
+	// linked to the job.
+	a.Store.SetClock(func() time.Time { return at })
+	run, err := a.Store.StartRun(ctx, jobID, []store.ItemRow{{Position: 0, Kind: "listing", Key: "k"}})
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+	a.Store.SetClock(func() time.Time { return at.Add(time.Minute) })
+	if err := a.Store.FinishRun(ctx, run, store.RunDone, 1, int64(len(nmIDs)), 0, ""); err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+	a.Store.SetClock(func() time.Time { return at })
+	for _, nm := range nmIDs {
+		if _, err := a.Store.SaveProduct(ctx, priced(nm, 99900, at), ""); err != nil {
+			t.Fatalf("SaveProduct: %v", err)
+		}
+		if err := a.Store.LinkJobProduct(ctx, jobID, nm); err != nil {
+			t.Fatalf("LinkJobProduct: %v", err)
+		}
+	}
+}
+
+func TestDetectChanges_AProductLeavingAStorefrontReachesTheOutbox(t *testing.T) {
+	// Spec section 6.1's assortment group, end to end. It was absent because
+	// every other change in the detector is about one product's numbers over
+	// two readings, and «продавец снял товар» is not about a product at all —
+	// it is about a set, and the set is what a storefront walk is.
+	a := newApp(t)
+	ctx := t.Context()
+	watchEverything(t, a, track.ProductRemoved)
+
+	id, err := a.Store.SaveJob(ctx, store.JobRow{
+		Name: "витрина", Type: store.JobKindSeller, Fields: `["nm_id"]`,
+		Regions: `["-1257786"]`, Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("SaveJob: %v", err)
+	}
+
+	first := time.Now().Add(-48 * time.Hour)
+	atWatermark(t, a, first.Add(time.Hour))
+
+	storefrontWalk(t, a, id, first, 100, 200)
+	storefrontWalk(t, a, id, first.Add(24*time.Hour), 100)
+
+	a.detectChanges(ctx)
+
+	events, err := a.Store.RecentEvents(ctx, 10)
+	if err != nil {
+		t.Fatalf("RecentEvents: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("сработок %d, ожидалась одна — снятый товар: %+v", len(events), events)
+	}
+	if events[0].NmID != 200 {
+		t.Errorf("сработало про товар %d, ожидалось 200", events[0].NmID)
+	}
+}
+
+func TestDetectChanges_AStorefrontThatMovedSaysSoOnceAsWell(t *testing.T) {
+	// One message about a seller who added forty goods overnight is a thing to
+	// read; forty messages is a thing to mute. Both are wanted, which is why
+	// they are separate kinds rather than one.
+	a := newApp(t)
+	ctx := t.Context()
+	watchEverything(t, a, track.AssortmentSizeChanged)
+
+	id, err := a.Store.SaveJob(ctx, store.JobRow{
+		Name: "витрина", Type: store.JobKindSeller, Fields: `["nm_id"]`,
+		Regions: `["-1257786"]`, Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("SaveJob: %v", err)
+	}
+
+	first := time.Now().Add(-48 * time.Hour)
+	atWatermark(t, a, first.Add(time.Hour))
+
+	storefrontWalk(t, a, id, first, 100)
+	storefrontWalk(t, a, id, first.Add(24*time.Hour), 100, 200, 300)
+
+	a.detectChanges(ctx)
+
+	events, err := a.Store.RecentEvents(ctx, 10)
+	if err != nil {
+		t.Fatalf("RecentEvents: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("сработок %d, ожидалась одна на всю витрину: %+v", len(events), events)
+	}
+}

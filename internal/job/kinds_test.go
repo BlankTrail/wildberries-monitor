@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/BlankTrail/wildberries-monitor/internal/store"
 	"github.com/BlankTrail/wildberries-monitor/wb"
 )
 
@@ -298,5 +299,19 @@ func TestParseKey_RefusesWhatItCannotRead(t *testing.T) {
 		if _, err := ParseKey(bad); err == nil {
 			t.Errorf("ParseKey(%q) accepted a key it cannot act on", bad)
 		}
+	}
+}
+
+func TestKinds_TheStoreSpellsThemTheSameWay(t *testing.T) {
+	// internal/store carries its own copy of the two storefront kinds,
+	// because it cannot import this package — this one imports it. Two
+	// spellings of one word is one word that can drift, and the drift would
+	// be silent: the assortment detector would simply stop finding storefront
+	// walks and nothing would fail.
+	if string(KindSeller) != store.JobKindSeller {
+		t.Errorf("продавец: %q против %q", KindSeller, store.JobKindSeller)
+	}
+	if string(KindBrand) != store.JobKindBrand {
+		t.Errorf("бренд: %q против %q", KindBrand, store.JobKindBrand)
 	}
 }

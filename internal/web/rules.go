@@ -58,6 +58,9 @@ var kindLabelsRU = map[track.Kind]string{
 	track.CompetitorJoinedPromo:      "Конкурент зашёл в акцию",
 	track.WorkingPhraseLost:          "Рабочая фраза перестала находить",
 	track.NewCompetitorInEnvironment: "Новый конкурент в окружении",
+	track.ProductAdded:               "У продавца появился товар",
+	track.ProductRemoved:             "Товар пропал из витрины",
+	track.AssortmentSizeChanged:      "Ассортимент изменился",
 }
 
 func kindLabel(k track.Kind) string {
