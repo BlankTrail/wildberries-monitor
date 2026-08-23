@@ -579,3 +579,106 @@ func TestSaveBenchmarks_CardCompletenessSurvivesBeingWrittenDown(t *testing.T) {
 		t.Errorf("полнота конкурента = %v, записывали 90", back[0].RivalOptionsFilledPct)
 	}
 }
+
+// promoReading is one reading of a promotion's contents, saved the way the
+// promotion job saves it: positions under the promotion's own name.
+func promoReading(t *testing.T, s *Store, slug, dest string, nmIDs ...int64) {
+	t.Helper()
+	searchReading(t, s, PromoQueryPrefix+slug, dest, nmIDs...)
+}
+
+func TestTopOfSearch_TellsWhoWasInAPromotion(t *testing.T) {
+	// «Кто из конкурентов зашёл в акцию и с какой ценой» is what the promotion
+	// job exists to answer. It collected, the rows went into the store, and
+	// nothing ever asked them anything — the comparison had a column for it
+	// and left it empty.
+	s := openTestStore(t)
+	ctx := context.Background()
+	at := time.Date(2026, 8, 20, 9, 0, 0, 0, time.UTC)
+	s.SetClock(func() time.Time { return at })
+
+	searchReading(t, s, "платье", "-1257786", 100, 200, 300)
+	promoReading(t, s, "letnie-skidki", "-1257786", 200)
+
+	top, err := s.TopOfSearch(ctx, "платье", "-1257786", 10)
+	if err != nil {
+		t.Fatalf("TopOfSearch: %v", err)
+	}
+	for _, st := range top {
+		if want := st.NmID == 200; st.InPromo != want {
+			t.Errorf("товар %d: в акции = %v, ожидалось %v", st.NmID, st.InPromo, want)
+		}
+	}
+}
+
+func TestTopOfSearch_APromotionIsNotASearchPhrase(t *testing.T) {
+	// Both live in the query column, which is what lets one reading of a
+	// promotion be a position like any other. The flag has to tell them apart
+	// or every product ever collected by phrase would count as being in an
+	// promotion of that name.
+	s := openTestStore(t)
+	ctx := context.Background()
+	at := time.Date(2026, 8, 20, 9, 0, 0, 0, time.UTC)
+	s.SetClock(func() time.Time { return at })
+
+	searchReading(t, s, "платье", "-1257786", 100)
+	searchReading(t, s, "сарафан", "-1257786", 100)
+
+	top, err := s.TopOfSearch(ctx, "платье", "-1257786", 10)
+	if err != nil {
+		t.Fatalf("TopOfSearch: %v", err)
+	}
+	if top[0].InPromo {
+		t.Error("выдача по другой фразе засчиталась акцией")
+	}
+}
+
+func TestTopOfSearch_APromotionBelongsToItsOwnRegionAndTime(t *testing.T) {
+	// A promotion runs in a region and it ends. Counted across either, last
+	// spring's sale in Moscow marks today's comparison in Penza.
+	s := openTestStore(t)
+	ctx := context.Background()
+	at := time.Date(2026, 8, 20, 9, 0, 0, 0, time.UTC)
+
+	s.SetClock(func() time.Time { return at.Add(-90 * 24 * time.Hour) })
+	promoReading(t, s, "vesennie-skidki", "-1257786", 100)
+	s.SetClock(func() time.Time { return at })
+	promoReading(t, s, "letnie-skidki", "-5887751", 100)
+	searchReading(t, s, "платье", "-1257786", 100)
+
+	top, err := s.TopOfSearch(ctx, "платье", "-1257786", 10)
+	if err != nil {
+		t.Fatalf("TopOfSearch: %v", err)
+	}
+	if top[0].InPromo {
+		t.Error("засчитана акция из другого региона или из прошлого сезона")
+	}
+}
+
+func TestSaveBenchmarks_PromotionMembershipSurvivesBeingWrittenDown(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	id, err := s.SaveProfile(ctx, ProfileRow{Name: "мой", SourceInput: "141504066"})
+	if err != nil {
+		t.Fatalf("SaveProfile: %v", err)
+	}
+	no, yes := false, true
+	if err := s.SaveBenchmarks(ctx, []BenchmarkRow{{
+		ProfileID: id, NmID: 100, Query: "платье", Dest: "-1257786", TS: 1000,
+		Baseline: BaselineMedian, Currency: "RUB",
+		InPromo: &no, RivalInPromo: &yes,
+	}}); err != nil {
+		t.Fatalf("SaveBenchmarks: %v", err)
+	}
+	back, err := s.Benchmarks(ctx, id)
+	if err != nil {
+		t.Fatalf("Benchmarks: %v", err)
+	}
+	if back[0].InPromo == nil || *back[0].InPromo {
+		t.Errorf("моё участие = %v, записывали false", back[0].InPromo)
+	}
+	if back[0].RivalInPromo == nil || !*back[0].RivalInPromo {
+		t.Errorf("участие конкурента = %v, записывали true", back[0].RivalInPromo)
+	}
+}

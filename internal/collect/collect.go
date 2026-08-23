@@ -365,7 +365,12 @@ func (f *Fetcher) mainFeed(ctx context.Context, key job.Key) (int, error) {
 
 // promoPrefix marks a position recorded inside a promotion rather than inside
 // a search. See promo above.
-const promoPrefix = "promo:"
+//
+// Declared by the store rather than here, because the store reads it too: the
+// comparison answers «в акции ли этот товар» off the same rows, and a second
+// copy of the prefix here would be a rule that could drift on one side and go
+// on compiling on the other.
+const promoPrefix = store.PromoQueryPrefix
 
 // promoQueryKey is the query column's value for a promotion's positions.
 func promoQueryKey(slug string) string { return promoPrefix + slug }

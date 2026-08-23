@@ -233,3 +233,30 @@ func TestCompare_CarriesHowFullEachCardIs(t *testing.T) {
 		t.Errorf("медианная полнота = %v, ожидалось 90 — медиана из 100, 90 и 60", b.RivalOptionsFilledPct)
 	}
 }
+
+func TestMedian_OfPromotionsIsWhetherMostOfTheTopIsDiscounting(t *testing.T) {
+	// A flag has no middle value, so the median of one is the honest reading:
+	// half the top inside a promotion is «здесь идёт акция», and one
+	// participant out of five is one seller's decision, not the shelf's.
+	top := []store.SearchStanding{
+		standing(200, 1, 99900, 4.9, 900),
+		standing(300, 2, 109900, 4.8, 500),
+		standing(400, 3, 119900, 4.7, 100),
+	}
+	top[0].InPromo, top[1].InPromo = true, true
+
+	mine := standing(100, 8, 149900, 4.5, 12)
+	got := Compare(7, "платье", "-1257786", mine, top, nil)
+	if got[0].RivalInPromo == nil || !*got[0].RivalInPromo {
+		t.Error("двое из троих в акции, а медиана говорит, что акции нет")
+	}
+	if got[0].InPromo == nil || *got[0].InPromo {
+		t.Error("моё участие в акции взялось ниоткуда")
+	}
+
+	top[1].InPromo = false
+	got = Compare(7, "платье", "-1257786", mine, top, nil)
+	if got[0].RivalInPromo == nil || *got[0].RivalInPromo {
+		t.Error("один из троих в акции, а медиана говорит, что акция идёт")
+	}
+}

@@ -79,7 +79,7 @@ func (s *Server) compareHTML(r *http.Request) (string, error) {
 	// section 4.7's comparisons have no source in this build, and a column of
 	// dashes reads like «у всех поровну».
 	b.WriteString(`<div class="bt-alert bt-alert--neutral">` +
-		`Не сравнивается в этой сборке: участие в акции, число фото и наличие видео — ` +
+		`Не сравнивается в этой сборке: число фото и наличие видео — ` +
 		`для них нет источника, а пустая колонка читалась бы как «поровну».</div>`)
 	b.WriteString(`</section>`)
 	return b.String(), nil
@@ -94,7 +94,7 @@ func compareTable(rows []store.BenchmarkRow) string {
 		`<th class="bt-num">Рейтинг</th><th class="bt-num">Отзывов</th>` +
 		`<th class="bt-num">Отзывов в день</th>` +
 		`<th class="bt-num">Остаток</th><th class="bt-num">Доставка</th>` +
-		`<th>Реклама</th>` +
+		`<th>Реклама</th><th>Акция</th>` +
 		`</tr></thead><tbody>`)
 
 	for _, r := range rows {
@@ -112,6 +112,7 @@ func compareTable(rows []store.BenchmarkRow) string {
 		b.WriteString(deltaCell(r.TotalQuantity, r.RivalTotalQuantity, higherIsBetter, plainInt))
 		b.WriteString(deltaCell(r.DeliveryTime2, r.RivalDeliveryTime2, lowerIsBetter, hours))
 		b.WriteString(flagCell(r.HasAd, r.RivalHasAd))
+		b.WriteString(flagCell(r.InPromo, r.RivalInPromo))
 		b.WriteString(`</tr>`)
 	}
 	b.WriteString(`</tbody></table></div>`)

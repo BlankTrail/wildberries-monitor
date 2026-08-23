@@ -72,6 +72,9 @@ type BenchmarkRow struct {
 	OptionsFilledPct      *int64
 	RivalOptionsFilledPct *int64
 
+	InPromo      *bool
+	RivalInPromo *bool
+
 	TotalQuantity      *int64
 	RivalTotalQuantity *int64
 
@@ -115,8 +118,9 @@ func (s *Store) SaveBenchmarks(ctx context.Context, rows []BenchmarkRow) error {
 				delivery_time2, rival_delivery_time2,
 				description_len, rival_description_len,
 				options_filled_pct, rival_options_filled_pct,
-				has_ad, rival_has_ad
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				has_ad, rival_has_ad,
+				in_promo, rival_in_promo
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT (profile_id, nm_id, query, dest, ts, baseline, baseline_id) DO NOTHING`,
 			r.ProfileID, r.NmID, r.Query, r.Dest, r.TS, r.Baseline, r.BaselineID,
 			r.PositionOrganic, r.RivalPositionOrganic,
@@ -129,7 +133,8 @@ func (s *Store) SaveBenchmarks(ctx context.Context, rows []BenchmarkRow) error {
 			r.DeliveryTime2, r.RivalDeliveryTime2,
 			r.DescriptionLen, r.RivalDescriptionLen,
 			r.OptionsFilledPct, r.RivalOptionsFilledPct,
-			r.HasAd, r.RivalHasAd); err != nil {
+			r.HasAd, r.RivalHasAd,
+			r.InPromo, r.RivalInPromo); err != nil {
 			return fmt.Errorf("store: save benchmark %d/%q: %w", r.NmID, r.Query, err)
 		}
 	}
@@ -156,7 +161,8 @@ func (s *Store) Benchmarks(ctx context.Context, profileID int64) ([]BenchmarkRow
 		       b.delivery_time2, b.rival_delivery_time2,
 		       b.description_len, b.rival_description_len,
 		       b.options_filled_pct, b.rival_options_filled_pct,
-		       b.has_ad, b.rival_has_ad
+		       b.has_ad, b.rival_has_ad,
+		       b.in_promo, b.rival_in_promo
 		FROM benchmarks b
 		JOIN newest n ON n.nm_id = b.nm_id AND n.query = b.query AND n.dest = b.dest
 		             AND n.baseline = b.baseline AND n.baseline_id = b.baseline_id AND n.ts = b.ts
@@ -182,7 +188,8 @@ func (s *Store) Benchmarks(ctx context.Context, profileID int64) ([]BenchmarkRow
 			&b.DeliveryTime2, &b.RivalDeliveryTime2,
 			&b.DescriptionLen, &b.RivalDescriptionLen,
 			&b.OptionsFilledPct, &b.RivalOptionsFilledPct,
-			&b.HasAd, &b.RivalHasAd); err != nil {
+			&b.HasAd, &b.RivalHasAd,
+			&b.InPromo, &b.RivalInPromo); err != nil {
 			return nil, fmt.Errorf("store: benchmarks of profile %d: %w", profileID, err)
 		}
 		out = append(out, b)
@@ -295,6 +302,31 @@ var (
 	velocityFloorSeconds  = strconv.FormatInt(int64(velocityFloor/time.Second), 10)
 )
 
+// PromoQueryPrefix marks a position recorded inside a promotion rather than
+// inside a search.
+//
+// A promotion's contents are stored as positions under the promotion's own
+// name — «третий в акции» is the same kind of fact as «третий по фразе» — and
+// this is what tells the two apart. Declared here because both the package
+// that writes those rows and the comparison that reads them need it, and one
+// rule written twice is one rule that can drift.
+const PromoQueryPrefix = "promo:"
+
+// inPromotion answers whether one product was inside any promotion around the
+// time of one reading.
+//
+// «Кто из конкурентов зашёл в акцию» is what spec section 4.6's promotion job
+// exists to answer, and until now its readings went into the store and nothing
+// asked them anything. Scoped to the region and to a day either side for the
+// same reason the advertising flag is: the promotion walk and the phrase walk
+// are separate jobs and never share a timestamp.
+var inPromotion = `EXISTS (
+		           SELECT 1 FROM positions q
+		           WHERE q.nm_id = p.nm_id AND q.dest = p.dest
+		             AND q.query LIKE '` + PromoQueryPrefix + `%'
+		             AND q.ts BETWEEN p.ts - ` + adWindowSeconds + ` AND p.ts + ` + adWindowSeconds + `
+		       )`
+
 // cardFullness is how much of its category's characteristics one card fills
 // in, as a percentage.
 //
@@ -348,6 +380,10 @@ type SearchStanding struct {
 	// OptionsFilledPct is how much of its category's characteristics this
 	// card fills in, or nil where the card has not been read. See cardFullness.
 	OptionsFilledPct *int64
+
+	// InPromo is whether this listing was inside a promotion around the time
+	// of the reading. See inPromotion.
+	InPromo bool
 }
 
 // TopOfSearch reads the best-placed products of the newest reading of one
@@ -370,7 +406,8 @@ func (s *Store) TopOfSearch(ctx context.Context, query, dest string, limit int) 
 		       LENGTH(COALESCE(pr.description, '')),
 		       `+wasAdvertised+`,
 		       `+reviewsPerDay+`,
-		       `+cardFullness+`
+		       `+cardFullness+`,
+		       `+inPromotion+`
 		FROM positions p
 		JOIN latest l ON l.ts = p.ts
 		LEFT JOIN snapshots s ON s.nm_id = p.nm_id AND s.dest = p.dest AND s.ts = p.ts
@@ -390,7 +427,7 @@ func (s *Store) TopOfSearch(ctx context.Context, query, dest string, limit int) 
 		if err := rows.Scan(&st.NmID, &st.Rank, &st.TS,
 			&st.Price, &st.DiscountPct, &st.Currency, &st.Rating, &st.Feedbacks,
 			&st.TotalQuantity, &st.DeliveryTime2, &st.DescriptionLen, &st.HasAd,
-			&st.FeedbacksPerDay, &st.OptionsFilledPct); err != nil {
+			&st.FeedbacksPerDay, &st.OptionsFilledPct, &st.InPromo); err != nil {
 			return nil, fmt.Errorf("store: top of %q in %q: %w", query, dest, err)
 		}
 		out = append(out, st)
@@ -430,7 +467,8 @@ func (s *Store) StandingOf(ctx context.Context, nmID int64, query, dest string) 
 		       LENGTH(COALESCE(pr.description, '')),
 		       `+wasAdvertised+`,
 		       `+reviewsPerDay+`,
-		       `+cardFullness+`
+		       `+cardFullness+`,
+		       `+inPromotion+`
 		FROM positions p
 		JOIN latest l ON l.ts = p.ts
 		LEFT JOIN snapshots s ON s.nm_id = p.nm_id AND s.dest = p.dest AND s.ts = p.ts
@@ -440,7 +478,7 @@ func (s *Store) StandingOf(ctx context.Context, nmID int64, query, dest string) 
 		Scan(&st.NmID, &st.Rank, &st.TS,
 			&st.Price, &st.DiscountPct, &st.Currency, &st.Rating, &st.Feedbacks,
 			&st.TotalQuantity, &st.DeliveryTime2, &st.DescriptionLen, &st.HasAd,
-			&st.FeedbacksPerDay, &st.OptionsFilledPct)
+			&st.FeedbacksPerDay, &st.OptionsFilledPct, &st.InPromo)
 	if err != nil {
 		return SearchStanding{}, false, nil
 	}

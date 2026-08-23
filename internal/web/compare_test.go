@@ -201,18 +201,25 @@ func TestCompare_APinnedRivalGetsItsOwnRow(t *testing.T) {
 }
 
 func TestCompare_SaysWhichComparisonsThisBuildCannotMake(t *testing.T) {
-	// Three of section 4.7's deltas have no source here. An empty column
-	// would read as «у всех поровну», which is the wrong answer rather than
-	// no answer.
+	// What is left of section 4.7's deltas with no source here: photos and
+	// video, which no client in the wb package fetches. An empty column would
+	// read as «у всех поровну», which is the wrong answer rather than no
+	// answer — so the screen says it out loud instead, once, at the bottom.
 	srv := newServer(t)
 	if _, err := srv.Store.SaveProfile(t.Context(), store.ProfileRow{Name: "мой"}); err != nil {
 		t.Fatalf("SaveProfile: %v", err)
 	}
 
 	body := get(t, srv, "/compare", "correct horse").Body.String()
-	for _, want := range []string{"участие в акции", "число фото", "нет источника"} {
+	for _, want := range []string{"число фото", "наличие видео", "нет источника"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("не сказано про %q:\n%s", want, firstLines(body))
+		}
+	}
+	// And it no longer apologises for the two that were given a source.
+	for _, gone := range []string{"участие в акции", "доля заполненных характеристик"} {
+		if strings.Contains(body, gone) {
+			t.Errorf("экран всё ещё пишет, что не умеет: %q", gone)
 		}
 	}
 }
@@ -347,5 +354,30 @@ func TestCompare_TheScreenActuallyShowsTheCardCompletenessBlock(t *testing.T) {
 	// And the old apology no longer claims this one has no source.
 	if strings.Contains(body, "доля заполненных характеристик") {
 		t.Error("экран всё ещё пишет, что доля характеристик не сравнивается")
+	}
+}
+
+func TestCompare_TheScreenShowsWhoIsInAPromotion(t *testing.T) {
+	// The column exists, is filled, and has to be on the screen: the same
+	// three steps the advertising flag failed at for a milestone.
+	srv := newServer(t)
+	ctx := t.Context()
+
+	id, err := srv.Store.SaveProfile(ctx, store.ProfileRow{Name: "мой"})
+	if err != nil {
+		t.Fatalf("SaveProfile: %v", err)
+	}
+	no, yes := false, true
+	if err := srv.Store.SaveBenchmarks(ctx, []store.BenchmarkRow{{
+		ProfileID: id, NmID: 100, Query: "платье", Dest: "-1257786", TS: 1000,
+		Baseline: store.BaselineMedian, Currency: "RUB",
+		InPromo: &no, RivalInPromo: &yes,
+	}}); err != nil {
+		t.Fatalf("SaveBenchmarks: %v", err)
+	}
+
+	body := get(t, srv, "/compare", "").Body.String()
+	if !strings.Contains(body, "<th>Акция</th>") {
+		t.Fatalf("на экране нет колонки про акцию:\n%s", firstLines(body))
 	}
 }

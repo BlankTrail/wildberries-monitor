@@ -54,6 +54,7 @@ func Compare(profileID int64, query, dest string, mine store.SearchStanding, top
 func against(profileID int64, query, dest string, mine, theirs store.SearchStanding, baseline string, baselineID int64) store.BenchmarkRow {
 	rank, rivalRank := mine.Rank, theirs.Rank
 	hasAd, rivalHasAd := mine.HasAd, theirs.HasAd
+	inPromo, rivalInPromo := mine.InPromo, theirs.InPromo
 
 	return store.BenchmarkRow{
 		ProfileID: profileID, NmID: mine.NmID, Query: query, Dest: dest,
@@ -92,6 +93,9 @@ func against(profileID int64, query, dest string, mine, theirs store.SearchStand
 
 		HasAd:      &hasAd,
 		RivalHasAd: &rivalHasAd,
+
+		InPromo:      &inPromo,
+		RivalInPromo: &rivalInPromo,
 	}
 }
 
@@ -129,6 +133,16 @@ func medianOf(top []store.SearchStanding) store.SearchStanding {
 		}
 	}
 	out.HasAd = ads*2 > len(top)
+
+	// And the same reading of a median over a flag for promotions: half the
+	// top discounting is «здесь идёт акция», and a single participant is not.
+	promos := 0
+	for _, s := range top {
+		if s.InPromo {
+			promos++
+		}
+	}
+	out.InPromo = promos*2 > len(top)
 	return out
 }
 
