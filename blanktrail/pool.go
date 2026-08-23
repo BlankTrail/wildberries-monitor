@@ -724,6 +724,43 @@ func (l *Lease) RotateEgress(ctx context.Context) error {
 	return nil
 }
 
+// RenewIdentity gives this port a new fingerprint and a new visit identity,
+// keeping its address.
+//
+// The remedy for a port that has nowhere to move to. A direct channel, or a
+// gateway channel holding one gateway, answers RotateEgress with
+// ErrRenewUnsupported — there is no second address — and until this existed the
+// only thing left to do was give up, so a retry budget of ten was silently cut
+// to the two or three attempts one address had earned.
+//
+// What changes is everything the target can see about the visitor except where
+// they are coming from: the fingerprint the proxy presents, and the session this
+// lease reports, which is what makes the caller mint a new visitor id. The
+// cookie jar goes with it, because the proxy discards a solved challenge
+// whenever the fingerprint changes.
+//
+// It is not a substitute for a new address. A target that refused this exit
+// will very likely refuse it again; this is for the far commoner case of a
+// challenge or a soft block bound to the identity rather than to the IP.
+func (l *Lease) RenewIdentity(ctx context.Context) error {
+	if l.released {
+		// The port is back in the pool and may already be serving another
+		// caller; changing its identity now would change it under a request
+		// that is in flight.
+		return errors.New("blanktrail: RenewIdentity on a released lease")
+	}
+	if err := l.pool.rotateProfile(ctx, l.pt.num); err != nil {
+		return err
+	}
+
+	l.pt.base.CloseIdleConnections()
+	l.pt.mu.Lock()
+	l.pt.session++
+	l.pt.mu.Unlock()
+	l.pool.resetFailures(l.pt.num)
+	return nil
+}
+
 // Release returns the port to the pool and starts its cooldown. Safe to call
 // more than once.
 func (l *Lease) Release() {

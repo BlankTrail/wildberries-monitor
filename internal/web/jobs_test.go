@@ -656,7 +656,15 @@ func TestFieldCheckboxes_EachGroupIsLaidOutInColumns(t *testing.T) {
 			groups++
 		}
 	}
-	if got := strings.Count(body, `<div class="bt-checks">`); got != groups {
+	// Counted inside «Что снимать с каждого товара», because the grid class is
+	// the design system's and other things on this screen use it too — the
+	// proxy picker among them.
+	from := strings.Index(body, "Что снимать с каждого товара")
+	if from < 0 {
+		t.Fatal("на экране нет выбора полей")
+	}
+	fields := body[from:]
+	if got := strings.Count(fields, `<div class="bt-checks">`); got != groups {
 		t.Errorf("групп в колонках %d, а групп с полями %d", got, groups)
 	}
 

@@ -461,12 +461,26 @@ func (s *Server) constructorHTML(r *http.Request) (string, error) {
 		job.KindPhrase, job.KindCatalog, job.KindSeller, job.KindBrand, job.KindPositions))
 	b.WriteString(`</div>`)
 
+	// Which exits, beside the regions: both are «где смотреть», and a job that
+	// must go through one country's proxies is the same kind of decision as one
+	// that must be read for one region.
+	b.WriteString(field("Через какие прокси", s.channelPicker(r, "channels", nil),
+		"Ничего не отмечено — через все включённые. Отметьте, если это задание должно идти "+
+			"только через определённые выходы."))
+
 	b.WriteString(`<h3 class="bt-form-head">Когда и как быстро</h3>`)
 	b.WriteString(`<div class="bt-form-grid">`)
 	b.WriteString(field("Расписание", scheduleControl(),
 		"Пусто — задание идёт только когда его запустят руками. Строка внизу — то, что сохранится; её можно править прямо."))
 	b.WriteString(field("Потоков", `<input class="bt-input" name="threads" type="number" min="1" value="4" data-estimate>`,
 		"Сколько запросов идёт одновременно."))
+	b.WriteString(field("Повторов запроса",
+		fmt.Sprintf(`<input class="bt-input" name="attempts" type="number" min="1" placeholder="%d">`,
+			wb.DefaultAttemptsPooled),
+		fmt.Sprintf("Сколько раз повторить один запрос, прежде чем считать его отказом. "+
+			"Пусто — %d с прокси и %d без них. Повтор идёт через другой порт, а если адрес "+
+			"один — порт меняет отпечаток и личность, оставаясь на том же адресе.",
+			wb.DefaultAttemptsPooled, wb.DefaultAttemptsDirect)))
 	b.WriteString(field("Пауза, мс", `<input class="bt-input" name="delay_ms" type="number" min="0" value="0" data-estimate>`,
 		"Задержка между запросами одного потока."))
 	b.WriteString(`</div>`)
@@ -982,6 +996,17 @@ func splitLines(s string) []string {
 	for line := range strings.SplitSeq(s, "\n") {
 		if line = strings.TrimSpace(line); line != "" {
 			out = append(out, line)
+		}
+	}
+	return out
+}
+
+// idList is a set of store ids as a form posts them: one value per ticked box.
+func idList(values []string) []int64 {
+	var out []int64
+	for _, v := range values {
+		if id := atoi64(v); id != 0 {
+			out = append(out, id)
 		}
 	}
 	return out

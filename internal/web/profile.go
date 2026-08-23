@@ -24,6 +24,27 @@ import (
 // learns which of that data is the user's own, and until it knows, the word
 // «сравнение» has nothing to attach to.
 
+// numberOrBlank is a stored number as a form shows it: blank for «не указано»,
+// so an empty box and the default stay tellable apart.
+func numberOrBlank(n int) string {
+	if n <= 0 {
+		return ""
+	}
+	return strconv.Itoa(n)
+}
+
+// profileThreads is the profile's own thread count, or the default.
+//
+// Beside the chain's own copy in internal/app, because the two jobs this screen
+// builds are the profile's as much as the chain's — and hard-coding four here
+// was how a setting on this screen came to be ignored by a job started from it.
+func profileThreads(p store.ProfileRow) int {
+	if p.Threads > 0 {
+		return p.Threads
+	}
+	return store.DefaultProfileThreads
+}
+
 // profileRegion and profilePages are what a storefront job made from a
 // profile starts with. Both are a first guess the user changes on the jobs
 // screen — the region because every reading is regional and a job cannot be
@@ -269,11 +290,31 @@ func (s *Server) profilePlanForm(r *http.Request, p store.ProfileRow) string {
 		fmt.Sprintf(`<input class="bt-input" name="suggest_limit" type="number" min="0" value="%d" placeholder="все">`,
 			p.SuggestLimit),
 		"Один запрос на фразу. 0 — спросить обо всех."))
+	b.WriteString(field("Потоков",
+		fmt.Sprintf(`<input class="bt-input" name="threads" type="number" min="1" value="%d" placeholder="%d">`,
+			profileThreads(p), store.DefaultProfileThreads),
+		fmt.Sprintf("Во сколько потоков идут задания этого профиля. Пусто — %d. "+
+			"Каждый поток стоит двух портов у службы, открытых до первого запроса, "+
+			"так что это число с ценой. Разбор ссылки всегда в один поток: он читает одну карточку.",
+			store.DefaultProfileThreads)))
+	b.WriteString(field("Повторов запроса",
+		fmt.Sprintf(`<input class="bt-input" name="attempts" type="number" min="1" value="%s" placeholder="%d">`,
+			numberOrBlank(p.Attempts), wb.DefaultAttemptsPooled),
+		fmt.Sprintf("Сколько раз повторить один запрос, прежде чем считать его отказом. "+
+			"Пусто — %d с прокси и %d без них. Повтор идёт через другой порт, а если адрес "+
+			"один — порт меняет отпечаток и личность, оставаясь на том же адресе.",
+			wb.DefaultAttemptsPooled, wb.DefaultAttemptsDirect)))
 	b.WriteString(field("Пересобирать",
 		`<input class="bt-input bt-input--mono" name="schedule" value="`+
 			html.EscapeString(p.Schedule)+`" placeholder="every 24h">`,
 		"Пусто — только по кнопке. «every 24h», «every 7d» — сбор повторится сам."))
 	b.WriteString(`</div>`)
+	// Which exits this profile's own jobs go through. After the grid rather
+	// than in it: a list of proxies is a list, and a third of a row is where a
+	// number goes.
+	b.WriteString(field("Через какие прокси", s.channelPicker(r, "channels", p.Channels),
+		"Ничего не отмечено — через все включённые. Отметьте, если этот профиль должен "+
+			"собираться только через определённые выходы."))
 
 	b.WriteString(`<div class="bt-field"><label class="bt-checkbox">` +
 		`<input type="checkbox" name="enabled" value="1"` + checkedIf(p.Enabled) + `> ` +
@@ -450,6 +491,10 @@ func (s *Server) saveProfilePlan(w http.ResponseWriter, r *http.Request) {
 			"Не указан ни один регион. Соберите его на вкладке «Задачи» — там есть конструктор."))
 		return
 	}
+	p.Threads = int(atoi64(r.PostFormValue("threads")))
+	p.Attempts = int(atoi64(r.PostFormValue("attempts")))
+	p.Channels = idList(r.PostForm["channels"])
+
 	fields := fieldsOfGroups(r.PostForm["groups"])
 	if len(fields) == 0 {
 		s.profileFragment(w, r, alert("error", "Не выбрано ни одной группы полей."))
@@ -758,10 +803,16 @@ func (s *Server) checkPhrases(w http.ResponseWriter, r *http.Request) {
 		Kind:     job.KindPositions,
 		Phrases:  texts,
 		Articles: products,
-		Regions:  []string{profileRegion},
+		// The profile's own answers: which exits, how many threads, how many
+		// attempts. Hard-coded here, this job ran through every proxy and in
+		// four threads whatever the profile said — two settings on one screen
+		// that a job started from the same screen ignored.
+		Regions:  p.Regions,
 		AppType:  1,
 		MaxPages: profileCheckPages,
-		Threads:  4,
+		Threads:  profileThreads(p),
+		Channels: p.Channels,
+		Attempts: p.Attempts,
 		Fields:   baseFields(),
 	})
 	if err != nil {
@@ -943,13 +994,19 @@ func (s *Server) collectPhrasePages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	jobID, err := job.Save(ctx, s.Store, job.Job{
-		Name:     "выдача по рабочим фразам: " + p.Name,
-		Kind:     job.KindPhrase,
-		Phrases:  texts,
-		Regions:  []string{profileRegion},
+		Name:    "выдача по рабочим фразам: " + p.Name,
+		Kind:    job.KindPhrase,
+		Phrases: texts,
+		// The profile's own answers: which exits, how many threads, how many
+		// attempts. Hard-coded here, this job ran through every proxy and in
+		// four threads whatever the profile said — two settings on one screen
+		// that a job started from the same screen ignored.
+		Regions:  p.Regions,
 		AppType:  1,
 		MaxPages: profileCheckPages,
-		Threads:  4,
+		Threads:  profileThreads(p),
+		Channels: p.Channels,
+		Attempts: p.Attempts,
 		Fields:   baseFields(),
 	})
 	if err != nil {

@@ -539,3 +539,68 @@ func TestProfile_TheRegionDirectoryIsHereButFoldedAway(t *testing.T) {
 		t.Error("подсказка всё ещё отправляет на вкладку задач")
 	}
 }
+
+func TestProfile_TheJobsThisScreenBuildsCarryTheProfilesAnswers(t *testing.T) {
+	// Two jobs are built here rather than by the chain — «собрать выдачу по
+	// рабочим фразам» and the phrase check — and both hard-coded four threads
+	// and every proxy. So a setting on this screen was ignored by a job started
+	// from the same screen.
+	srv := newServer(t)
+	ctx := t.Context()
+	id, err := srv.Store.SaveProfile(ctx, store.ProfileRow{
+		Name: "мой", SourceInput: "141504066", SellerID: ptrTo(int64(4242)),
+	})
+	if err != nil {
+		t.Fatalf("SaveProfile: %v", err)
+	}
+	p, _ := srv.Store.Profile(ctx, id)
+	p.Threads, p.Attempts, p.Channels = 9, 10, []int64{3}
+	if err := srv.Store.SaveProfilePlan(ctx, p); err != nil {
+		t.Fatalf("SaveProfilePlan: %v", err)
+	}
+	// One working phrase for «собрать выдачу», one candidate and one product
+	// for the check: each endpoint refuses without what it needs.
+	for _, ph := range []store.PhraseRow{
+		{ProfileID: id, Text: "платье летнее", NmID: 141504066,
+			State: store.PhraseWorking, Origin: store.PhraseGenerated},
+		{ProfileID: id, Text: "сарафан летний", NmID: 141504066,
+			State: store.PhraseCandidate, Origin: store.PhraseGenerated},
+	} {
+		if err := srv.Store.SavePhrase(ctx, ph); err != nil {
+			t.Fatalf("SavePhrase: %v", err)
+		}
+	}
+	if err := srv.Store.AddProfileItem(ctx, id, store.ProfileProduct, 141504066); err != nil {
+		t.Fatalf("AddProfileItem: %v", err)
+	}
+
+	// Both of them: «собрать выдачу по рабочим фразам» and the phrase check.
+	for _, path := range []string{"/profile/phrases/collect", "/profile/phrases/check"} {
+		before, err := srv.Store.Jobs(ctx)
+		if err != nil {
+			t.Fatalf("Jobs: %v", err)
+		}
+		postForm(t, srv, fmt.Sprintf("%s?id=%d", path, id), url.Values{})
+
+		after, err := srv.Store.Jobs(ctx)
+		if err != nil {
+			t.Fatalf("Jobs: %v", err)
+		}
+		if len(after) <= len(before) {
+			t.Fatalf("%s: задание не создано", path)
+		}
+		made, err := job.Load(ctx, srv.Store, after[len(after)-1].ID)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if made.Threads != 9 {
+			t.Errorf("%s: потоков %d, профиль просил 9", path, made.Threads)
+		}
+		if made.Attempts != 10 {
+			t.Errorf("%s: повторов %d, профиль просил 10", path, made.Attempts)
+		}
+		if len(made.Channels) != 1 || made.Channels[0] != 3 {
+			t.Errorf("%s: каналы %v, профиль просил [3]", path, made.Channels)
+		}
+	}
+}

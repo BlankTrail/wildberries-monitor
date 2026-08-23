@@ -12,7 +12,9 @@ import (
 	"time"
 
 	"github.com/BlankTrail/wildberries-monitor/blanktrail"
+	"github.com/BlankTrail/wildberries-monitor/internal/job"
 	"github.com/BlankTrail/wildberries-monitor/internal/store"
+	"github.com/BlankTrail/wildberries-monitor/wb"
 )
 
 // listFile writes a proxy list in the spellings spec section 3.5 accepts, and
@@ -464,5 +466,94 @@ func TestChannels_AGatewayChannelCarriesEveryGatewayItNames(t *testing.T) {
 		if !seen[want] {
 			t.Errorf("шлюз %q ни разу не выдан: выдавались %v", want, seen)
 		}
+	}
+}
+
+func TestChannels_AJobRunsThroughTheExitsItNames(t *testing.T) {
+	// Every run used every enabled channel, so a person with eight proxies
+	// could not say that this job goes through two of them.
+	e := openEngine(t)
+	ctx := t.Context()
+
+	first := saveChannel(t, e, store.ChannelRow{
+		Name: "первый", Kind: store.ChannelDirect, Enabled: true,
+	})
+	second := saveChannel(t, e, store.ChannelRow{
+		Name: "второй", Kind: store.ChannelDirect, Enabled: true,
+	})
+
+	all, done, err := e.Channels(ctx)
+	if err != nil {
+		t.Fatalf("Channels: %v", err)
+	}
+	done()
+	if len(all) != 2 {
+		t.Fatalf("без выбора собрано каналов: %d, ожидалось 2", len(all))
+	}
+
+	one, done, err := e.Channels(ctx, second)
+	if err != nil {
+		t.Fatalf("Channels: %v", err)
+	}
+	defer done()
+	if len(one) != 1 || one[0].Name() != "второй" {
+		t.Fatalf("по выбору собрано %d каналов: %+v", len(one), one)
+	}
+	_ = first
+}
+
+func TestChannels_AnExitAJobNamesAndCannotHaveStopsTheRun(t *testing.T) {
+	// Skipping it would collect through exits the person deliberately excluded,
+	// and skipping the last one would collect through the machine's own address
+	// — the outcome anybody configuring proxies is trying to avoid. So the run
+	// stops and says which proxy is missing.
+	e := openEngine(t)
+	ctx := t.Context()
+	off := saveChannel(t, e, store.ChannelRow{
+		Name: "выключенный", Kind: store.ChannelDirect, Enabled: false,
+	})
+
+	if _, _, err := e.Channels(ctx, off); err == nil {
+		t.Fatal("прогон пошёл через выключенный прокси")
+	} else if !strings.Contains(err.Error(), "выключен") {
+		t.Errorf("причина не про выключенный прокси: %v", err)
+	}
+
+	if _, _, err := e.Channels(ctx, 4242); err == nil {
+		t.Error("прогон пошёл через прокси, которого нет")
+	}
+}
+
+func TestRetryPolicyFor_TheJobsOwnBudgetWinsAndZeroIsTheBuilds(t *testing.T) {
+	// «Сколько раз повторить» had nowhere to be said, so every run took the
+	// build's answer — two attempts without proxies, fifteen with them.
+	if got := retryPolicyFor(job.Job{Attempts: 10}, true); got.Attempts != 10 {
+		t.Errorf("с выбором повторов = %d, ожидалось 10", got.Attempts)
+	}
+	if got := retryPolicyFor(job.Job{}, true); got.Attempts != wb.DefaultAttemptsPooled {
+		t.Errorf("без выбора и с прокси = %d, ожидалось %d", got.Attempts, wb.DefaultAttemptsPooled)
+	}
+	if got := retryPolicyFor(job.Job{}, false); got.Attempts != wb.DefaultAttemptsDirect {
+		t.Errorf("без выбора и без прокси = %d, ожидалось %d", got.Attempts, wb.DefaultAttemptsDirect)
+	}
+	// The per-address share is the build's either way: it is about what one
+	// address has earned, not about how hard the job wants to try.
+	if got := retryPolicyFor(job.Job{Attempts: 10}, true); got.AttemptsPerEgress != wb.DefaultAttemptsPerEgress {
+		t.Errorf("на адрес = %d, ожидалось %d", got.AttemptsPerEgress, wb.DefaultAttemptsPerEgress)
+	}
+}
+
+func TestRunnerFor_HandsTheJobsOwnExitsToTheChannelBuilder(t *testing.T) {
+	// A source-level check, because everything else in RunnerFor needs a live
+	// licensed service: it opens ports before the first fetch. What is being
+	// guarded is one argument — the job's chosen exits reaching the builder that
+	// filters on them — and dropped, every job silently runs through every
+	// enabled proxy again, which is the state this setting exists to end.
+	src, err := os.ReadFile("engine.go")
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if !strings.Contains(string(src), "e.Channels(ctx, j.Channels...)") {
+		t.Error("RunnerFor не передаёт выбранные задания каналы — прогон пойдёт через все")
 	}
 }

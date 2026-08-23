@@ -57,6 +57,26 @@ type params struct {
 	PromotionQuery string `json:"promotion_query,omitempty"`
 
 	MaxPages int `json:"max_pages,omitempty"`
+
+	// Attempts is how many times one request may be sent. In the parameters
+	// rather than a column of its own: it is a setting of this job like the
+	// page bound beside it, and a column would be a migration for a number.
+	Attempts int `json:"attempts,omitempty"`
+}
+
+// nonZero drops the zeros from a list of ids.
+//
+// A form posts an empty box as an empty value, and a zero channel id is a
+// channel that does not exist — stored, it would be a job naming an exit
+// nothing can build.
+func nonZero(in []int64) []int64 {
+	var out []int64
+	for _, v := range in {
+		if v != 0 {
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 // Save writes a job and returns its id.
@@ -84,6 +104,7 @@ func Save(ctx context.Context, s *store.Store, j Job) (int64, error) {
 		PromotionSlug:   j.PromotionSlug,
 		PromotionShard:  j.PromotionShard,
 		PromotionQuery:  j.PromotionQuery,
+		Attempts:        j.Attempts,
 		MaxPages:        j.MaxPages,
 	})
 	if err != nil {
@@ -97,6 +118,13 @@ func Save(ctx context.Context, s *store.Store, j Job) (int64, error) {
 	if err != nil {
 		return 0, fmt.Errorf("job: save: %w", err)
 	}
+	// The column has been here since the schema was written and every save put
+	// "[]" in it, so no job could ever name a channel and the run used every
+	// enabled one. It carries the answer now.
+	channels, err := json.Marshal(nonZero(j.Channels))
+	if err != nil {
+		return 0, fmt.Errorf("job: save: %w", err)
+	}
 
 	return s.SaveJob(ctx, store.JobRow{
 		ID:       j.ID,
@@ -105,7 +133,7 @@ func Save(ctx context.Context, s *store.Store, j Job) (int64, error) {
 		Params:   string(p),
 		Fields:   string(fields),
 		Regions:  string(regions),
-		Channels: "[]",
+		Channels: string(channels),
 		Schedule: j.Schedule,
 		Threads:  j.Threads,
 		DelayMS:  int(j.Delay / time.Millisecond),
@@ -131,6 +159,12 @@ func fromRow(row store.JobRow) (Job, error) {
 	if err := json.Unmarshal([]byte(row.Params), &p); err != nil {
 		return Job{}, fmt.Errorf("job %d: params: %w", row.ID, err)
 	}
+	// The channels this job names. A list that will not parse is read as an
+	// empty one — «через все включённые», which is what every job did before
+	// the column carried anything — rather than as a reason to refuse a job
+	// somebody can still see and run.
+	var channels []int64
+	_ = json.Unmarshal([]byte(row.Channels), &channels)
 	var fields []string
 	if err := json.Unmarshal([]byte(row.Fields), &fields); err != nil {
 		return Job{}, fmt.Errorf("job %d: fields: %w", row.ID, err)
@@ -161,6 +195,8 @@ func fromRow(row store.JobRow) (Job, error) {
 		PromotionShard:  p.PromotionShard,
 		PromotionQuery:  p.PromotionQuery,
 		MaxPages:        p.MaxPages,
+		Attempts:        p.Attempts,
+		Channels:        channels,
 		Threads:         row.Threads,
 		Delay:           time.Duration(row.DelayMS) * time.Millisecond,
 		Schedule:        row.Schedule,

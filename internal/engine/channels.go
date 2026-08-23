@@ -25,10 +25,37 @@ import (
 // Disabled channels are left out, which is the whole of what the switch on the
 // screen does. None enabled — or none saved — comes back empty, and the pool
 // reads that as the host's own address.
-func (e *Engine) Channels(ctx context.Context) ([]blanktrail.Channel, func(), error) {
+//
+// want names the channels a job asked for, by store id. Empty is every enabled
+// one, which is what every run did before a job could say. A named channel that
+// is gone or switched off stops the run rather than being skipped: skipping
+// would collect through exits the person deliberately excluded, and skipping
+// the last one would collect through the machine's own address — the one
+// outcome anybody configuring proxies is trying to avoid.
+func (e *Engine) Channels(ctx context.Context, want ...int64) ([]blanktrail.Channel, func(), error) {
 	rows, err := e.Store.Channels(ctx)
 	if err != nil {
 		return nil, nil, err
+	}
+
+	chosen := map[int64]bool{}
+	for _, id := range want {
+		chosen[id] = true
+	}
+	if len(chosen) > 0 {
+		usable := map[int64]bool{}
+		for _, row := range rows {
+			if row.Enabled {
+				usable[row.ID] = true
+			}
+		}
+		for _, id := range want {
+			if !usable[id] {
+				return nil, nil, fmt.Errorf(
+					"engine: задание назначено на прокси №%d, а он выключен или удалён — "+
+						"выберите прокси заново", id)
+			}
+		}
 	}
 
 	var built []blanktrail.Channel
@@ -40,6 +67,9 @@ func (e *Engine) Channels(ctx context.Context) ([]blanktrail.Channel, func(), er
 
 	for _, row := range rows {
 		if !row.Enabled {
+			continue
+		}
+		if len(chosen) > 0 && !chosen[row.ID] {
 			continue
 		}
 		ch, err := buildChannel(ctx, row)

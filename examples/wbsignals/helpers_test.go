@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/BlankTrail/wildberries-monitor/blanktrail"
 	"github.com/BlankTrail/wildberries-monitor/wb"
 )
 
@@ -44,6 +45,11 @@ func (l *scriptedLease) Port() int {
 func (l *scriptedLease) RotateEgress(context.Context) error {
 	l.rotated++
 	return nil
+}
+
+// RenewIdentity is the other remedy: the address stays and the visitor changes.
+func (l *scriptedLease) RenewIdentity(context.Context) error {
+	return blanktrail.ErrRenewUnsupported
 }
 func (l *scriptedLease) Release() { l.released++ }
 

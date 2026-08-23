@@ -103,6 +103,22 @@ type ProfileRow struct {
 	Fields   []string
 	MaxPages int
 
+	// Channels, Threads and Attempts are how the chain's own jobs run: through
+	// which exits, in how many threads, and how many times one request may be
+	// sent before it counts as failed.
+	//
+	// All three were hard-coded in every job the chain builds, so a collection
+	// that took an hour could not be told to take twenty minutes and a person
+	// with eight proxies could not say which of them their own assortment
+	// should be read through. Zero on any of them is the build's own answer.
+	//
+	// The resolve stage keeps one thread whatever this says: it reads one card,
+	// and a pool of sixteen ports opened to fetch one document is sixteen
+	// control calls for nothing.
+	Channels []int64
+	Threads  int
+	Attempts int
+
 	// PhrasesPerProduct and PhraseProducts are the two bounds section 4.7
 	// asks for by name. Zero on either means «сколько есть», which is right
 	// for a seller with fifty goods and wrong for one with ten thousand —
@@ -186,6 +202,14 @@ func DefaultProfilePlan() ProfileRow {
 	}
 }
 
+// DefaultProfileThreads is how many threads a profile's own jobs use when
+// nobody says.
+//
+// Four. Each thread costs two ports at the service, opened before the first
+// fetch, so this is a number with a price — which is why the screen offers it
+// as a number rather than as «сколько получится».
+const DefaultProfileThreads = 4
+
 // DefaultProfilePages is how deep a profile walks its own storefront.
 //
 // About two thousand goods, which covers all but the largest sellers, and a
@@ -248,6 +272,7 @@ func (s *Store) Profiles(ctx context.Context) ([]ProfileRow, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, name, source_input, seller_id, created_at, updated_at,
 		       stage, stage_job, stage_run, resolve_job, catalog_job, check_job, regions, fields, max_pages,
+		       channels, threads, attempts,
 		       phrases_per_product, phrase_products,
 		       subjects, suggest_limit, suggest_rounds,
 		       schedule, enabled, started_at, finished_at, failure
@@ -276,6 +301,7 @@ func (s *Store) Profile(ctx context.Context, id int64) (ProfileRow, error) {
 	p, err := scanProfile(s.db.QueryRowContext(ctx, `
 		SELECT id, name, source_input, seller_id, created_at, updated_at,
 		       stage, stage_job, stage_run, resolve_job, catalog_job, check_job, regions, fields, max_pages,
+		       channels, threads, attempts,
 		       phrases_per_product, phrase_products,
 		       subjects, suggest_limit, suggest_rounds,
 		       schedule, enabled, started_at, finished_at, failure
@@ -295,10 +321,11 @@ func (s *Store) Profile(ctx context.Context, id int64) (ProfileRow, error) {
 // already there: one row is one row whatever table it came out of.
 func scanProfile(row scanner) (ProfileRow, error) {
 	var p ProfileRow
-	var regions, fields, subjects string
+	var regions, fields, subjects, channels string
 	var enabled int64
 	if err := row.Scan(&p.ID, &p.Name, &p.SourceInput, &p.SellerID, &p.CreatedAt, &p.UpdatedAt,
 		&p.Stage, &p.StageJob, &p.StageRun, &p.ResolveJob, &p.CatalogJob, &p.CheckJob, &regions, &fields, &p.MaxPages,
+		&channels, &p.Threads, &p.Attempts,
 		&p.PhrasesPerProduct, &p.PhraseProducts,
 		&subjects, &p.SuggestLimit, &p.SuggestRounds,
 		&p.Schedule, &enabled, &p.StartedAt, &p.FinishedAt, &p.Failure); err != nil {
@@ -312,6 +339,7 @@ func scanProfile(row scanner) (ProfileRow, error) {
 	_ = json.Unmarshal([]byte(regions), &p.Regions)
 	_ = json.Unmarshal([]byte(fields), &p.Fields)
 	_ = json.Unmarshal([]byte(subjects), &p.Subjects)
+	_ = json.Unmarshal([]byte(channels), &p.Channels)
 	return p, nil
 }
 
@@ -333,6 +361,10 @@ func (s *Store) SaveProfilePlan(ctx context.Context, p ProfileRow) error {
 	if err != nil {
 		return fmt.Errorf("store: profile plan %d: %w", p.ID, err)
 	}
+	channels, err := json.Marshal(nonZero(p.Channels))
+	if err != nil {
+		return fmt.Errorf("store: profile plan %d: %w", p.ID, err)
+	}
 	enabled := int64(0)
 	if p.Enabled {
 		enabled = 1
@@ -342,11 +374,13 @@ func (s *Store) SaveProfilePlan(ctx context.Context, p ProfileRow) error {
 		   SET regions = ?, fields = ?, max_pages = ?,
 		       phrases_per_product = ?, phrase_products = ?,
 		       subjects = ?, suggest_limit = ?, suggest_rounds = ?,
+		       channels = ?, threads = ?, attempts = ?,
 		       schedule = ?, enabled = ?, updated_at = ?
 		 WHERE id = ?`,
 		string(regions), string(fields), p.MaxPages,
 		max(p.PhrasesPerProduct, 0), max(p.PhraseProducts, 0),
 		string(subjects), max(p.SuggestLimit, 0), max(p.SuggestRounds, 0),
+		string(channels), max(p.Threads, 0), max(p.Attempts, 0),
 		strings.TrimSpace(p.Schedule), enabled, s.now().UTC().Unix(), p.ID); err != nil {
 		return fmt.Errorf("store: profile plan %d: %w", p.ID, err)
 	}
@@ -472,6 +506,7 @@ func (s *Store) ProfileOfResolveJob(ctx context.Context, jobID int64) (ProfileRo
 	p, err := scanProfile(s.db.QueryRowContext(ctx, `
 		SELECT id, name, source_input, seller_id, created_at, updated_at,
 		       stage, stage_job, stage_run, resolve_job, catalog_job, check_job, regions, fields, max_pages,
+		       channels, threads, attempts,
 		       phrases_per_product, phrase_products, subjects, suggest_limit, suggest_rounds,
 		       schedule, enabled, started_at, finished_at, failure
 		  FROM profiles WHERE resolve_job = ?`, jobID))

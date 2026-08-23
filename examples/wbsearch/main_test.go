@@ -572,6 +572,11 @@ func (l *scriptedLease) RotateEgress(context.Context) error {
 	l.rotated++
 	return nil
 }
+
+// RenewIdentity is the other remedy: the address stays and the visitor changes.
+func (l *scriptedLease) RenewIdentity(context.Context) error {
+	return blanktrail.ErrRenewUnsupported
+}
 func (l *scriptedLease) Release() { l.released++ }
 
 // scriptedLeaser hands the same lease to every fetch, the way a one-port pool

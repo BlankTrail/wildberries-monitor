@@ -30,6 +30,14 @@ import (
 // already reported on the jobs screen. What this adds is the order and the
 // waiting.
 
+// profileThreadCount is the profile's own thread count, or the default.
+func profileThreadCount(p store.ProfileRow) int {
+	if p.Threads > 0 {
+		return p.Threads
+	}
+	return store.DefaultProfileThreads
+}
+
 // profileCheckTopPages is how deep the phrase check walks.
 //
 // One page. Section 4.7 draws the «рабочая» line at the first hundred places
@@ -373,7 +381,12 @@ func (a *App) profileResolve(ctx context.Context, p store.ProfileRow) error {
 		Regions: p.Regions,
 		AppType: wb.AppWeb,
 		Fields:  wb.Selection{"nm_id"},
-		Threads: 1,
+		// One thread whatever the profile says: this reads one card, and a pool
+		// of sixteen ports opened to fetch one document is sixteen control
+		// calls spent on nothing.
+		Threads:  1,
+		Channels: p.Channels,
+		Attempts: p.Attempts,
 	}
 	id, err := job.Save(ctx, a.Store, j)
 	if err != nil {
@@ -416,7 +429,9 @@ func (a *App) profileCatalog(ctx context.Context, p store.ProfileRow) error {
 		Regions:    p.Regions,
 		AppType:    wb.AppWeb,
 		MaxPages:   p.MaxPages,
-		Threads:    4,
+		Threads:    profileThreadCount(p),
+		Channels:   p.Channels,
+		Attempts:   p.Attempts,
 		Fields:     wb.Selection(p.Fields),
 	}
 	id, err := job.Save(ctx, a.Store, j)
@@ -677,7 +692,9 @@ func (a *App) profileCheck(ctx context.Context, p store.ProfileRow) error {
 		Regions:  p.Regions,
 		AppType:  wb.AppWeb,
 		MaxPages: profileCheckTopPages,
-		Threads:  4,
+		Threads:  profileThreadCount(p),
+		Channels: p.Channels,
+		Attempts: p.Attempts,
 		Fields:   wb.Selection(p.Fields),
 	}
 	id, err := job.Save(ctx, a.Store, j)

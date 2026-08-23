@@ -1491,3 +1491,80 @@ func TestPool_SaysSoWhenTheProxyHasLostEveryPort(t *testing.T) {
 		t.Errorf("the proxy has %v open after the pool lost every port; it must not reopen into a restarting proxy", got)
 	}
 }
+
+func TestLease_RenewIdentityChangesTheVisitorAndKeepsTheAddress(t *testing.T) {
+	// The remedy for a port with nowhere to move to: a direct channel, or a
+	// gateway channel holding one gateway, has one address and answers
+	// RotateEgress with ErrRenewUnsupported. Until this existed the only thing
+	// left was to give up, so a retry budget of ten was silently cut to the two
+	// or three that one address had earned.
+	//
+	// What must change is everything the target can see about the visitor —
+	// which the caller observes as a new session, because that is what makes it
+	// mint a new visitor id. What must not change is the address.
+	fake := fakebt.New(t)
+	clock := newFakeClock()
+	cfg := testPoolConfig(t, fake, clock, 1, 1)
+	cfg.Channels = []Channel{NewDirectChannel("direct")}
+
+	p, err := NewPool(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	defer p.Close()
+
+	l, err := p.Acquire(context.Background())
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	defer l.Release()
+
+	port := l.Port()
+	before := fake.UpstreamOf(port)
+	session := l.Session()
+
+	// The address cannot move, which is the whole premise.
+	if err := l.RotateEgress(context.Background()); !errors.Is(err, ErrRenewUnsupported) {
+		t.Fatalf("RotateEgress on direct egress = %v, want ErrRenewUnsupported", err)
+	}
+
+	if err := l.RenewIdentity(context.Background()); err != nil {
+		t.Fatalf("RenewIdentity: %v", err)
+	}
+	if l.Session() == session {
+		t.Errorf("session still %q — the caller would keep the visitor id the target already refused", session)
+	}
+	if l.Port() != port {
+		t.Errorf("port %d → %d; the lease keeps its port", port, l.Port())
+	}
+	if after := fake.UpstreamOf(port); after != before {
+		t.Errorf("upstream %q → %q; the address is the one thing this must not change", before, after)
+	}
+	if st := p.Stats(); st.ProfileRotations != 1 {
+		t.Errorf("Stats.ProfileRotations=%d, want 1", st.ProfileRotations)
+	}
+}
+
+func TestLease_RenewIdentityRefusesAfterRelease(t *testing.T) {
+	// The port is back in the pool and may already be serving another caller;
+	// changing its identity now would change it under a request in flight.
+	fake := fakebt.New(t)
+	clock := newFakeClock()
+	cfg := testPoolConfig(t, fake, clock, 1, 1)
+
+	p, err := NewPool(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	defer p.Close()
+
+	l, err := p.Acquire(context.Background())
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	l.Release()
+
+	if err := l.RenewIdentity(context.Background()); err == nil {
+		t.Error("RenewIdentity on a released lease changed a port somebody else may hold")
+	}
+}

@@ -85,6 +85,21 @@ func (e *Engine) Check(ctx context.Context) error {
 // network call, the preflight before ports are opened, ports before a plan is
 // written. Opening a pool and then discovering the licence is expired would
 // have spent the ports to learn it.
+// retryPolicyFor is the budget one job's requests are given.
+//
+// The job's own where it names one, and otherwise the build's — which differs
+// with and without proxies because the remedies do. A pooled run can walk
+// through addresses; a direct one has one address and changes its identity on
+// it instead, which is why a budget above the per-address share is worth having
+// there too.
+func retryPolicyFor(j job.Job, pooled bool) wb.RetryPolicy {
+	policy := wb.DefaultRetryPolicy(pooled)
+	if j.Attempts > 0 {
+		policy.Attempts = j.Attempts
+	}
+	return policy
+}
+
 func (e *Engine) RunnerFor(ctx context.Context, j job.Job) (*job.Runner, func(), error) {
 	client, err := e.control(ctx)
 	if err != nil {
@@ -104,7 +119,7 @@ func (e *Engine) RunnerFor(ctx context.Context, j job.Job) (*job.Runner, func(),
 		return nil, nil, fmt.Errorf("engine: прокси не готов: %s", firstBlocking(report))
 	}
 
-	channels, closeChannels, err := e.Channels(ctx)
+	channels, closeChannels, err := e.Channels(ctx, j.Channels...)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -121,7 +136,7 @@ func (e *Engine) RunnerFor(ctx context.Context, j job.Job) (*job.Runner, func(),
 	// should walk through addresses until one gets through; on the host's own
 	// address there is one and no search to make, so the budget stops early.
 	site := wb.NewClientWithRetry(wb.FromPool(pool), wb.NewSessions(),
-		wb.DefaultRetryPolicy(len(channels) > 0))
+		retryPolicyFor(j, len(channels) > 0))
 
 	runner := &job.Runner{
 		Store:   e.Store,

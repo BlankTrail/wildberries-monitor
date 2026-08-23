@@ -32,6 +32,10 @@ type fakeLease struct {
 	// rotateErr is what RotateEgress reports instead of making one.
 	rotations int
 	rotateErr error
+	// identities counts the identity renewals — the remedy for a port with one
+	// address — and identityErr is what RenewIdentity reports instead.
+	identities  int
+	identityErr error
 	// dropAt fails the requests with these 1-based indexes at the transport
 	// level — the proxy refusing, dropping or forcibly closing the connection —
 	// without consuming a scripted reply, so a dead connection can be scripted
@@ -96,6 +100,20 @@ func (f *fakeLease) RotateEgress(context.Context) error {
 	f.rotations++
 	f.events = append(f.events, "rotate")
 	f.session = fmt.Sprintf("%d#r%d", f.port, f.rotations)
+	return nil
+}
+
+// RenewIdentity models the other remedy: the address stays, and everything the
+// target can see about the visitor changes — which wb observes as a new session.
+func (f *fakeLease) RenewIdentity(context.Context) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.identityErr != nil {
+		return f.identityErr
+	}
+	f.identities++
+	f.events = append(f.events, "identity")
+	f.session = fmt.Sprintf("%d#i%d", f.port, f.identities)
 	return nil
 }
 
@@ -334,11 +352,17 @@ func TestClient_DirectEgressStopsAtTwoAttempts(t *testing.T) {
 	}
 }
 
-func TestClient_StopsWhenTheEgressCannotBeChanged(t *testing.T) {
-	// A pooled budget pointed at a port that cannot change its address — direct
-	// egress, or a gateway fixed at open time. Every attempt past the threshold
-	// would leave through the address that has already failed three times, so
-	// the loop stops there instead of spending twelve more requests proving it.
+func TestClient_ChangesWhoItIsWhenItCannotChangeWhereItIsFrom(t *testing.T) {
+	// A port that cannot change its address — direct egress, or a gateway
+	// channel holding one gateway. The budget used to stop there: every further
+	// attempt would leave through the address that had already failed, so three
+	// of the fifteen were spent and the rest thrown away.
+	//
+	// But the commonest refusal is not bound to the address. A challenge binds
+	// to the identity — fingerprint, jar, visitor id — and all of that can
+	// change while the address stays. So the loop asks for a new identity
+	// instead of giving up, which is what makes a retry limit mean what it says
+	// on a single-port run.
 	l := &fakeLease{port: 1, replies: challenges(20), rotateErr: blanktrail.ErrRenewUnsupported}
 	c := NewClientWithRetry(&fakeLeaser{leases: []*fakeLease{l}}, NewSessions(), DefaultRetryPolicy(true))
 
@@ -349,12 +373,36 @@ func TestClient_StopsWhenTheEgressCannotBeChanged(t *testing.T) {
 	if got.Class != ClassChallenge {
 		t.Fatalf("Class=%v, want %v", got.Class, ClassChallenge)
 	}
-	if len(l.sent) != 3 || got.Attempts != 3 {
-		t.Errorf("sent %d requests and reported %d attempts, want 3 of each — the budget cannot be spent on an address that will not change",
-			len(l.sent), got.Attempts)
+	if got.Attempts != DefaultAttemptsPooled || len(l.sent) != DefaultAttemptsPooled {
+		t.Errorf("sent %d requests and reported %d attempts, want %d of each — the whole budget",
+			len(l.sent), got.Attempts, DefaultAttemptsPooled)
+	}
+	if l.identities == 0 {
+		t.Error("the address could not change and neither did the visitor")
 	}
 	if got.Rotations != 0 {
 		t.Errorf("Rotations=%d, want 0 — a refused change is not a change", got.Rotations)
+	}
+	if got.PortChanges != 0 {
+		t.Errorf("PortChanges=%d, want 0 — one address is not a broken port", got.PortChanges)
+	}
+}
+
+func TestClient_StopsWhenNeitherTheAddressNorTheVisitorCanChange(t *testing.T) {
+	// Both remedies refused. Every further attempt would send the same request
+	// from the same address as the same visitor, so the loop stops instead of
+	// spending twelve more requests proving it.
+	l := &fakeLease{port: 1, replies: challenges(20),
+		rotateErr: blanktrail.ErrRenewUnsupported, identityErr: blanktrail.ErrRenewUnsupported}
+	c := NewClientWithRetry(&fakeLeaser{leases: []*fakeLease{l}}, NewSessions(), DefaultRetryPolicy(true))
+
+	got, err := c.Get(context.Background(), "https://www.wildberries.ru/x", KindSearch, "")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if len(l.sent) != 3 || got.Attempts != 3 {
+		t.Errorf("sent %d requests and reported %d attempts, want 3 of each — nothing about the request could change",
+			len(l.sent), got.Attempts)
 	}
 }
 
@@ -1153,11 +1201,12 @@ func TestClient_TakesAnotherPortWhenThisOneWillNotChangeItsEgress(t *testing.T) 
 	}
 }
 
-func TestClient_StillStopsWhenThereIsNoOtherEgressToMoveTo(t *testing.T) {
+func TestClient_AnAddressThatCannotChangeIsNotABrokenPort(t *testing.T) {
 	// ErrRenewUnsupported keeps meaning what it meant: direct egress, or a
-	// gateway fixed at open time, has one address and no second one. That is
-	// not a broken port and must not cost a port change — otherwise a direct
-	// run would churn through the pool for nothing.
+	// gateway channel holding one gateway, has one address and no second one.
+	// That is not a broken port and must not cost a port change — otherwise a
+	// direct run would churn through the pool for nothing. The remedy stays on
+	// the port it is already holding.
 	l := &fakeLease{port: 1, replies: challenges(20), rotateErr: blanktrail.ErrRenewUnsupported}
 	leaser := &fakeLeaser{leases: []*fakeLease{l, {port: 2, replies: challenges(20)}}}
 	c := NewClientWithRetry(leaser, NewSessions(), DefaultRetryPolicy(true))
@@ -1166,8 +1215,8 @@ func TestClient_StillStopsWhenThereIsNoOtherEgressToMoveTo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if got.Attempts != 3 || got.PortChanges != 0 {
-		t.Errorf("Attempts=%d PortChanges=%d, want 3/0", got.Attempts, got.PortChanges)
+	if got.PortChanges != 0 {
+		t.Errorf("PortChanges=%d, want 0", got.PortChanges)
 	}
 	if leaser.n != 1 {
 		t.Errorf("acquired %d leases, want 1", leaser.n)
@@ -1307,6 +1356,7 @@ func (l liveLease) Do(r *http.Request) (*http.Response, error) { return l.hc.Do(
 func (l liveLease) Session() string                            { return "test#1" }
 func (l liveLease) Port() int                                  { return 1 }
 func (l liveLease) RotateEgress(context.Context) error         { return blanktrail.ErrRenewUnsupported }
+func (l liveLease) RenewIdentity(context.Context) error        { return blanktrail.ErrRenewUnsupported }
 func (l liveLease) Release()                                   {}
 
 type liveLeaser struct{ hc *http.Client }

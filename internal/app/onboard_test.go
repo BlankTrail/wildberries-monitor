@@ -4,6 +4,7 @@ package app
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -1263,8 +1264,11 @@ func TestProfileChain_PicksUpARunTheProgramWasStoppedIn(t *testing.T) {
 
 	// The chain picks it up rather than waiting on it forever.
 	seedStorefront(t, a, 4242)
-	a.advanceProfiles(ctx)
+	// Asked on every pass, the way the tick asks: a start that did not take —
+	// the control API busy, the machine loaded — is retried next round rather
+	// than leaving the profile stuck on one refused attempt.
 	settled(t, "прерванное задание не подняли", func() bool {
+		a.advanceProfiles(ctx)
 		return !a.orphaned(ctx, got.CatalogJob)
 	})
 }
@@ -1359,5 +1363,125 @@ func TestStepProfile_DispatchesOnTheRowTheLandedRunWrote(t *testing.T) {
 	if made.SupplierID != seller {
 		t.Errorf("витрину собирают у продавца %d, а карточка назвала %d",
 			made.SupplierID, seller)
+	}
+}
+
+func TestProfileChain_ItsJobsCarryTheProfilesOwnAnswers(t *testing.T) {
+	// Threads, exits and the retry budget were hard-coded in every job the
+	// chain builds, so a collection that took an hour could not be told to take
+	// twenty minutes and a person with eight proxies could not say which of
+	// them their own assortment should be read through.
+	//
+	// The resolve is the exception and stays one thread: it reads one card, and
+	// a pool of sixteen ports opened to fetch one document is sixteen control
+	// calls spent on nothing.
+	a := newApp(t)
+	ctx := t.Context()
+	configured(t, a)
+	collecting(t, a)
+	p := aProfile(t, a, 4242)
+
+	p.Threads, p.Attempts, p.Channels = 9, 10, []int64{3, 5}
+	if err := a.Store.SaveProfilePlan(ctx, p); err != nil {
+		t.Fatalf("SaveProfilePlan: %v", err)
+	}
+
+	if err := a.StartProfileChain(ctx, p.ID); err != nil {
+		t.Fatalf("StartProfileChain: %v", err)
+	}
+	got, _ := a.Store.Profile(ctx, p.ID)
+	walk, err := job.Load(ctx, a.Store, got.CatalogJob)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if walk.Threads != 9 {
+		t.Errorf("витрину собирают в %d потоков, профиль просил 9", walk.Threads)
+	}
+	if walk.Attempts != 10 {
+		t.Errorf("повторов у витрины %d, профиль просил 10", walk.Attempts)
+	}
+	if !slices.Equal(walk.Channels, []int64{3, 5}) {
+		t.Errorf("витрина идёт через %v, профиль просил [3 5]", walk.Channels)
+	}
+
+	// And the stage after it, which is the one that makes the most requests:
+	// a phrase check is every phrase against every product, so a profile that
+	// asked for nine threads is asking for them here above anywhere else.
+	if err := a.Store.SavePhrase(ctx, store.PhraseRow{
+		ProfileID: p.ID, Text: "платье", NmID: 100,
+	}); err != nil {
+		t.Fatalf("SavePhrase: %v", err)
+	}
+	seedStorefront(t, a, 4242)
+	landed(t, a, got.CatalogJob)
+	a.advanceProfiles(ctx)
+
+	after, _ := a.Store.Profile(ctx, p.ID)
+	if after.CheckJob == 0 {
+		t.Fatal("задание на проверку не создано")
+	}
+	check, err := job.Load(ctx, a.Store, after.CheckJob)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if check.Threads != 9 {
+		t.Errorf("проверку фраз ведут в %d потоков, профиль просил 9", check.Threads)
+	}
+	if check.Attempts != 10 {
+		t.Errorf("повторов у проверки %d, профиль просил 10", check.Attempts)
+	}
+	if !slices.Equal(check.Channels, []int64{3, 5}) {
+		t.Errorf("проверка идёт через %v, профиль просил [3 5]", check.Channels)
+	}
+
+	// And the default is the default: a profile that said nothing gets it.
+	other := aProfile(t, a, 777)
+	if err := a.StartProfileChain(ctx, other.ID); err != nil {
+		t.Fatalf("StartProfileChain: %v", err)
+	}
+	row, _ := a.Store.Profile(ctx, other.ID)
+	plain, err := job.Load(ctx, a.Store, row.CatalogJob)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if plain.Threads != store.DefaultProfileThreads {
+		t.Errorf("без выбора потоков %d, ожидалось %d", plain.Threads, store.DefaultProfileThreads)
+	}
+	if len(plain.Channels) != 0 {
+		t.Errorf("без выбора каналы = %v — должно быть «через все»", plain.Channels)
+	}
+}
+
+func TestProfileChain_TheResolveStaysOnOneThread(t *testing.T) {
+	// It reads one card. A pool of sixteen ports opened for one document is
+	// sixteen control calls at the service before the first fetch, and the
+	// profile's thread count is about the storefront walk that follows.
+	a := newApp(t)
+	ctx := t.Context()
+	configured(t, a)
+	collecting(t, a)
+
+	id, err := a.Store.SaveProfile(ctx, store.ProfileRow{
+		Name: "мой", SourceInput: "141504066",
+	})
+	if err != nil {
+		t.Fatalf("SaveProfile: %v", err)
+	}
+	p, _ := a.Store.Profile(ctx, id)
+	p.Threads = 16
+	if err := a.Store.SaveProfilePlan(ctx, p); err != nil {
+		t.Fatalf("SaveProfilePlan: %v", err)
+	}
+
+	if err := a.StartProfileChain(ctx, id); err != nil {
+		t.Fatalf("StartProfileChain: %v", err)
+	}
+	got, _ := a.Store.Profile(ctx, id)
+	made, err := job.Load(ctx, a.Store, got.ResolveJob)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if made.Threads != 1 {
+		t.Errorf("разбор ссылки идёт в %d потоков", made.Threads)
 	}
 }

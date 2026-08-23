@@ -214,6 +214,27 @@ type Job struct {
 	// without a bound is a job that never finishes.
 	MaxPages int
 
+	// Channels names the egress channels this job runs through, by their store
+	// ids. Empty is every enabled channel, which is what every job did before
+	// this could be said — and still the right default, because a run wants the
+	// whole mix unless somebody has a reason.
+	//
+	// A channel that is named and then deleted or switched off is a refusal
+	// rather than a fallback: falling back to the rest would run through exits
+	// the person had deliberately excluded, and falling back to none would run
+	// through the machine's own address, which is the one outcome anybody
+	// configuring proxies is trying to avoid.
+	Channels []int64
+
+	// Attempts is how many times one request may be sent before the run counts
+	// it as failed. Zero is the build's own budget — see wb.DefaultRetryPolicy,
+	// which differs with and without proxies because the remedies do.
+	//
+	// It bounds one HTTP request, not one item: an item that fails is not
+	// queued again, so this is the whole of what «повторы при ошибках» means
+	// here.
+	Attempts int
+
 	// Threads and Delay are how hard to push. Zero threads means one.
 	Threads int
 	Delay   time.Duration

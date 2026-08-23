@@ -33,6 +33,11 @@ type Lease interface {
 	// there is no other address to move to — direct egress, or a gateway hop
 	// fixed at open time.
 	RotateEgress(context.Context) error
+	// RenewIdentity gives the port a new fingerprint and visit identity while
+	// keeping its address. The remedy for a port with nowhere to move to: a
+	// direct channel, or a gateway channel holding one gateway, has one address
+	// and answers RotateEgress with blanktrail.ErrRenewUnsupported.
+	RenewIdentity(context.Context) error
 	Release()
 }
 
@@ -279,6 +284,7 @@ func (c *Client) Get(ctx context.Context, url string, kind Kind, referer string)
 		spent       int     // attempts actually made, which is not the loop counter after an early exit
 		onPort      int     // attempts made on the port currently held
 		rotations   int
+		identities  int
 		portChanges int
 		faults      int
 	)
@@ -312,10 +318,21 @@ attempts:
 				rotations++
 			case errors.Is(err, blanktrail.ErrRenewUnsupported):
 				// One address behind this port and no second one to move to —
-				// direct egress, or a gateway fixed when the port was opened.
-				// Every further attempt would leave through the address that has
-				// already failed, so stop and report what the last one found.
-				break attempts
+				// direct egress, or a gateway channel holding one gateway. The
+				// address cannot change, but everything else the target sees
+				// about this visitor can: a fresh fingerprint, a fresh jar, a
+				// fresh visit identity. That is the remedy for the commonest
+				// refusal, a challenge bound to the identity rather than to the
+				// IP, and until it existed a budget of ten attempts was silently
+				// cut to the two or three one address had earned.
+				if idErr := lease.RenewIdentity(ctx); idErr != nil {
+					// Nothing left to change. Stop rather than spending the rest
+					// of the budget on a request that will be refused the same
+					// way, and report what the last attempt found.
+					break attempts
+				}
+				identities++
+				onPort = 0
 			default:
 				// The port refused to take a new egress. That says nothing about
 				// the egress: it is the port failing at the one thing asked of

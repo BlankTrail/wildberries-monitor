@@ -5,6 +5,7 @@ package job
 import (
 	"context"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -210,5 +211,51 @@ func TestRun_ResolvesAnUploadedListIntoTheWalk(t *testing.T) {
 	// planner blind to the list would have produced.
 	if res.Items != 2 {
 		t.Errorf("the run did %d items, want one per uploaded phrase", res.Items)
+	}
+}
+
+func TestSave_KeepsWhichChannelsAndHowManyAttempts(t *testing.T) {
+	// The channels column has been in the schema since it was written and every
+	// save put "[]" in it, so no job could name an exit and every run used the
+	// whole mix. The attempts budget had nowhere to live at all.
+	s := openStore(t)
+	ctx := context.Background()
+
+	id, err := Save(ctx, s, Job{
+		Name: "через два", Kind: KindPhrase, Phrases: []string{"платье"},
+		Regions: []string{"-1257786"}, Fields: wb.Selection{"nm_id"}, MaxPages: 1,
+		Channels: []int64{7, 0, 9}, Attempts: 10,
+	})
+	if err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	got, err := Load(ctx, s, id)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	// The zero is dropped: a form posts an empty box as an empty value, and
+	// channel nought is an exit nothing can build.
+	if !slices.Equal(got.Channels, []int64{7, 9}) {
+		t.Errorf("каналы = %v, ожидались [7 9]", got.Channels)
+	}
+	if got.Attempts != 10 {
+		t.Errorf("повторов = %d, ожидалось 10", got.Attempts)
+	}
+
+	// And «через все» stays sayable: nothing named is every enabled one.
+	all, err := Save(ctx, s, Job{
+		Name: "через все", Kind: KindPhrase, Phrases: []string{"платье"},
+		Regions: []string{"-1257786"}, Fields: wb.Selection{"nm_id"}, MaxPages: 1,
+	})
+	if err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	back, err := Load(ctx, s, all)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(back.Channels) != 0 {
+		t.Errorf("без выбора каналы = %v", back.Channels)
 	}
 }
