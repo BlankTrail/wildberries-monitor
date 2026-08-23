@@ -5,6 +5,7 @@ package web
 import (
 	"bytes"
 	"fmt"
+	"html"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +14,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/BlankTrail/wildberries-monitor/internal/cp1251"
 	"github.com/BlankTrail/wildberries-monitor/internal/job"
@@ -823,5 +825,201 @@ func TestConstructor_TheScriptSaysItIsAskingForAFragment(t *testing.T) {
 	// answered with a whole page nested inside the region it was dropped into.
 	if !strings.Contains(script, `[FRAGMENT]: "1"`) {
 		t.Error("скрипт не ставит заголовок на запрос — сервер будет отвечать ему целыми страницами")
+	}
+}
+
+// savedJob writes one job with every run control set away from its default, so
+// a form that dropped any of them shows it.
+func savedJob(t *testing.T, srv *Server) int64 {
+	t.Helper()
+	id, err := job.Save(t.Context(), srv.Store, job.Job{
+		Name: "витрина KODA", Kind: job.KindSeller, SupplierID: 86346,
+		Regions: []string{"-1257786", "-2133463"}, AppType: 1, MaxPages: 12,
+		Threads: 16, Attempts: 7, Delay: 250 * time.Millisecond,
+		Schedule: "every 6h", Enabled: true,
+		Fields: wb.Selection{"nm_id", "price_sale", "description"},
+	})
+	if err != nil {
+		t.Fatalf("job.Save: %v", err)
+	}
+	return id
+}
+
+func TestEditJob_OpensTheWholeFormOnTheSavedJob(t *testing.T) {
+	// Threads, the channel, the field selection, the page bound and the pause
+	// are settable in the constructor and nowhere else. Until this form could
+	// open on a saved job, changing any of them meant making the job again —
+	// which is how a job loses the regions and the schedule somebody spent an
+	// evening on.
+	srv := newServer(t)
+	id := savedJob(t, srv)
+
+	body := get(t, srv, "/jobs/edit?id="+itoa(id), "").Body.String()
+
+	for _, want := range []string{
+		`value="витрина KODA"`,
+		`name="threads" type="number" min="1" data-estimate value="16"`,
+		`name="max_pages" type="number" min="1" data-estimate value="12"`,
+		`name="delay_ms" type="number" min="0" data-estimate value="250"`,
+		`name="attempts" type="number" min="1" placeholder="15" value="7"`,
+		`name="supplier_id" type="number" min="1" data-estimate value="86346"`,
+		`value="-1257786,-2133463"`,
+		`name="schedule" placeholder="every 3h" value="every 6h"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("в форме нет %s", want)
+		}
+	}
+	// The kind it actually is, and the id it is changing.
+	if !strings.Contains(body, `value="seller" checked`) {
+		t.Error("форма открылась не на том типе задания")
+	}
+	if !strings.Contains(body, `name="id" value="`+itoa(id)+`"`) {
+		t.Error("форма не несёт номер задания — сохранение заведёт второе")
+	}
+}
+
+func TestEditJob_TheFieldsItCollectsComeBackTicked(t *testing.T) {
+	// A job cut down to three fields must not come back with the whole base
+	// group re-ticked: saved, that quietly widens what it collects and what it
+	// costs.
+	srv := newServer(t)
+	id := savedJob(t, srv)
+
+	body := get(t, srv, "/jobs/edit?id="+itoa(id), "").Body.String()
+	if !strings.Contains(body, `value="description" data-estimate checked`) {
+		t.Error("отмеченное поле карточки вернулось снятым")
+	}
+	if strings.Contains(body, `value="brand" data-estimate checked`) {
+		t.Error("неотмеченное базовое поле вернулось отмеченным — задание расширится молча")
+	}
+}
+
+func TestEditJob_SavingChangesTheJobRatherThanMakingASecond(t *testing.T) {
+	// The whole point of the hidden id. Without it every correction writes a
+	// new row and the list grows a copy per edit.
+	srv := newServer(t)
+	id := savedJob(t, srv)
+
+	postForm(t, srv, "/jobs", url.Values{
+		"id": {itoa(id)}, "name": {"витрина KODA"}, "kind": {"seller"},
+		"supplier_id": {"86346"}, "regions": {"-1257786"}, "app_type": {"1"},
+		"max_pages": {"12"}, "threads": {"32"}, "delay_ms": {"0"},
+		"fields": {"nm_id"},
+	})
+
+	list, err := srv.Store.Jobs(t.Context())
+	if err != nil {
+		t.Fatalf("Jobs: %v", err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("заданий %d, ожидалось одно — правка завела копию", len(list))
+	}
+	got, err := job.Load(t.Context(), srv.Store, id)
+	if err != nil {
+		t.Fatalf("job.Load: %v", err)
+	}
+	if got.Threads != 32 {
+		t.Errorf("потоков %d, сохраняли 32", got.Threads)
+	}
+}
+
+func TestJobList_ALongNameDoesNotStretchTheTable(t *testing.T) {
+	// A job named after the address it collects is a hundred characters wide,
+	// and the table it stretched pushed the row's own buttons off the screen.
+	srv := newServer(t)
+	const name = "профиль: разбор https://www.wildberries.ru/catalog/190496459/detail.aspx"
+	if _, err := job.Save(t.Context(), srv.Store, job.Job{
+		Name: name, Kind: job.KindArticles, Articles: []int64{100},
+		Regions: []string{"-1257786"}, AppType: 1, Threads: 1,
+		Fields: wb.Selection{"nm_id"},
+	}); err != nil {
+		t.Fatalf("job.Save: %v", err)
+	}
+
+	body := get(t, srv, "/jobs", "").Body.String()
+	if !strings.Contains(body, `<td class="bt-cell-clip" title="`+html.EscapeString(name)+`">`) {
+		t.Error("длинное имя задания ничем не ограничено — таблица уедет вбок")
+	}
+	// And the whole of it is still there to read.
+	if !strings.Contains(body, html.EscapeString(name)+`</td>`) {
+		t.Error("имя обрезано на сервере — прочитать его целиком негде")
+	}
+}
+
+func TestJobList_EveryRowOffersTheThreeThingsAJobIsFor(t *testing.T) {
+	// Run it, change it, read what it collected. The middle one is the reason
+	// this test exists: threads, the channels and the field selection are
+	// settable in the constructor and nowhere else, and without a way back
+	// into it the only way to change any of them was to make the job again.
+	srv := newServer(t)
+	id := savedJob(t, srv)
+
+	body := get(t, srv, "/jobs", "").Body.String()
+	for _, want := range []string{
+		`data-get="/jobs/edit?id=` + itoa(id) + `" data-target="#job-new">Изменить<`,
+		`href="/results?job_id=` + itoa(id) + `">Результаты<`,
+		`/jobs/run?id=` + itoa(id),
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("в строке задания нет %s", want)
+		}
+	}
+}
+
+func TestEditJob_ASavedScheduleOpensAsASchedule(t *testing.T) {
+	// «по запросу, без расписания» is ticked only when there is none. Ticked
+	// over a saved schedule the form paints as though the job had none —
+	// which is what somebody reads and believes — and without the script the
+	// composer never corrects it.
+	srv := newServer(t)
+	id := savedJob(t, srv) // every 6h
+
+	body := get(t, srv, "/jobs/edit?id="+itoa(id), "").Body.String()
+	if strings.Contains(body, `<input type="checkbox" data-compose-off checked>`) {
+		t.Error("задание с расписанием открылось как «по запросу»")
+	}
+
+	// And a job without one opens the other way round, or every new job would
+	// show a schedule builder nobody asked for.
+	plain, err := job.Save(t.Context(), srv.Store, job.Job{
+		Name: "по запросу", Kind: job.KindArticles, Articles: []int64{100},
+		Regions: []string{"-1257786"}, AppType: 1, Threads: 1,
+		Fields: wb.Selection{"nm_id"},
+	})
+	if err != nil {
+		t.Fatalf("job.Save: %v", err)
+	}
+	body = get(t, srv, "/jobs/edit?id="+itoa(plain), "").Body.String()
+	if !strings.Contains(body, `<input type="checkbox" data-compose-off checked>`) {
+		t.Error("задание без расписания открылось с включённым расписанием")
+	}
+}
+
+func TestEditJob_TheDirectoryPickersOpenOnWhatTheJobChose(t *testing.T) {
+	// A catalogue job is a node of somebody else's tree, and the node is what
+	// it collects. Opened on the first option in a list of three thousand,
+	// «изменить» plus «сохранить» quietly moves the job to a different
+	// category — and nothing on the screen said so.
+	srv := newServer(t)
+	seedCategories(t, srv)
+	id, err := job.Save(t.Context(), srv.Store, job.Job{
+		Name: "блузки", Kind: job.KindCatalog,
+		CategoryID: 8126, CategoryQuery: "menu_v3_8126 блузка рубашка женская",
+		Regions: []string{"-1257786"}, AppType: 1, Threads: 1, MaxPages: 3,
+		Fields: wb.Selection{"nm_id"},
+	})
+	if err != nil {
+		t.Fatalf("job.Save: %v", err)
+	}
+
+	body := get(t, srv, "/jobs/edit?id="+itoa(id), "").Body.String()
+	if !strings.Contains(body, `<option value="8126" selected>`) {
+		t.Error("категория задания не выбрана в списке — сохранение перенесёт задание в другую")
+	}
+	// And the refresh press carries it, or pressing «обновить справочник»
+	// mid-edit does the same damage a moment later.
+	if !strings.Contains(body, `data-with="#job-category"`) {
+		t.Error("обновление справочника не заберёт с собой выбранную категорию")
 	}
 }

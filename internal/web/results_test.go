@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/BlankTrail/wildberries-monitor/internal/job"
 	"github.com/BlankTrail/wildberries-monitor/internal/store"
 	"github.com/BlankTrail/wildberries-monitor/wb"
 )
@@ -720,5 +721,79 @@ func TestResults_TheStockCellOpensTheExplanation(t *testing.T) {
 	}
 	if !strings.Contains(body, `id="results-detail"`) {
 		t.Error("на экране нет места, куда этот разбор ляжет")
+	}
+}
+
+func TestResults_TheJobFilterShowsOnlyWhatThatJobCollects(t *testing.T) {
+	// The way somebody arrives here: they pressed «Результаты» on a job, and
+	// the question they carried over is «что собрало вот это», not «что есть
+	// в базе». Without the filter the answer is every reading of every job,
+	// and finding the four hundred rows that belong to theirs is a job in
+	// itself.
+	srv := newServer(t)
+	ctx := t.Context()
+	seedReadings(t, srv.Store, 3) // articles 100, 101, 102
+
+	id, err := job.Save(ctx, srv.Store, job.Job{
+		Name: "витрина KODA", Kind: job.KindArticles, Articles: []int64{100},
+		Regions: []string{"-1257786"}, AppType: 1, Threads: 1,
+		Fields: wb.Selection{"nm_id"},
+	})
+	if err != nil {
+		t.Fatalf("job.Save: %v", err)
+	}
+	if err := srv.Store.LinkJobProduct(ctx, id, 100); err != nil {
+		t.Fatalf("LinkJobProduct: %v", err)
+	}
+
+	body := get(t, srv, "/results/table?job_id="+itoa(id), "").Body.String()
+	if !strings.Contains(body, ">100<") {
+		t.Error("товара задания нет в таблице")
+	}
+	for _, other := range []string{">101<", ">102<"} {
+		if strings.Contains(body, other) {
+			t.Errorf("в таблице есть %s — товар, которого это задание не собирало", other)
+		}
+	}
+	// And the chip says which job, by its name, with the way back out of it.
+	if !strings.Contains(body, "витрина KODA") {
+		t.Error("фильтр по заданию не назван — снять его негде")
+	}
+}
+
+func TestResults_AJobThatIsGoneKeepsItsFilter(t *testing.T) {
+	// The rows it collected are still there and still worth reading. A chip
+	// that disappeared with the job would silently widen the table from four
+	// hundred rows to four hundred thousand, with nothing on the screen
+	// having changed.
+	srv := newServer(t)
+	seedReadings(t, srv.Store, 3)
+
+	body := get(t, srv, "/results/table?job_id=9999", "").Body.String()
+	if !strings.Contains(body, "№9999") {
+		t.Error("удалённое задание не названо в фильтре")
+	}
+	if strings.Contains(body, ">100<") {
+		t.Error("фильтр по несуществующему заданию показал чужие товары")
+	}
+}
+
+func TestResults_SearchingInsideAJobStaysInsideIt(t *testing.T) {
+	// Every control on this screen — the search bar, the sort links, the pager
+	// — carries the qualification it is not changing. A key missing from that
+	// list is a control that silently widens the view it was meant to narrow,
+	// and «нашлось 400 000» after typing a word into a job's own results is a
+	// surprise with nothing on the screen to explain it.
+	srv := newServer(t)
+	seedReadings(t, srv.Store, 3)
+
+	body := get(t, srv, "/results/table?job_id=7&q=платье", "").Body.String()
+	if !strings.Contains(body, `name="job_id" value="7"`) {
+		t.Error("строка поиска не унесёт с собой фильтр по заданию")
+	}
+	// And the sort links and pager keep it too — they build their addresses
+	// from the same list.
+	if !strings.Contains(body, "job_id=7") {
+		t.Error("ссылки таблицы теряют фильтр по заданию")
 	}
 }

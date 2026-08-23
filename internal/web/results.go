@@ -580,6 +580,11 @@ func filterFromQuery(q url.Values) store.ProductFilter {
 			f.AppType = &n
 		}
 	}
+	if v := strings.TrimSpace(q.Get("job_id")); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			f.JobID = &n
+		}
+	}
 	f.From = dayStart(q.Get("from"))
 	// The end of the named day, not its start: a person who types the same
 	// date in both boxes means "that day", and a window from midnight to

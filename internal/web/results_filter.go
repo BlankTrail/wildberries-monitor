@@ -96,6 +96,12 @@ func (s *Server) resultsChips(r *http.Request, q url.Values, total int64) string
 	if v := q.Get("app_type"); v != "" {
 		add("app_type", "аудитория", audienceLabel(v))
 	}
+	// Named rather than numbered. «задание 7» is a chip nobody can check
+	// without opening another tab, and the name is what the person who pressed
+	// «результаты» over there was reading.
+	if v := q.Get("job_id"); v != "" {
+		add("job_id", "задание", s.jobLabel(r, v))
+	}
 	add("from", "с", q.Get("from"))
 	add("to", "по", q.Get("to"))
 	if q.Get("latest") != "" {
@@ -279,7 +285,7 @@ func supplierLabel(r *http.Request, s *Server, value string) string {
 // silently widens the view it was supposed to narrow.
 var filterKeys = []string{
 	"q", "nm_ids", "brand", "supplier_id", "dest", "app_type",
-	"from", "to", "latest", "fields", "sort", "desc",
+	"job_id", "from", "to", "latest", "fields", "sort", "desc",
 }
 
 // resultsURL is the table's own address for a set of parameters.
@@ -317,4 +323,23 @@ func withoutParam(q url.Values, key string) url.Values {
 		out[k] = append([]string(nil), vs...)
 	}
 	return out
+}
+
+// jobLabel is a job by its name, and by its number when the name cannot be
+// read.
+//
+// A deleted job keeps its chip: the reading rows it collected are still there
+// and still worth looking at, so the filter goes on working and says «задание
+// №7» — which is true — rather than disappearing and quietly widening the
+// table by four hundred thousand rows.
+func (s *Server) jobLabel(r *http.Request, id string) string {
+	n, err := strconv.ParseInt(id, 10, 64)
+	if err != nil {
+		return id
+	}
+	row, err := s.Store.Job(r.Context(), n)
+	if err != nil || strings.TrimSpace(row.Name) == "" {
+		return "№" + id
+	}
+	return row.Name
 }

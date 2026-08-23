@@ -349,6 +349,17 @@
         off.checked = target.value.trim() === "";
         every.hidden = off.checked;
       });
+      // A field that already has a string in it was filled in by the server —
+      // the constructor opened on a saved job — and that string is the answer,
+      // not a starting point. Running apply() over it would compose «every 3h»
+      // from the controls' own defaults and write that instead, so opening a
+      // nightly job to change its thread count and saving would quietly move
+      // its schedule.
+      if (target.value.trim() !== "") {
+        off.checked = false;
+        every.hidden = false;
+        return;
+      }
       apply();
     });
 

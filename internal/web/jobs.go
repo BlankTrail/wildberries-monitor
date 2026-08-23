@@ -92,7 +92,7 @@ const productsPerPage = 100
 func (s *Server) jobsPage(w http.ResponseWriter, r *http.Request) {
 	// Closed: this tab is about what is already there, and the constructor is
 	// asked for by pressing for it.
-	body, err := s.jobsHTML(r, false)
+	body, err := s.jobsHTML(r, false, nil)
 	if err != nil {
 		http.Error(w, "jobs: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -106,12 +106,12 @@ func (s *Server) jobsPage(w http.ResponseWriter, r *http.Request) {
 // this existed, a job saved yesterday could not be seen, started, stopped or
 // removed from anywhere but the bot — the screen offered only the form that
 // made it.
-func (s *Server) jobsHTML(r *http.Request, open bool) (string, error) {
+func (s *Server) jobsHTML(r *http.Request, open bool, edit *job.Job) (string, error) {
 	list, err := s.jobList(r.Context())
 	if err != nil {
 		return "", err
 	}
-	region, err := s.jobConstructor(r, open)
+	region, err := s.jobConstructor(r, open, edit)
 	if err != nil {
 		return "", err
 	}
@@ -174,17 +174,66 @@ func fieldTarget(box regionBox) string { return "#" + regionFieldID(box) }
 // questions a person has while filling this in and nowhere else, and they sit
 // after the form rather than inside it because a form nested in a form is not
 // HTML.
-func (s *Server) jobConstructor(r *http.Request, open bool) (string, error) {
+func (s *Server) jobConstructor(r *http.Request, open bool, edit *job.Job) (string, error) {
 	if !open {
 		return `<div class="bt-form-actions"><button class="bt-btn bt-btn--primary" type="button" ` +
 			`data-get="/jobs/new" data-target="#job-new">Добавить задание</button></div>`, nil
 	}
 
-	constructor, err := s.constructorHTML(r)
+	constructor, err := s.constructorHTML(r, edit)
 	if err != nil {
 		return "", err
 	}
 	return constructor, nil
+}
+
+// editJobHandler opens the constructor on a saved job.
+//
+// The same two answers newJobHandler gives, for the same reason: the script
+// asks for the form alone and drops it under the list, and a person who opens
+// the address in the browser gets the tasks screen with the form already open
+// on that job.
+func (s *Server) editJobHandler(w http.ResponseWriter, r *http.Request) {
+	// A job that cannot be named or cannot be read is not an error status: the
+	// address is one a person can type or keep in a bookmark, and a job
+	// deleted since is the ordinary way to arrive here without one. The tasks
+	// screen with the reason above it answers the question they came with —
+	// «где моё задание» — where a 400 answers none of it.
+	var edit *job.Job
+	notice := ""
+	id, err := strconv.ParseInt(r.URL.Query().Get("id"), 10, 64)
+	switch {
+	case err != nil:
+		notice = alert("neutral", "Не сказано, какое задание менять. Выберите его в списке.")
+	default:
+		j, err := job.Load(r.Context(), s.Store, id)
+		if err != nil {
+			notice = alert("error", "Задание не читается: "+err.Error())
+		} else {
+			edit = &j
+		}
+	}
+
+	if !fragment(r) {
+		body, err := s.jobsHTML(r, edit != nil, edit)
+		if err != nil {
+			http.Error(w, "jobs: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		s.render(w, r, page{Title: "Задачи", Body: rawHTML(notice + body)})
+		return
+	}
+
+	if edit == nil {
+		s.writeHTML(w, notice)
+		return
+	}
+	body, err := s.jobConstructor(r, true, edit)
+	if err != nil {
+		http.Error(w, "jobs: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.writeHTML(w, body)
 }
 
 // newJobHandler opens the constructor, or puts the press back.
@@ -198,7 +247,7 @@ func (s *Server) jobConstructor(r *http.Request, open bool) (string, error) {
 func (s *Server) newJobHandler(w http.ResponseWriter, r *http.Request) {
 	open := r.URL.Query().Get("close") == ""
 	if !fragment(r) {
-		body, err := s.jobsHTML(r, open)
+		body, err := s.jobsHTML(r, open, nil)
 		if err != nil {
 			http.Error(w, "jobs: "+err.Error(), http.StatusInternalServerError)
 			return
@@ -207,12 +256,34 @@ func (s *Server) newJobHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	body, err := s.jobConstructor(r, open)
+	body, err := s.jobConstructor(r, open, nil)
 	if err != nil {
 		http.Error(w, "jobs: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 	s.writeHTML(w, body)
+}
+
+// editedJob is the saved job the open constructor is changing, or nil when it
+// is making a new one.
+//
+// Read from the form rather than the address, because that is where the id
+// travels: the constructor carries it in a hidden field so that saving,
+// re-estimating and re-rendering after an upload all keep changing the same
+// job instead of quietly making a second one.
+func (s *Server) editedJob(r *http.Request) *job.Job {
+	if err := parseForm(r); err != nil {
+		return nil
+	}
+	id := atoi64(r.Form.Get("id"))
+	if id == 0 {
+		return nil
+	}
+	j, err := job.Load(r.Context(), s.Store, id)
+	if err != nil {
+		return nil
+	}
+	return &j
 }
 
 // jobsFragment re-renders the screen after an action, without the page around
@@ -223,7 +294,7 @@ func (s *Server) newJobHandler(w http.ResponseWriter, r *http.Request) {
 // it does, because the refusal is something to fix in the form and hunting for
 // the button again is not part of fixing it.
 func (s *Server) jobsFragment(w http.ResponseWriter, r *http.Request, notice string, open bool) {
-	body, err := s.jobsHTML(r, open)
+	body, err := s.jobsHTML(r, open, nil)
 	if err != nil {
 		http.Error(w, "jobs: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -255,7 +326,12 @@ func (s *Server) jobListHTML(list []store.JobStatus) string {
 
 		b.WriteString(`<tr>`)
 		fmt.Fprintf(&b, `<td>%d</td>`, j.ID)
-		b.WriteString(`<td>` + html.EscapeString(jobTitle(j)) + `</td>`)
+		// Clipped to its column with the whole of it in the title. A job named
+		// after the address it collects is a hundred characters wide, and the
+		// table it stretched took the row's own buttons off the screen.
+		title := jobTitle(j)
+		b.WriteString(`<td class="bt-cell-clip" title="` + html.EscapeString(title) + `">` +
+			html.EscapeString(title) + `</td>`)
 		b.WriteString(`<td>` + html.EscapeString(kind) + `</td>`)
 		b.WriteString(`<td>` + jobStateHTML(j) + `</td>`)
 		b.WriteString(`<td>` + html.EscapeString(scheduleText(j)) + `</td>`)
@@ -332,6 +408,15 @@ func jobActionsHTML(j store.JobStatus) string {
 		b.WriteString(action("/jobs/toggle?id="+fmt.Sprint(j.ID), "#jobs-body", label))
 	}
 	fmt.Fprintf(&b, `<button class="bt-btn bt-btn--ghost bt-btn--sm" data-get="/jobs/detail?id=%d" data-target="#job-detail">Подробнее</button>`, j.ID)
+	// Into the region the constructor lives in, so «изменить» opens the same
+	// form «добавить» opens — the whole form, not a strip of it. Threads, the
+	// channels and the field selection are only settable there, and until this
+	// button existed the only way to change them was to make the job again.
+	fmt.Fprintf(&b, `<button class="bt-btn bt-btn--ghost bt-btn--sm" data-get="/jobs/edit?id=%d" data-target="#job-new">Изменить</button>`, j.ID)
+	// A link and not a press: the results are their own screen, and somebody
+	// who got there from a job wants to be able to come back to it — which a
+	// swap into this page cannot offer.
+	fmt.Fprintf(&b, `<a class="bt-btn bt-btn--ghost bt-btn--sm" href="/results?job_id=%d">Результаты</a>`, j.ID)
 	b.WriteString(action("/jobs/delete?id="+fmt.Sprint(j.ID), "#jobs-body", "Удалить"))
 	return b.String()
 }
@@ -437,50 +522,61 @@ func alert(kind, text string) string {
 // has just been streamed in has to appear in the dropdown, and re-rendering
 // the whole document into the region the swap targets would nest one page
 // inside another.
-func (s *Server) constructorHTML(r *http.Request) (string, error) {
+func (s *Server) constructorHTML(r *http.Request, edit *job.Job) (string, error) {
 	lists, err := s.Store.PhraseLists(r.Context())
 	if err != nil {
 		return "", err
 	}
+	d := draftOf(edit)
 
 	var b strings.Builder
-	b.WriteString(`<section class="bt-card"><h2>Новое задание</h2>`)
+	b.WriteString(`<section class="bt-card"><h2>` + html.EscapeString(d.heading()) + `</h2>`)
 	// data-switch names the field the rest of the form follows: each group
 	// marked data-when belongs to one kind or a few, and app.js shows the
 	// ones that apply. Without the script they all stay visible, which is
 	// what this form was before, and the server still reads only what the
 	// chosen kind uses.
 	b.WriteString(`<form class="bt-fieldset bt-form" data-post="/jobs" data-target="#main" data-switch="kind">`)
+	// Which job is being written, carried in the form rather than in the
+	// address: the same route saves both, and a save that lost the id would
+	// quietly make a second job instead of changing the one on the screen.
+	if d.editing {
+		b.WriteString(hidden("id", strconv.FormatInt(d.ID, 10)))
+	}
 
-	b.WriteString(field("Название", `<input class="bt-input" name="name" required placeholder="Весенние платья, Москва">`,
+	b.WriteString(field("Название", `<input class="bt-input" name="name" required placeholder="Весенние платья, Москва"`+
+		d.text(d.Name)+`>`,
 		"Под этим именем задание будет в списке и в отчётах."))
 
-	b.WriteString(kindPicker())
+	b.WriteString(kindPicker(d.Kind))
 
 	// The parameters, one group per kind. What a kind does not use is out of
 	// the way rather than sitting empty in a column of fifteen fields.
 	// Typed or uploaded, and never both: the two are alternatives the job
 	// itself refuses together — «pick one» — and offering both at once was a
 	// form that let somebody fill in a refusal.
-	b.WriteString(whenAny(phraseSource(s.phraseListField(lists)),
+	b.WriteString(whenAny(phraseSource(s.phraseListField(lists, d.PhraseListID), d),
 		job.KindPhrase, job.KindPhraseAds, job.KindPositions))
 
-	b.WriteString(whenAny(s.categoryBox(r, ""), job.KindCatalog))
+	b.WriteString(whenAny(s.categoryBox(r, "", d.CategoryID), job.KindCatalog))
 
-	b.WriteString(whenAny(s.promotionBox(r, ""), job.KindPromotion))
+	b.WriteString(whenAny(s.promotionBox(r, "", d.PromotionSlug), job.KindPromotion))
 
 	b.WriteString(whenAny(
-		field("Артикул продавца", `<input class="bt-input" name="supplier_id" type="number" min="1" data-estimate>`,
+		field("Артикул продавца", `<input class="bt-input" name="supplier_id" type="number" min="1" data-estimate`+
+			d.id(d.SupplierID)+`>`,
 			"Число из адреса витрины продавца."),
 		job.KindSeller))
 
 	b.WriteString(whenAny(
-		field("Идентификатор бренда", `<input class="bt-input" name="brand_id" type="number" min="1" data-estimate>`,
+		field("Идентификатор бренда", `<input class="bt-input" name="brand_id" type="number" min="1" data-estimate`+
+			d.id(d.BrandID)+`>`,
 			"Число из адреса страницы бренда."),
 		job.KindBrand))
 
 	b.WriteString(whenAny(
-		field("Артикулы", `<textarea class="bt-textarea" name="articles" rows="3" data-estimate placeholder="по одному в строке"></textarea>`,
+		field("Артикулы", `<textarea class="bt-textarea" name="articles" rows="3" data-estimate placeholder="по одному в строке">`+
+			html.EscapeString(d.articlesText())+`</textarea>`,
 			"По одному в строке. Задание пройдёт ровно по ним."),
 		job.KindArticles, job.KindPositions, job.KindShelves))
 
@@ -491,13 +587,15 @@ func (s *Server) constructorHTML(r *http.Request) (string, error) {
 	// folded away — it is a question somebody has once, and open it would bury
 	// the rest of the form under a map of four thousand settlements.
 	b.WriteString(s.regionField(r,
-		regionBox{ID: "job-regions", Value: regionsChosen(r, profileRegion), Estimate: true}))
+		regionBox{ID: "job-regions", Value: d.regions(r), Estimate: true}))
 	b.WriteString(`<div class="bt-form-grid">`)
-	b.WriteString(field("Аудитория", `<input class="bt-input" name="app_type" type="number" value="1" data-estimate>`,
+	b.WriteString(field("Аудитория", `<input class="bt-input" name="app_type" type="number" data-estimate`+
+		d.num(d.AppType)+`>`,
 		"Код приложения. Одно задание — одна аудитория: место в выдаче для веба и для Android — разные факты."))
 	// Pages bound a walk that has pages; the kinds without them do not ask.
 	b.WriteString(whenAny(
-		field("Страниц выдачи", `<input class="bt-input" name="max_pages" type="number" min="1" value="5" data-estimate>`,
+		field("Страниц выдачи", `<input class="bt-input" name="max_pages" type="number" min="1" data-estimate`+
+			d.num(d.MaxPages)+`>`,
 			"Постраничная выдача сама не кончается, поэтому предел обязателен."),
 		job.KindPhrase, job.KindCatalog, job.KindSeller, job.KindBrand, job.KindPositions))
 	b.WriteString(`</div>`)
@@ -505,24 +603,26 @@ func (s *Server) constructorHTML(r *http.Request) (string, error) {
 	// Which exits, beside the regions: both are «где смотреть», and a job that
 	// must go through one country's proxies is the same kind of decision as one
 	// that must be read for one region.
-	b.WriteString(field("Через какие прокси", s.channelPicker(r, "channels", nil),
+	b.WriteString(field("Через какие прокси", s.channelPicker(r, "channels", d.Channels),
 		"Ничего не отмечено — через все включённые. Отметьте, если это задание должно идти "+
 			"только через определённые выходы."))
 
 	b.WriteString(`<h3 class="bt-form-head">Когда и как быстро</h3>`)
 	b.WriteString(`<div class="bt-form-grid">`)
-	b.WriteString(field("Расписание", scheduleControl(),
+	b.WriteString(field("Расписание", scheduleControl(d.Schedule),
 		"Пусто — задание идёт только когда его запустят руками. Строка внизу — то, что сохранится; её можно править прямо."))
-	b.WriteString(field("Потоков", `<input class="bt-input" name="threads" type="number" min="1" value="4" data-estimate>`,
+	b.WriteString(field("Потоков", `<input class="bt-input" name="threads" type="number" min="1" data-estimate`+
+		d.num(d.Threads)+`>`,
 		"Сколько запросов идёт одновременно."))
 	b.WriteString(field("Повторов запроса",
-		fmt.Sprintf(`<input class="bt-input" name="attempts" type="number" min="1" placeholder="%d">`,
-			wb.DefaultAttemptsPooled),
+		fmt.Sprintf(`<input class="bt-input" name="attempts" type="number" min="1" placeholder="%d"%s>`,
+			wb.DefaultAttemptsPooled, d.opt(d.Attempts)),
 		fmt.Sprintf("Сколько раз повторить один запрос, прежде чем считать его отказом. "+
 			"Пусто — %d с прокси и %d без них. Повтор идёт через другой порт, а если адрес "+
 			"один — порт меняет отпечаток и личность, оставаясь на том же адресе.",
 			wb.DefaultAttemptsPooled, wb.DefaultAttemptsDirect)))
-	b.WriteString(field("Пауза, мс", `<input class="bt-input" name="delay_ms" type="number" min="0" value="0" data-estimate>`,
+	b.WriteString(field("Пауза, мс", `<input class="bt-input" name="delay_ms" type="number" min="0" data-estimate`+
+		d.num(int(d.Delay/time.Millisecond))+`>`,
 		"Пауза потока между элементами плана — страницами, карточками, витринами. "+
 			"Из неё же выводится минимальный промежуток между двумя запросами через один и тот же порт: "+
 			"он вдвое больше, потому что на поток приходится два порта. "+
@@ -530,7 +630,7 @@ func (s *Server) constructorHTML(r *http.Request) (string, error) {
 	b.WriteString(`</div>`)
 
 	b.WriteString(`<h3 class="bt-form-head">Что снимать с каждого товара</h3>`)
-	b.WriteString(fieldCheckboxes())
+	b.WriteString(fieldCheckboxes(d.Fields, d.editing))
 
 	b.WriteString(`<div id="estimate" class="bt-alert bt-alert--neutral">Отметьте поля — здесь появится оценка.</div>`)
 	b.WriteString(`<div class="bt-form-actions">
@@ -550,18 +650,106 @@ func (s *Server) constructorHTML(r *http.Request) (string, error) {
 	return b.String(), nil
 }
 
+// draft is what the constructor fills its controls from: a saved job when the
+// form was opened to change one, and the defaults when it was opened to make
+// one.
+//
+// Every control reads this rather than asking whether it is editing, because
+// the failure of the obvious alternative is silent: a field that forgot to
+// check would show its own default over saved data, and the save that follows
+// would write the default back.
+type draft struct {
+	job.Job
+	editing bool
+}
+
+// draftOf is the saved job, or the defaults a blank form opens with.
+//
+// The defaults live here and nowhere else. They used to be typed into each
+// control's value attribute, which is fine until the same controls have to
+// show a saved job — and then a default left behind in one of them overwrites
+// what somebody saved.
+func draftOf(edit *job.Job) draft {
+	if edit != nil {
+		return draft{Job: *edit, editing: true}
+	}
+	return draft{Job: job.Job{AppType: 1, MaxPages: 5, Threads: 4}}
+}
+
+func (d draft) heading() string {
+	if !d.editing {
+		return "Новое задание"
+	}
+	return "Задание №" + strconv.FormatInt(d.ID, 10)
+}
+
+// text is a value attribute for a string, and nothing for an empty one — so a
+// blank form keeps whatever placeholder its control carries.
+func (d draft) text(v string) string {
+	if v == "" {
+		return ""
+	}
+	return ` value="` + html.EscapeString(v) + `"`
+}
+
+// num is a value attribute for a number that always has one.
+func (d draft) num(v int) string { return ` value="` + strconv.Itoa(v) + `"` }
+
+// opt is a value attribute for a number whose zero means «не задано» — the
+// retry count, which falls back to the client's own default.
+func (d draft) opt(v int) string {
+	if v == 0 {
+		return ""
+	}
+	return ` value="` + strconv.Itoa(v) + `"`
+}
+
+// id is opt for an int64 identifier.
+func (d draft) id(v int64) string {
+	if v == 0 {
+		return ""
+	}
+	return ` value="` + strconv.FormatInt(v, 10) + `"`
+}
+
+// regions is what goes into the region box: the job's own list when editing,
+// and otherwise whatever the address suggested.
+//
+// A saved job's regions win over the suggestion. Opening «изменить» on a job
+// collected for eighty-five regions and finding one there — because the URL
+// carried a profile's region — is how a job loses eighty-four of them to a
+// press nobody thought was destructive.
+func (d draft) regions(r *http.Request) string {
+	if d.editing {
+		return strings.Join(d.Regions, ",")
+	}
+	return regionsChosen(r, profileRegion)
+}
+
+func (d draft) articlesText() string {
+	out := make([]string, len(d.Articles))
+	for i, nm := range d.Articles {
+		out[i] = strconv.FormatInt(nm, 10)
+	}
+	return strings.Join(out, "\n")
+}
+
+func (d draft) phrasesText() string { return strings.Join(d.Phrases, "\n") }
+
 // kindPicker is the choice of what the job enumerates.
 //
 // The one picker in the panel whose radios carry data-estimate: changing what
 // a job walks changes what it will cost, and the price is on the same screen.
-func kindPicker() string {
+func kindPicker(chosen job.Kind) string {
 	picks := make([]pick, 0, len(job.Composable()))
 	for _, k := range job.Composable() {
 		label := kindLabels[k]
 		if label == "" {
 			label = string(k)
 		}
-		picks = append(picks, pick{Value: string(k), Label: label, What: kindWhat[k]})
+		picks = append(picks, pick{
+			Value: string(k), Label: label, What: kindWhat[k], Checked: k == chosen,
+		})
 	}
 	return picker("Что перечислять", "kind", " data-estimate", picks)
 }
@@ -585,16 +773,21 @@ func phrasesFromForm(f url.Values) ([]string, int64) {
 // and an uploaded list together — which one the estimate priced and which one
 // the run walked would be two different answers — and a form that shows both
 // boxes is a form inviting exactly that.
-func phraseSource(uploaded string) string {
+func phraseSource(uploaded string, d draft) string {
+	// Which of the two the saved job used. A job with a file behind it opened
+	// on «Вписать» would show an empty box over a hundred thousand phrases,
+	// and saving it would replace them with nothing.
+	fromFile := d.PhraseListID != 0
 	var b strings.Builder
 	b.WriteString(`<div class="bt-stack" data-switch="phrase_source">`)
 	b.WriteString(picker("Откуда фразы", "phrase_source", " data-estimate", []pick{
-		{Value: "typed", Label: "Вписать", What: "Несколько фраз, по одной в строке."},
-		{Value: "file", Label: "Из файла", What: "Готовый список, загруженный сюда файлом."},
+		{Value: "typed", Label: "Вписать", What: "Несколько фраз, по одной в строке.", Checked: !fromFile},
+		{Value: "file", Label: "Из файла", What: "Готовый список, загруженный сюда файлом.", Checked: fromFile},
 	}))
 	b.WriteString(whenAny(
 		field("Фразы",
-			`<textarea class="bt-textarea" name="phrases" rows="4" data-estimate placeholder="по одной в строке"></textarea>`,
+			`<textarea class="bt-textarea" name="phrases" rows="4" data-estimate placeholder="по одной в строке">`+
+				html.EscapeString(d.phrasesText())+`</textarea>`,
 			"По одной в строке."),
 		"typed"))
 	b.WriteString(whenAny(uploaded, "file"))
@@ -603,13 +796,17 @@ func phraseSource(uploaded string) string {
 }
 
 // phraseListField is the uploaded-file half of the phrase question.
-func (s *Server) phraseListField(lists []store.PhraseListRow) string {
+func (s *Server) phraseListField(lists []store.PhraseListRow, chosen int64) string {
 	var sel strings.Builder
 	sel.WriteString(`<select class="bt-select" name="phrase_list_id" data-estimate>`)
 	sel.WriteString(`<option value="0">— не использовать файл —</option>`)
 	for _, l := range lists {
-		fmt.Fprintf(&sel, `<option value="%d">%s — %d фраз</option>`,
-			l.ID, html.EscapeString(l.Name), l.Count)
+		selected := ""
+		if l.ID == chosen {
+			selected = ` selected`
+		}
+		fmt.Fprintf(&sel, `<option value="%d"%s>%s — %d фраз</option>`,
+			l.ID, selected, html.EscapeString(l.Name), l.Count)
 	}
 	sel.WriteString(`</select>`)
 
@@ -636,7 +833,11 @@ func (s *Server) phraseListField(lists []store.PhraseListRow) string {
 // wb.Selection.Cost — the same call the estimate makes — rather than written
 // out here. Two spellings of the same arithmetic is how a screen ends up
 // promising a price the run does not charge.
-func fieldCheckboxes() string {
+func fieldCheckboxes(chosen wb.Selection, editing bool) string {
+	on := make(map[string]bool, len(chosen))
+	for _, k := range chosen {
+		on[k] = true
+	}
 	var b strings.Builder
 	// No label of its own: the heading above this says what it is, and two
 	// headings one under the other read as two different questions.
@@ -668,12 +869,19 @@ func fieldCheckboxes() string {
 		b.WriteString(`<div class="bt-checks">`)
 
 		for _, f := range fields {
-			// The base group is pre-ticked. Every field in it rides on the
-			// search page the job pays for regardless, and three of them —
-			// ts, dest, app_type — are what makes a row comparable to the
-			// next one at all.
+			// A saved job shows what it collects; a blank form pre-ticks the
+			// base group, every field of which rides on the search page the
+			// job pays for regardless — and three of them, ts, dest and
+			// app_type, are what makes a row comparable to the next one.
+			//
+			// The two cases are told apart by which form this is and not by
+			// whether anything is ticked: a saved job that collects nothing
+			// but its base fields would otherwise be indistinguishable from a
+			// blank one, which is true and harmless, while a job somebody
+			// deliberately cut down to four fields would come back with the
+			// whole base group re-ticked.
 			checked := ""
-			if f.Group == wb.GroupBase {
+			if (editing && on[f.Key]) || (!editing && f.Group == wb.GroupBase) {
 				checked = " checked"
 			}
 			fmt.Fprintf(&b,
@@ -808,6 +1016,10 @@ func (s *Server) jobFromForm(r *http.Request) (job.Job, error) {
 	f := r.Form
 
 	j := job.Job{
+		// Zero for a new job, and the saved job's own id when the constructor
+		// was opened to change one. job.Save reads it: without it every
+		// correction to a job would write a second copy of it.
+		ID:       atoi64(f.Get("id")),
 		Name:     strings.TrimSpace(f.Get("name")),
 		Kind:     job.Kind(f.Get("kind")),
 		Regions:  splitCommas(f.Get("regions")),
@@ -927,7 +1139,7 @@ func (s *Server) uploadPhrases(w http.ResponseWriter, r *http.Request) {
 			}
 			// The constructor is re-rendered so the file that was just
 			// streamed in is already in the dropdown.
-			body, err := s.constructorHTML(r)
+			body, err := s.constructorHTML(r, s.editedJob(r))
 			if err != nil {
 				http.Error(w, "upload: "+err.Error(), http.StatusInternalServerError)
 				return
@@ -1323,10 +1535,18 @@ var scheduleUnits = []struct {
 // composer only writes into it. A builder that hid the string would leave
 // nobody able to read what a job actually does, and «every 3h» is short
 // enough to read.
-func scheduleControl() string {
+func scheduleControl(current string) string {
+	// «Без расписания» is ticked only when there is none. Left ticked over a
+	// saved schedule, the composer's own first pass clears the field it writes
+	// into — so opening a nightly job to change its thread count and saving
+	// would turn it into a job that never runs again.
+	off := " checked"
+	if strings.TrimSpace(current) != "" {
+		off = ""
+	}
 	var b strings.Builder
 	b.WriteString(`<div class="bt-compose" data-compose="#job-schedule">`)
-	b.WriteString(`<label class="bt-checkbox"><input type="checkbox" data-compose-off checked> по запросу, без расписания</label>`)
+	b.WriteString(`<label class="bt-checkbox"><input type="checkbox" data-compose-off` + off + `> по запросу, без расписания</label>`)
 	b.WriteString(`<div class="bt-compose__every">`)
 	b.WriteString(`<span class="bt-form-hint">каждые</span>`)
 	b.WriteString(`<input class="bt-input bt-input--sm" type="number" min="1" value="3" data-compose-count>`)
@@ -1341,7 +1561,8 @@ func scheduleControl() string {
 	}
 	b.WriteString(`</select>`)
 	b.WriteString(`</div>`)
-	b.WriteString(`<input class="bt-input bt-input--mono" id="job-schedule" name="schedule" placeholder="every 3h">`)
+	b.WriteString(`<input class="bt-input bt-input--mono" id="job-schedule" name="schedule" placeholder="every 3h" value="` +
+		html.EscapeString(strings.TrimSpace(current)) + `">`)
 	b.WriteString(`</div>`)
 	return b.String()
 }

@@ -27,7 +27,7 @@ import (
 // words, rather than left for somebody to infer from an empty run.
 
 // promotionControl is the picker.
-func (s *Server) promotionControl(r *http.Request) string {
+func (s *Server) promotionControl(r *http.Request, chosen string) string {
 	list, err := s.Store.Promotions(r.Context())
 	if err != nil {
 		return alert("error", "Справочник акций не читается: "+err.Error())
@@ -57,7 +57,11 @@ func (s *Server) promotionControl(r *http.Request) string {
 			skipped++
 			continue
 		}
-		b.WriteString(`<option value="` + html.EscapeString(p.Slug) + `">` +
+		selected := ""
+		if p.Slug == chosen {
+			selected = ` selected`
+		}
+		b.WriteString(`<option value="` + html.EscapeString(p.Slug) + `"` + selected + `>` +
 			html.EscapeString(p.Name) + `</option>`)
 	}
 	b.WriteString(`</select>`)
@@ -96,20 +100,20 @@ func promotionRefreshHTML() string {
 
 // promotionBox is the picker with its own region around it, so a refresh can
 // replace it without taking the rest of the form with it.
-func (s *Server) promotionBox(r *http.Request, notice string) string {
-	return `<div class="bt-stack" id="promotion-box">` + notice + s.promotionControl(r) + `</div>`
+func (s *Server) promotionBox(r *http.Request, notice string, chosen string) string {
+	return `<div class="bt-stack" id="promotion-box">` + notice + s.promotionControl(r, chosen) + `</div>`
 }
 
 // refreshPromotions reads the site's list again.
 func (s *Server) refreshPromotions(w http.ResponseWriter, r *http.Request) {
 	if s.Promotions == nil {
 		s.writeHTML(w, s.promotionBox(r, alert("error",
-			"Загрузка списка акций недоступна в этой сборке.")))
+			"Загрузка списка акций недоступна в этой сборке."), chosenPromotion(r)))
 		return
 	}
 	n, missed, err := s.Promotions(r.Context())
 	if err != nil {
-		s.writeHTML(w, s.promotionBox(r, alert("error", "Список не загрузился: "+err.Error())))
+		s.writeHTML(w, s.promotionBox(r, alert("error", "Список не загрузился: "+err.Error()), chosenPromotion(r)))
 		return
 	}
 	msg := fmt.Sprintf("Список обновлён: акций %d.", n)
@@ -119,7 +123,16 @@ func (s *Server) refreshPromotions(w http.ResponseWriter, r *http.Request) {
 		// looks like the site running fewer promotions.
 		msg += fmt.Sprintf(" У %d не удалось прочитать пресет — они не попали в список.", missed)
 	}
-	s.writeHTML(w, s.promotionBox(r, alert("success", msg)))
+	s.writeHTML(w, s.promotionBox(r, alert("success", msg), chosenPromotion(r)))
+}
+
+// chosenPromotion is the promotion the open form has picked, for a redraw that
+// must not change it — see chosenCategory.
+func chosenPromotion(r *http.Request) string {
+	if err := parseForm(r); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(r.Form.Get("promotion_slug"))
 }
 
 // promotionOf reads the promotion a submitted form chose, with the address

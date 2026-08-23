@@ -113,6 +113,19 @@ type ProductFilter struct {
 	// overall.
 	Latest bool
 
+	// JobID keeps only the products one job collects. nil means every product,
+	// whoever collected it.
+	//
+	// Through job_products rather than through the readings, and the
+	// difference matters: a reading carries no job, because the same reading
+	// serves every job that met the product. What a job owns is the set of
+	// products it walked — see internal/collect's link — so «результаты этого
+	// задания» means every reading of those products, including ones taken
+	// before this job existed. That is the honest reading of the question
+	// somebody asks by pressing «результаты» on a job: they mean «мои товары
+	// отсюда», not «строки, записанные этим прогоном».
+	JobID *int64
+
 	// Search is free text matched against the words on a product: its name,
 	// its brand, its seller, and its article number. Taken as given — the
 	// screen that collected it from a person is where typing is tidied up, and
@@ -278,6 +291,11 @@ func productsQuery(f ProductFilter) (string, []any) {
 		// already paid for that mistake once.
 		where = append(where, "s.app_type = ?")
 		args = append(args, *f.AppType)
+	}
+	if f.JobID != nil {
+		where = append(where,
+			"EXISTS (SELECT 1 FROM job_products jp WHERE jp.nm_id = p.nm_id AND jp.job_id = ?)")
+		args = append(args, *f.JobID)
 	}
 	if q := f.Search; q != "" {
 		// Four columns and one term, «содержит», folded in every alphabet —

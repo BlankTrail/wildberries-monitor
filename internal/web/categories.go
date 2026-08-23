@@ -23,7 +23,7 @@ import (
 // «женские блузки», three thousand of which are in the list.
 
 // categoryControl is the field the constructor shows for a catalogue job.
-func (s *Server) categoryControl(r *http.Request) string {
+func (s *Server) categoryControl(r *http.Request, chosen int64) string {
 	ctx := r.Context()
 	list, err := s.Store.Categories(ctx)
 	if err != nil {
@@ -59,7 +59,11 @@ func (s *Server) categoryControl(r *http.Request) string {
 		}
 		// Indented by depth, so the tree keeps the arrangement of the site's
 		// own menu — the one somebody already knows their way around.
-		b.WriteString(`<option value="` + strconv.FormatInt(c.ID, 10) + `">` +
+		selected := ""
+		if c.ID == chosen {
+			selected = ` selected`
+		}
+		b.WriteString(`<option value="` + strconv.FormatInt(c.ID, 10) + `"` + selected + `>` +
 			strings.Repeat("&nbsp;&nbsp;&nbsp;", min(c.Depth, 4)) +
 			html.EscapeString(c.Title()) + `</option>`)
 	}
@@ -93,8 +97,12 @@ func (s *Server) categoryState(r *http.Request, total, skipped int) string {
 
 // categoryRefreshHTML is the button that re-downloads the directory.
 func categoryRefreshHTML() string {
+	// data-with carries the current selection into the refresh, so a directory
+	// reloaded while a saved job is open comes back with that job's own node
+	// still picked. Without it, pressing «обновить» during an edit silently
+	// moves the job to whichever category happens to be first.
 	return `<button class="bt-btn bt-btn--secondary bt-btn--sm" type="submit" form="` +
-		categoryRefreshForm + `">Обновить справочник</button>`
+		categoryRefreshForm + `" data-with="#job-category">Обновить справочник</button>`
 }
 
 // categoryRefreshForm is the id of the empty form that button submits, and
@@ -123,24 +131,33 @@ func refreshForms() string {
 
 // categoryBox is the picker with its own region around it, so a refresh can
 // replace it without taking the rest of the form with it.
-func (s *Server) categoryBox(r *http.Request, notice string) string {
-	return `<div class="bt-stack" id="category-box">` + notice + s.categoryControl(r) + `</div>`
+func (s *Server) categoryBox(r *http.Request, notice string, chosen int64) string {
+	return `<div class="bt-stack" id="category-box">` + notice + s.categoryControl(r, chosen) + `</div>`
 }
 
 // refreshCategories downloads the directory again.
 func (s *Server) refreshCategories(w http.ResponseWriter, r *http.Request) {
 	if s.Categories == nil {
 		s.writeHTML(w, s.categoryBox(r, alert("error",
-			"Загрузка справочника недоступна в этой сборке.")))
+			"Загрузка справочника недоступна в этой сборке."), chosenCategory(r)))
 		return
 	}
 	n, err := s.Categories(r.Context())
 	if err != nil {
-		s.writeHTML(w, s.categoryBox(r, alert("error", "Справочник не загрузился: "+err.Error())))
+		s.writeHTML(w, s.categoryBox(r, alert("error", "Справочник не загрузился: "+err.Error()), chosenCategory(r)))
 		return
 	}
 	s.writeHTML(w, s.categoryBox(r, alert("success",
-		fmt.Sprintf("Справочник обновлён: узлов %d.", n))))
+		fmt.Sprintf("Справочник обновлён: узлов %d.", n)), chosenCategory(r)))
+}
+
+// chosenCategory is the node the open form has picked, for a redraw that must
+// not change it.
+func chosenCategory(r *http.Request) int64 {
+	if err := parseForm(r); err != nil {
+		return 0
+	}
+	return atoi64(r.Form.Get("category_id"))
 }
 
 // categoryOf reads the node a submitted form chose, with the query the job will

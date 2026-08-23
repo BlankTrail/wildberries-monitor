@@ -413,15 +413,29 @@ dialog.bt-modal:not([open]) {
    half the labels off the edge. The viewport still wins on a narrow screen. */
 dialog.bt-modal {
   margin: auto;
-  max-width: min(64rem, calc(100vw - 2 * var(--space-6)));
+  max-width: min(76rem, calc(100vw - 2 * var(--space-4)));
   width: 100%;
-  max-height: min(85vh, 60rem);
+  max-height: min(88vh, 64rem);
   padding: 0;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--bg-card);
   color: var(--text);
-  overflow: auto;
+  /* Down the page only. The dialog kept a horizontal scrollbar under content
+     that fitted across it, and the cause is the design system's own
+     display:flex: a flex child's min-width is auto, so it refuses to shrink
+     below its content and pushes the box wider than its own max-width. The
+     shrink is restored below; the axis is closed here so that whatever else
+     ever overflows sideways cannot put the bar back. */
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+/* The shrink itself. Without it the rule above hides the overflow instead of
+   preventing it, and a wide table inside would lose its right-hand columns
+   with nothing to scroll them back. */
+dialog.bt-modal > * {
+  min-width: 0;
 }
 
 dialog.bt-modal::backdrop {
@@ -1524,4 +1538,19 @@ dialog.bt-modal > #settings-body {
   top: 0;
   z-index: 1;
   background: var(--bg-card);
+}
+
+/* ---- long values in a table --------------------------------------------- */
+
+/* A cell that keeps its column's width whatever is in it.
+
+   The tasks list is the case: a job named after the address it collects — «профиль:
+   разбор https://www.wildberries.ru/catalog/190496459/detail.aspx» — pushed the
+   table past the screen, and the row's own buttons went with it. The full text
+   stays reachable: every cell drawn this way carries it as a title. */
+.bt-cell-clip {
+  max-width: 22rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }

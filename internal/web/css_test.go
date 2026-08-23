@@ -112,6 +112,20 @@ func TestStyles_TheSettingsDialogIsWiderThanTheSystemsDefault(t *testing.T) {
 	if !strings.Contains(block, "100vw") {
 		t.Error("ширина не считается от окна — на узком экране диалог вылезет за край")
 	}
+
+	// The dialog scrolls down the page and not across it. A horizontal
+	// scrollbar stayed under content that fitted, because the design system's
+	// display:flex leaves each child at min-width:auto — a child that will not
+	// shrink below its content pushes the box past its own max-width. Both
+	// halves are needed: closing the axis alone hides an overflow instead of
+	// preventing it, and a wide table inside would lose its right-hand columns
+	// with nothing left to scroll them back.
+	if !strings.Contains(block, "overflow-x: hidden") || !strings.Contains(block, "overflow-y: auto") {
+		t.Error("окно настроек прокручивается вбок — полоса под формой, которой некуда ехать")
+	}
+	if !strings.Contains(ruleBody(string(ours), "dialog.bt-modal > * {"), "min-width: 0") {
+		t.Error("содержимое окна не сжимается — обрежется вместо того, чтобы поместиться")
+	}
 }
 
 // ruleBody is the declarations of one CSS rule, by its exact opening line.
@@ -206,5 +220,53 @@ func TestScreens_TheTablesThatGrowAreCapped(t *testing.T) {
 		if !strings.Contains(string(src), "bt-table-wrap--capped") {
 			t.Errorf("%s: длинная таблица снова без ограничения высоты", file)
 		}
+	}
+}
+
+func TestStyles_ALongValueDoesNotStretchItsTable(t *testing.T) {
+	// A job named after the address it collects is a hundred characters wide.
+	// The tasks table it stretched went past the screen and took the row's own
+	// buttons with it.
+	ours, err := staticFS.ReadFile("static/monitor.css")
+	if err != nil {
+		t.Fatalf("monitor.css: %v", err)
+	}
+	block := ruleBody(string(ours), ".bt-cell-clip {")
+	if block == "" {
+		t.Fatal("в monitor.css нет правила для длинных значений в ячейке")
+	}
+	for _, want := range []string{"max-width", "overflow: hidden", "text-overflow: ellipsis", "white-space: nowrap"} {
+		if !strings.Contains(block, want) {
+			t.Errorf("в правиле нет %q — ячейка растянет колонку", want)
+		}
+	}
+}
+
+func TestScripts_AComposerDoesNotOverwriteWhatTheServerFilledIn(t *testing.T) {
+	// The composer writes «every 3h» into the field it drives, computed from
+	// its own controls, and it does that once as it is wired. Over a form the
+	// server opened on a saved job that is destructive: opening a six-hourly
+	// job to change its thread count and saving would silently make it hourly
+	// — or, with «без расписания» ticked, stop it running at all.
+	//
+	// The server's half of this is tested through the rendered form (see
+	// TestEditJob_ASavedScheduleOpensAsASchedule) and it is not enough on its
+	// own: with the box unticked the composer takes the other branch and
+	// composes a string from its defaults regardless.
+	raw, err := staticFS.ReadFile("static/app.js")
+	if err != nil {
+		t.Fatalf("app.js: %v", err)
+	}
+	script := string(raw)
+	at := strings.Index(script, "data-compose")
+	if at < 0 {
+		t.Fatal("в app.js нет композитора расписания — проверять нечего")
+	}
+	block := script[at:]
+	if end := strings.Index(block, "\n    root.querySelectorAll"); end > 0 {
+		block = block[:end]
+	}
+	if !strings.Contains(block, `target.value.trim() !== ""`) {
+		t.Error("композитор не смотрит, есть ли уже значение — перезапишет сохранённое расписание")
 	}
 }
