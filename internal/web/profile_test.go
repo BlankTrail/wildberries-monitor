@@ -478,3 +478,35 @@ func TestProfile_ARefusedPasteSaysWhyAndKeepsTheScreen(t *testing.T) {
 		t.Errorf("отказ разбора не показан:\n%s", firstLines(body))
 	}
 }
+
+func TestProfile_TheTabWalksTheStagesWithoutAReload(t *testing.T) {
+	// The panel follows one job. When that job ends the chain moves to the
+	// next stage, which is a different job — and nothing would ever start
+	// following it, so the tab froze on «Идёт сбор: разбираем ссылку» for the
+	// whole of a collection that was going fine.
+	srv := newServer(t)
+	id, err := srv.Store.SaveProfile(t.Context(), store.ProfileRow{
+		Name: "мой", SourceInput: "141504066",
+	})
+	if err != nil {
+		t.Fatalf("SaveProfile: %v", err)
+	}
+	if err := srv.Store.SetProfileJobs(t.Context(), id, 7, 0, 0); err != nil {
+		t.Fatalf("SetProfileJobs: %v", err)
+	}
+	if err := srv.Store.StartProfileChain(t.Context(), id, store.StageCatalog, 7); err != nil {
+		t.Fatalf("StartProfileChain: %v", err)
+	}
+
+	body := get(t, srv, "/profile", "correct horse").Body.String()
+	if !strings.Contains(body, `data-done-post="/profile/step?id=`+itoa(id)+`"`) {
+		t.Errorf("по окончании прогона вкладка ничего не делает:\n%s", firstLines(body))
+	}
+	if !strings.Contains(body, `data-done-target="#profile-body"`) {
+		t.Errorf("не сказано, что перерисовывать:\n%s", firstLines(body))
+	}
+	// The jobs screen wants none of it: its list already says the run ended.
+	if strings.Contains(runLiveHTML(7), "data-done-post") {
+		t.Error("панель на вкладке заданий тоже что-то дёргает по окончании")
+	}
+}

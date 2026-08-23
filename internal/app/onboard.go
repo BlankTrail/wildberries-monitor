@@ -228,8 +228,20 @@ func (a *App) stepProfileOnce(ctx context.Context, p store.ProfileRow) (store.Pr
 	// Waiting on a job is the common case, and it is the first question:
 	// nothing else can be decided until the run it is watching has ended.
 	if p.StageJob != 0 {
-		state, failure, ok := a.runState(ctx, p.StageJob)
+		state, failure, ok := a.runState(ctx, p.StageJob, p.StageRun)
 		if !ok {
+			if a.orphaned(ctx, p.StageJob) {
+				// Started again rather than failed: the runner resumes a run
+				// it finds unfinished, so this carries on from where the stop
+				// interrupted it instead of walking the storefront twice.
+				if err := a.StartJob(ctx, p.StageJob); err != nil {
+					a.Log.Printf("профиль %q: не поднять прерванное задание %d: %v",
+						p.Name, p.StageJob, err)
+				} else {
+					a.Log.Printf("профиль %q: задание %d было прервано, продолжаем",
+						p.Name, p.StageJob)
+				}
+			}
 			return store.ProfileRow{}, false // still going
 		}
 		if state != store.RunDone {
@@ -289,17 +301,25 @@ func (a *App) stepProfileOnce(ctx context.Context, p store.ProfileRow) (store.Pr
 	return next, true
 }
 
-// runState is how a job's last run ended, and whether it has ended at all.
-func (a *App) runState(ctx context.Context, jobID int64) (string, string, bool) {
+// runState is how the run a stage is waiting on ended, and whether it has.
+//
+// after is the newest run that existed when the stage started its job. The
+// chain reuses one job per stage across rescans, so without it the previous
+// pass's finished run answered «done» for as long as this pass's had not
+// opened — and the chain skipped a stage it had only just begun.
+//
+// The third value is the one to read first: false means «ещё идёт», and the
+// two before it are meaningless then.
+func (a *App) runState(ctx context.Context, jobID, after int64) (string, string, bool) {
 	runs, err := a.Store.Runs(ctx, jobID, 1)
 	if err != nil {
 		a.Log.Printf("профиль: прогоны задания %d: %v", jobID, err)
 		return "", "", false
 	}
-	if len(runs) == 0 {
-		// The job exists and has never run. Treated as «ещё идёт» rather than
-		// as a failure: the start is asynchronous, and a tick that landed
-		// between the save and the first row would otherwise call it broken.
+	if len(runs) == 0 || runs[0].ID <= after {
+		// Never run, or run only before this stage asked. Treated as «ещё
+		// идёт» rather than as a failure: the start is asynchronous, and a
+		// tick that landed between it and the first row would call it broken.
 		return "", "", false
 	}
 	r := runs[0]
@@ -307,6 +327,30 @@ func (a *App) runState(ctx context.Context, jobID int64) (string, string, bool) 
 		return "", "", false
 	}
 	return r.State, r.Error, true
+}
+
+// orphaned reports a run that is open with nothing behind it.
+//
+// The program stopped while it was going. Nobody resumes it, so a profile
+// waiting on that run waits at «идёт сбор» for as long as the database lives —
+// which is what a restart in the middle of a storefront walk used to cost.
+//
+// No race with a start: the run row is written from inside Scheduler.Start,
+// after it has marked the job running, so a row that exists and is open is a
+// row the scheduler knows about unless the process that made it is gone.
+func (a *App) orphaned(ctx context.Context, jobID int64) bool {
+	if a.Scheduler == nil || a.Scheduler.Running(jobID) {
+		return false
+	}
+	runs, err := a.Store.Runs(ctx, jobID, 1)
+	if err != nil || len(runs) == 0 || runs[0].FinishedAt != nil {
+		return false
+	}
+	// And it began before this program did. A run opened since then and not
+	// running is one whose goroutine has not reached the scheduler yet, or one
+	// somebody else's process owns — picking either up would be starting a
+	// second walk over the same storefront.
+	return runs[0].StartedAt < a.startedAt
 }
 
 // profileResolve reads the pasted card, which is what names the seller.
@@ -340,10 +384,15 @@ func (a *App) profileResolve(ctx context.Context, p store.ProfileRow) error {
 			return err
 		}
 	}
+	// Read before the start: this stage's run is the first one past it.
+	after, err := a.Store.LatestRunID(ctx, id)
+	if err != nil {
+		return err
+	}
 	if err := a.StartJob(ctx, id); err != nil {
 		return fmt.Errorf("запуск разбора ссылки: %w", err)
 	}
-	return a.Store.SetProfileStage(ctx, p.ID, store.StageCatalog, id)
+	return a.Store.SetProfileStage(ctx, p.ID, store.StageCatalog, id, after)
 }
 
 // profileCatalog walks the seller's storefront and their own record.
@@ -379,12 +428,16 @@ func (a *App) profileCatalog(ctx context.Context, p store.ProfileRow) error {
 			return err
 		}
 	}
+	after, err := a.Store.LatestRunID(ctx, id)
+	if err != nil {
+		return err
+	}
 	if err := a.StartJob(ctx, id); err != nil {
 		return fmt.Errorf("запуск сбора ассортимента: %w", err)
 	}
 	// The next stage waits on this job; the stage after it is decided when
 	// this one lands.
-	return a.Store.SetProfileStage(ctx, p.ID, store.StagePhrases, id)
+	return a.Store.SetProfileStage(ctx, p.ID, store.StagePhrases, id, after)
 }
 
 // profilePhrases derives the candidates from what the catalogue collected.
@@ -468,7 +521,7 @@ func (a *App) profilePhrases(ctx context.Context, p store.ProfileRow) error {
 	a.Log.Printf("профиль %q: фразы собраны с %d товаров, кандидатов %d",
 		p.Name, len(from), made)
 	// No job, so the chain carries straight on rather than waiting a tick.
-	return a.Store.SetProfileStage(ctx, p.ID, store.StageExpand, 0)
+	return a.Store.SetProfileStage(ctx, p.ID, store.StageExpand, 0, 0)
 }
 
 // profileExpand asks the site's own search what people type instead — spec
@@ -488,7 +541,7 @@ func (a *App) profileExpand(ctx context.Context, p store.ProfileRow) error {
 	// run at all when there are none, which is the same decision made once.
 	// What this does check is whether there is anything to ask with.
 	if a.Hints == nil {
-		return a.Store.SetProfileStage(ctx, p.ID, store.StageCheck, 0)
+		return a.Store.SetProfileStage(ctx, p.ID, store.StageCheck, 0, 0)
 	}
 
 	asked, added := 0, 0
@@ -555,7 +608,7 @@ func (a *App) profileExpand(ctx context.Context, p store.ProfileRow) error {
 			break
 		}
 	}
-	return a.Store.SetProfileStage(ctx, p.ID, store.StageCheck, 0)
+	return a.Store.SetProfileStage(ctx, p.ID, store.StageCheck, 0, 0)
 }
 
 // expandedAlready reports whether this phrase has already been sent to the
@@ -602,7 +655,7 @@ func (a *App) profileCheck(ctx context.Context, p store.ProfileRow) error {
 		// should reach the competitors anyway — with nothing in them, which
 		// is the truth.
 		a.Log.Printf("профиль %q: проверять нечего — из названий не вышло ни одной фразы", p.Name)
-		return a.Store.SetProfileStage(ctx, p.ID, store.StageRivals, 0)
+		return a.Store.SetProfileStage(ctx, p.ID, store.StageRivals, 0, 0)
 	}
 
 	// A phrase job rather than a positions one, and the difference is the
@@ -636,11 +689,15 @@ func (a *App) profileCheck(ctx context.Context, p store.ProfileRow) error {
 			return err
 		}
 	}
+	after, err := a.Store.LatestRunID(ctx, id)
+	if err != nil {
+		return err
+	}
 	if err := a.StartJob(ctx, id); err != nil {
 		return fmt.Errorf("запуск проверки фраз: %w", err)
 	}
 	a.Log.Printf("профиль %q: проверка %d фраз на %d товарах", p.Name, len(texts), len(products))
-	return a.Store.SetProfileStage(ctx, p.ID, store.StageRivals, id)
+	return a.Store.SetProfileStage(ctx, p.ID, store.StageRivals, id, after)
 }
 
 // profileRivals computes who stands beside these products in these phrases.
@@ -672,5 +729,5 @@ func (a *App) profileRivals(ctx context.Context, p store.ProfileRow) error {
 	}
 	a.Log.Printf("профиль %q: сбор завершён — рабочих фраз %d, конкурентов %d",
 		p.Name, len(working), len(found))
-	return a.Store.SetProfileStage(ctx, p.ID, store.StageDone, 0)
+	return a.Store.SetProfileStage(ctx, p.ID, store.StageDone, 0, 0)
 }

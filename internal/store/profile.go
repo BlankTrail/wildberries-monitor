@@ -74,6 +74,14 @@ type ProfileRow struct {
 	// is waiting on — zero when the stage needs none.
 	Stage    string
 	StageJob int64
+	// StageRun is the newest run that existed when the stage started its job,
+	// which is what tells this stage's run from the ones before it.
+	//
+	// The chain reuses one job per stage across rescans. Without this the
+	// question «has the run I started finished?» was answered by the previous
+	// pass's finished run for as long as the new one had not opened — so the
+	// chain skipped a stage it had only just begun.
+	StageRun int64
 	// ResolveJob, CatalogJob and CheckJob are the three jobs the chain reuses.
 	// Kept rather than recreated per run: a rescan that made new ones would
 	// fill the jobs screen with a copy a week, and the history of one
@@ -239,7 +247,7 @@ func (s *Store) SaveProfile(ctx context.Context, p ProfileRow) (int64, error) {
 func (s *Store) Profiles(ctx context.Context) ([]ProfileRow, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, name, source_input, seller_id, created_at, updated_at,
-		       stage, stage_job, resolve_job, catalog_job, check_job, regions, fields, max_pages,
+		       stage, stage_job, stage_run, resolve_job, catalog_job, check_job, regions, fields, max_pages,
 		       phrases_per_product, phrase_products,
 		       subjects, suggest_limit, suggest_rounds,
 		       schedule, enabled, started_at, finished_at, failure
@@ -267,7 +275,7 @@ func (s *Store) Profiles(ctx context.Context) ([]ProfileRow, error) {
 func (s *Store) Profile(ctx context.Context, id int64) (ProfileRow, error) {
 	p, err := scanProfile(s.db.QueryRowContext(ctx, `
 		SELECT id, name, source_input, seller_id, created_at, updated_at,
-		       stage, stage_job, resolve_job, catalog_job, check_job, regions, fields, max_pages,
+		       stage, stage_job, stage_run, resolve_job, catalog_job, check_job, regions, fields, max_pages,
 		       phrases_per_product, phrase_products,
 		       subjects, suggest_limit, suggest_rounds,
 		       schedule, enabled, started_at, finished_at, failure
@@ -290,7 +298,7 @@ func scanProfile(row scanner) (ProfileRow, error) {
 	var regions, fields, subjects string
 	var enabled int64
 	if err := row.Scan(&p.ID, &p.Name, &p.SourceInput, &p.SellerID, &p.CreatedAt, &p.UpdatedAt,
-		&p.Stage, &p.StageJob, &p.ResolveJob, &p.CatalogJob, &p.CheckJob, &regions, &fields, &p.MaxPages,
+		&p.Stage, &p.StageJob, &p.StageRun, &p.ResolveJob, &p.CatalogJob, &p.CheckJob, &regions, &fields, &p.MaxPages,
 		&p.PhrasesPerProduct, &p.PhraseProducts,
 		&subjects, &p.SuggestLimit, &p.SuggestRounds,
 		&p.Schedule, &enabled, &p.StartedAt, &p.FinishedAt, &p.Failure); err != nil {
@@ -350,7 +358,11 @@ func (s *Store) SaveProfilePlan(ctx context.Context, p ProfileRow) error {
 // The stage and the job it waits on together, because they are one fact: a
 // stage with the wrong job under it is a chain waiting on something that
 // finished last week.
-func (s *Store) SetProfileStage(ctx context.Context, id int64, stage string, jobID int64) error {
+// SetProfileStage moves the chain, and says which run the new stage waits on.
+//
+// after is the newest run that existed before the stage started its job: this
+// stage's own run is the first one past it. Zero when the stage waits on no job.
+func (s *Store) SetProfileStage(ctx context.Context, id int64, stage string, jobID, after int64) error {
 	now := s.now().UTC().Unix()
 	switch stage {
 	case StageDone:
@@ -364,8 +376,8 @@ func (s *Store) SetProfileStage(ctx context.Context, id int64, stage string, job
 	// screen that read it as one would say «собрано» about a profile with no
 	// phrases in it — so only the case above touches that column.
 	_, err := s.db.ExecContext(ctx, `
-		UPDATE profiles SET stage = ?, stage_job = ?, updated_at = ? WHERE id = ?`,
-		stage, jobID, now, id)
+		UPDATE profiles SET stage = ?, stage_job = ?, stage_run = ?, updated_at = ? WHERE id = ?`,
+		stage, jobID, after, now, id)
 	return wrapProfile(id, err)
 }
 
@@ -373,7 +385,8 @@ func (s *Store) SetProfileStage(ctx context.Context, id int64, stage string, job
 func (s *Store) StartProfileChain(ctx context.Context, id int64, stage string, jobID int64) error {
 	now := s.now().UTC().Unix()
 	_, err := s.db.ExecContext(ctx, `
-		UPDATE profiles SET stage = ?, stage_job = ?, started_at = ?, failure = '', updated_at = ?
+		UPDATE profiles SET stage = ?, stage_job = ?, stage_run = 0, started_at = ?,
+		       failure = '', updated_at = ?
 		 WHERE id = ?`, stage, jobID, now, now, id)
 	return wrapProfile(id, err)
 }
@@ -394,6 +407,36 @@ func (s *Store) SetProfileJobs(ctx context.Context, id, resolve, catalog, check 
 		 WHERE id = ?`,
 		resolve, catalog, check, s.now().UTC().Unix(), id)
 	return wrapProfile(id, err)
+}
+
+// ReopenRunForTest leaves a finished run open, the way stopping the program
+// mid-run leaves it.
+//
+// Exported for a test because there is no other way to produce the state: the
+// runner always closes what it opened, and the case worth testing is the one
+// where it never got the chance.
+func (s *Store) ReopenRunForTest(ctx context.Context, runID, startedAt int64) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE job_runs SET finished_at = NULL, state = 'running', started_at = ? WHERE id = ?`,
+		startedAt, runID)
+	if err != nil {
+		return fmt.Errorf("store: прогон %d: %w", runID, err)
+	}
+	return nil
+}
+
+// LatestRunID is the newest run of one job, or zero when it has never run.
+//
+// Read before a stage starts its job, so that the run it then waits for can be
+// told from the ones before it.
+func (s *Store) LatestRunID(ctx context.Context, jobID int64) (int64, error) {
+	var id int64
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COALESCE(MAX(id), 0) FROM job_runs WHERE job_id = ?`, jobID).Scan(&id)
+	if err != nil {
+		return 0, fmt.Errorf("store: прогоны задания %d: %w", jobID, err)
+	}
+	return id, nil
 }
 
 // SellerProductCount is how many of a seller's goods this database holds.
@@ -428,7 +471,7 @@ func (s *Store) ProfileOfResolveJob(ctx context.Context, jobID int64) (ProfileRo
 	}
 	p, err := scanProfile(s.db.QueryRowContext(ctx, `
 		SELECT id, name, source_input, seller_id, created_at, updated_at,
-		       stage, stage_job, resolve_job, catalog_job, check_job, regions, fields, max_pages,
+		       stage, stage_job, stage_run, resolve_job, catalog_job, check_job, regions, fields, max_pages,
 		       phrases_per_product, phrase_products, subjects, suggest_limit, suggest_rounds,
 		       schedule, enabled, started_at, finished_at, failure
 		  FROM profiles WHERE resolve_job = ?`, jobID))

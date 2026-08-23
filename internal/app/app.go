@@ -60,6 +60,14 @@ type App struct {
 	Engine    *engine.Engine
 	Scheduler *job.Scheduler
 
+	// startedAt is when this process came up, in whole Unix seconds.
+	//
+	// What it tells apart: a run row that is open with nothing behind it and
+	// began before this — the program was stopped while it was going, and
+	// nobody resumes it — from one that began since, whose goroutine simply
+	// has not reached the scheduler yet.
+	startedAt int64
+
 	// profileMu holds the onboarding chain to one walker.
 	//
 	// It is stepped from the tick and from every run that finishes, and the
@@ -186,7 +194,7 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 	}
 
 	a := &App{
-		Config: cfg, Store: s, Bus: events.New(),
+		Config: cfg, Store: s, Bus: events.New(), startedAt: time.Now().Unix(),
 		Password: password, Generated: generated,
 		Log: log.New(os.Stderr, "wbmon ", log.LstdFlags),
 	}

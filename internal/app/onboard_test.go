@@ -512,7 +512,7 @@ func TestProfileChain_WaitsWhileTheRunIsStillGoing(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
-	if err := a.Store.SetProfileStage(ctx, p.ID, store.StagePhrases, id); err != nil {
+	if err := a.Store.SetProfileStage(ctx, p.ID, store.StagePhrases, id, 0); err != nil {
 		t.Fatalf("SetProfileStage: %v", err)
 	}
 
@@ -635,7 +635,7 @@ func TestProfileChain_TheNeighboursAreComputedAfterTheVerdictsAreRead(t *testing
 		t.Fatalf("SavePhrase: %v", err)
 	}
 
-	if err := a.Store.SetProfileStage(ctx, p.ID, store.StageRivals, 0); err != nil {
+	if err := a.Store.SetProfileStage(ctx, p.ID, store.StageRivals, 0, 0); err != nil {
 		t.Fatalf("SetProfileStage: %v", err)
 	}
 	a.advanceProfiles(ctx)
@@ -1175,5 +1175,189 @@ func TestProfileChain_AdvancesWhenARunFinishes(t *testing.T) {
 	}
 	if p.Stage != store.StageDone {
 		t.Fatalf("цепочка встала на %q: %s", p.Stage, p.Failure)
+	}
+}
+
+func TestProfileChain_DoesNotMistakeTheLastPassesRunForThisOne(t *testing.T) {
+	// The chain reuses one job per stage across rescans, so «the newest run of
+	// that job» is the previous pass's finished run for as long as this pass's
+	// has not opened — and the chain read that as «этот этап закончился» and
+	// skipped a stage it had only just started. Nothing collected, «собрано».
+	a := newApp(t)
+	ctx := t.Context()
+	configured(t, a)
+	collecting(t, a)
+	p := aProfile(t, a, 4242)
+
+	// A first pass, walked to the storefront stage and landed.
+	if err := a.StartProfileChain(ctx, p.ID); err != nil {
+		t.Fatalf("StartProfileChain: %v", err)
+	}
+	first, _ := a.Store.Profile(ctx, p.ID)
+	seedStorefront(t, a, 4242)
+	landed(t, a, first.CatalogJob)
+
+	// A second pass over the same job. Its stage must wait for its own run,
+	// not read the one that finished a moment ago.
+	if err := a.Store.SetProfileJobs(ctx, p.ID, first.ResolveJob, first.CatalogJob, first.CheckJob); err != nil {
+		t.Fatalf("SetProfileJobs: %v", err)
+	}
+	row, _ := a.Store.Profile(ctx, p.ID)
+	after, err := a.Store.LatestRunID(ctx, row.CatalogJob)
+	if err != nil {
+		t.Fatalf("LatestRunID: %v", err)
+	}
+	if after == 0 {
+		t.Fatal("первый проход не оставил прогона — проверять нечего")
+	}
+	if err := a.Store.SetProfileStage(ctx, p.ID, store.StagePhrases, row.CatalogJob, after); err != nil {
+		t.Fatalf("SetProfileStage: %v", err)
+	}
+
+	waiting, _ := a.Store.Profile(ctx, p.ID)
+	state, _, done := a.runState(ctx, waiting.StageJob, waiting.StageRun)
+	if done {
+		t.Errorf("прошлый прогон принят за текущий: %q", state)
+	}
+}
+
+func TestProfileChain_PicksUpARunTheProgramWasStoppedIn(t *testing.T) {
+	// A run row left open by a stop has nothing behind it, and nobody resumes
+	// it: the profile waiting on that run waits at «идёт сбор» for as long as
+	// the database lives. Which is what closing the program during a storefront
+	// walk used to cost — and there is no button anywhere that repairs it,
+	// because «Собрать всё» is hidden while a chain is running.
+	a := newApp(t)
+	ctx := t.Context()
+	configured(t, a)
+	collecting(t, a)
+	p := aProfile(t, a, 4242)
+
+	if err := a.StartProfileChain(ctx, p.ID); err != nil {
+		t.Fatalf("StartProfileChain: %v", err)
+	}
+	got, _ := a.Store.Profile(ctx, p.ID)
+	landed(t, a, got.CatalogJob)
+
+	// What a stop leaves behind: the run open, nothing running it, and the
+	// profile still waiting on it. Built rather than caused, because the runner
+	// always closes what it opened — the case worth testing is the one where it
+	// never got the chance.
+	runs, err := a.Store.Runs(ctx, got.CatalogJob, 1)
+	if err != nil || len(runs) == 0 {
+		t.Fatalf("Runs: %v", err)
+	}
+	// Reopened and back-dated: an orphan is a run that began before this
+	// program did, which is the only thing that tells it from a run whose
+	// goroutine has simply not reached the scheduler yet.
+	if err := a.Store.ReopenRunForTest(ctx, runs[0].ID, a.startedAt-60); err != nil {
+		t.Fatalf("ReopenRunForTest: %v", err)
+	}
+	if err := a.Store.SetProfileStage(ctx, p.ID, store.StagePhrases,
+		got.CatalogJob, runs[0].ID-1); err != nil {
+		t.Fatalf("SetProfileStage: %v", err)
+	}
+	if !a.orphaned(ctx, got.CatalogJob) {
+		t.Fatal("брошенный прогон не опознан")
+	}
+
+	// The chain picks it up rather than waiting on it forever.
+	seedStorefront(t, a, 4242)
+	a.advanceProfiles(ctx)
+	settled(t, "прерванное задание не подняли", func() bool {
+		return !a.orphaned(ctx, got.CatalogJob)
+	})
+}
+
+func TestResolveProfile_ReadsTheCardAgainEvenWhenTheSellerIsKnown(t *testing.T) {
+	// «Разобрать» is a fresh reading of the link, and that is the whole of what
+	// the press asks for: the card may name a different seller than last time,
+	// or a different name for the same one. A rescan does not — a card since
+	// delisted would fail a rescan of a perfectly healthy seller — so the two
+	// entry points differ here and nowhere else.
+	a := newApp(t)
+	ctx := t.Context()
+	configured(t, a)
+	collecting(t, a)
+	p := aProfile(t, a, 4242)
+
+	// The button: the seller is known, so it walks the storefront first.
+	if err := a.StartProfileChain(ctx, p.ID); err != nil {
+		t.Fatalf("StartProfileChain: %v", err)
+	}
+	byButton, _ := a.Store.Profile(ctx, p.ID)
+	if byButton.StageJob != byButton.CatalogJob {
+		t.Errorf("кнопка начала не с витрины: ждёт %d, витрина %d",
+			byButton.StageJob, byButton.CatalogJob)
+	}
+
+	// The paste: the same profile, read again from the link.
+	if _, err := a.ResolveProfile(ctx, "141504066"); err != nil {
+		t.Fatalf("ResolveProfile: %v", err)
+	}
+	byPaste, _ := a.Store.Profile(ctx, p.ID)
+	if byPaste.ResolveJob == 0 || byPaste.StageJob != byPaste.ResolveJob {
+		t.Errorf("разбор не перечитал карточку: ждёт %d, разбор %d",
+			byPaste.StageJob, byPaste.ResolveJob)
+	}
+}
+
+func TestStepProfile_DispatchesOnTheRowTheLandedRunWrote(t *testing.T) {
+	// The run that just landed is the thing that wrote to this profile — the
+	// resolve writes the seller — and the copy the caller is holding was read
+	// before it did. Acting on the stale one sends the storefront walk at a
+	// profile whose seller is still nil, which is a job for supplier zero and,
+	// one line earlier, a nil dereference.
+	a := newApp(t)
+	ctx := t.Context()
+	configured(t, a)
+	collecting(t, a)
+
+	id, err := a.Store.SaveProfile(ctx, store.ProfileRow{
+		Name: "мой", SourceInput: "141504066",
+	})
+	if err != nil {
+		t.Fatalf("SaveProfile: %v", err)
+	}
+	if err := a.StartProfileChain(ctx, id); err != nil {
+		t.Fatalf("StartProfileChain: %v", err)
+	}
+	stale, _ := a.Store.Profile(ctx, id)
+	landed(t, a, stale.ResolveJob)
+
+	// What the resolve run writes, after the caller read its copy.
+	seller := int64(4242)
+	if _, err := a.Store.SaveProfile(ctx, store.ProfileRow{
+		ID: id, Name: "мой", SourceInput: "141504066", SellerID: &seller,
+	}); err != nil {
+		t.Fatalf("SaveProfile: %v", err)
+	}
+	// Waiting on that landed run again, which is the state the tick reads.
+	if err := a.Store.SetProfileStage(ctx, id, store.StageCatalog, stale.ResolveJob, 0); err != nil {
+		t.Fatalf("SetProfileStage: %v", err)
+	}
+
+	// Dispatched with the copy from before the seller was written.
+	if _, ok := a.stepProfileOnce(ctx, stale); !ok {
+		t.Fatal("шаг не сделан")
+	}
+
+	after, err := a.Store.Profile(ctx, id)
+	if err != nil {
+		t.Fatalf("Profile: %v", err)
+	}
+	if after.Stage == store.StageFailed {
+		t.Fatalf("цепочка остановилась на устаревшей копии: %s", after.Failure)
+	}
+	if after.CatalogJob == 0 {
+		t.Fatal("задание на витрину не создано")
+	}
+	made, err := job.Load(ctx, a.Store, after.CatalogJob)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if made.SupplierID != seller {
+		t.Errorf("витрину собирают у продавца %d, а карточка назвала %d",
+			made.SupplierID, seller)
 	}
 }
