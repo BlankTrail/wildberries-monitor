@@ -649,3 +649,76 @@ func TestResults_OnePressCollapsesARowPerReadingToARowPerProduct(t *testing.T) {
 		t.Errorf("выгрузка не несёт условие:\n%s", firstLines(one))
 	}
 }
+
+func TestStock_TheCellExplainsWhereItsNumberComesFrom(t *testing.T) {
+	// The row's figure is one region's. Two rows of the same product with two
+	// different numbers is the moment somebody asks «а сколько же всего», and
+	// this is where that is answered — with the reason the two cannot simply
+	// be added.
+	srv := newServer(t)
+	ctx := t.Context()
+	at := time.Date(2026, 8, 20, 9, 0, 0, 0, time.UTC)
+
+	// One warehouse both regions can reach, and one each cannot.
+	stockIn(t, srv, 100, "-1257786", at, map[int64]int64{507: 40, 1733: 60})
+	stockIn(t, srv, 100, "-5887751", at.Add(time.Minute), map[int64]int64{507: 40, 2100: 30})
+
+	body := get(t, srv, "/results/stock?nm=100", "").Body.String()
+	if !strings.Contains(body, "130") {
+		t.Errorf("не назван общий остаток 130:\n%s", firstLines(body))
+	}
+	for _, want := range []string{"не сумма по регионам", "посчитан один раз", "дважды"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("не объяснено, почему это не сумма: нет %q", want)
+		}
+	}
+	if !strings.Contains(body, "507") {
+		t.Error("нет разбивки по складам")
+	}
+	_ = ctx
+}
+
+func TestStock_WithNothingCollectedItSaysSo(t *testing.T) {
+	srv := newServer(t)
+	body := get(t, srv, "/results/stock?nm=100", "").Body.String()
+	if !strings.Contains(body, "ничего не собрано") {
+		t.Errorf("пустой ответ вместо объяснения:\n%s", firstLines(body))
+	}
+}
+
+// stockIn files one reading of one product for one region, with stock spread
+// over the named warehouses.
+func stockIn(t *testing.T, srv *Server, nmID int64, dest string, at time.Time, stock map[int64]int64) {
+	t.Helper()
+	srv.Store.SetClock(func() time.Time { return at })
+
+	var stocks []wb.Stock
+	for wh, qty := range stock {
+		stocks = append(stocks, wb.Stock{WarehouseID: wh, Qty: qty})
+	}
+	p := listing(nmID, 1, 99900, at)
+	p.Dest = dest
+	p.Sizes = []wb.Size{{Name: "M", PriceProduct: ptrTo(int64(99900)), Stocks: stocks}}
+
+	if _, err := srv.Store.SaveProduct(t.Context(), p, ""); err != nil {
+		t.Fatalf("SaveProduct: %v", err)
+	}
+}
+
+func TestResults_TheStockCellOpensTheExplanation(t *testing.T) {
+	// Two rows of one product with two different stock numbers is the moment
+	// the question arises, and the cell that raises it is where the answer
+	// belongs. Drawn as a plain number, the panel exists and nothing reaches
+	// it.
+	srv := newServer(t)
+	at := time.Date(2026, 8, 20, 9, 0, 0, 0, time.UTC)
+	stockIn(t, srv, 100, "-1257786", at, map[int64]int64{507: 40})
+
+	body := get(t, srv, "/results?cols=nm_id,total_quantity", "").Body.String()
+	if !strings.Contains(body, `data-get="/results/stock?nm=100"`) {
+		t.Errorf("остаток в таблице не открывает разбор:\n%s", firstLines(body))
+	}
+	if !strings.Contains(body, `id="results-detail"`) {
+		t.Error("на экране нет места, куда этот разбор ляжет")
+	}
+}

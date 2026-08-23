@@ -127,6 +127,10 @@ func (s *Server) resultsHTML(r *http.Request) (string, error) {
 	}
 	b.WriteString(pager(q, page, total, shown))
 	b.WriteString(s.exportButtons(r, q))
+	// Where a stock cell puts its answer. Empty until asked, and inside the
+	// section so that a redraw of the table clears an explanation of a row
+	// that may no longer be on it.
+	b.WriteString(`<div id="results-detail"></div>`)
 	b.WriteString(`</section>`)
 	return b.String(), nil
 }
@@ -214,6 +218,13 @@ func resultsCell(q url.Values, names map[int64]string, row store.ProductRow, c w
 	value := text
 	if c.Key == "dest" {
 		text = regionLabel(names, value)
+	}
+
+	// The stock number opens rather than narrows: the row's figure is one
+	// region's, and «почему в Москве 120, а в Пензе 80, и сколько же всего» is
+	// the question it raises.
+	if c.Key == "total_quantity" {
+		return stockCell(row.NmID, text)
 	}
 
 	var narrowed url.Values

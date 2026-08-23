@@ -312,6 +312,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /rules/targets/delete", s.auth(http.HandlerFunc(s.deleteTarget)))
 	mux.Handle("GET /results", s.auth(http.HandlerFunc(s.resultsPage)))
 	mux.Handle("GET /results/table", s.auth(http.HandlerFunc(s.resultsFragment)))
+	mux.Handle("GET /results/stock", s.auth(http.HandlerFunc(s.stockPanel)))
 	mux.Handle("GET /results/export", s.auth(http.HandlerFunc(s.exportHandler)))
 	mux.Handle("GET /live", s.auth(http.HandlerFunc(s.live)))
 	mux.Handle("GET /track", s.auth(http.HandlerFunc(s.trackPage)))
