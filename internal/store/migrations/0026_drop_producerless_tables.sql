@@ -1,0 +1,41 @@
+-- Three tables that were declared ahead of their producers and never given
+-- any: ad_placements, promos, promo_items.
+--
+-- Migration 0003 declared them on a sound argument — spec section 5.1 lists
+-- them, and adding a table to a database holding a year of history is cheap
+-- while rewriting one is not. What the argument did not anticipate is where
+-- the producers landed when they arrived a milestone later. The ads job writes
+-- its readings into shelves and shelf_items; the promotion job writes its own
+-- into positions, under the promotion's own name. Both are the general tables
+-- the rest of the product already reads, and neither ever wrote a row here.
+--
+-- Left standing, an empty table is worse than a missing one, because something
+-- eventually reads it. Something did: the comparison screen answered «реклама»
+-- out of ad_placements, so the flag was false for every product in every
+-- search and the screen said exactly the same thing about a seat somebody paid
+-- for and a seat nobody did. That is the cost of keeping a table nothing
+-- fills — not the disk, the reader who believes it.
+--
+-- What is lost with them, said plainly rather than left to be discovered:
+--
+--   * bid_minor and bid_currency, a competitor's advertising spend. WB
+--     stopped publishing it; where the payload used to carry a cpm figure it
+--     now carries undecodable ciphertext. Spec section 4.6's «по какой ставке»
+--     has no source in the public payloads and no table here would have made
+--     one appear.
+--   * slice_fingerprint, which existed for a "write only when the slice
+--     changed" comparison that shelves does its own way.
+--   * promos.starts_at, promos.ends_at and promo_items.price — a promotion's
+--     dates and its members' prices as a promotion. The membership itself
+--     survives, because that is what the promotion job actually collects: its
+--     readings are positions under a «promo:» query, and the comparison now
+--     reads them.
+--
+-- Should a producer for any of this ever exist, the table comes back in its
+-- own migration, shaped by what that producer actually returns rather than by
+-- what was guessed before there was one.
+--
+-- promo_items first: it has the foreign key.
+DROP TABLE IF EXISTS promo_items;
+DROP TABLE IF EXISTS promos;
+DROP TABLE IF EXISTS ad_placements;

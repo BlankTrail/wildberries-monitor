@@ -58,13 +58,11 @@ var wantPrimaryKeys = map[string][]string{
 	"events":                   {"id"},
 	"event_changes":            {"event_id", "position"},
 
-	// Task 4: the rest of spec section 5.1, none of it with a producer yet.
-	"ad_placements": {"id"},
-	"promos":        {"id"},
-	// The reading is part of the key: membership is what promo_items exists
-	// to answer, and a table that only knew the current price could not.
-	"promo_items": {"promo_id", "nm_id", "ts"},
-	"profiles":    {"id"},
+	// Task 4: the rest of spec section 5.1. Three of its tables — the ad
+	// slices and the two promotion ones — were dropped in migration 0026:
+	// their producers, when they arrived, wrote into shelves and positions
+	// instead, and an empty table is only waiting for somebody to read it.
+	"profiles": {"id"},
 	// One membership kind lives at the same key as the others: is this
 	// entity_id already a member of this profile under this kind.
 	"profile_items": {"profile_id", "kind", "entity_id"},
@@ -133,13 +131,11 @@ var wantIndexes = map[string][]string{
 	"idx_events_nm_observed_at":   {"nm_id", "observed_at"},
 	"idx_events_kind_observed_at": {"kind", "observed_at"},
 
-	// Task 4: the rest of spec section 5.1.
-	//
-	// The third index spec section 5.2 names, for the table it names as the
-	// fastest-growing one in the schema.
-	"idx_ad_placements_query_dest_ts": {"query", "dest", "ts"},
-	"idx_ad_placements_nm_ts":         {"nm_id", "ts"},
-	"idx_promo_items_nm_ts":           {"nm_id", "ts"},
+	// Task 4: the rest of spec section 5.1. The three indexes that belonged to
+	// the ad and promotion tables went with them in migration 0026 — including
+	// the one spec section 5.2 named for «the fastest-growing table in the
+	// schema», which in the end never grew at all because nothing wrote to it.
+	// What the ads job does collect is indexed on shelves.
 	"idx_phrases_profile_state":       {"profile_id", "state"},
 	"idx_benchmarks_nm_query_dest_ts": {"nm_id", "query", "dest", "ts"},
 	"idx_job_runs_job_started":        {"job_id", "started_at"},

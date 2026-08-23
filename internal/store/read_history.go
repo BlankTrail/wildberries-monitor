@@ -101,9 +101,9 @@ func (s *Store) SnapshotHistory(ctx context.Context, nmID int64, dest string, ap
 // another region, or measured as another audience is a different measurement,
 // and drawing them as one line is drawing a line nobody ever saw.
 //
-// Paid placement is not here. ad_placements is its own table with its own
-// owner per row (see 0001_core.sql), and a chart that mixed bought positions
-// into organic ones would report an advertising budget as a ranking.
+// Paid placement is not here. What WB advertised into a search is a shelves
+// reading — see benchmarks.go's wasAdvertised — and a chart that mixed bought
+// positions into organic ones would report an advertising budget as a ranking.
 func (s *Store) PositionHistory(ctx context.Context, nmID int64, query, dest string, appType int, from, to int64) iter.Seq2[PositionPoint, error] {
 	q := `
 		SELECT ts, rank, page

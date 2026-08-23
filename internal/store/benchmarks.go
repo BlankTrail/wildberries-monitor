@@ -216,7 +216,7 @@ const adWindow = 24 * time.Hour
 // used to be read from ad_placements — a table declared a milestone ahead of
 // its producer and never given one — so the answer was false for everybody
 // and the comparison said the same about a seat somebody paid for and a seat
-// nobody did.
+// nobody did. That table is gone; see migration 0026.
 //
 // The phrase is trimmed on both sides because the two come from different
 // places: positions.query is what the person asked for, and shelves.source_key

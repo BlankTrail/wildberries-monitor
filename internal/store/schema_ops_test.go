@@ -17,7 +17,6 @@ func TestRestOfTheSchema_CreatesEveryTable(t *testing.T) {
 
 	got := tableNames(t, s)
 	for _, want := range []string{
-		"ad_placements", "promos", "promo_items",
 		"profiles", "profile_items", "phrases", "competitors", "benchmarks",
 		"jobs", "job_runs", "job_items", "channels",
 		"rules", "rule_events", "notify_targets", "notify_outbox",
@@ -28,67 +27,26 @@ func TestRestOfTheSchema_CreatesEveryTable(t *testing.T) {
 	}
 }
 
-func TestAdPlacements_HaveTheIndexSpecSection52Names(t *testing.T) {
-	// Spec section 5.2 names (query, dest, ts) as one of three indexes, and
-	// names ad slices as the fastest-growing table in the schema: one phrase
-	// in one region produces the whole list of paid seats, not one row.
-	// Without this index every read of that table is a full scan.
-	s := openTestStore(t)
-
-	got := indexColumns(t, s, "idx_ad_placements_query_dest_ts")
-	if len(got) != 3 || got[0] != "query" || got[1] != "dest" || got[2] != "ts" {
-		t.Errorf("idx_ad_placements_query_dest_ts covers %v, want [query dest ts]", got)
-	}
-}
-
-func TestAdPlacements_RefuseAFractionalBid(t *testing.T) {
-	// A bid is minor units. STRICT is what makes 12.5 an error instead of a
-	// number that rounds differently on every read.
+func TestSchema_HoldsNoTableNothingWrites(t *testing.T) {
+	// ad_placements, promos and promo_items were declared a milestone ahead of
+	// their producers, and when the producers arrived they wrote somewhere
+	// else — ads into shelves, promotions into positions. Three empty tables
+	// stood there until something read one of them and believed it: the
+	// comparison screen answered «реклама» out of ad_placements and reported
+	// no advertising anywhere, for a milestone, to everybody.
 	//
-	// This is a dedicated test rather than reliance on the general
-	// TestSchema_MoneyIsMinorUnits sweep, even though bid_minor's name now
-	// puts it inside that sweep too: the sweep only proves the column's
-	// declared type is INTEGER, not that STRICT actually rejects 12.5 on a
-	// live INSERT, which is the failure mode this table cares about.
+	// Named here rather than swept for, because "a table with no INSERT in the
+	// Go source" is not something a test can decide — plenty of tables are
+	// written by one statement built at runtime. These three are the ones that
+	// were dropped, and this is what makes a copy-paste bringing one back a
+	// failing test instead of a fresh source of quiet zeroes.
 	s := openTestStore(t)
 
-	execFails(t, s, "a bid with a fractional part",
-		`INSERT INTO ad_placements (query, dest, ts, position, nm_id, placement_type, bid_minor, bid_currency, slice_fingerprint)
-		 VALUES ('socks', '-1257786', 1000, 1, 111, 'auction', 12.5, 'RUB', 'abc')`)
-	execOK(t, s, `INSERT INTO ad_placements (query, dest, ts, position, nm_id, placement_type, bid_minor, bid_currency, slice_fingerprint)
-	              VALUES ('socks', '-1257786', 1000, 1, 111, 'auction', 12500, 'RUB', 'abc')`)
-}
-
-func TestAdPlacements_AnUnpublishedBidIsNotAZeroBid(t *testing.T) {
-	// Spec section 4.2 warns that WB may not publish bids at all. A missing
-	// bid stored as zero would read as "this seat was free", which is the
-	// one thing it certainly was not.
-	s := openTestStore(t)
-
-	execOK(t, s, `INSERT INTO ad_placements (query, dest, ts, position, nm_id, placement_type, slice_fingerprint)
-	              VALUES ('socks', '-1257786', 1000, 2, 222, 'auction', 'abc')`)
-
-	var bid sql.NullInt64
-	if err := s.db.QueryRowContext(context.Background(),
-		`SELECT bid_minor FROM ad_placements WHERE nm_id = 222`).Scan(&bid); err != nil {
-		t.Fatalf("read placement: %v", err)
-	}
-	if bid.Valid {
-		t.Errorf("an unpublished bid read back as %d; want NULL", bid.Int64)
-	}
-}
-
-func TestPromos_DeletingAPromoTakesItsItems(t *testing.T) {
-	s := openTestStore(t)
-
-	execOK(t, s, `INSERT INTO promos (id, name, starts_at, ends_at, conditions, first_seen_at, last_seen_at)
-	              VALUES ('winter', 'Winter sale', 1000, 2000, 'up to 40%', 900, 900)`)
-	execOK(t, s, `INSERT INTO promo_items (promo_id, nm_id, ts, price, currency) VALUES ('winter', 111, 1000, 70000, 'RUB')`)
-
-	execOK(t, s, `DELETE FROM promos WHERE id = 'winter'`)
-
-	if n := countQuery(t, s, `SELECT count(*) FROM promo_items`); n != 0 {
-		t.Errorf("promo_items left %d rows after its promo was deleted, want 0", n)
+	got := tableNames(t, s)
+	for _, gone := range []string{"ad_placements", "promos", "promo_items"} {
+		if contains(got, gone) {
+			t.Errorf("таблица %q вернулась — у неё по-прежнему нет ни одного производителя", gone)
+		}
 	}
 }
 

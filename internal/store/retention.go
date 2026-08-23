@@ -147,10 +147,10 @@ WHERE rowid IN (
 // facts rather than periodic samples: deleting an event deletes the only
 // record that something happened, and no other row carries it.
 //
-// Spec section 5.2 names a third such carve-out, ad_placements. That table
-// still has no producer and now has no reader either — the comparison's
-// advertising column reads shelves, where the ads job actually writes — so
-// there is nothing in it to thin or to spare.
+// Spec section 5.2 names a third such carve-out, ad_placements, and calls it
+// the fastest-growing table in the schema. It never grew: nothing ever wrote
+// to it, the ads job writes into shelves, and migration 0026 dropped it. There
+// is no rule here for a table that is gone.
 func (s *Store) Thin(ctx context.Context) (ThinStats, error) {
 	// retentionOrDefault is dedupe.go's substitution of defaults for an
 	// unset field (task 6); Thin reads it rather than repeating that logic,
