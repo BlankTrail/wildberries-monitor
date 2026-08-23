@@ -1489,3 +1489,18 @@ dialog.bt-modal > #settings-body {
   border-style: dashed;
   color: var(--text-link);
 }
+
+/* ---- the region picker -------------------------------------------------- */
+
+/* Eighty-five regions in three columns is a screen and a half of checkboxes
+   between the field above them and the rest of the form, so the form they
+   belong to stops being readable the moment somebody uses the preset that
+   makes them useful.
+
+   A height rather than a count of rows: the groups differ — «в заданиях» is
+   usually one line and «из справочника» is all of them — and what matters is
+   that neither pushes the page. Scrolls only when it has to. */
+.bt-picklist .bt-checks {
+  max-height: 18rem;
+  overflow-y: auto;
+}

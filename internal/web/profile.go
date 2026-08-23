@@ -111,7 +111,19 @@ func (s *Server) profileHTML(r *http.Request) (string, error) {
 		b.WriteString(s.profileCard(r, p))
 	}
 
-	b.WriteString(s.profileForm(r))
+	// The form for pasting a link is here only while there is nothing to
+	// paste it into. «Мой профиль» is mine — one seller, the one whose goods
+	// these are — and a second link would either replace that answer silently
+	// or leave two profiles both claiming to be it. Somebody else's seller is
+	// a job on the «Задачи» tab, which is what that tab is.
+	if len(profiles) == 0 {
+		b.WriteString(s.profileForm(r))
+	} else {
+		b.WriteString(`<p class="bt-form-hint">` +
+			`Профиль в этом разделе один — он про ваши товары. Чтобы разобрать другого ` +
+			`продавца, поставьте задание «Все товары продавца» на вкладке «Задачи»; ` +
+			`чтобы сменить свой — удалите этот.</p>`)
+	}
 	// Every form the region directory's controls name, at the very end and
 	// outside all the others.
 	b.WriteString(regionHelpForms())
@@ -138,7 +150,7 @@ func (s *Server) profileForm(r *http.Request) string {
 	// region would be the region of the second run.
 	b.WriteString(s.regionField(r,
 		regionBox{ID: "new-profile-regions", Value: regionsChosen(r, profileRegion)}))
-	b.WriteString(s.runControls(r, store.RunControls{}))
+	b.WriteString(s.runControls(r, store.RunControls{}, true))
 	b.WriteString(`<div class="bt-form-actions"><button class="bt-btn bt-btn--primary" type="submit">Разобрать</button></div>`)
 	b.WriteString(`</form>`)
 	return b.String()
@@ -149,9 +161,14 @@ func (s *Server) profileForm(r *http.Request) string {
 // One function for both places that ask them — this screen's first press and
 // the profile's own card — so the two cannot drift into offering different
 // settings for the same collection.
-func (s *Server) runControls(r *http.Request, c store.RunControls) string {
+func (s *Server) runControls(r *http.Request, c store.RunControls, folded bool) string {
 	var b strings.Builder
-	b.WriteString(`<details class="bt-more"><summary>Как выполнять запросы: потоки, прокси, повторы</summary>`)
+	open := " open"
+	if folded {
+		open = ""
+	}
+	b.WriteString(`<details class="bt-more"` + open +
+		`><summary>Как выполнять запросы: потоки, прокси, повторы</summary>`)
 	b.WriteString(`<div class="bt-form-grid">`)
 	b.WriteString(field("Потоков",
 		fmt.Sprintf(`<input class="bt-input" name="threads" type="number" min="1" value="%s" placeholder="%d">`,
@@ -355,9 +372,14 @@ func (s *Server) profilePlanForm(r *http.Request, p store.ProfileRow) string {
 	// The same three the first press offers, drawn by the same function: two
 	// screens asking the same question in two shapes is two places to change
 	// and one of them will be missed.
+	// Open here, folded on the one-line form that starts a profile. There it
+	// is an aside — the defaults are right for most people and the point of
+	// that screen is one box and one press. Here the whole card is the
+	// settings, and a setting folded away on a screen for changing settings is
+	// one somebody reports as missing.
 	b.WriteString(s.runControls(r, store.RunControls{
 		Threads: p.Threads, Attempts: p.Attempts, Channels: p.Channels,
-	}))
+	}, false))
 
 	b.WriteString(`<div class="bt-field"><label class="bt-checkbox">` +
 		`<input type="checkbox" name="enabled" value="1"` + checkedIf(p.Enabled) + `> ` +

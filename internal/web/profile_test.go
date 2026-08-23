@@ -703,12 +703,69 @@ func TestProfile_TheFirstPressCarriesTheRegion(t *testing.T) {
 		t.Errorf("регионы %v, форма просила два", got.Regions)
 	}
 
-	body := get(t, srv, "/profile", "").Body.String()
+	// On a fresh screen, where the form is: once a profile exists this section
+	// is gone, because «Мой профиль» is one seller.
+	fresh := newServer(t)
+	body := get(t, fresh, "/profile", "").Body.String()
 	if !strings.Contains(body, `id="new-profile-regions"`) {
 		t.Errorf("на первом экране нет поля регионов:\n%s", firstLines(body))
 	}
 	if !strings.Contains(body, "Справочник регионов") {
 		t.Error("рядом с полем нет справочника, откуда берутся коды")
+	}
+}
+
+func TestProfile_TheFormForPastingALinkGoesOnceThereIsAProfile(t *testing.T) {
+	// «Мой профиль» is mine — one seller, the one whose goods these are. A
+	// second link would either replace that answer without saying so or leave
+	// two profiles both claiming to be it, and somebody else's seller is a job
+	// on the «Задачи» tab, which is what that tab is for.
+	srv := newServer(t)
+	ctx := t.Context()
+
+	before := get(t, srv, "/profile", "").Body.String()
+	if !strings.Contains(before, `name="input"`) {
+		t.Fatalf("на пустом экране нет формы разбора ссылки:\n%s", firstLines(before))
+	}
+
+	if _, err := srv.Store.SaveProfile(ctx, store.ProfileRow{
+		Name: "мой", SourceInput: "141504066",
+	}); err != nil {
+		t.Fatalf("SaveProfile: %v", err)
+	}
+
+	after := get(t, srv, "/profile", "").Body.String()
+	if strings.Contains(after, `name="input"`) {
+		t.Error("форма разбора ссылки осталась при заполненном профиле")
+	}
+	if !strings.Contains(after, "Задачи") {
+		t.Error("не сказано, где разбирать чужого продавца")
+	}
+	if !strings.Contains(after, "удалите этот") {
+		t.Error("не сказано, как сменить свой профиль")
+	}
+}
+
+func TestProfile_TheRunControlsAreOpenWhereTheyAreEdited(t *testing.T) {
+	// They are folded on the one-line form that starts a profile, where they
+	// are an aside. On the card, which is nothing but settings, a folded
+	// setting is one somebody reports as missing — and this one was reported.
+	srv := newServer(t)
+	ctx := t.Context()
+	if _, err := srv.Store.SaveProfile(ctx, store.ProfileRow{
+		Name: "мой", SourceInput: "141504066",
+	}); err != nil {
+		t.Fatalf("SaveProfile: %v", err)
+	}
+
+	body := get(t, srv, "/profile", "").Body.String()
+	if !strings.Contains(body, `<details class="bt-more" open><summary>Как выполнять запросы`) {
+		t.Errorf("настройки прогона свёрнуты на экране, где их правят:\n%s", firstLines(body))
+	}
+
+	fresh := get(t, newServer(t), "/profile", "").Body.String()
+	if strings.Contains(fresh, `<details class="bt-more" open><summary>Как выполнять запросы`) {
+		t.Error("на форме из одной строки настройки прогона раскрыты — она перестала быть формой из одной строки")
 	}
 }
 

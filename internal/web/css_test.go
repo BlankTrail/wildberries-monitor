@@ -145,3 +145,21 @@ func TestScript_APressCanTakeOneFieldWithIt(t *testing.T) {
 		t.Error("скрипт читает data-with и не кладёт поле в запрос")
 	}
 }
+
+func TestStyles_TheRegionListScrollsRatherThanStretchingThePage(t *testing.T) {
+	// Eighty-five regions in three columns is a screen and a half of
+	// checkboxes between the field above them and the rest of the form — so
+	// the form they belong to stops being readable the moment somebody uses
+	// the preset that makes them useful.
+	ours, err := staticFS.ReadFile("static/monitor.css")
+	if err != nil {
+		t.Fatalf("monitor.css: %v", err)
+	}
+	block := ruleBody(string(ours), ".bt-picklist .bt-checks {")
+	if block == "" {
+		t.Fatal("в monitor.css нет правила для списка регионов")
+	}
+	if !strings.Contains(block, "max-height") || !strings.Contains(block, "overflow-y") {
+		t.Error("список регионов не ограничен по высоте — он растянет страницу")
+	}
+}
