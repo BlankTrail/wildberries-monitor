@@ -62,8 +62,9 @@ const (
 )
 
 // ProfileRow is one «мой контур».
-// RunControls is how a collection is run rather than what it collects: in how
-// many threads, through which exits, with how many attempts per request.
+// RunControls is what a collection is given when it is started: where to
+// collect, in how many threads, through which exits, with how many attempts
+// per request.
 //
 // Its own type because the answers are given before the profile exists. The
 // press that pastes a link starts the whole chain, so a screen that could only
@@ -71,6 +72,12 @@ const (
 // the defaults — which is what «нет возможности задать» meant on the one
 // screen that starts everything.
 type RunControls struct {
+	// Regions is where. Empty leaves whatever the profile already had, which
+	// on a new one is the default: a first collection has to happen somewhere,
+	// and refusing to start until a region is typed would put a form in front
+	// of a screen whose whole point is one line and one press.
+	Regions []string
+
 	Threads  int
 	Attempts int
 	Channels []int64
@@ -78,6 +85,9 @@ type RunControls struct {
 
 // Apply writes these answers onto a profile row.
 func (c RunControls) Apply(p *ProfileRow) {
+	if len(c.Regions) > 0 {
+		p.Regions = c.Regions
+	}
 	p.Threads, p.Attempts, p.Channels = c.Threads, c.Attempts, c.Channels
 }
 

@@ -1498,6 +1498,7 @@ func TestResolveProfile_TheAnswersGivenWithTheLinkReachTheFirstRun(t *testing.T)
 	resolving(t, a, 4242)
 
 	id, err := a.ResolveProfile(ctx, "141504066", store.RunControls{
+		Regions: []string{"-1257786", "-5887751"},
 		Threads: 9, Attempts: 10, Channels: []int64{3, 5},
 	})
 	if err != nil {
@@ -1512,6 +1513,12 @@ func TestResolveProfile_TheAnswersGivenWithTheLinkReachTheFirstRun(t *testing.T)
 		t.Errorf("профиль сохранён как потоки=%d повторы=%d каналы=%v",
 			p.Threads, p.Attempts, p.Channels)
 	}
+	// Where, as well as how. Every number a profile collects is regional, so a
+	// region chosen beside the link has to be on the profile before the chain
+	// builds anything — otherwise the first collection is for somewhere else.
+	if !slices.Equal(p.Regions, []string{"-1257786", "-5887751"}) {
+		t.Errorf("регионы профиля = %v, просили два", p.Regions)
+	}
 
 	// And the very first job the chain built — the resolve — already has them.
 	// It stays on one thread by its own rule; the other two are the answers.
@@ -1524,5 +1531,8 @@ func TestResolveProfile_TheAnswersGivenWithTheLinkReachTheFirstRun(t *testing.T)
 	}
 	if !slices.Equal(made.Channels, []int64{3, 5}) {
 		t.Errorf("разбор ссылки идёт через %v, просили [3 5]", made.Channels)
+	}
+	if !slices.Equal(made.Regions, []string{"-1257786", "-5887751"}) {
+		t.Errorf("разбор ссылки идёт по регионам %v, просили два", made.Regions)
 	}
 }

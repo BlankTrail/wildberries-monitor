@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -679,5 +680,64 @@ func TestProfile_TheCardShowsTheRunControlsAlreadyChosen(t *testing.T) {
 	}
 	if !strings.Contains(body, `name="attempts" type="number" min="1" value="10"`) {
 		t.Error("карточка профиля не показывает выбранные 10 повторов")
+	}
+}
+
+func TestProfile_TheFirstPressCarriesTheRegion(t *testing.T) {
+	// Every number a profile collects — price, stock, place in the results —
+	// is regional, and this press starts the whole collection. Chosen only
+	// afterwards, on the card that appears next, the region would be the
+	// region of the second run.
+	srv := newServer(t)
+	var got store.RunControls
+	srv.ResolveProfile = func(ctx context.Context, input string, run store.RunControls) (int64, error) {
+		got = run
+		return srv.Store.SaveProfile(ctx, store.ProfileRow{Name: input, SourceInput: input})
+	}
+
+	postForm(t, srv, "/profile", url.Values{
+		"input":   {"141504066"},
+		"regions": {"-1257786, -5887751"},
+	})
+	if !slices.Equal(got.Regions, []string{"-1257786", "-5887751"}) {
+		t.Errorf("регионы %v, форма просила два", got.Regions)
+	}
+
+	body := get(t, srv, "/profile", "").Body.String()
+	if !strings.Contains(body, `id="new-profile-regions"`) {
+		t.Errorf("на первом экране нет поля регионов:\n%s", firstLines(body))
+	}
+	if !strings.Contains(body, "Справочник регионов") {
+		t.Error("рядом с полем нет справочника, откуда берутся коды")
+	}
+}
+
+func TestProfile_TheDirectoryIsUnderTheFieldThatAsksForACode(t *testing.T) {
+	// It used to sit at the very bottom of the card, past the phrases, the
+	// competitors and every setting — a page away from the box it answers.
+	// The job constructor puts it directly under the field, and these two
+	// screens ask the same question.
+	srv := newServer(t)
+	ctx := t.Context()
+
+	id, err := srv.Store.SaveProfile(ctx, store.ProfileRow{Name: "мой", SourceInput: "141504066"})
+	if err != nil {
+		t.Fatalf("SaveProfile: %v", err)
+	}
+
+	body := get(t, srv, "/profile", "").Body.String()
+	field := strings.Index(body, fmt.Sprintf(`id="profile-regions-%d"`, id))
+	if field < 0 {
+		t.Fatalf("в карточке профиля нет поля регионов:\n%s", firstLines(body))
+	}
+	directory := strings.Index(body[field:], "Справочник регионов")
+	if directory < 0 {
+		t.Fatal("справочника после поля нет вовсе")
+	}
+	// Between them: the hint under the field and the opening of the details.
+	// Anything more and it is not «под полем» any more.
+	between := body[field : field+directory]
+	if strings.Contains(between, "Страниц витрины") {
+		t.Error("справочник ниже остальных настроек, а не под полем регионов")
 	}
 }

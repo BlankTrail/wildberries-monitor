@@ -132,6 +132,15 @@ func (s *Server) profileForm(r *http.Request) string {
 	b.WriteString(field("Ссылка или артикул",
 		`<input class="bt-input" name="input" required placeholder="https://www.wildberries.ru/catalog/141504066/detail.aspx">`,
 		"Ссылка на карточку товара или сам артикул. Из ссылки берётся номер после /catalog/, поэтому адрес из строки браузера подойдёт как есть."))
+	// Where, right here rather than on the card that appears afterwards: this
+	// press starts the whole collection, and every number it collects — price,
+	// stock, place in the results — is regional. Chosen after the fact, the
+	// region would be the region of the second run.
+	b.WriteString(field("Регионы",
+		s.regionControl(r, regionBox{ID: "new-profile-regions", Value: profileRegion}),
+		"Цена, остаток и место в выдаче у Wildberries свои для каждого региона. "+
+			"Строка внизу — то, что сохранится."))
+	b.WriteString(s.regionHelp(r))
 	b.WriteString(s.runControls(r, store.RunControls{}))
 	b.WriteString(`<div class="bt-form-actions"><button class="bt-btn bt-btn--primary" type="submit">Разобрать</button></div>`)
 	b.WriteString(`</form>`)
@@ -172,6 +181,7 @@ func (s *Server) runControls(r *http.Request, c store.RunControls) string {
 // runControlsFrom reads them back off whichever form posted them.
 func runControlsFrom(r *http.Request) store.RunControls {
 	return store.RunControls{
+		Regions:  splitList(r.PostFormValue("regions")),
 		Threads:  int(atoi64(r.PostFormValue("threads"))),
 		Attempts: int(atoi64(r.PostFormValue("attempts"))),
 		Channels: idList(r.PostForm["channels"]),
@@ -194,7 +204,6 @@ func (s *Server) profileCard(r *http.Request, p store.ProfileRow) string {
 	b.WriteString(s.phrasesHTML(r, p))
 	b.WriteString(s.competitorsHTML(r, p))
 	b.WriteString(s.profilePlanForm(r, p))
-	b.WriteString(s.regionHelp(r))
 	b.WriteString(`<div class="bt-form-actions">`)
 	if !p.Running() {
 		b.WriteString(action(fmt.Sprintf("/profile/scan?id=%d", p.ID), "#profile-body",
@@ -307,12 +316,20 @@ func (s *Server) profilePlanForm(r *http.Request, p store.ProfileRow) string {
 	b.WriteString(`<form class="bt-form" data-post="` +
 		fmt.Sprintf("/profile/plan?id=%d", p.ID) + `" data-target="#profile-body">`)
 
-	b.WriteString(`<div class="bt-form-grid">`)
+	// The regions across the whole width and the directory directly under them,
+	// the same way the job constructor does it. Squeezed into a third of a row
+	// the tick-list wraps every line, and the directory at the very bottom of
+	// the card was a page away from the field that asks for a code.
 	b.WriteString(field("Регионы",
-		`<input class="bt-input bt-input--mono" name="regions" value="`+
-			html.EscapeString(strings.Join(p.Regions, ", "))+`" placeholder="`+profileRegion+`">`,
-		"Коды dest через запятую. Каждый регион — отдельный проход: цены, остатки и места "+
-			"в выдаче у Wildberries свои для каждого. Где взять код — «Справочник регионов» ниже."))
+		s.regionControl(r, regionBox{
+			ID:    fmt.Sprintf("profile-regions-%d", p.ID),
+			Value: strings.Join(p.Regions, ", "),
+		}),
+		"Каждый регион — отдельный проход: цены, остатки и места в выдаче у Wildberries "+
+			"свои для каждого. Строка внизу — то, что сохранится."))
+	b.WriteString(s.regionHelp(r))
+
+	b.WriteString(`<div class="bt-form-grid">`)
 	b.WriteString(field("Страниц витрины",
 		fmt.Sprintf(`<input class="bt-input" name="max_pages" type="number" min="0" value="%d" placeholder="0">`,
 			p.MaxPages),

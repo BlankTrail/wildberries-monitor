@@ -463,7 +463,8 @@ func (s *Server) constructorHTML(r *http.Request) (string, error) {
 	b.WriteString(`<h3 class="bt-form-head">Где смотреть</h3>`)
 	// The regions across the whole width: it is a list to tick, and squeezed
 	// into a third of the row every line of it wraps.
-	b.WriteString(field("Регионы", s.regionControl(r),
+	b.WriteString(field("Регионы",
+		s.regionControl(r, regionBox{ID: "job-regions", Value: profileRegion, Estimate: true}),
 		"Цена, остаток и место в выдаче — все региональные, поэтому регион обязателен. Строка внизу — то, что сохранится."))
 	// Where the codes come from, under the field that asks for them and folded
 	// away — it is a question somebody has once, and open it would bury the
@@ -1332,10 +1333,10 @@ func scheduleControl() string {
 // its data came back with. A list of codes typed from memory would be worse
 // than none, because a wrong dest does not fail: it quietly returns another
 // city's prices, and every number after that is about somewhere else.
-func (s *Server) regionControl(r *http.Request) string {
+func (s *Server) regionControl(r *http.Request, box regionBox) string {
 	ctx := r.Context()
 	names := s.regionNames(r)
-	const field = `<input class="bt-input bt-input--mono" id="job-regions" name="regions" value="-1257786" data-estimate>`
+	field := box.input()
 
 	dests, err := s.Store.Dests(ctx)
 	if err != nil || len(dests) == 0 {
@@ -1345,7 +1346,7 @@ func (s *Server) regionControl(r *http.Request) string {
 	}
 
 	var b strings.Builder
-	b.WriteString(`<div class="bt-picklist" data-picklist="#job-regions">`)
+	b.WriteString(`<div class="bt-picklist" data-picklist="#` + box.ID + `">`)
 	b.WriteString(`<label class="bt-checkbox"><input type="checkbox" data-picklist-all> отметить все</label>`)
 
 	// Three groups, and the differences between them are real. One is what
@@ -1386,6 +1387,35 @@ func (s *Server) regionControl(r *http.Request) string {
 	b.WriteString(field)
 	b.WriteString(`</div>`)
 	return b.String()
+}
+
+// regionBox is the text field a region picker writes into.
+//
+// Its own type because the picker is now on three screens — the job
+// constructor, the press that starts a profile, and that profile's own plan —
+// and they differ in exactly three ways: which element the tick-list writes
+// to, what is in it already, and whether typing in it re-prices the job. A
+// picker that wrote into an id belonging to another screen's field would tick
+// boxes and change nothing.
+type regionBox struct {
+	// ID is the element id, which the tick-list above it writes into. Unique
+	// per screen: two boxes sharing one id is one box the picker can find.
+	ID string
+	// Value is what is already in it.
+	Value string
+	// Estimate marks the box that drives the job constructor's price. Only the
+	// constructor has one, and an estimate that redrew on a screen with no
+	// price to show would be a request per keystroke for nothing.
+	Estimate bool
+}
+
+func (b regionBox) input() string {
+	estimate := ""
+	if b.Estimate {
+		estimate = " data-estimate"
+	}
+	return `<input class="bt-input bt-input--mono" id="` + b.ID +
+		`" name="regions" value="` + html.EscapeString(b.Value) + `"` + estimate + `>`
 }
 
 // destUseText says why a code is on the list.
