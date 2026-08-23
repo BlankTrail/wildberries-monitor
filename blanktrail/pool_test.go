@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -120,23 +121,60 @@ func TestNewPool_ExplicitCooldownWins(t *testing.T) {
 	}
 }
 
-func TestNewPool_RollsBackOnFailure(t *testing.T) {
+func TestNewPool_ARangeTooSmallGivesASmallerPoolThatSaysSo(t *testing.T) {
+	// Two ports fit the range and open for real; the third has nowhere to go.
+	//
+	// A pool short of what it was asked for is a slower run, not a wrong one,
+	// and refusing to start at all is the worse answer — but nothing may find
+	// out by accident, so the shortfall is on the record and the reason with
+	// it.
 	fake := fakebt.New(t)
 	clock := newFakeClock()
 	cfg := testPoolConfig(t, fake, clock, 1, 3)
-	// Two ports fit the range and open for real; the third has nowhere to go, so
-	// NewPool fails half way and must close what it already opened.
-	//
-	// The failure has to be a real one. The fake's FailNext short-circuits before
-	// a port is ever registered, so faking a "successful" open would leave nothing
-	// for the rollback to close and this test would pass either way.
 	cfg.PortRange = [2]int{20000, 20001}
 
-	if _, err := NewPool(context.Background(), cfg); err == nil {
-		t.Fatal("NewPool returned nil error when the port range could not cover the pool")
+	p, err := NewPool(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	if p.Size() != 2 {
+		t.Errorf("портов %d, а в диапазон помещалось два", p.Size())
+	}
+	missing, why := p.Shortfall()
+	if missing != 1 {
+		t.Errorf("недостача %d, ожидалась одна", missing)
+	}
+	if len(why) != 1 || !strings.Contains(why[0], "exhausted") {
+		t.Errorf("причина недостачи не названа: %v", why)
+	}
+
+	// And closing still closes everything it opened.
+	if err := p.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
 	}
 	if got := fake.OpenPorts(); len(got) != 0 {
-		t.Errorf("ports left open after a rolled-back NewPool: %v", got)
+		t.Errorf("порты остались открытыми после Close: %v", got)
+	}
+}
+
+func TestNewPool_NotOneSlotOpeningIsStillAFailure(t *testing.T) {
+	// The floor. A pool of nothing cannot collect, and starting one would turn
+	// a configuration mistake into a run that makes no requests and reports no
+	// error.
+	fake := fakebt.New(t)
+	clock := newFakeClock()
+	cfg := testPoolConfig(t, fake, clock, 1, 2)
+	cfg.PortRange = [2]int{20000, 20001}
+	// Every attempt refused: two slots, three egresses each.
+	for range 6 {
+		fake.FailNext("/api/v1/ports/open", http.StatusConflict, "port already open")
+	}
+
+	if _, err := NewPool(context.Background(), cfg); err == nil {
+		t.Fatal("NewPool завёл пул, в котором не открылось ни одного порта")
+	}
+	if got := fake.OpenPorts(); len(got) != 0 {
+		t.Errorf("порты остались открытыми после неудачного NewPool: %v", got)
 	}
 }
 
@@ -191,12 +229,20 @@ func TestNewPool_ClosesAPortWhoseOpenLostItsResponse(t *testing.T) {
 	cfg.Client = c
 	cfg.PortRange = [2]int{20000, 20009}
 
-	if _, err := NewPool(context.Background(), cfg); err == nil {
-		t.Fatal("NewPool returned nil error though the third open call failed")
+	p, err := NewPool(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
 	}
-	if got := fake.OpenPorts(); len(got) != 0 {
-		t.Errorf("ports still open on the proxy after a rolled-back NewPool: %v; "+
-			"the port whose open lost its response was opened server-side and must be closed too", got)
+	defer p.Close()
+
+	// The slot recovers on its next try, so the pool is whole. What must not
+	// survive is the ghost: the port the proxy opened and never told us about.
+	if p.Size() != 4 {
+		t.Errorf("портов %d, ожидалось четыре — слот должен был взять следующий номер", p.Size())
+	}
+	if got := fake.OpenPorts(); len(got) != 4 {
+		t.Errorf("на прокси открыто портов %d, а пул держит 4: %v; "+
+			"порт, чей ответ потерялся, открыт на сервере и должен быть закрыт", len(got), got)
 	}
 }
 
@@ -1566,5 +1612,99 @@ func TestLease_RenewIdentityRefusesAfterRelease(t *testing.T) {
 
 	if err := l.RenewIdentity(context.Background()); err == nil {
 		t.Error("RenewIdentity on a released lease changed a port somebody else may hold")
+	}
+}
+
+func TestNewPool_StepsOverPortsTheProxyAlreadyHolds(t *testing.T) {
+	// A previous run that ended without closing — killed, crashed, a machine
+	// restarted under it — leaves its ports open on the service. A range is
+	// walked from its first number, so the next run asks for numbers somebody
+	// still owns, the service answers 409, and 409 is the one status the open
+	// path deliberately does not act on: a port belonging to a live process
+	// must not be closed out from under it.
+	//
+	// So the collision is avoided rather than resolved, and the service is the
+	// one that knows which numbers to avoid.
+	fake := fakebt.New(t)
+	clock := newFakeClock()
+
+	// Six leftovers at the bottom of the range, and that number is the test.
+	// Each slot gets three tries, so two or three leftovers are walked past by
+	// the retry loop alone and prove nothing about consulting the service —
+	// six are more than the retries can cover, and a pool that did not ask
+	// which numbers were taken would open nothing at all.
+	leftovers, err := NewClient(fake.URL(), fake.Key())
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	for _, n := range []int{20000, 20001, 20002, 20003, 20004, 20005} {
+		if _, err := leftovers.OpenPort(t.Context(), n, PortSpec{Protocol: "http"}, Egress{}); err != nil {
+			t.Fatalf("OpenPort %d: %v", n, err)
+		}
+	}
+
+	cfg := testPoolConfig(t, fake, clock, 1, 2)
+	cfg.PortRange = [2]int{20000, 20009}
+
+	p, err := NewPool(t.Context(), cfg)
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	defer p.Close()
+
+	if p.Size() != 2 {
+		t.Fatalf("портов %d, ожидалось два", p.Size())
+	}
+	if missing, why := p.Shortfall(); missing != 0 {
+		t.Errorf("недостача %d: %v — оставленные порты должны просто пропускаться", missing, why)
+	}
+	// And the leftovers are still there: stepping over them is the point, and
+	// closing them would reach into whatever still owns them.
+	open := fake.OpenPorts()
+	for _, n := range []int{20000, 20001, 20002, 20003, 20004, 20005} {
+		if !slices.Contains(open, n) {
+			t.Errorf("порт %d закрыт, а он принадлежит не этому пулу: %v", n, open)
+		}
+	}
+}
+
+func TestNewPool_APortTakenSinceTheListingIsLeftAlone(t *testing.T) {
+	// Asking the service which numbers are taken is best effort, and there are
+	// two ways it does not answer for a number that is: the listing call fails,
+	// and somebody opens the port in the moment between the listing and the
+	// open. Both end in a real 409 against a real port belonging to somebody
+	// else, and 409 is the one status the open path must not act on — closing
+	// it reaches into a running process and takes its port away.
+	//
+	// The listing failure is the reproducible half of that pair.
+	fake := fakebt.New(t)
+	clock := newFakeClock()
+
+	other, err := NewClient(fake.URL(), fake.Key())
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	if _, err := other.OpenPort(t.Context(), 20000, PortSpec{Protocol: "http"}, Egress{}); err != nil {
+		t.Fatalf("OpenPort: %v", err)
+	}
+	fake.FailNext("/api/v1/ports", http.StatusInternalServerError, "listing unavailable")
+
+	cfg := testPoolConfig(t, fake, clock, 1, 1)
+	cfg.PortRange = [2]int{20000, 20009}
+
+	p, err := NewPool(t.Context(), cfg)
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	defer p.Close()
+
+	// The slot met the 409 and moved on rather than giving up: an unanswered
+	// question is not grounds for refusing to start.
+	if p.Size() != 1 {
+		t.Errorf("портов %d, ожидался один", p.Size())
+	}
+	if !slices.Contains(fake.OpenPorts(), 20000) {
+		t.Errorf("порт 20000 закрыт, а он принадлежит другому процессу: %v; "+
+			"409 — это ответ «порт занят», и закрывать его нельзя", fake.OpenPorts())
 	}
 }

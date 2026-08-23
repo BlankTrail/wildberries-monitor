@@ -129,6 +129,15 @@ func (e *Engine) RunnerFor(ctx context.Context, j job.Job) (*job.Runner, func(),
 		closeChannels()
 		return nil, nil, fmt.Errorf("engine: не удалось открыть порты: %w", err)
 	}
+	// A pool short of what the job asked for still collects — slower, and
+	// that is the better answer than refusing to start because one VPN
+	// configuration of eleven would not launch. But it is not something to
+	// find out by accident: the count goes to the log with the first reason
+	// beside it, and the ports table shows what actually came up.
+	if missing, why := pool.Shortfall(); missing > 0 {
+		e.logf("портов не открылось: %d из %d, первая причина: %s",
+			missing, missing+pool.Size(), why[0])
+	}
 
 	// Whether there is anywhere to move to decides how hard a challenge is
 	// worth fighting. With an egress channel, a challenge that survives the

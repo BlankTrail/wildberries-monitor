@@ -5,6 +5,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -344,5 +345,35 @@ func TestCheck_AnAddressSomebodyClearedIsNotTheDefault(t *testing.T) {
 
 	if err := e.Check(t.Context()); !errors.Is(err, ErrNotConfigured) {
 		t.Errorf("Check = %v, ожидался ErrNotConfigured", err)
+	}
+}
+
+func TestRunnerFor_APoolShortOfPortsSaysSoInTheLog(t *testing.T) {
+	// A source-level check, for the reason RunnerFor's own test gives:
+	// everything past the preflight needs a live licensed service, because it
+	// opens ports before the first fetch.
+	//
+	// What is guarded is one report. A slot that would not open no longer ends
+	// the run — a gateway channel names eleven configurations and one of them
+	// failing to launch used to stop a fifty-thread collection before its
+	// first request — so the run now starts smaller. That is the right answer
+	// and it is also the kind of thing nobody may learn by accident: a
+	// collection quietly running at a fifth of its width looks like a slow
+	// site.
+	src, err := os.ReadFile("engine.go")
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	body := string(src)
+	at := strings.Index(body, "pool.Shortfall()")
+	if at < 0 {
+		t.Fatal("недостача портов нигде не спрашивается — пул может открыться вполовину молча")
+	}
+	tail := body[at : at+400]
+	if !strings.Contains(tail, "e.logf(") {
+		t.Error("недостача портов посчитана, но не сказана")
+	}
+	if !strings.Contains(tail, "why[0]") {
+		t.Error("сказано, сколько портов не открылось, но не сказано почему")
 	}
 }
