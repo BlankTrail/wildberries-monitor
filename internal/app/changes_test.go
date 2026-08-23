@@ -713,3 +713,63 @@ func TestDetectChanges_AStorefrontThatMovedSaysSoOnceAsWell(t *testing.T) {
 		t.Fatalf("сработок %d, ожидалась одна на всю витрину: %+v", len(events), events)
 	}
 }
+
+func TestDetectChanges_ACompetitorOnMyShelfReachesTheOutbox(t *testing.T) {
+	// Spec section 6.1's shelf group, end to end. Whose shelf it is and whose
+	// product moved are what turn a membership into a sentence, and neither is
+	// answerable from the shelf alone — so this is also the test that the
+	// profile's own products are read and used.
+	a := newApp(t)
+	ctx := t.Context()
+	watchEverything(t, a, track.ShelfCompetitorEntered)
+
+	profile, err := a.Store.SaveProfile(ctx, store.ProfileRow{Name: "мой", SourceInput: "777"})
+	if err != nil {
+		t.Fatalf("SaveProfile: %v", err)
+	}
+	if err := a.Store.AddProfileItem(ctx, profile, store.ProfileProduct, 777); err != nil {
+		t.Fatalf("AddProfileItem: %v", err)
+	}
+
+	first := time.Now().Add(-2 * time.Hour)
+	atWatermark(t, a, first.Add(-time.Hour))
+
+	a.Store.SetClock(func() time.Time { return first })
+	if _, err := a.Store.SaveProductShelf(ctx, wb.ProductShelf{
+		NmID: 777, Title: "Похожие", Members: []int64{100},
+	}); err != nil {
+		t.Fatalf("SaveProductShelf: %v", err)
+	}
+	a.Store.SetClock(func() time.Time { return first.Add(time.Hour) })
+	if _, err := a.Store.SaveProductShelf(ctx, wb.ProductShelf{
+		NmID: 777, Title: "Похожие", Members: []int64{100, 200},
+	}); err != nil {
+		t.Fatalf("SaveProductShelf: %v", err)
+	}
+
+	a.detectChanges(ctx)
+
+	events, err := a.Store.RecentEvents(ctx, 10)
+	if err != nil {
+		t.Fatalf("RecentEvents: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("сработок %d, ожидалась одна — новый сосед на полке: %+v", len(events), events)
+	}
+	if events[0].NmID != 200 {
+		t.Errorf("сработало про товар %d, ожидалось 200", events[0].NmID)
+	}
+}
+
+func TestDetectChanges_TheSlotSourceSpellingsAgreeAcrossPackages(t *testing.T) {
+	// internal/track carries its own copy of the two source names, because it
+	// knows nothing about the database. Two spellings of one word is one word
+	// that can drift, and the drift would be silent: every shelf change would
+	// simply stop being recognised as one.
+	if track.SlotSourceQuery != store.ShelfSourceQuery {
+		t.Errorf("фраза: %q против %q", track.SlotSourceQuery, store.ShelfSourceQuery)
+	}
+	if track.SlotSourceProduct != store.ShelfSourceProduct {
+		t.Errorf("товар: %q против %q", track.SlotSourceProduct, store.ShelfSourceProduct)
+	}
+}

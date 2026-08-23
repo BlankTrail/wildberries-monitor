@@ -22,13 +22,16 @@ package track
 // with a producer: a rule on a kind nothing can emit never fires, and a person
 // whose rule never fires concludes that nothing is changing. What is absent:
 //
-//   - Advertising (AdAppeared, AdLost, AdBidChanged, AdCompetitorEntered,
-//     OutrankedByAd) and shelves (ShelfEntered, ShelfLost,
-//     ShelfCompetitorEntered). What an ads reading gives is who WB was
-//     promoting for a phrase, never where in the page the seat sat, so
-//     «сверху встало платное размещение» cannot be told from «органика
-//     просела». The shelf trio needs a per-product recommendation shelf
-//     history keyed the way placements are, which nothing collects yet.
+//   - AdBidChanged. Wildberries stopped publishing bids: where the payload
+//     used to carry a cpm figure it now carries undecodable ciphertext, on
+//     the placement and on the product alike. See wb/shelf.go, which says the
+//     same thing from the other end. There is no number to watch.
+//   - OutrankedByAd. It claims a relation between two places on a page — a
+//     paid seat above an organic one — and an ads reading says who was being
+//     promoted for a phrase, never where in the page the seat sat. The two
+//     halves it needs are «моя органика не изменилась» and «сверху встал
+//     конкурент», and only the first is observable. What is observable of the
+//     second has its own name: AdCompetitorEntered.
 //   - ContentChanged. The card's static half — what the seller wrote — is
 //     stored as one row per product and overwritten on every reading, so
 //     there is no earlier version to compare against. It needs a history of
@@ -39,7 +42,7 @@ package track
 //     rather than for one of the two kinds of storefront it happens on.
 type Kind string
 
-// The thirty kinds this build can emit, grouped by what they are about. The
+// The thirty-six kinds this build can emit, grouped by what they are about. The
 // spec section 6.1 names that are absent are listed on Kind above, with
 // the reason each of them has no producer here.
 //
@@ -109,6 +112,16 @@ const (
 	ProductAdded          Kind = "product-added"
 	ProductRemoved        Kind = "product-removed"
 	AssortmentSizeChanged Kind = "assortment-size-changed"
+
+	// Paid placement, and the shelf under a product. One question asked of two
+	// sources — see slot.go, and the doc comment on Slot for why they are one
+	// file rather than two.
+	AdAppeared             Kind = "ad-appeared"
+	AdLost                 Kind = "ad-lost"
+	AdCompetitorEntered    Kind = "ad-competitor-entered"
+	ShelfEntered           Kind = "shelf-entered"
+	ShelfLost              Kind = "shelf-lost"
+	ShelfCompetitorEntered Kind = "shelf-competitor-entered"
 )
 
 // Unit says what the two numbers on a change are counted in.
@@ -156,5 +169,7 @@ func Kinds() []Kind {
 		CompetitorJoinedPromo, WorkingPhraseLost,
 		NewCompetitorInEnvironment,
 		ProductAdded, ProductRemoved, AssortmentSizeChanged,
+		AdAppeared, AdLost, AdCompetitorEntered,
+		ShelfEntered, ShelfLost, ShelfCompetitorEntered,
 	}
 }

@@ -775,3 +775,80 @@ func TestPromotions_APromotionIsNotASearchPlacement(t *testing.T) {
 		t.Error("вместе с акцией пропала и обычная выдача")
 	}
 }
+
+// shelfOfProduct files one reading of the «похожие» row under a product.
+func shelfOfProduct(t *testing.T, s *Store, owner int64, members ...int64) {
+	t.Helper()
+	if _, err := s.SaveProductShelf(context.Background(), wb.ProductShelf{
+		NmID: owner, Title: "Похожие", Members: members,
+	}); err != nil {
+		t.Fatalf("SaveProductShelf: %v", err)
+	}
+}
+
+func TestSlots_LeavingAShelfIsFindableAtAll(t *testing.T) {
+	// A product that left has no row in the newest reading, so a query over
+	// new rows alone can never name it — and «выбыл с полки» is the half worth
+	// telling somebody about.
+	s := openTestStore(t)
+	ctx := context.Background()
+	at := time.Date(2026, 8, 20, 9, 0, 0, 0, time.UTC)
+
+	s.SetClock(func() time.Time { return at.Add(-time.Hour) })
+	shelfOfProduct(t, s, 777, 100, 200)
+	first := at.Add(-time.Hour).Unix()
+
+	s.SetClock(func() time.Time { return at })
+	shelfOfProduct(t, s, 777, 100)
+
+	keys, err := s.SlotsChangedSince(ctx, first)
+	if err != nil {
+		t.Fatalf("SlotsChangedSince: %v", err)
+	}
+	seen := map[int64]bool{}
+	for _, k := range keys {
+		if k.Source != ShelfSourceProduct || k.Key != "777" {
+			t.Errorf("ключ не про полку товара 777: %+v", k)
+		}
+		seen[k.NmID] = true
+	}
+	if !seen[200] {
+		t.Error("выбывший с полки товар не попал в список изменившихся")
+	}
+
+	points, err := s.LastTwoSlots(ctx, SlotKey{NmID: 200, Source: ShelfSourceProduct, Key: "777"})
+	if err != nil {
+		t.Fatalf("LastTwoSlots: %v", err)
+	}
+	if len(points) != 2 {
+		t.Fatalf("прочитано %d замеров", len(points))
+	}
+	if !points[0].In || points[1].In {
+		t.Errorf("замеры = %+v, ожидалось «был» и «нет»", points)
+	}
+}
+
+func TestSlots_APhrasesPlacementsAndAProductsShelfAreTwoThings(t *testing.T) {
+	// One writer, one pair of tables, two sources. A key that lost the source
+	// would compare a phrase's paid placements with a product's shelf and call
+	// the difference a change.
+	s := openTestStore(t)
+	ctx := context.Background()
+	at := time.Date(2026, 8, 20, 9, 0, 0, 0, time.UTC)
+	s.SetClock(func() time.Time { return at })
+
+	adsReading(t, s, "платье", "-1257786", 100)
+	shelfOfProduct(t, s, 777, 100)
+
+	keys, err := s.SlotsChangedSince(ctx, at.Add(-time.Hour).Unix())
+	if err != nil {
+		t.Fatalf("SlotsChangedSince: %v", err)
+	}
+	sources := map[string]int{}
+	for _, k := range keys {
+		sources[k.Source]++
+	}
+	if sources[ShelfSourceQuery] == 0 || sources[ShelfSourceProduct] == 0 {
+		t.Errorf("источники = %v, ожидались оба", sources)
+	}
+}

@@ -86,6 +86,13 @@ func (a *App) detectChanges(ctx context.Context) {
 		highest = max(highest, at)
 	}
 
+	if n, at, err := a.applySlots(ctx, engine, all, since); err != nil {
+		a.Log.Printf("правила: реклама и полки: %v", err)
+	} else {
+		fired += n
+		highest = max(highest, at)
+	}
+
 	if n, at, err := a.applyAssortment(ctx, engine, all, since); err != nil {
 		a.Log.Printf("правила: ассортимент: %v", err)
 	} else {
@@ -329,6 +336,89 @@ func (a *App) applyPromotion(ctx context.Context, e *rules.Engine, all []rules.R
 		fired += n
 	}
 	return fired, newest, nil
+}
+
+// applySlots tells the rules who came and went in the paid placements and on
+// the shelves under products.
+//
+// Spec section 6.1's advertising and shelf groups, which turn out to be one
+// question asked of two sources: a shelf is a named block with products in it,
+// read at a moment, and what differs is whether it was read for a phrase or
+// for a product.
+//
+// Whose product moved and whose shelf it moved into is what turns a membership
+// into a sentence, and neither is answerable from the shelf alone — so the
+// profile's own products are read once, here, rather than per slot.
+func (a *App) applySlots(ctx context.Context, e *rules.Engine, all []rules.Rule, since int64) (int, int64, error) {
+	keys, err := a.Store.SlotsChangedSince(ctx, since)
+	if err != nil {
+		return 0, 0, err
+	}
+	if len(keys) == 0 {
+		return 0, 0, nil
+	}
+	mine, err := a.Store.MyProducts(ctx)
+	if err != nil {
+		return 0, 0, err
+	}
+
+	fired, highest := 0, int64(0)
+	for _, key := range keys {
+		points, err := a.Store.LastTwoSlots(ctx, key)
+		if err != nil {
+			return fired, highest, err
+		}
+		if len(points) == 0 {
+			continue
+		}
+		highest = max(highest, points[len(points)-1].TS)
+		if len(points) < 2 {
+			continue
+		}
+
+		changes, err := track.DiffSlot(slotOf(key, points[0], mine), slotOf(key, points[1], mine))
+		if err != nil {
+			return fired, highest, fmt.Errorf("сравнение полок: %w", err)
+		}
+		for _, c := range changes {
+			facts, err := a.Store.Facts(ctx, key.NmID)
+			if err != nil {
+				return fired, highest, err
+			}
+			jobs, err := a.Store.JobsOfProduct(ctx, key.NmID)
+			if err != nil {
+				return fired, highest, err
+			}
+			n, err := e.Apply(ctx, all, rules.Event{
+				Change: c,
+				Brand:  facts.Brand, SupplierID: facts.SupplierID, SubjectID: facts.SubjectID,
+				JobIDs: jobs,
+			})
+			if err != nil {
+				return fired, highest, err
+			}
+			fired += n
+		}
+	}
+	return fired, highest, nil
+}
+
+// slotOf turns a stored reading into the shape track diffs.
+//
+// OnMine is only ever true for a product's own shelf: a phrase's shelf belongs
+// to nobody, and the key of one is a phrase rather than an article number.
+func slotOf(key store.SlotKey, p store.SlotPoint, mine map[int64]bool) track.Slot {
+	s := track.Slot{
+		NmID: key.NmID, Source: key.Source, Key: key.Key,
+		Dest: key.Dest, AppType: key.AppType,
+		TS: p.TS, In: p.In, Mine: mine[key.NmID],
+	}
+	if key.Source == track.SlotSourceProduct {
+		if owner, err := strconv.ParseInt(key.Key, 10, 64); err == nil {
+			s.OnMine = mine[owner]
+		}
+	}
+	return s
 }
 
 // applyAssortment tells the rules what a storefront gained and lost.
