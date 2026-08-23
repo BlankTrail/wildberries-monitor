@@ -11,6 +11,7 @@ import (
 
 	"github.com/BlankTrail/wildberries-monitor/internal/events"
 	"github.com/BlankTrail/wildberries-monitor/internal/job"
+	"github.com/BlankTrail/wildberries-monitor/internal/store"
 )
 
 // This file is the live half of the interface: what a run is doing, arriving
@@ -72,6 +73,22 @@ func (s *Server) live(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
 
+	// Where things stand, before anything else happens.
+	//
+	// This stream carries what is published from now on, and a run publishes
+	// progress only when an item finishes — which for a storefront walk is
+	// once every few minutes. So a tab opened in the middle of a run showed
+	// «План составляется…» over an empty log for minutes, and there was no way
+	// to tell that from a run that had hung. And a tab opened after the run
+	// ended showed it forever.
+	if name, data, ok := s.standing(r, jobID); ok {
+		writeEvent(w, name, data)
+		flusher.Flush()
+		if name == "done" {
+			return
+		}
+	}
+
 	for {
 		select {
 		case <-r.Context().Done():
@@ -104,6 +121,52 @@ func (s *Server) live(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+}
+
+// standing is the first message: what the job's newest run is doing right now,
+// or that it is over.
+//
+// Built from the store rather than from the bus, because the bus has no memory:
+// what it said before this connection opened is gone.
+func (s *Server) standing(r *http.Request, jobID int64) (name, data string, ok bool) {
+	ctx := r.Context()
+	runs, err := s.Store.Runs(ctx, jobID, 1)
+	if err != nil || len(runs) == 0 {
+		// No run yet. «План составляется…» is then the truth.
+		return "", "", false
+	}
+
+	run := runs[0]
+	if run.FinishedAt != nil {
+		// Over before anybody looked. Said as the same event a live run ends
+		// with, so the screen does with it whatever it does with that — which
+		// on the profile tab is to move the chain on and redraw.
+		return "done", finishedText(run), true
+	}
+
+	done, total, err := s.Store.RunStanding(ctx, run.ID)
+	if err != nil {
+		return "", "", false
+	}
+	return "progress", progressHTML(job.Progress{
+		Done: done, Total: total,
+		Items: run.Items, Failed: run.Errors, Requests: run.Requests,
+		// No ports: the pool belongs to the run's own process and this is a
+		// reading from the database. The next live frame carries them, and a
+		// table that appeared and then changed shape would be worse than one
+		// that arrives once.
+	}), true
+}
+
+// finishedText is how a run that ended before the screen opened is announced.
+func finishedText(run store.RunRow) string {
+	if run.State == store.RunDone {
+		return fmt.Sprintf("готово: собрано %d, запросов %d", run.Items, run.Requests)
+	}
+	if run.Error != "" {
+		return "задание " + run.State + ": " + run.Error
+	}
+	return "задание " + run.State
 }
 
 // renderEvent turns one event into the name and body of an SSE message.

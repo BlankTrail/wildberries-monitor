@@ -406,6 +406,24 @@ func (s *Store) Runs(ctx context.Context, jobID int64, limit int) ([]RunRow, err
 	return out, nil
 }
 
+// RunStanding is how far a run has got: how many of its items have reached a
+// terminal state, and how many there are.
+//
+// Read from the plan rather than counted as the run goes, because the plan is
+// written before the run starts — which is what lets a screen that opens in the
+// middle say «7 из 21» instead of «План составляется…» until the next item
+// happens to finish.
+func (s *Store) RunStanding(ctx context.Context, runID int64) (done, total int64, err error) {
+	err = s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*), COALESCE(SUM(CASE WHEN state IN (?, ?, ?) THEN 1 ELSE 0 END), 0)
+		  FROM job_items WHERE run_id = ?`,
+		ItemDone, ItemFailed, ItemSkipped, runID).Scan(&total, &done)
+	if err != nil {
+		return 0, 0, fmt.Errorf("store: ход прогона %d: %w", runID, err)
+	}
+	return done, total, nil
+}
+
 // FailedItems are the items of one run that did not finish, with what went
 // wrong on each.
 //

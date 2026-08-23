@@ -976,3 +976,29 @@ func TestClient_BrandPropagatesADecodeFailure(t *testing.T) {
 		t.Fatal("a malformed body was accepted without error")
 	}
 }
+
+func TestDecodeSellerProfile_TakesAFractionalDeliveryDuration(t *testing.T) {
+	// The site sends hours fractional — 38.33 for a seller who ships in a day
+	// and a half. Read as a whole number the entire document failed to decode,
+	// so the seller had no record at all and the profile screen said «данные о
+	// продавце ещё не собраны» about a card that had arrived and been thrown
+	// away over one field.
+	for _, c := range []struct {
+		raw  string
+		want int64
+	}{
+		{"38.33", 38},
+		{"38.9", 39},
+		{"7", 7},
+		{"0", 0},
+	} {
+		got, err := decodeSellerProfile([]byte(`{"id":86346,"valuation":"4.8",` +
+			`"deliveryDuration":` + c.raw + `}`))
+		if err != nil {
+			t.Fatalf("deliveryDuration %s: %v", c.raw, err)
+		}
+		if got.DeliveryDuration == nil || *got.DeliveryDuration != c.want {
+			t.Errorf("deliveryDuration %s -> %v, ожидалось %d", c.raw, got.DeliveryDuration, c.want)
+		}
+	}
+}

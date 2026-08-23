@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/url"
 	"strconv"
 	"strings"
@@ -156,14 +157,19 @@ type sellerProfile struct {
 // decodeSellerStatic guards against on its own three fields.
 func decodeSellerProfile(raw []byte) (sellerProfile, error) {
 	var r struct {
-		ID                          int64     `json:"id"`
-		Valuation                   string    `json:"valuation"`
-		FeedbacksCount              int64     `json:"feedbacksCount"`
-		RegistrationDate            time.Time `json:"registrationDate"`
-		SaleItemQuantity            int64     `json:"saleItemQuantity"`
-		DeliveryDuration            int64     `json:"deliveryDuration"`
-		IsPremium                   bool      `json:"isPremium"`
-		SupplierLoyaltyProgramLevel int       `json:"supplierLoyaltyProgramLevel"`
+		ID               int64     `json:"id"`
+		Valuation        string    `json:"valuation"`
+		FeedbacksCount   int64     `json:"feedbacksCount"`
+		RegistrationDate time.Time `json:"registrationDate"`
+		SaleItemQuantity int64     `json:"saleItemQuantity"`
+		// A number of hours, and the site sends it fractional: 38.33 for a
+		// seller who ships in a day and a half. Read as an int64 the whole
+		// document failed to decode and the seller had no record at all — the
+		// screen said «данные о продавце ещё не собраны» about a card that had
+		// arrived and been thrown away over one field.
+		DeliveryDuration            float64 `json:"deliveryDuration"`
+		IsPremium                   bool    `json:"isPremium"`
+		SupplierLoyaltyProgramLevel int     `json:"supplierLoyaltyProgramLevel"`
 	}
 	if err := json.Unmarshal(raw, &r); err != nil {
 		return sellerProfile{}, fmt.Errorf("wb: decode seller profile: %w", err)
@@ -179,7 +185,10 @@ func decodeSellerProfile(raw []byte) (sellerProfile, error) {
 	feedbackCount := r.FeedbacksCount
 	registeredAt := r.RegistrationDate
 	itemCount := r.SaleItemQuantity
-	deliveryDuration := r.DeliveryDuration
+	// Rounded to whole hours, which is what the column holds and what anybody
+	// reading «доставка 38 ч» means. Truncating rather than rounding would call
+	// 38.9 hours thirty-eight.
+	deliveryDuration := int64(math.Round(r.DeliveryDuration))
 	return sellerProfile{
 		ID:               r.ID,
 		Valuation:        &valuation,

@@ -15,6 +15,7 @@ import (
 	"github.com/BlankTrail/wildberries-monitor/internal/collect"
 	"github.com/BlankTrail/wildberries-monitor/internal/events"
 	"github.com/BlankTrail/wildberries-monitor/internal/job"
+	"github.com/BlankTrail/wildberries-monitor/internal/store"
 )
 
 // liveServer is a server with a bus, listening on a real port.
@@ -25,6 +26,13 @@ import (
 // checked after it returned, which is the one moment its liveness does not
 // matter.
 func liveServer(t *testing.T) (*httptest.Server, *events.Bus) {
+	ts, bus, _ := liveServerWithStore(t)
+	return ts, bus
+}
+
+// liveServerWithStore hands back the panel too, for a test that has to put
+// something in the database the stream then reads.
+func liveServerWithStore(t *testing.T) (*httptest.Server, *events.Bus, *Server) {
 	t.Helper()
 	srv := newServer(t)
 	bus := events.New()
@@ -33,7 +41,7 @@ func liveServer(t *testing.T) (*httptest.Server, *events.Bus) {
 
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
-	return ts, bus
+	return ts, bus, srv
 }
 
 // openStream connects to /live and returns the response, ready to be read
@@ -412,5 +420,64 @@ func TestLive_AnItemReadByTheCollectorReachesTheLog(t *testing.T) {
 
 	if msg := readMessage(t, res); !strings.Contains(msg, "платье прочитано") {
 		t.Errorf("прочитанный товар не дошёл до лога: %q", msg)
+	}
+}
+
+func TestLive_SaysWhereThingsStandTheMomentItOpens(t *testing.T) {
+	// The stream carries what is published from now on, and a run publishes
+	// progress only when an item finishes — which for a storefront walk is once
+	// every few minutes. So a tab opened in the middle of one showed «План
+	// составляется…» over an empty log, and there was no telling that from a
+	// run that had hung.
+	ts, _, srv := liveServerWithStore(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	id := savedJobRow(t, srv, "витрина", "", true)
+	runID, err := srv.Store.StartRun(ctx, id, []store.ItemRow{
+		{Position: 1, Kind: "listing", Key: "a", State: "pending"},
+		{Position: 2, Kind: "listing", Key: "b", State: "pending"},
+		{Position: 3, Kind: "listing", Key: "c", State: "pending"},
+	})
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+	if err := srv.Store.FinishItem(ctx, runID, 1, store.ItemDone, ""); err != nil {
+		t.Fatalf("FinishItem: %v", err)
+	}
+
+	res := openStream(ctx, t, ts, itoa(id))
+	msg := readMessage(t, res)
+	if !strings.Contains(msg, "1 из 3") {
+		t.Errorf("поток молчит о том, где прогон: %q", msg)
+	}
+}
+
+func TestLive_ARunThatEndedBeforeTheScreenOpenedIsSaidToBeOver(t *testing.T) {
+	// Otherwise the panel waits for an event that will never come and reports
+	// «Идёт сбор» over a job that finished an hour ago — and on the profile tab
+	// that is what stops the chain's next stage from ever being followed.
+	ts, _, srv := liveServerWithStore(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	id := savedJobRow(t, srv, "уже прошло", "", true)
+	runID, err := srv.Store.StartRun(ctx, id, []store.ItemRow{
+		{Position: 1, Kind: "listing", Key: "a", State: "pending"},
+	})
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+	if err := srv.Store.FinishRun(ctx, runID, store.RunDone, 12, 34, 0, ""); err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+
+	res := openStream(ctx, t, ts, itoa(id))
+	msg := readMessage(t, res)
+	if !strings.Contains(msg, "event: done") {
+		t.Errorf("о законченном прогоне поток не сказал: %q", msg)
+	}
+	if !strings.Contains(msg, "собрано 34") {
+		t.Errorf("не сказано, чем кончилось: %q", msg)
 	}
 }
