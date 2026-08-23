@@ -5,6 +5,7 @@ package app
 import (
 	"context"
 	"errors"
+	"sync"
 
 	"github.com/BlankTrail/wildberries-monitor/internal/geo"
 	"github.com/BlankTrail/wildberries-monitor/internal/store"
@@ -63,32 +64,95 @@ func (a *App) refreshPickupDirectory(ctx context.Context) (int, int, error) {
 // keeps a closed point from quietly dropping a whole region out of «все
 // региональные центры».
 //
-// Sequential on purpose: they go through the standing port, which is one port,
-// and firing them at it in parallel would only queue them behind each other
-// with the pool's cooldown in between.
+// Several at a time, which «все региональные центры» is the reason for: that
+// preset is eighty-five groups, and asked one after another it is eighty-five
+// round trips to the site in a row while somebody watches a spinner.
+//
+// They all go through the standing port, and that is fine — the port's own
+// cooldown is derived from the job delay, which is nought here, so requests
+// through it overlap rather than queue. What bounds this is the site's
+// patience rather than the port's: a handful in flight is quick and unremarkable,
+// and a hundred at once is a burst nobody needs to send.
+//
+// The order of the answers is the order of the groups, whatever order they
+// come back in. «Все региональные центры» would otherwise put a different list
+// in the box every time it is pressed, and a list that reshuffles itself is
+// one nobody can check against last time.
+const pickupThreads = 8
+
 func (a *App) resolvePickup(ctx context.Context, groups [][]int64) (store.PickupResolution, error) {
+	return mergeAnswers(fanOut(ctx, len(groups), pickupThreads, func(i int) answer {
+		var counted store.PickupResolution
+		dest, err := a.resolveGroup(ctx, groups[i], &counted)
+		return answer{dest: dest, asked: counted.Asked, tried: counted.Tried, err: err}
+	}))
+}
+
+// answer is what one group came back with.
+type answer struct {
+	dest         int64
+	asked, tried int
+	err          error
+}
+
+// fanOut runs one piece of work per index, several at a time, and returns the
+// answers in the order of the indexes rather than of the finishing.
+func fanOut(ctx context.Context, n, threads int, do func(int) answer) []answer {
+	answers := make([]answer, n)
+	if n == 0 {
+		return answers
+	}
+
+	var wg sync.WaitGroup
+	work := make(chan int)
+	for range min(threads, n) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range work {
+				if err := ctx.Err(); err != nil {
+					answers[i] = answer{err: err}
+					continue
+				}
+				answers[i] = do(i)
+			}
+		}()
+	}
+	for i := range n {
+		work <- i
+	}
+	close(work)
+	wg.Wait()
+	return answers
+}
+
+// mergeAnswers counts them up and puts the codes in the order they were asked
+// for.
+//
+// Here rather than in the workers: a shared counter would need a lock around
+// every increment, and a shared «уже видели» would make which duplicate wins
+// depend on which request finished first — so the same preset, pressed twice,
+// could put two different lists in the box.
+func mergeAnswers(answers []answer) (store.PickupResolution, error) {
 	var out store.PickupResolution
 	seen := map[int64]bool{}
-
-	for _, group := range groups {
-		if err := ctx.Err(); err != nil {
-			return out, err
+	for _, a := range answers {
+		out.Asked += a.asked
+		out.Tried += a.tried
+		if a.err != nil {
+			return out, a.err
 		}
-		dest, err := a.resolveGroup(ctx, group, &out)
-		if err != nil {
-			return out, err
-		}
-		if dest == 0 {
+		if a.dest == 0 {
 			// Every candidate for this code was closed or unreachable.
 			out.Failed++
 			continue
 		}
-		if seen[dest] {
+		if seen[a.dest] {
 			continue
 		}
-		seen[dest] = true
+		seen[a.dest] = true
 		out.Resolved++
-		out.Dests = append(out.Dests, dest)
+		out.Dests = append(out.Dests, a.dest)
 	}
 	return out, nil
 }

@@ -129,11 +129,35 @@ func (s *Server) jobsHTML(r *http.Request, open bool) (string, error) {
 // wants a dest code and this is where the code comes from. That is possible
 // only because the picker carries no forms of its own any more — what to add
 // travels in each press's address — and a form inside a form is not HTML.
-func (s *Server) regionHelp(r *http.Request) string {
+func (s *Server) regionHelp(r *http.Request, box regionBox) string {
 	return `<details class="bt-more"><summary>Справочник регионов: выбрать код</summary>` +
-		`<div class="bt-stack">` + s.pickupSection(r) + s.regionsSection(r) + `</div>` +
+		`<div class="bt-stack">` + s.pickupSection(r, box) + s.regionsSection(r) + `</div>` +
 		`</details>`
 }
+
+// regionField is the whole of «где смотреть»: the codes to tick, the box they
+// go into, and the directory a code comes from.
+//
+// One element around all three, and that is the fix rather than the tidying it
+// looks like. A preset resolved eighty-five regional capitals, wrote them into
+// the directory, and answered with the directory alone — the box above it and
+// the list of codes to tick were a sibling nothing redrew. The whole thing
+// worked and the screen showed the same two codes it had before, so the only
+// way to see what had happened was to leave the tab and come back.
+func (s *Server) regionField(r *http.Request, box regionBox) string {
+	return `<div id="` + regionFieldID(box) + `">` +
+		field("Регионы", s.regionControl(r, box),
+			"Каждый регион — отдельный проход: цена, остаток и место в выдаче у Wildberries "+
+				"свои для каждого. Строка внизу — то, что сохранится.") +
+		s.regionHelp(r, box) +
+		`</div>`
+}
+
+// regionFieldID is what a press inside the directory redraws.
+func regionFieldID(box regionBox) string { return box.ID + "-field" }
+
+// fieldTarget is that id as a press names it.
+func fieldTarget(box regionBox) string { return "#" + regionFieldID(box) }
 
 // jobConstructor is what sits under the list: the press that opens the
 // constructor, or the constructor itself.
@@ -463,13 +487,11 @@ func (s *Server) constructorHTML(r *http.Request) (string, error) {
 	b.WriteString(`<h3 class="bt-form-head">Где смотреть</h3>`)
 	// The regions across the whole width: it is a list to tick, and squeezed
 	// into a third of the row every line of it wraps.
-	b.WriteString(field("Регионы",
-		s.regionControl(r, regionBox{ID: "job-regions", Value: profileRegion, Estimate: true}),
-		"Цена, остаток и место в выдаче — все региональные, поэтому регион обязателен. Строка внизу — то, что сохранится."))
-	// Where the codes come from, under the field that asks for them and folded
-	// away — it is a question somebody has once, and open it would bury the
-	// rest of the form under a map of four thousand settlements.
-	b.WriteString(s.regionHelp(r))
+	// Where the codes come from is under the field that asks for them and
+	// folded away — it is a question somebody has once, and open it would bury
+	// the rest of the form under a map of four thousand settlements.
+	b.WriteString(s.regionField(r,
+		regionBox{ID: "job-regions", Value: regionsChosen(r, profileRegion), Estimate: true}))
 	b.WriteString(`<div class="bt-form-grid">`)
 	b.WriteString(field("Аудитория", `<input class="bt-input" name="app_type" type="number" value="1" data-estimate>`,
 		"Код приложения. Одно задание — одна аудитория: место в выдаче для веба и для Android — разные факты."))
@@ -1387,6 +1409,24 @@ func (s *Server) regionControl(r *http.Request, box regionBox) string {
 	b.WriteString(field)
 	b.WriteString(`</div>`)
 	return b.String()
+}
+
+// regionsChosen is what belongs in the box: what the caller asked for, or what
+// a press in the directory has just added to it.
+//
+// The press carries the box's current value with it — see data-with in app.js
+// — so that resolving «все региональные центры» adds eighty-five codes to
+// whatever was already there instead of replacing it, and so that the answer
+// can put them in the box rather than leaving somebody to copy them across
+// from a table.
+func regionsChosen(r *http.Request, fallback string) string {
+	if r == nil {
+		return fallback
+	}
+	if got := strings.TrimSpace(r.FormValue("regions")); got != "" {
+		return got
+	}
+	return fallback
 }
 
 // regionBox is the text field a region picker writes into.

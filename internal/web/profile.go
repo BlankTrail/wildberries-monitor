@@ -136,11 +136,8 @@ func (s *Server) profileForm(r *http.Request) string {
 	// press starts the whole collection, and every number it collects — price,
 	// stock, place in the results — is regional. Chosen after the fact, the
 	// region would be the region of the second run.
-	b.WriteString(field("Регионы",
-		s.regionControl(r, regionBox{ID: "new-profile-regions", Value: profileRegion}),
-		"Цена, остаток и место в выдаче у Wildberries свои для каждого региона. "+
-			"Строка внизу — то, что сохранится."))
-	b.WriteString(s.regionHelp(r))
+	b.WriteString(s.regionField(r,
+		regionBox{ID: "new-profile-regions", Value: regionsChosen(r, profileRegion)}))
 	b.WriteString(s.runControls(r, store.RunControls{}))
 	b.WriteString(`<div class="bt-form-actions"><button class="bt-btn bt-btn--primary" type="submit">Разобрать</button></div>`)
 	b.WriteString(`</form>`)
@@ -320,14 +317,10 @@ func (s *Server) profilePlanForm(r *http.Request, p store.ProfileRow) string {
 	// the same way the job constructor does it. Squeezed into a third of a row
 	// the tick-list wraps every line, and the directory at the very bottom of
 	// the card was a page away from the field that asks for a code.
-	b.WriteString(field("Регионы",
-		s.regionControl(r, regionBox{
-			ID:    fmt.Sprintf("profile-regions-%d", p.ID),
-			Value: strings.Join(p.Regions, ", "),
-		}),
-		"Каждый регион — отдельный проход: цены, остатки и места в выдаче у Wildberries "+
-			"свои для каждого. Строка внизу — то, что сохранится."))
-	b.WriteString(s.regionHelp(r))
+	b.WriteString(s.regionField(r, regionBox{
+		ID:    fmt.Sprintf("profile-regions-%d", p.ID),
+		Value: strings.Join(p.Regions, ", "),
+	}))
 
 	b.WriteString(`<div class="bt-form-grid">`)
 	b.WriteString(field("Страниц витрины",

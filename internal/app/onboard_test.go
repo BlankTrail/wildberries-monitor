@@ -133,11 +133,19 @@ func TestProfileChain_WalksTheStagesInOrder(t *testing.T) {
 	}
 	// Deriving the phrases costs no request, so the chain does not stop on it:
 	// one pass carries it through to the check and the job that waits.
-	if after.Stage != store.StageRivals {
-		t.Fatalf("после ассортимента этап %q, ожидался %q", after.Stage, store.StageRivals)
-	}
+	//
+	// The check job's existence is what says the chain got here, and the stage
+	// is only where it happens to be standing. Under a loaded machine that job
+	// can finish while this line is being read — the runner is a fake and its
+	// work is instant — and the bus nudges the chain on to the next stage
+	// without anybody asking. Reading the stage alone made this test fail
+	// about once in four whole-package runs, always with «done» where «rivals»
+	// was expected, and every time the chain had done exactly what it should.
 	if after.CheckJob == 0 {
-		t.Fatal("задание на проверку фраз не создано")
+		t.Fatal("задание на проверку фраз не создано — этап конкурентов пропущен")
+	}
+	if after.Stage != store.StageRivals && after.Stage != store.StageDone {
+		t.Fatalf("после ассортимента этап %q, ожидался %q", after.Stage, store.StageRivals)
 	}
 	candidates, err := a.Store.ProfilePhrases(ctx, p.ID, store.PhraseCandidate)
 	if err != nil {
@@ -1264,12 +1272,35 @@ func TestProfileChain_PicksUpARunTheProgramWasStoppedIn(t *testing.T) {
 
 	// The chain picks it up rather than waiting on it forever.
 	seedStorefront(t, a, 4242)
-	// Asked on every pass, the way the tick asks: a start that did not take —
-	// the control API busy, the machine loaded — is retried next round rather
-	// than leaving the profile stuck on one refused attempt.
-	settled(t, "прерванное задание не подняли", func() bool {
-		a.advanceProfiles(ctx)
-		return !a.orphaned(ctx, got.CatalogJob)
+
+	// Asked once, and then waited on. Asking on every poll was the shape this
+	// had for a while, and it made the failure it was meant to prevent: each
+	// pass that found the run still orphaned started another goroutine, so a
+	// machine slow enough to be late by one poll was handed two hundred more
+	// jobs to schedule and got slower. What the chain owes is one start; what
+	// takes time afterwards is the goroutine reaching the scheduler, and that
+	// is a thing to wait for rather than to ask for again.
+	//
+	// The refusal, if there is one, is logged by advanceProfiles — so a
+	// failure here says «не поднялось за N секунд» and the log above it says
+	// why, instead of a timeout with nothing behind it.
+	waited(t, 20*time.Second, "прерванное задание не подняли", func() bool {
+		if a.orphaned(ctx, got.CatalogJob) {
+			// Asked again, the way the tick asks: starting a job dials the
+			// control API, and a dial that did not answer this second is a
+			// thing to try again next round rather than to give up on.
+			//
+			// Every quarter second and not every poll. Asking on every poll —
+			// which this did for a while — starts a goroutine each time it
+			// finds the run still orphaned, so a machine slow enough to be
+			// late by one poll gets handed two hundred more jobs to schedule
+			// and becomes slower. The retry is what makes this test survive a
+			// busy machine; the interval is what stops it causing one.
+			a.advanceProfiles(ctx)
+			time.Sleep(250 * time.Millisecond)
+			return false
+		}
+		return true
 	})
 }
 

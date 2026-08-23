@@ -158,6 +158,27 @@ func press(url, target, label, class string) string {
 		html.EscapeString(label) + `</button>`
 }
 
+// pressWith is press that takes a field's current value along with it.
+//
+// The shared form is empty by design, which is what lets a picker of a hundred
+// rows live inside the form it is filling in — but a press that resolves
+// eighty-five regions has to put them somewhere, and «somewhere» is the box on
+// the screen it was pressed from. Without its current value the answer could
+// only replace what was there, so ticking Moscow and then pressing «все
+// региональные центры» would lose Moscow.
+//
+// with is the id of the element to send. See data-with in app.js.
+func pressWith(url, target, with, label, class string) string {
+	if class == "" {
+		class = "bt-btn bt-btn--secondary bt-btn--sm"
+	}
+	return `<button class="` + class + `" type="submit" form="` + sharedFormID +
+		`" data-post="` + html.EscapeString(url) +
+		`" data-target="` + html.EscapeString(target) +
+		`" data-with="#` + html.EscapeString(with) + `">` +
+		html.EscapeString(label) + `</button>`
+}
+
 // pressRaw is press for a label that is already markup.
 func pressRaw(url, target, inner, class string) string {
 	return `<button class="` + class + `" type="submit" form="` + sharedFormID +

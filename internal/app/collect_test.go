@@ -89,6 +89,24 @@ func collectible(t *testing.T, a *App, schedule string) int64 {
 
 // settled waits for a background run to reach a state, and says what it was
 // waiting for rather than timing the package out.
+// waited is settled with a budget named at the call site.
+//
+// Five seconds is right for «the fake runner finished an item»; it is not
+// right for «a goroutine reached the scheduler on a machine running six copies
+// of this package at once», which is a wait on the operating system rather
+// than on this program.
+func waited(t *testing.T, budget time.Duration, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(budget)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("не дождались за %s: %s", budget, what)
+}
+
 func settled(t *testing.T, what string, cond func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)

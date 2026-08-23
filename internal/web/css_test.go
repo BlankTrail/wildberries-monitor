@@ -126,3 +126,22 @@ func ruleBody(css, opener string) string {
 	}
 	return rest[:j]
 }
+
+func TestScript_APressCanTakeOneFieldWithIt(t *testing.T) {
+	// The two halves of data-with are in different languages: the server puts
+	// the attribute on a button, the script reads it and appends that field to
+	// the request. Nothing else would notice them drifting apart — and without
+	// the script's half, resolving eighty-five regions replaces whatever was
+	// already chosen instead of adding to it.
+	raw, err := staticFS.ReadFile("static/app.js")
+	if err != nil {
+		t.Fatalf("app.js: %v", err)
+	}
+	script := string(raw)
+	if !strings.Contains(script, "by.dataset.with") {
+		t.Fatal("скрипт не читает data-with")
+	}
+	if !strings.Contains(script, "body.append(with_.name, with_.value)") {
+		t.Error("скрипт читает data-with и не кладёт поле в запрос")
+	}
+}

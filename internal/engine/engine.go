@@ -79,12 +79,6 @@ func (e *Engine) Check(ctx context.Context) error {
 	return err
 }
 
-// RunnerFor builds everything one job needs, and the cleanup that closes it.
-//
-// The order is the order things can fail in, cheapest first: settings before a
-// network call, the preflight before ports are opened, ports before a plan is
-// written. Opening a pool and then discovering the licence is expired would
-// have spent the ports to learn it.
 // retryPolicyFor is the budget one job's requests are given.
 //
 // The job's own where it names one, and otherwise the build's — which differs
@@ -100,6 +94,12 @@ func retryPolicyFor(j job.Job, pooled bool) wb.RetryPolicy {
 	return policy
 }
 
+// RunnerFor builds everything one job needs, and the cleanup that closes it.
+//
+// The order is the order things can fail in, cheapest first: settings before a
+// network call, the preflight before ports are opened, ports before a plan is
+// written. Opening a pool and then discovering the licence is expired would
+// have spent the ports to learn it.
 func (e *Engine) RunnerFor(ctx context.Context, j job.Job) (*job.Runner, func(), error) {
 	client, err := e.control(ctx)
 	if err != nil {

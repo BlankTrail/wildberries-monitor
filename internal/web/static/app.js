@@ -125,7 +125,15 @@
         // FormData over a file input streams the file rather than reading it
         // in: a hundred thousand phrases must not have to fit in the tab's
         // memory before the upload starts.
-        await swap(into, url, { method: "POST", body: new FormData(form) });
+        // A press may take one field along with it. The shared form is empty
+        // by design — that is what lets a picker of a hundred rows live inside
+        // the form it fills in — so a press that has to know what is already
+        // in a box says which box, and the answer can add to it instead of
+        // replacing it.
+        const body = new FormData(form);
+        const with_ = by && by.dataset.with && document.querySelector(by.dataset.with);
+        if (with_ && with_.name) body.append(with_.name, with_.value);
+        await swap(into, url, { method: "POST", body });
       });
     });
 

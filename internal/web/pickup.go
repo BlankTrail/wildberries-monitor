@@ -25,16 +25,29 @@ import (
 // it holds and how many of those already have their code, and no choice is
 // acted on before that number has been shown.
 
+// boxOf is the region field a press in this picker belongs to.
+//
+// It travels in the address, the way every other parameter of these presses
+// does, because one picker is rendered on three screens and each has its own
+// box: writing into an id that belongs to another screen's field would tick
+// boxes and change nothing.
+func boxOf(r *http.Request) regionBox {
+	return regionBox{
+		ID:    strings.TrimSpace(r.FormValue("box")),
+		Value: strings.TrimSpace(r.FormValue("regions")),
+	}
+}
+
 // pickupSection is the whole picker.
-func (s *Server) pickupSection(r *http.Request) string {
+func (s *Server) pickupSection(r *http.Request, box regionBox) string {
 	var b strings.Builder
 	b.WriteString(`<div class="bt-stack" id="pickup-box">`)
-	b.WriteString(s.pickupBody(r))
+	b.WriteString(s.pickupBody(r, box))
 	b.WriteString(`</div>`)
 	return b.String()
 }
 
-func (s *Server) pickupBody(r *http.Request) string {
+func (s *Server) pickupBody(r *http.Request, box regionBox) string {
 	ctx := r.Context()
 	state, err := s.Store.PickupDirectory(ctx)
 	if err != nil {
@@ -56,9 +69,9 @@ func (s *Server) pickupBody(r *http.Request) string {
 		return b.String()
 	}
 
-	b.WriteString(s.pickupPresets())
+	b.WriteString(s.pickupPresets(box))
 	b.WriteString(`<div class="bt-cols bt-cols--three">`)
-	b.WriteString(`<div class="bt-col" id="pickup-regions">` + s.pickupRegions(r) + `</div>`)
+	b.WriteString(`<div class="bt-col" id="pickup-regions">` + s.pickupRegions(r, box) + `</div>`)
 	b.WriteString(`<div class="bt-col" id="pickup-settlements">` + pickupHint("Выберите регион") + `</div>`)
 	b.WriteString(`<div class="bt-col" id="pickup-points">` + pickupHint("Выберите населённый пункт") + `</div>`)
 	b.WriteString(`</div>`)
@@ -83,7 +96,7 @@ func pickupHint(text string) string {
 // «Все региональные центры» is eighty-five delivery points and eighty-five
 // codes to fetch once. The two halves of the country are the same thing cut
 // along the federal districts, which is a line somebody can check.
-func (s *Server) pickupPresets() string {
+func (s *Server) pickupPresets(box regionBox) string {
 	var b strings.Builder
 	b.WriteString(`<div class="bt-form-grid bt-form-grid--tight">`)
 	for _, p := range []struct{ part, label, hint string }{
@@ -99,8 +112,8 @@ func (s *Server) pickupPresets() string {
 		// lets the whole picker sit inside the form it is filling in.
 		b.WriteString(`<div class="bt-inline">` +
 			`<span class="bt-label">` + html.EscapeString(p.label) + info(p.hint) + `</span>` +
-			press(pickupCentresURL(p.part, store.PickCentral), "#pickup-box", "центральный", "") +
-			press(pickupCentresURL(p.part, store.PickRandom), "#pickup-box", "случайный", "") +
+			pressWith(pickupCentresURL(box, p.part, store.PickCentral), fieldTarget(box), box.ID, "центральный", "") +
+			pressWith(pickupCentresURL(box, p.part, store.PickRandom), fieldTarget(box), box.ID, "случайный", "") +
 			`</div>`)
 	}
 	b.WriteString(`</div>`)
@@ -108,7 +121,7 @@ func (s *Server) pickupPresets() string {
 }
 
 // pickupRegions is the first column.
-func (s *Server) pickupRegions(r *http.Request) string {
+func (s *Server) pickupRegions(r *http.Request, box regionBox) string {
 	rows, err := s.Store.PickupRegions(r.Context())
 	if err != nil {
 		return alert("error", err.Error())
@@ -136,6 +149,7 @@ func (s *Server) pickupRegions(r *http.Request) string {
 
 // pickupSettlements is the second column.
 func (s *Server) pickupSettlements(w http.ResponseWriter, r *http.Request) {
+	box := boxOf(r)
 	code := strings.TrimSpace(r.URL.Query().Get("region"))
 	search := strings.TrimSpace(r.URL.Query().Get("q"))
 	region, ok := regionNamed(code)
@@ -160,7 +174,7 @@ func (s *Server) pickupSettlements(w http.ResponseWriter, r *http.Request) {
 		total += row.Points
 	}
 	b.WriteString(`<div class="bt-inline">` +
-		press(pickupRegionURL(code), "#pickup-box",
+		pressWith(pickupRegionURL(box, code), fieldTarget(box), box.ID,
 			fmt.Sprintf("Весь регион: %d пунктов", total), "bt-btn bt-btn--ghost bt-btn--sm") +
 		info("Каждый пункт региона отдельным запросом. Это самый дорогой выбор: столько же кодов "+
 			"придётся узнать один раз, и на столько же умножится каждый запрос задания.") +
@@ -201,6 +215,7 @@ func (s *Server) pickupSettlements(w http.ResponseWriter, r *http.Request) {
 
 // pickupPoints is the third column.
 func (s *Server) pickupPoints(w http.ResponseWriter, r *http.Request) {
+	box := boxOf(r)
 	code := strings.TrimSpace(r.URL.Query().Get("region"))
 	place := strings.TrimSpace(r.URL.Query().Get("place"))
 	if code == "" || place == "" {
@@ -241,7 +256,7 @@ func (s *Server) pickupPoints(w http.ResponseWriter, r *http.Request) {
 			"Когда важен город, а не адрес. В следующий раз может выпасть другой — если это важно, выберите пункт вручную."},
 	} {
 		b.WriteString(`<div class="bt-inline">` +
-			press(pickupSettlementURL(code, place, opt.pick), "#pickup-box",
+			pressWith(pickupSettlementURL(box, code, place, opt.pick), fieldTarget(box), box.ID,
 				opt.label, "bt-btn bt-btn--ghost bt-btn--sm") +
 			info(opt.hint) + `</div>`)
 	}
@@ -264,16 +279,16 @@ func (s *Server) pickupPoints(w http.ResponseWriter, r *http.Request) {
 // refreshPickup reads the site's directory.
 func (s *Server) refreshPickup(w http.ResponseWriter, r *http.Request) {
 	if s.PickupDirectory == nil {
-		s.writeHTML(w, alert("error", "Запрос к сайту недоступен в этой сборке.")+s.pickupBody(r))
+		s.writeHTML(w, alert("error", "Запрос к сайту недоступен в этой сборке.")+s.regionField(r, boxOf(r)))
 		return
 	}
 	places, points, err := s.PickupDirectory(r.Context())
 	if err != nil {
-		s.writeHTML(w, alert("error", "Справочник не прочитался: "+err.Error())+s.pickupBody(r))
+		s.writeHTML(w, alert("error", "Справочник не прочитался: "+err.Error())+s.regionField(r, boxOf(r)))
 		return
 	}
 	s.writeHTML(w, alert("success", fmt.Sprintf(
-		"Прочитано пунктов выдачи: %d в %d населённых пунктах.", points, places))+s.pickupBody(r))
+		"Прочитано пунктов выдачи: %d в %d населённых пунктах.", points, places))+s.regionField(r, boxOf(r)))
 }
 
 // addPickup turns a choice into region codes.
@@ -288,7 +303,7 @@ func (s *Server) addPickup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.ResolvePickup == nil {
-		s.writeHTML(w, alert("error", "Запрос к сайту недоступен в этой сборке.")+s.pickupBody(r))
+		s.writeHTML(w, alert("error", "Запрос к сайту недоступен в этой сборке.")+s.regionField(r, boxOf(r)))
 		return
 	}
 
@@ -307,19 +322,27 @@ func (s *Server) addPickup(w http.ResponseWriter, r *http.Request) {
 	}
 	groups, err := s.Store.ExpandPickup(r.Context(), choice)
 	if err != nil {
-		s.writeHTML(w, alert("error", err.Error())+s.pickupBody(r))
+		s.writeHTML(w, alert("error", err.Error())+s.regionField(r, boxOf(r)))
 		return
 	}
 	if len(groups) == 0 {
-		s.writeHTML(w, alert("neutral", "Под этот выбор не нашлось ни одного пункта выдачи.")+s.pickupBody(r))
+		s.writeHTML(w, alert("neutral", "Под этот выбор не нашлось ни одного пункта выдачи.")+s.regionField(r, boxOf(r)))
 		return
 	}
 
 	got, err := s.ResolvePickup(r.Context(), groups)
 	if err != nil {
-		s.writeHTML(w, alert("error", err.Error())+s.pickupBody(r))
+		s.writeHTML(w, alert("error", err.Error())+s.regionField(r, boxOf(r)))
 		return
 	}
+
+	// Into the box, which is the only place a code chosen here ever reaches a
+	// job from. Resolving eighty-five capitals used to write them into the
+	// directory and answer with the directory, so the field above it — the one
+	// that gets saved — still held the one code it started with, and the only
+	// sign anything had happened was a sentence saying so.
+	box := boxOf(r)
+	box.Value = withDests(box.Value, got.Dests)
 
 	msg := fmt.Sprintf("Добавлено регионов: %d из %d (запросов к сайту %d).",
 		got.Resolved, len(groups), got.Asked)
@@ -333,7 +356,30 @@ func (s *Server) addPickup(w http.ResponseWriter, r *http.Request) {
 	if got.Resolved == 0 {
 		kind = "error"
 	}
-	s.writeHTML(w, alert(kind, msg)+s.pickupBody(r))
+	s.writeHTML(w, alert(kind, msg)+s.regionField(r, box))
+}
+
+// withDests adds codes to what is already in the box, keeping the order and
+// dropping what is there twice.
+//
+// Adding rather than replacing, because the two are different questions: «все
+// региональные центры» after ticking Moscow means «и они тоже», and a preset
+// that wiped the box would make every combination impossible to build.
+func withDests(current string, dests []int64) string {
+	out := splitList(current)
+	seen := map[string]bool{}
+	for _, code := range out {
+		seen[code] = true
+	}
+	for _, dest := range dests {
+		code := strconv.FormatInt(dest, 10)
+		if seen[code] {
+			continue
+		}
+		seen[code] = true
+		out = append(out, code)
+	}
+	return strings.Join(out, ", ")
 }
 
 // pickupSearchForm is the id of the one form in this picker that has a field.
@@ -364,20 +410,23 @@ func regionHelpForms() string {
 // The addresses this picker presses. One place, because each of them is read
 // back by addPickup and a parameter spelled differently at either end is a
 // press that quietly adds nothing.
-func pickupCentresURL(part, pick string) string {
+func pickupCentresURL(box regionBox, part, pick string) string {
 	return "/pickup/add?scope=" + url.QueryEscape(store.ScopeCentres) +
-		"&part=" + url.QueryEscape(part) + "&pick=" + url.QueryEscape(pick)
+		"&part=" + url.QueryEscape(part) + "&pick=" + url.QueryEscape(pick) +
+		"&box=" + url.QueryEscape(box.ID)
 }
 
-func pickupRegionURL(code string) string {
+func pickupRegionURL(box regionBox, code string) string {
 	return "/pickup/add?scope=" + url.QueryEscape(store.ScopeRegion) +
-		"&region=" + url.QueryEscape(code) + "&pick=" + url.QueryEscape(store.PickAll)
+		"&region=" + url.QueryEscape(code) + "&pick=" + url.QueryEscape(store.PickAll) +
+		"&box=" + url.QueryEscape(box.ID)
 }
 
-func pickupSettlementURL(code, place, pick string) string {
+func pickupSettlementURL(box regionBox, code, place, pick string) string {
 	return "/pickup/add?scope=" + url.QueryEscape(store.ScopeSettlement) +
 		"&region=" + url.QueryEscape(code) + "&place=" + url.QueryEscape(place) +
-		"&pick=" + url.QueryEscape(pick)
+		"&pick=" + url.QueryEscape(pick) +
+		"&box=" + url.QueryEscape(box.ID)
 }
 
 func pickupPointURL(id int64) string {
