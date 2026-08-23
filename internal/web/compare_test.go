@@ -239,3 +239,26 @@ func TestCompare_WithNothingCollectedSaysSoRatherThanShowingZeroes(t *testing.T)
 		t.Errorf("сравнения выдуманы из ничего: %+v", rows)
 	}
 }
+
+func TestCompareTable_EveryRowHasACellForEveryHeading(t *testing.T) {
+	// A column added to the head and not to the body — or the other way about
+	// — does not fail anything: the browser draws the table anyway, one cell
+	// short, and from that point every value on the row is under the wrong
+	// heading. Ratings read as review counts and nobody is told.
+	rows := []store.BenchmarkRow{{
+		NmID: 100, Query: "платье", Dest: "-1257786", Baseline: store.BaselineMedian,
+		Currency: "RUB",
+	}}
+	html := compareTable(rows)
+
+	head := html[:strings.Index(html, "</thead>")]
+	headings := strings.Count(head, "<th>") + strings.Count(head, "<th ")
+	body := html[strings.Index(html, "<tbody>"):]
+	cells := strings.Count(body, "<td")
+	if headings != cells {
+		t.Errorf("заголовков %d, ячеек в строке %d", headings, cells)
+	}
+	if headings == 0 {
+		t.Error("таблица без заголовков — считать нечего")
+	}
+}

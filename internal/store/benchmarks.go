@@ -61,6 +61,12 @@ type BenchmarkRow struct {
 	Feedbacks      *int64
 	RivalFeedbacks *int64
 
+	// How fast each side is collecting them. The count says how big somebody
+	// is; the rate says how fast they are growing, and only the second is a
+	// thing to react to.
+	FeedbacksPerDay      *float64
+	RivalFeedbacksPerDay *float64
+
 	TotalQuantity      *int64
 	RivalTotalQuantity *int64
 
@@ -99,11 +105,12 @@ func (s *Store) SaveBenchmarks(ctx context.Context, rows []BenchmarkRow) error {
 				discount_pct, rival_discount_pct,
 				rating, rival_rating,
 				feedbacks, rival_feedbacks,
+				feedbacks_per_day, rival_feedbacks_per_day,
 				total_quantity, rival_total_quantity,
 				delivery_time2, rival_delivery_time2,
 				description_len, rival_description_len,
 				has_ad, rival_has_ad
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT (profile_id, nm_id, query, dest, ts, baseline, baseline_id) DO NOTHING`,
 			r.ProfileID, r.NmID, r.Query, r.Dest, r.TS, r.Baseline, r.BaselineID,
 			r.PositionOrganic, r.RivalPositionOrganic,
@@ -111,6 +118,7 @@ func (s *Store) SaveBenchmarks(ctx context.Context, rows []BenchmarkRow) error {
 			r.DiscountPct, r.RivalDiscountPct,
 			r.Rating, r.RivalRating,
 			r.Feedbacks, r.RivalFeedbacks,
+			r.FeedbacksPerDay, r.RivalFeedbacksPerDay,
 			r.TotalQuantity, r.RivalTotalQuantity,
 			r.DeliveryTime2, r.RivalDeliveryTime2,
 			r.DescriptionLen, r.RivalDescriptionLen,
@@ -136,6 +144,7 @@ func (s *Store) Benchmarks(ctx context.Context, profileID int64) ([]BenchmarkRow
 		       b.discount_pct, b.rival_discount_pct,
 		       b.rating, b.rival_rating,
 		       b.feedbacks, b.rival_feedbacks,
+		       b.feedbacks_per_day, b.rival_feedbacks_per_day,
 		       b.total_quantity, b.rival_total_quantity,
 		       b.delivery_time2, b.rival_delivery_time2,
 		       b.description_len, b.rival_description_len,
@@ -160,6 +169,7 @@ func (s *Store) Benchmarks(ctx context.Context, profileID int64) ([]BenchmarkRow
 			&b.DiscountPct, &b.RivalDiscountPct,
 			&b.Rating, &b.RivalRating,
 			&b.Feedbacks, &b.RivalFeedbacks,
+			&b.FeedbacksPerDay, &b.RivalFeedbacksPerDay,
 			&b.TotalQuantity, &b.RivalTotalQuantity,
 			&b.DeliveryTime2, &b.RivalDeliveryTime2,
 			&b.DescriptionLen, &b.RivalDescriptionLen,
@@ -217,6 +227,65 @@ var wasAdvertised = `EXISTS (
 // of truth for the span, whichever of the two forms is being read.
 var adWindowSeconds = strconv.FormatInt(int64(adWindow/time.Second), 10)
 
+// velocityWindow is how far back a rate of collecting reviews is measured.
+//
+// A month rather than the whole history: a product watched for a year would
+// otherwise average its launch into today's number and stop responding to the
+// part anybody acts on. A month is also long enough that one busy weekend does
+// not become the trend.
+const velocityWindow = 30 * 24 * time.Hour
+
+// velocityFloor is the shortest span a rate may be computed over.
+//
+// Below a day the divisor is the collection schedule rather than the market:
+// two readings an hour apart turn a single review into twenty-four a day.
+const velocityFloor = 24 * time.Hour
+
+// reviewsPerDay is how fast one product is collecting reviews as of one
+// reading: the difference between this reading and the oldest one still inside
+// velocityWindow, spread over the days between them.
+//
+// Null where there is nothing to measure — one reading, or two too close
+// together. Reported as zero instead, "we have only looked once" would read as
+// "this rival stopped collecting reviews": a claim about them built out of a
+// fact about us.
+//
+// The difference is signed on purpose. Counts do fall — WB removes reviews —
+// and a fall is a real thing to see beside a rival's rise.
+//
+// Both readings are the same product in the same region, and that is said
+// exactly once — in the one subquery that picks the older row. It was said in
+// three places to begin with, on three different tables, and three copies of
+// one rule cannot be tested: each was individually redundant, so removing any
+// one of them changed nothing and no test could ever object. The newer reading
+// is not looked up at all now; it is the snapshot this row already joined.
+//
+// A rate that borrowed another region's history would change with which
+// regions happened to be collected — the same data, read for one more city,
+// producing a different number on a row that is not about that city.
+//
+// The older reading is the oldest one that counted reviews at all, not simply
+// the oldest one: a snapshot taken when WB served no review count would
+// otherwise stand in as the start of the series and take the whole rate down
+// with it. There is no matching guard on the newer count, because arithmetic
+// over a null is null and the rate is absent anyway.
+var reviewsPerDay = `(
+		           SELECT (s.feedbacks - was.feedbacks) * 86400.0 / (p.ts - was.ts)
+		           FROM (
+		               SELECT m.ts, m.feedbacks FROM snapshots m
+		               WHERE m.nm_id = p.nm_id AND m.dest = p.dest
+		                 AND m.ts BETWEEN p.ts - ` + velocityWindowSeconds + ` AND p.ts
+		                 AND m.feedbacks IS NOT NULL
+		               ORDER BY m.ts LIMIT 1
+		           ) AS was
+		           WHERE p.ts - was.ts >= ` + velocityFloorSeconds + `
+		       )`
+
+var (
+	velocityWindowSeconds = strconv.FormatInt(int64(velocityWindow/time.Second), 10)
+	velocityFloorSeconds  = strconv.FormatInt(int64(velocityFloor/time.Second), 10)
+)
+
 // SearchStanding is one product as it stood in one search, with the numbers a
 // comparison is made of.
 type SearchStanding struct {
@@ -232,6 +301,10 @@ type SearchStanding struct {
 	DeliveryTime2  *int64
 	DescriptionLen *int64
 	HasAd          bool
+
+	// FeedbacksPerDay is how fast this listing is collecting reviews, or nil
+	// where the history is too short to say. See reviewsPerDay.
+	FeedbacksPerDay *float64
 }
 
 // TopOfSearch reads the best-placed products of the newest reading of one
@@ -252,7 +325,8 @@ func (s *Store) TopOfSearch(ctx context.Context, query, dest string, limit int) 
 		       s.price_sale, s.discount_pct, s.currency, s.rating, s.feedbacks,
 		       s.total_quantity, s.time2,
 		       LENGTH(COALESCE(pr.description, '')),
-		       `+wasAdvertised+`
+		       `+wasAdvertised+`,
+		       `+reviewsPerDay+`
 		FROM positions p
 		JOIN latest l ON l.ts = p.ts
 		LEFT JOIN snapshots s ON s.nm_id = p.nm_id AND s.dest = p.dest AND s.ts = p.ts
@@ -271,7 +345,8 @@ func (s *Store) TopOfSearch(ctx context.Context, query, dest string, limit int) 
 		var st SearchStanding
 		if err := rows.Scan(&st.NmID, &st.Rank, &st.TS,
 			&st.Price, &st.DiscountPct, &st.Currency, &st.Rating, &st.Feedbacks,
-			&st.TotalQuantity, &st.DeliveryTime2, &st.DescriptionLen, &st.HasAd); err != nil {
+			&st.TotalQuantity, &st.DeliveryTime2, &st.DescriptionLen, &st.HasAd,
+			&st.FeedbacksPerDay); err != nil {
 			return nil, fmt.Errorf("store: top of %q in %q: %w", query, dest, err)
 		}
 		out = append(out, st)
@@ -309,7 +384,8 @@ func (s *Store) StandingOf(ctx context.Context, nmID int64, query, dest string) 
 		       s.price_sale, s.discount_pct, s.currency, s.rating, s.feedbacks,
 		       s.total_quantity, s.time2,
 		       LENGTH(COALESCE(pr.description, '')),
-		       `+wasAdvertised+`
+		       `+wasAdvertised+`,
+		       `+reviewsPerDay+`
 		FROM positions p
 		JOIN latest l ON l.ts = p.ts
 		LEFT JOIN snapshots s ON s.nm_id = p.nm_id AND s.dest = p.dest AND s.ts = p.ts
@@ -318,7 +394,8 @@ func (s *Store) StandingOf(ctx context.Context, nmID int64, query, dest string) 
 		query, dest, query, dest, nmID).
 		Scan(&st.NmID, &st.Rank, &st.TS,
 			&st.Price, &st.DiscountPct, &st.Currency, &st.Rating, &st.Feedbacks,
-			&st.TotalQuantity, &st.DeliveryTime2, &st.DescriptionLen, &st.HasAd)
+			&st.TotalQuantity, &st.DeliveryTime2, &st.DescriptionLen, &st.HasAd,
+			&st.FeedbacksPerDay)
 	if err != nil {
 		return SearchStanding{}, false, nil
 	}

@@ -75,6 +75,9 @@ func against(profileID int64, query, dest string, mine, theirs store.SearchStand
 		Feedbacks:      mine.Feedbacks,
 		RivalFeedbacks: theirs.Feedbacks,
 
+		FeedbacksPerDay:      mine.FeedbacksPerDay,
+		RivalFeedbacksPerDay: theirs.FeedbacksPerDay,
+
 		TotalQuantity:      mine.TotalQuantity,
 		RivalTotalQuantity: theirs.TotalQuantity,
 
@@ -110,21 +113,8 @@ func medianOf(top []store.SearchStanding) store.SearchStanding {
 	out.DeliveryTime2 = medianPtr(collect(top, func(s store.SearchStanding) *int64 { return s.DeliveryTime2 }))
 	out.DescriptionLen = medianPtr(collect(top, func(s store.SearchStanding) *int64 { return s.DescriptionLen }))
 
-	var ratings []float64
-	for _, s := range top {
-		if s.Rating != nil {
-			ratings = append(ratings, *s.Rating)
-		}
-	}
-	if len(ratings) > 0 {
-		slices.Sort(ratings)
-		mid := len(ratings) / 2
-		v := ratings[mid]
-		if len(ratings)%2 == 0 {
-			v = (ratings[mid-1] + ratings[mid]) / 2
-		}
-		out.Rating = &v
-	}
+	out.Rating = medianFloat(collectFloat(top, func(s store.SearchStanding) *float64 { return s.Rating }))
+	out.FeedbacksPerDay = medianFloat(collectFloat(top, func(s store.SearchStanding) *float64 { return s.FeedbacksPerDay }))
 
 	// Half of the top buying placement is what «здесь торгуют рекламой»
 	// looks like, and that is the honest reading of a median over a flag.
@@ -136,6 +126,32 @@ func medianOf(top []store.SearchStanding) store.SearchStanding {
 	}
 	out.HasAd = ads*2 > len(top)
 	return out
+}
+
+func collectFloat(top []store.SearchStanding, pick func(store.SearchStanding) *float64) []float64 {
+	var out []float64
+	for _, s := range top {
+		if v := pick(s); v != nil {
+			out = append(out, *v)
+		}
+	}
+	return out
+}
+
+// medianFloat is medianInt's counterpart for the columns that are not whole
+// numbers — a rating, a rate per day — on the same rule: the middle value, or
+// the average of the two middle ones, and nothing at all where nobody read it.
+func medianFloat(values []float64) *float64 {
+	if len(values) == 0 {
+		return nil
+	}
+	slices.Sort(values)
+	mid := len(values) / 2
+	v := values[mid]
+	if len(values)%2 == 0 {
+		v = (values[mid-1] + values[mid]) / 2
+	}
+	return &v
 }
 
 func collect(top []store.SearchStanding, pick func(store.SearchStanding) *int64) []int64 {

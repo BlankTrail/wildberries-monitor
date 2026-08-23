@@ -160,3 +160,49 @@ func deref(v *int64) any {
 	}
 	return *v
 }
+
+func TestCompare_CarriesTheRateReviewsAreArrivingAt(t *testing.T) {
+	// The count says how big a rival is; the rate says how fast they are
+	// growing, and only the second is something to react to. It reaches the
+	// row the same way every other number does — mine beside the middle of
+	// the top — and the middle is a median because one launch-week product
+	// collecting fifty a day is not what this search looks like.
+	mine := standing(100, 8, 149900, 4.5, 12)
+	mine.FeedbacksPerDay = ptr(0.5)
+
+	top := []store.SearchStanding{
+		standing(200, 1, 99900, 4.9, 900),
+		standing(300, 2, 109900, 4.8, 500),
+		standing(400, 3, 119900, 4.7, 100),
+	}
+	top[0].FeedbacksPerDay = ptr(50.0)
+	top[1].FeedbacksPerDay = ptr(4.0)
+	top[2].FeedbacksPerDay = ptr(3.0)
+
+	got := Compare(7, "платье", "-1257786", mine, top, nil)
+	if len(got) != 1 {
+		t.Fatalf("сравнений %d, ожидалось одно", len(got))
+	}
+	b := got[0]
+	if b.FeedbacksPerDay == nil || *b.FeedbacksPerDay != 0.5 {
+		t.Errorf("мой темп = %v, ожидалось 0.5", b.FeedbacksPerDay)
+	}
+	if b.RivalFeedbacksPerDay == nil || *b.RivalFeedbacksPerDay != 4.0 {
+		t.Errorf("медианный темп = %v, ожидалось 4 — медиана из 50, 4 и 3", b.RivalFeedbacksPerDay)
+	}
+}
+
+func TestCompare_ARateNobodyCouldMeasureStaysAbsent(t *testing.T) {
+	// A rate needs two readings far enough apart, and a search read once has
+	// none. Filled with a zero it would say every listing here stopped
+	// collecting reviews — a claim about the market made out of the fact that
+	// we have only looked once.
+	mine := standing(100, 8, 149900, 4.5, 12)
+	top := []store.SearchStanding{standing(200, 1, 99900, 4.9, 900)}
+
+	got := Compare(7, "платье", "-1257786", mine, top, nil)
+	if got[0].FeedbacksPerDay != nil || got[0].RivalFeedbacksPerDay != nil {
+		t.Errorf("темп объявлен там, где его не из чего посчитать: %v / %v",
+			got[0].FeedbacksPerDay, got[0].RivalFeedbacksPerDay)
+	}
+}

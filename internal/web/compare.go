@@ -91,6 +91,7 @@ func compareTable(rows []store.BenchmarkRow) string {
 		`<th>Товар</th><th>Фраза</th><th>С кем</th>` +
 		`<th class="bt-num">Место</th><th class="bt-num">Цена</th><th class="bt-num">Скидка</th>` +
 		`<th class="bt-num">Рейтинг</th><th class="bt-num">Отзывов</th>` +
+		`<th class="bt-num">Отзывов в день</th>` +
 		`<th class="bt-num">Остаток</th><th class="bt-num">Доставка</th>` +
 		`<th class="bt-num">Описание</th><th>Реклама</th>` +
 		`</tr></thead><tbody>`)
@@ -106,6 +107,7 @@ func compareTable(rows []store.BenchmarkRow) string {
 		b.WriteString(deltaCell(r.DiscountPct, r.RivalDiscountPct, higherIsBetter, percent))
 		b.WriteString(floatCell(r.Rating, r.RivalRating))
 		b.WriteString(deltaCell(r.Feedbacks, r.RivalFeedbacks, higherIsBetter, plainInt))
+		b.WriteString(floatCell(r.FeedbacksPerDay, r.RivalFeedbacksPerDay))
 		b.WriteString(deltaCell(r.TotalQuantity, r.RivalTotalQuantity, higherIsBetter, plainInt))
 		b.WriteString(deltaCell(r.DeliveryTime2, r.RivalDeliveryTime2, lowerIsBetter, hours))
 		b.WriteString(deltaCell(r.DescriptionLen, r.RivalDescriptionLen, higherIsBetter, plainInt))
