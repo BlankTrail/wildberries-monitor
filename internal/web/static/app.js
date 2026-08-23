@@ -95,7 +95,11 @@
     // nowhere while the route answered and the button looked fine. One
     // mechanism instead of two, and «anything that posts is a form» is a
     // thing the server's own tests can check.
-    root.querySelectorAll("form[data-post]").forEach((form) => {
+    // data-press is the shared form the stateless presses submit. It carries no
+    // address of its own, which is the whole point of it — each button brings
+    // one — and matching on data-post alone left it unbound, so every press on
+    // it navigated the browser instead of swapping a fragment.
+    root.querySelectorAll("form[data-post], form[data-press]").forEach((form) => {
       if (form.dataset.wired) return;
       form.dataset.wired = "1";
       form.addEventListener("submit", async (ev) => {
@@ -107,6 +111,7 @@
         // HTML, and that is the only other way to give a row its own address.
         const by = ev.submitter;
         const url = (by && by.dataset.post) || form.dataset.post;
+        if (!url) return;
         const into = (by && by.dataset.target) || form.dataset.target || "#main";
         // FormData over a file input streams the file rather than reading it
         // in: a hundred thousand phrases must not have to fit in the tab's

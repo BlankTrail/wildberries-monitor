@@ -124,8 +124,15 @@ const sharedFormID = "bt-press"
 
 // SharedForm is that form. Rendered once, outside every other form on the
 // screen.
+//
+// data-press is what tells the script to take it over. It carries no address
+// of its own — every press on it brings one — and the script bound «a form we
+// handle» to data-post alone, so this one was never bound at all: pressing a
+// preset or a region submitted it the way HTML does, the browser navigated,
+// and the constructor the picker was sitting inside came back closed and
+// empty. It read exactly like a button that closes the form.
 func sharedForm() string {
-	return `<form id="` + sharedFormID + `" class="bt-inline"></form>`
+	return `<form id="` + sharedFormID + `" class="bt-inline" data-press></form>`
 }
 
 // press is a button that posts to its own address, through the shared form.

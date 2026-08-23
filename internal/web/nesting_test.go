@@ -102,3 +102,80 @@ func TestForms_EveryNamedFormIsOnTheScreenThatNamesIt(t *testing.T) {
 		}
 	}
 }
+
+// TestForms_EveryOneIsAFormTheScriptTakesOver is the guard for the failure
+// that looks like a button doing the opposite of its job.
+//
+// This panel swaps fragments; nothing here navigates. A form the script does
+// not bind is therefore not «a form that does nothing» — it is a form the
+// browser submits the ordinary way, which reloads the screen. Whatever was
+// open closes, whatever was typed is gone, and the button that did it looks
+// like a button for closing things.
+//
+// It happened to the shared press form: it carries no address of its own,
+// because every press on it brings one in its own data-post, and the script
+// matched «a form we handle» on data-post alone. So every preset and every
+// region in the directory reloaded the page, and the job constructor they sit
+// inside came back closed.
+func TestForms_EveryOneIsAFormTheScriptTakesOver(t *testing.T) {
+	srv := populated(t)
+	raw, err := staticFS.ReadFile("static/app.js")
+	if err != nil {
+		t.Fatalf("app.js: %v", err)
+	}
+	script := string(raw)
+
+	// What the script actually binds, read off the script rather than repeated
+	// here: a list written twice drifts on one side.
+	var bound []string
+	for _, attr := range []string{"data-post", "data-press", "data-get-form"} {
+		if strings.Contains(script, `form[`+attr+`]`) {
+			bound = append(bound, attr)
+		}
+	}
+	if len(bound) == 0 {
+		t.Fatal("скрипт не связывает ни одной формы — читать нечего")
+	}
+
+	for _, path := range []string{
+		"/", "/jobs", "/jobs/new", "/rules", "/channels", "/track", "/results",
+		"/settings", "/profile", "/compare",
+	} {
+		body := get(t, srv, path, "correct horse").Body.String()
+		for _, tag := range formTags(body) {
+			ok := false
+			for _, attr := range bound {
+				if strings.Contains(tag, attr) {
+					ok = true
+					break
+				}
+			}
+			// A form that names where it goes is a navigation somebody meant:
+			// the tracking screen's filter is one. What this looks for is a form
+			// with neither an address of its own nor anybody to take it over —
+			// which submits to the current URL and reloads the screen.
+			if !ok && !strings.Contains(tag, "action=") {
+				t.Errorf("%s: форму никто не перехватит, нажатие перезагрузит экран:\n  %s",
+					path, tag)
+			}
+		}
+	}
+}
+
+// formTags is every opening <form ...> tag on a screen.
+func formTags(body string) []string {
+	var out []string
+	for rest := body; ; {
+		i := strings.Index(rest, "<form")
+		if i < 0 {
+			return out
+		}
+		rest = rest[i:]
+		j := strings.Index(rest, ">")
+		if j < 0 {
+			return out
+		}
+		out = append(out, rest[:j+1])
+		rest = rest[j+1:]
+	}
+}
