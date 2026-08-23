@@ -40,7 +40,6 @@ const (
 	// right answer for a fresh install with no channels yet, and it is the
 	// answer the screen names out loud rather than leaving to be discovered.
 	SettingServiceChannel = "blanktrail.service_channel"
-	SettingDataDir        = "data.dir"
 	SettingListenLAN      = "web.listen_lan"
 
 	// SettingRequireAuth turns the panel's password on. Off by default, and

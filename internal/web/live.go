@@ -181,6 +181,13 @@ func finishedText(run store.RunRow) string {
 // would append a blank line to the log for every product scraped.
 func renderEvent(ev events.Event) (name, data string) {
 	switch ev.Kind {
+	case events.RunStarted:
+		// The one event nobody was listening to. Between pressing «Запустить»
+		// and the first item there is the preflight and twenty ports being
+		// opened at the service — long enough for a person to decide nothing
+		// happened, on a panel that had nothing to say until the first page
+		// came back.
+		return "log", "прогон начался: готовим порты"
 	case events.RunProgress:
 		return "progress", progressHTML(ev.Payload)
 	case events.ItemScraped:

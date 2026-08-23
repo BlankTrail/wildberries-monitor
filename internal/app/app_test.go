@@ -439,3 +439,32 @@ func TestPause_SaysWhichWayItIsSoTheMenuCannotDisagree(t *testing.T) {
 		t.Error("resumed program reports itself paused")
 	}
 }
+
+func TestListenLAN_TheFlagOrTheTick(t *testing.T) {
+	// The checkbox spec section 7 asks for was declared as a setting and read
+	// by nothing: reaching the panel from a phone on the same network meant
+	// restarting the program by hand with an argument.
+	a := newApp(t)
+	ctx := t.Context()
+
+	if a.listenLAN(ctx) {
+		t.Error("без флага и без галочки панель собралась в сеть")
+	}
+
+	if err := a.Store.SetSetting(ctx, store.SettingListenLAN, "1", store.SettingBool); err != nil {
+		t.Fatalf("SetSetting: %v", err)
+	}
+	if !a.listenLAN(ctx) {
+		t.Error("галочка в настройках ничего не изменила — она и была настройкой, которую никто не читал")
+	}
+
+	// The flag still works on its own, for somebody starting the program by
+	// hand who never opens the panel.
+	if err := a.Store.SetSetting(ctx, store.SettingListenLAN, "0", store.SettingBool); err != nil {
+		t.Fatalf("SetSetting: %v", err)
+	}
+	a.Config.LAN = true
+	if !a.listenLAN(ctx) {
+		t.Error("флаг -lan перестал работать")
+	}
+}

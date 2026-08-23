@@ -346,3 +346,110 @@ func TestSettings_TheServiceChannelIsChosenAndRemembered(t *testing.T) {
 		t.Error("окно настроек не показывает выбранный канал")
 	}
 }
+
+func TestSettings_TheLanCheckboxIsLockedUntilThePanelHasItsOwnPassword(t *testing.T) {
+	// Spec section 7 asks for this box and for exactly this condition. It was
+	// declared as a setting, written by nothing and read by nothing: reaching
+	// the panel from a phone on the same network meant restarting the program
+	// by hand with a flag.
+	//
+	// Locked while the password is the generated one, because what the panel
+	// holds is a proxy key, a bot token and everything collected — and a
+	// password printed into a file beside the database is not a thing to put a
+	// network behind.
+	srv := newServer(t)
+	ctx := t.Context()
+	srv.GeneratedPassword = true
+
+	body := get(t, srv, "/settings", "").Body.String()
+	if !strings.Contains(body, `name="listen_lan"`) {
+		t.Fatalf("в настройках нет галочки «в локальную сеть»:\n%s", firstLines(body))
+	}
+	if !strings.Contains(body, `name="listen_lan" value="1" disabled`) {
+		t.Error("галочка не заблокирована при сгенерированном пароле")
+	}
+
+	// And ticking it anyway — a hand-made request, since the box on screen is
+	// disabled — does not turn it on.
+	postForm(t, srv, "/settings", url.Values{
+		"url":        {store.DefaultBlankTrailURL},
+		"api_key":    {store.MaskedSecret()},
+		"listen_lan": {"1"},
+	})
+	if srv.Store.SettingBool(ctx, store.SettingListenLAN, false) {
+		t.Error("панель согласилась выйти в сеть без своего пароля")
+	}
+}
+
+func TestSettings_WithItsOwnPasswordTheLanBoxWorks(t *testing.T) {
+	srv := newServer(t)
+	ctx := t.Context()
+	srv.GeneratedPassword = false
+	if err := srv.Store.SetSetting(ctx, store.SettingRequireAuth, "1", store.SettingBool); err != nil {
+		t.Fatalf("SetSetting: %v", err)
+	}
+
+	body := get(t, srv, "/settings", "correct horse").Body.String()
+	if strings.Contains(body, `name="listen_lan" value="1" disabled`) {
+		t.Error("галочка заблокирована, хотя пароль свой")
+	}
+
+	// The whole dialog posts at once, so the password box travels with it:
+	// unticking «требовать пароль» in the same submit must not leave the panel
+	// on a network, and the decision is made after the new value is written.
+	postForm(t, srv, "/settings", url.Values{
+		"url":          {store.DefaultBlankTrailURL},
+		"api_key":      {store.MaskedSecret()},
+		"require_auth": {"1"},
+		"listen_lan":   {"1"},
+	})
+	if !srv.Store.SettingBool(ctx, store.SettingListenLAN, false) {
+		t.Fatal("галочка не сохранилась")
+	}
+	// The port refuses or agrees on the same rule, and that is where it counts.
+	if _, err := srv.ListenAddress(ctx, 8760, true); err != nil {
+		t.Errorf("порт отказался открываться при своём пароле: %v", err)
+	}
+
+	// Unticking puts it back.
+	postForm(t, srv, "/settings", url.Values{
+		"url":          {store.DefaultBlankTrailURL},
+		"api_key":      {store.MaskedSecret()},
+		"require_auth": {"1"},
+	})
+	if srv.Store.SettingBool(ctx, store.SettingListenLAN, false) {
+		t.Error("снятая галочка не сохранилась")
+	}
+
+	// And turning the password off in the same submit takes the panel off the
+	// network with it, rather than leaving it open with nothing in front of it.
+	postForm(t, srv, "/settings", url.Values{
+		"url":        {store.DefaultBlankTrailURL},
+		"api_key":    {store.MaskedSecret()},
+		"listen_lan": {"1"},
+	})
+	if srv.Store.SettingBool(ctx, store.SettingListenLAN, false) {
+		t.Error("пароль сняли, а панель осталась открытой в сеть")
+	}
+}
+
+func TestSettings_RequirePasswordIsReadAsABooleanRatherThanAsTheDigitOne(t *testing.T) {
+	// The panel writes «1» into a bool column, and a comparison with «1» reads
+	// it back. Anything else that writes into the same column — a restored
+	// backup, a hand edit, a future importer — writes «true», which every
+	// other reader in the program understands and that comparison did not.
+	//
+	// One of those readers decides whether this panel goes onto a network.
+	srv := newServer(t)
+	ctx := t.Context()
+
+	if err := srv.Store.SetSetting(ctx, store.SettingRequireAuth, "true", store.SettingBool); err != nil {
+		t.Fatalf("SetSetting: %v", err)
+	}
+	if !srv.RequireAuth(ctx) {
+		t.Error("«true» в колонке-булеве прочитано как «пароль не нужен»")
+	}
+	if _, err := srv.ListenAddress(ctx, 8760, true); err != nil {
+		t.Errorf("порт отказался открываться, хотя пароль требуется: %v", err)
+	}
+}

@@ -448,6 +448,20 @@ func (a *App) reloadTelegram(ctx context.Context) {
 	}
 }
 
+// listenLAN reports whether the panel should be reachable from the network.
+//
+// The flag or the tick. The flag is for somebody starting the program by hand
+// and knowing what they want; the tick is spec section 7's checkbox, which is
+// how anybody else would ask — it was declared as a setting, written by
+// nothing and read by nothing, so the only way to reach the panel from a phone
+// on the same network was to restart the program with an argument.
+//
+// Neither of them decides on its own: whether a panel with no password of its
+// own may be exposed is refused where the port is opened, once, on both paths.
+func (a *App) listenLAN(ctx context.Context) bool {
+	return a.Config.LAN || a.Store.SettingBool(ctx, store.SettingListenLAN, false)
+}
+
 // Run starts the background loops and serves until the context ends.
 func (a *App) Run(ctx context.Context) error {
 	// Before anything can serve a request: this is what a run started from the
@@ -455,7 +469,7 @@ func (a *App) Run(ctx context.Context) error {
 	// can be asked for.
 	a.life.Store(&ctx)
 
-	addr, err := a.Server.ListenAddress(ctx, a.Config.Port, a.Config.LAN)
+	addr, err := a.Server.ListenAddress(ctx, a.Config.Port, a.listenLAN(ctx))
 	if err != nil {
 		return err
 	}

@@ -73,6 +73,47 @@ func (s *Server) serviceChannelField(r *http.Request) string {
 	return b.String()
 }
 
+// lanField is spec section 7's «открыть в локальную сеть».
+//
+// The panel listens on this machine only unless somebody says otherwise, and
+// «otherwise» was a command-line flag: the setting the spec asks for was
+// declared, never written and never read, so the only way to reach the panel
+// from a phone on the same network was to restart the program by hand with an
+// argument.
+//
+// Locked while the panel has no password of its own — none asked for, or one
+// this program generated and wrote to a file beside the database. That is the
+// spec's own condition and it is enforced where the port is opened as well;
+// this is the half that explains it before somebody tries. What the panel
+// holds is a proxy key, a bot token and everything collected, and a network is
+// not a place to put those behind a password printed in a text file.
+//
+// A restart is needed either way, and the hint says so rather than leaving
+// somebody to wonder why the address still refuses from the next room: the
+// port is opened once, at startup, before any of this can be ticked.
+func (s *Server) lanField(r *http.Request) string {
+	ctx := r.Context()
+	on := s.Store.SettingBool(ctx, store.SettingListenLAN, false)
+	locked := !s.RequireAuth(ctx) || s.GeneratedPassword
+
+	attrs := ""
+	if on {
+		attrs += " checked"
+	}
+	hint := "Панель станет доступна с других устройств этой сети. " +
+		"Изменение вступит в силу после перезапуска."
+	if locked {
+		attrs += " disabled"
+		hint = "Сначала включите «требовать пароль» и задайте свой — " +
+			"сгенерированный не считается. Панель держит ключ прокси, токен бота " +
+			"и всё собранное, и в сеть её не выпускают без пароля."
+	}
+	return `<div class="bt-field"><label class="bt-checkbox">` +
+		`<input type="checkbox" name="listen_lan" value="1"` + attrs + `> ` +
+		`Открыть в локальную сеть</label>` +
+		`<span class="bt-form-hint">` + hint + `</span></div>`
+}
+
 func (s *Server) writeSettingsForm(w http.ResponseWriter, r *http.Request, notice string) {
 	// Read for display, never in the clear: this is the one function whose
 	// output goes into a page, and the page is what a user screenshots.
@@ -137,6 +178,7 @@ func (s *Server) writeSettingsForm(w http.ResponseWriter, r *http.Request, notic
 </div>`)
 
 	b.WriteString(s.serviceChannelField(r))
+	b.WriteString(s.lanField(r))
 
 	// The same masking as the API key, and for a stronger reason: whoever
 	// holds a bot token holds the bot, including every chat it has been added
@@ -340,6 +382,17 @@ func (s *Server) saveSettings(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "settings: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
+	}
+
+	// A disabled box posts nothing, so the tick is only ever read while the
+	// panel has a password of its own — which is the same condition the port
+	// itself checks, said here so the setting cannot be turned on from a
+	// screen that shows it locked.
+	lan := r.FormValue("listen_lan") != "" && s.RequireAuth(ctx) && !s.GeneratedPassword
+	if err := s.Store.SetSetting(ctx, store.SettingListenLAN,
+		boolSetting(lan), store.SettingBool); err != nil {
+		http.Error(w, "settings: "+err.Error(), http.StatusInternalServerError)
+		return
 	}
 
 	if err := s.Store.SetSetting(ctx, store.SettingServiceChannel,

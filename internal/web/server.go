@@ -359,7 +359,13 @@ func (s *Server) Handler() http.Handler {
 // on the next page instead of on the next restart — a setting that needs a
 // restart is a setting people believe they changed.
 func (s *Server) RequireAuth(ctx context.Context) bool {
-	return s.Store.SettingOr(ctx, store.SettingRequireAuth, "") == "1"
+	// Through the store's own reading of a boolean rather than a comparison
+	// with «1». The panel writes «1», but the column is a bool column and
+	// anything that writes «true» into it — a restored backup, a hand edit, a
+	// future importer — would be read as off by a comparison and as on by
+	// every other reader in the program. One of those readers decides whether
+	// this panel goes onto a network.
+	return s.Store.SettingBool(ctx, store.SettingRequireAuth, false)
 }
 
 // auth is the password gate, when there is one.

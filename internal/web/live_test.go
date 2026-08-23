@@ -481,3 +481,31 @@ func TestLive_ARunThatEndedBeforeTheScreenOpenedIsSaidToBeOver(t *testing.T) {
 		t.Errorf("не сказано, чем кончилось: %q", msg)
 	}
 }
+
+func TestLive_SaysTheRunStartedBeforeTheFirstItemComesBack(t *testing.T) {
+	// events.RunStarted was published by the runner and subscribed to by
+	// nobody. Between the press and the first page there is a preflight and a
+	// pool of ports being opened at the service — long enough to decide that
+	// nothing happened, on a panel with nothing to say until the first item.
+	name, data := renderEvent(events.Event{Kind: events.RunStarted, JobID: 7})
+	if name != "log" {
+		t.Fatalf("начало прогона отрисовано как %q — экран его не покажет", name)
+	}
+	if data == "" {
+		t.Error("начало прогона отрисовано пустой строкой")
+	}
+}
+
+func TestLive_EveryEventTheBusCarriesHasSomethingToSay(t *testing.T) {
+	// The kinds are declared in one block precisely so a screen can be read
+	// against it. One that renders to nothing is an event published for
+	// nobody — which is what «прогон начался» was for a milestone.
+	for _, kind := range []events.Kind{
+		events.RunStarted, events.RunProgress, events.ItemScraped,
+		events.ItemFailed, events.RunFinished,
+	} {
+		if name, _ := renderEvent(events.Event{Kind: kind, JobID: 7}); name == "" {
+			t.Errorf("экран прогона ничего не говорит о событии %q", kind)
+		}
+	}
+}
