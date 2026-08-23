@@ -41,6 +41,15 @@ type CompetitorRow struct {
 	Pinned     bool
 	Excluded   bool
 	ComputedAt int64
+
+	// FirstSeenAt is when this one turned up in the environment, and it is a
+	// different fact from ComputedAt: the second is rewritten every time the
+	// neighbours are worked out again, so asking it «кто новый» answers «все».
+	//
+	// Nought on the rows that predate the column — see migration 0028, which
+	// would otherwise have announced a month's worth of familiar sellers as
+	// new the first time the rules ran after an upgrade.
+	FirstSeenAt int64
 }
 
 // SaveCompetitors replaces what a recompute produced, leaving the hand edits
@@ -58,8 +67,15 @@ func (s *Store) SaveCompetitors(ctx context.Context, profileID int64, rows []Com
 	defer tx.Rollback()
 
 	hand := map[string]struct{ pinned, excluded bool }{}
+	// When each of them was first seen, kept for every row rather than only
+	// for the hand-marked ones. A recompute deletes what the automation
+	// produced last time and writes it again, so without carrying this across
+	// the delete every neighbour is new every night — and «новый конкурент»
+	// arriving about the same seller on a schedule is a notification people
+	// turn off.
+	since := map[string]int64{}
 	existing, err := tx.QueryContext(ctx,
-		`SELECT kind, entity_id, pinned, excluded FROM competitors WHERE profile_id = ?`, profileID)
+		`SELECT kind, entity_id, pinned, excluded, first_seen_at FROM competitors WHERE profile_id = ?`, profileID)
 	if err != nil {
 		return fmt.Errorf("store: save competitors: %w", err)
 	}
@@ -67,12 +83,15 @@ func (s *Store) SaveCompetitors(ctx context.Context, profileID int64, rows []Com
 		var kind string
 		var id int64
 		var pinned, excluded bool
-		if err := existing.Scan(&kind, &id, &pinned, &excluded); err != nil {
+		var firstSeen int64
+		if err := existing.Scan(&kind, &id, &pinned, &excluded, &firstSeen); err != nil {
 			existing.Close()
 			return fmt.Errorf("store: save competitors: %w", err)
 		}
+		key := fmt.Sprintf("%s:%d", kind, id)
+		since[key] = firstSeen
 		if pinned || excluded {
-			hand[fmt.Sprintf("%s:%d", kind, id)] = struct{ pinned, excluded bool }{pinned, excluded}
+			hand[key] = struct{ pinned, excluded bool }{pinned, excluded}
 		}
 	}
 	existing.Close()
@@ -91,18 +110,65 @@ func (s *Store) SaveCompetitors(ctx context.Context, profileID int64, rows []Com
 	for _, r := range rows {
 		marks := hand[fmt.Sprintf("%s:%d", r.Kind, r.EntityID)]
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO competitors (profile_id, kind, entity_id, adjacency, position_delta, pinned, excluded, computed_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+			INSERT INTO competitors (profile_id, kind, entity_id, adjacency, position_delta, pinned, excluded, computed_at, first_seen_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT (profile_id, kind, entity_id) DO UPDATE SET
 				adjacency = excluded.adjacency,
 				position_delta = excluded.position_delta,
 				computed_at = excluded.computed_at`,
 			profileID, r.Kind, r.EntityID, r.Adjacency, r.PositionDelta,
-			marks.pinned, marks.excluded, now); err != nil {
+			marks.pinned, marks.excluded, now, firstSeenOf(since, r, now)); err != nil {
 			return fmt.Errorf("store: save competitor %s %d: %w", r.Kind, r.EntityID, err)
 		}
 	}
 	return tx.Commit()
+}
+
+// firstSeenOf is when this neighbour turned up: the moment already on file, or
+// now if this is the first time.
+//
+// A row that predates migration 0028 carries nought, and nought is kept rather
+// than replaced with now. Those are the sellers somebody has been watching for
+// a month, and stamping them today would announce every one of them as new.
+func firstSeenOf(since map[string]int64, r CompetitorRow, now int64) int64 {
+	if was, ok := since[fmt.Sprintf("%s:%d", r.Kind, r.EntityID)]; ok {
+		return was
+	}
+	return now
+}
+
+// NewCompetitors are the ones that turned up after a moment.
+//
+// first_seen_at rather than computed_at, which is the whole point of the
+// column: the second is rewritten on every recompute, so asking it «кто новый»
+// answers «все» every time the neighbours are worked out again.
+//
+// Excluded ones are left out. Somebody who struck a seller off the list is not
+// waiting to be told that the recompute found them again.
+func (s *Store) NewCompetitors(ctx context.Context, since int64) ([]CompetitorRow, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT profile_id, kind, entity_id, adjacency, position_delta, pinned, first_seen_at
+		  FROM competitors
+		 WHERE first_seen_at > ? AND excluded = 0
+		 ORDER BY profile_id, first_seen_at, kind, entity_id`, since)
+	if err != nil {
+		return nil, fmt.Errorf("store: new competitors since %d: %w", since, err)
+	}
+	defer rows.Close()
+
+	var out []CompetitorRow
+	for rows.Next() {
+		var r CompetitorRow
+		if err := rows.Scan(&r.ProfileID, &r.Kind, &r.EntityID, &r.Adjacency,
+			&r.PositionDelta, &r.Pinned, &r.FirstSeenAt); err != nil {
+			return nil, fmt.Errorf("store: new competitors since %d: %w", since, err)
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: new competitors since %d: %w", since, err)
+	}
+	return out, nil
 }
 
 // Competitors lists a profile's neighbours, the closest and most frequent

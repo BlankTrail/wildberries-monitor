@@ -25,12 +25,13 @@ func TestKinds_OffersEverythingThisBuildCanEmit(t *testing.T) {
 		CompetitorOutranked, CompetitorEnteredTop,
 		RatingFellBelowMedian, ContentGapWidened,
 		CompetitorJoinedPromo, WorkingPhraseLost,
+		NewCompetitorInEnvironment,
 	} {
 		if !slices.Contains(all, k) {
 			t.Errorf("движок умеет %q, а конструктор правил его не предложит", k)
 		}
 	}
-	if len(all) != 26 {
-		t.Errorf("в списке %d видов, перечислено 26 — список и проверка разошлись", len(all))
+	if len(all) != 27 {
+		t.Errorf("в списке %d видов, перечислено 27 — список и проверка разошлись", len(all))
 	}
 }

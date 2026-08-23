@@ -1,0 +1,14 @@
+-- When a competitor first appeared in a profile's environment.
+--
+-- computed_at, which is what this table had, is rewritten on every recompute:
+-- it says when the neighbours were last worked out, not when this one turned
+-- up. So the one comparison of spec section 6.1 that is not a diff of a pair
+-- over time — NewCompetitorInEnvironment, «в вашем окружении новый продавец» —
+-- had nothing to be computed from, while every other name in that group did.
+--
+-- Nought for the rows that are already here rather than today's date. They
+-- have been in the environment for as long as this database has existed, and
+-- stamping them now would announce every one of them as new the first time the
+-- rules run after an upgrade — a mailbox full of «новый конкурент» about
+-- sellers somebody has been watching for a month.
+ALTER TABLE competitors ADD COLUMN first_seen_at INTEGER NOT NULL DEFAULT 0;

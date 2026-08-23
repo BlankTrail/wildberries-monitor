@@ -86,6 +86,13 @@ func (a *App) detectChanges(ctx context.Context) {
 		highest = max(highest, at)
 	}
 
+	if n, at, err := a.applyNewCompetitors(ctx, engine, all, since); err != nil {
+		a.Log.Printf("правила: новые конкуренты: %v", err)
+	} else {
+		fired += n
+		highest = max(highest, at)
+	}
+
 	standings, err := a.Store.StandingsChangedSince(ctx, since)
 	if err != nil {
 		a.Log.Printf("правила: не прочитать изменившиеся сравнения: %v", err)
@@ -315,6 +322,45 @@ func (a *App) applyPromotion(ctx context.Context, e *rules.Engine, all []rules.R
 		fired += n
 	}
 	return fired, newest, nil
+}
+
+// applyNewCompetitors tells the rules about sellers that turned up in a
+// profile's environment.
+//
+// The one comparison in spec section 6.1 that is not a diff of a pairing over
+// time: there is no earlier reading of a seller who was not there. So it is
+// read off the set rather than computed from two rows, and what makes «новый»
+// answerable at all is first_seen_at — computed_at is rewritten on every
+// recompute, so asking it would answer «все» every time the neighbours are
+// worked out again.
+//
+// The change carries the newcomer as its subject and no numbers: there is no
+// «было», and a nought pretending to be one would make «на сколько изменилось»
+// a question with an answer.
+func (a *App) applyNewCompetitors(ctx context.Context, e *rules.Engine, all []rules.Rule, since int64) (int, int64, error) {
+	fresh, err := a.Store.NewCompetitors(ctx, since)
+	if err != nil {
+		return 0, 0, err
+	}
+
+	fired, highest := 0, int64(0)
+	for _, c := range fresh {
+		highest = max(highest, c.FirstSeenAt)
+		n, err := e.Apply(ctx, all, rules.Event{
+			Change: track.Change{
+				Kind:    track.NewCompetitorInEnvironment,
+				NmID:    c.EntityID,
+				TS:      c.FirstSeenAt,
+				Subject: c.Kind,
+				Unit:    track.UnitItems,
+			},
+		})
+		if err != nil {
+			return fired, highest, err
+		}
+		fired += n
+	}
+	return fired, highest, nil
 }
 
 // applyStanding runs the rules over one product's standing beside one rival.

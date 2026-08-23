@@ -20,18 +20,23 @@ package track
 // Spec section 6.1 lists about forty. Only the ones this build can actually
 // observe are declared, for the same reason wb/fields.go declares only fields
 // with a producer: a rule on a kind nothing can emit never fires, and a person
-// whose rule never fires concludes that nothing is changing. One is absent:
+// whose rule never fires concludes that nothing is changing. What is absent:
 //
-//   - NewCompetitorInEnvironment. The other eight comparisons are diffs of
-//     one pairing over time, which the profile's own comparison already
-//     computes; this one is not — it is a competitor appearing in the set at
-//     all, which is a fact about the set rather than about a pair, and the
-//     place that would notice it is where competitors are found rather than
-//     here.
+//   - Advertising (AdAppeared, AdLost, AdBidChanged, AdCompetitorEntered,
+//     OutrankedByAd) and shelves (ShelfEntered, ShelfLost,
+//     ShelfCompetitorEntered). What an ads reading gives is who WB was
+//     promoting for a phrase, never where in the page the seat sat, so
+//     «сверху встало платное размещение» cannot be told from «органика
+//     просела». The shelf trio needs a per-product recommendation shelf
+//     history keyed the way placements are, which nothing collects yet.
+//   - Assortment (ProductAdded, ProductRemoved, ContentChanged,
+//     BrandAssortmentChanged). These are about a storefront's shape rather
+//     than a product's numbers, and the diff in this package is written
+//     against one product at a time.
 type Kind string
 
-// The twenty-six kinds this build can emit, grouped by what they are about. The
-// one spec section 6.1 name that is absent is listed on Kind above, with
+// The twenty-seven kinds this build can emit, grouped by what they are about. The
+// spec section 6.1 names that are absent are listed on Kind above, with
 // the reason each of them has no producer here.
 //
 // The promotions group used to be on that list, excluded because «this build
@@ -89,6 +94,10 @@ const (
 	ContentGapWidened     Kind = "content-gap-widened"
 	CompetitorJoinedPromo Kind = "competitor-joined-promo"
 	WorkingPhraseLost     Kind = "working-phrase-lost"
+
+	// And the one comparison that is not a diff of a pairing over time: a
+	// seller appearing in the environment at all.
+	NewCompetitorInEnvironment Kind = "new-competitor-in-environment"
 )
 
 // Unit says what the two numbers on a change are counted in.
@@ -134,5 +143,6 @@ func Kinds() []Kind {
 		CompetitorOutranked, CompetitorEnteredTop,
 		RatingFellBelowMedian, ContentGapWidened,
 		CompetitorJoinedPromo, WorkingPhraseLost,
+		NewCompetitorInEnvironment,
 	}
 }

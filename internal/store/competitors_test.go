@@ -4,6 +4,8 @@ package store
 
 import (
 	"context"
+	"database/sql"
+	"strings"
 	"testing"
 	"time"
 
@@ -171,5 +173,61 @@ func TestCompetitors_AHandEditSurvivesTheRecompute(t *testing.T) {
 	// decision is not sorted below an average.
 	if got[0].EntityID != 300 {
 		t.Errorf("первым идёт %d, ожидался закреплённый", got[0].EntityID)
+	}
+}
+
+func TestCompetitors_TheOnesThatPredateTheColumnAreNotNew(t *testing.T) {
+	// first_seen_at arrived in migration 0028, on a table that already had
+	// rows. Stamped with today's date they would every one of them be
+	// announced as a new competitor the first time the rules ran after an
+	// upgrade — a mailbox full of «новый конкурент» about sellers somebody has
+	// been watching for a month.
+	s := openTestStore(t)
+
+	var dflt sql.NullString
+	if err := s.db.QueryRowContext(context.Background(),
+		`SELECT dflt_value FROM pragma_table_info('competitors') WHERE name = 'first_seen_at'`,
+	).Scan(&dflt); err != nil {
+		t.Fatalf("read the column: %v", err)
+	}
+	if !dflt.Valid || strings.TrimSpace(dflt.String) != "0" {
+		t.Errorf("значение по умолчанию = %q, ожидался 0", dflt.String)
+	}
+}
+
+func TestCompetitors_ARowFromBeforeTheColumnStaysOld(t *testing.T) {
+	// The default keeps them at nought; this keeps them there. A recompute
+	// rewrites what the automation produced, so without carrying the nought
+	// across it the first scheduled recompute after an upgrade would stamp
+	// every familiar seller with today's date and announce all of them.
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	id, err := s.SaveProfile(ctx, ProfileRow{Name: "мой", SourceInput: "100"})
+	if err != nil {
+		t.Fatalf("SaveProfile: %v", err)
+	}
+	// A row as migration 0028 leaves it: known for a while, first seen never
+	// recorded.
+	if _, err := s.db.ExecContext(ctx, `
+		INSERT INTO competitors (profile_id, kind, entity_id, adjacency, pinned, excluded, computed_at, first_seen_at)
+		VALUES (?, 'seller', 4242, 3, 0, 0, 1000, 0)`, id); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	if err := s.SaveCompetitors(ctx, id, []CompetitorRow{
+		{Kind: "seller", EntityID: 4242, Adjacency: 5},
+	}); err != nil {
+		t.Fatalf("SaveCompetitors: %v", err)
+	}
+
+	fresh, err := s.NewCompetitors(ctx, 0)
+	if err != nil {
+		t.Fatalf("NewCompetitors: %v", err)
+	}
+	for _, c := range fresh {
+		if c.EntityID == 4242 {
+			t.Errorf("давно знакомый конкурент объявлен новым: впервые замечен %d", c.FirstSeenAt)
+		}
 	}
 }

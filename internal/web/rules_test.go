@@ -71,7 +71,7 @@ func TestRules_OffersOnlyTheChangesThisBuildCanNotice(t *testing.T) {
 			t.Errorf("%q has no label on screen", k)
 		}
 	}
-	for _, absent := range []string{"new-competitor-in-environment", "outranked-by-ad", "shelf-lost"} {
+	for _, absent := range []string{"outranked-by-ad", "shelf-lost", "product-added"} {
 		if strings.Contains(body, `value="`+absent+`"`) {
 			t.Errorf("the constructor offers %q, which nothing in this build emits", absent)
 		}
@@ -173,7 +173,7 @@ func TestSaveRule_AnEmptyConditionRowIsNotACondition(t *testing.T) {
 func TestSaveRule_RefusesWhatCanNeverFireAndSaysWhy(t *testing.T) {
 	srv, target := withTarget(t)
 	form := ruleFormValues(target)
-	form["kind"] = []string{"new-competitor-in-environment"}
+	form["kind"] = []string{"outranked-by-ad"}
 
 	w := postForm(t, srv, "/rules", form)
 	if !strings.Contains(w.Body.String(), "не отслеживает") {
@@ -255,7 +255,7 @@ func TestRules_MarksARuleThatCannotFire(t *testing.T) {
 	// again — but never shown as healthy.
 	srv, target := withTarget(t)
 	if _, err := srv.Store.SaveRule(t.Context(), store.RuleRow{
-		Name: "из будущего", EventKind: "new-competitor-in-environment", ScopeKind: "product",
+		Name: "из будущего", EventKind: "outranked-by-ad", ScopeKind: "product",
 		ScopeID: 1, Targets: fmt.Sprintf("[%d]", target), Enabled: true,
 	}, 0); err != nil {
 		t.Fatalf("SaveRule: %v", err)

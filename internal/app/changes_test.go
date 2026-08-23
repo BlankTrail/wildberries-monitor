@@ -541,3 +541,76 @@ func TestDetectChanges_TheBaselineSpellingsAgreeAcrossPackages(t *testing.T) {
 		t.Errorf("конкурент: %q против %q", track.BaselineRival, store.BaselineRival)
 	}
 }
+
+func TestDetectChanges_ASellerAppearingInTheEnvironmentIsTold(t *testing.T) {
+	// The one comparison of spec section 6.1 that is not a diff of a pairing
+	// over time: there is no earlier reading of a seller who was not there.
+	// What made it unanswerable was that the table only knew computed_at,
+	// which is rewritten on every recompute — so asking it «кто новый» would
+	// have answered «все» every time the neighbours were worked out again.
+	a := newApp(t)
+	ctx := t.Context()
+	watchEverything(t, a, track.NewCompetitorInEnvironment)
+
+	profile, err := a.Store.SaveProfile(ctx, store.ProfileRow{Name: "мой", SourceInput: "100"})
+	if err != nil {
+		t.Fatalf("SaveProfile: %v", err)
+	}
+	atWatermark(t, a, time.Now().Add(-time.Hour))
+
+	if err := a.Store.SaveCompetitors(ctx, profile, []store.CompetitorRow{
+		{Kind: "seller", EntityID: 4242, Adjacency: 3},
+	}); err != nil {
+		t.Fatalf("SaveCompetitors: %v", err)
+	}
+
+	a.detectChanges(ctx)
+
+	events, err := a.Store.RecentEvents(ctx, 10)
+	if err != nil {
+		t.Fatalf("RecentEvents: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("сработок %d, ожидалась одна: %+v", len(events), events)
+	}
+}
+
+func TestDetectChanges_ACompetitorRecomputedIsNotANewOne(t *testing.T) {
+	// The recompute runs on a schedule and rewrites every row it finds. Told
+	// from that, «новый конкурент» arrives once; told from computed_at it
+	// would arrive every night about the same familiar sellers.
+	a := newApp(t)
+	ctx := t.Context()
+	watchEverything(t, a, track.NewCompetitorInEnvironment)
+
+	profile, err := a.Store.SaveProfile(ctx, store.ProfileRow{Name: "мой", SourceInput: "100"})
+	if err != nil {
+		t.Fatalf("SaveProfile: %v", err)
+	}
+	atWatermark(t, a, time.Now().Add(-time.Hour))
+
+	rivals := []store.CompetitorRow{{Kind: "seller", EntityID: 4242, Adjacency: 3}}
+	if err := a.Store.SaveCompetitors(ctx, profile, rivals); err != nil {
+		t.Fatalf("SaveCompetitors: %v", err)
+	}
+	a.detectChanges(ctx)
+
+	// The same neighbour, worked out again — an hour later, which is what the
+	// schedule does and what makes computed_at move while first_seen_at does
+	// not. Recomputed within the same second the two are equal and the
+	// difference between them cannot be seen at all.
+	later := time.Now().Add(time.Hour)
+	a.Store.SetClock(func() time.Time { return later })
+	if err := a.Store.SaveCompetitors(ctx, profile, rivals); err != nil {
+		t.Fatalf("SaveCompetitors: %v", err)
+	}
+	a.detectChanges(ctx)
+
+	events, err := a.Store.RecentEvents(ctx, 10)
+	if err != nil {
+		t.Fatalf("RecentEvents: %v", err)
+	}
+	if len(events) != 1 {
+		t.Errorf("сработок %d — пересчёт объявил знакомого конкурента новым: %+v", len(events), events)
+	}
+}
