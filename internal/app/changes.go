@@ -86,6 +86,25 @@ func (a *App) detectChanges(ctx context.Context) {
 		highest = max(highest, at)
 	}
 
+	standings, err := a.Store.StandingsChangedSince(ctx, since)
+	if err != nil {
+		a.Log.Printf("правила: не прочитать изменившиеся сравнения: %v", err)
+		return
+	}
+	for _, key := range standings {
+		if seen >= changesPerPass {
+			break
+		}
+		seen++
+		n, at, err := a.applyStanding(ctx, engine, all, key)
+		if err != nil {
+			a.Log.Printf("правила: сравнение товара %d по фразе %q: %v", key.NmID, key.Query, err)
+			continue
+		}
+		fired += n
+		highest = max(highest, at)
+	}
+
 	promos, err := a.Store.PromotionsChangedSince(ctx, since)
 	if err != nil {
 		a.Log.Printf("правила: не прочитать изменившиеся акции: %v", err)
@@ -296,6 +315,77 @@ func (a *App) applyPromotion(ctx context.Context, e *rules.Engine, all []rules.R
 		fired += n
 	}
 	return fired, newest, nil
+}
+
+// applyStanding runs the rules over one product's standing beside one rival.
+//
+// Spec section 6.1's comparison group, the last of the nine names that had no
+// producer. What they need is «my» product, which the seller profile of
+// section 4.7 names, and the pairing itself — which that profile already
+// computes and stores as a benchmark. So what was missing was never the data;
+// it was the diff of two of those rows.
+func (a *App) applyStanding(ctx context.Context, e *rules.Engine, all []rules.Rule, key store.StandingKey) (int, int64, error) {
+	rows, err := a.Store.LastTwoStandings(ctx, key)
+	if err != nil {
+		return 0, 0, err
+	}
+	if len(rows) == 0 {
+		return 0, 0, nil
+	}
+	newest := rows[len(rows)-1].TS
+	if len(rows) < 2 {
+		return 0, newest, nil
+	}
+
+	changes, err := track.DiffStanding(standingOf(key, rows[0]), standingOf(key, rows[1]))
+	if err != nil {
+		return 0, newest, fmt.Errorf("сравнение с конкурентом: %w", err)
+	}
+	if len(changes) == 0 {
+		return 0, newest, nil
+	}
+
+	facts, err := a.Store.Facts(ctx, key.NmID)
+	if err != nil {
+		return 0, newest, err
+	}
+	jobs, err := a.Store.JobsOfProduct(ctx, key.NmID)
+	if err != nil {
+		return 0, newest, err
+	}
+
+	fired := 0
+	for _, c := range changes {
+		n, err := e.Apply(ctx, all, rules.Event{
+			Change: c,
+			Brand:  facts.Brand, SupplierID: facts.SupplierID, SubjectID: facts.SubjectID,
+			JobIDs: jobs,
+		})
+		if err != nil {
+			return fired, newest, err
+		}
+		fired += n
+	}
+	return fired, newest, nil
+}
+
+// standingOf turns a stored comparison into the shape track diffs.
+func standingOf(key store.StandingKey, b store.BenchmarkRow) track.Standing {
+	return track.Standing{
+		NmID: key.NmID, Phrase: key.Query, Dest: key.Dest,
+		// One audience per comparison, and the comparison does not record
+		// which: the benchmark is keyed on the phrase and the region, and the
+		// audience it was collected as is the profile's. Left at nought here
+		// rather than guessed, because it is part of the identity check and a
+		// guess would make two series look like one.
+		TS: b.TS, Baseline: key.Baseline, RivalID: key.BaselineID,
+
+		MyRank: b.PositionOrganic, RivalRank: b.RivalPositionOrganic,
+		MyPrice: b.Price, RivalPrice: b.RivalPrice,
+		MyRating: b.Rating, RivalRating: b.RivalRating,
+		MyFullness: b.OptionsFilledPct, RivalFullness: b.RivalOptionsFilledPct,
+		RivalInPromo: b.RivalInPromo,
+	}
 }
 
 // membershipOf turns a stored reading into the shape track diffs.

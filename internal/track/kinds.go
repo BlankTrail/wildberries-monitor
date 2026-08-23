@@ -20,19 +20,18 @@ package track
 // Spec section 6.1 lists about forty. Only the ones this build can actually
 // observe are declared, for the same reason wb/fields.go declares only fields
 // with a producer: a rule on a kind nothing can emit never fires, and a person
-// whose rule never fires concludes that nothing is changing. Nine are absent:
+// whose rule never fires concludes that nothing is changing. One is absent:
 //
-//   - Comparison against competitors (UndercutByCompetitor, LostPriceLead,
-//     CompetitorOutranked, CompetitorEnteredTop, NewCompetitorInEnvironment,
-//     RatingFellBelowMedian, ContentGapWidened, CompetitorJoinedPromo,
-//     WorkingPhraseLost). Every one of them is stated relative to "my"
-//     product, and which product is mine comes from the seller profile of
-//     spec section 4.7, which this build does not have. Declared without it,
-//     they would each need a "my product" nobody has set.
+//   - NewCompetitorInEnvironment. The other eight comparisons are diffs of
+//     one pairing over time, which the profile's own comparison already
+//     computes; this one is not — it is a competitor appearing in the set at
+//     all, which is a fact about the set rather than about a pair, and the
+//     place that would notice it is where competitors are found rather than
+//     here.
 type Kind string
 
-// The eighteen kinds this build can emit, grouped by what they are about. The
-// nine spec section 6.1 names that are absent are listed on Kind above, with
+// The twenty-six kinds this build can emit, grouped by what they are about. The
+// one spec section 6.1 name that is absent is listed on Kind above, with
 // the reason each of them has no producer here.
 //
 // The promotions group used to be on that list, excluded because «this build
@@ -77,6 +76,19 @@ const (
 	PromoJoined       Kind = "promo-joined"
 	PromoLeft         Kind = "promo-left"
 	PromoPriceChanged Kind = "promo-price-changed"
+
+	// Against competitors. Every one of them is stated relative to «my»
+	// product, which is what the seller profile of spec section 4.7 names —
+	// and the pairing they are diffs of is the comparison that profile
+	// already computes and stores.
+	UndercutByCompetitor  Kind = "undercut-by-competitor"
+	LostPriceLead         Kind = "lost-price-lead"
+	CompetitorOutranked   Kind = "competitor-outranked"
+	CompetitorEnteredTop  Kind = "competitor-entered-top"
+	RatingFellBelowMedian Kind = "rating-fell-below-median"
+	ContentGapWidened     Kind = "content-gap-widened"
+	CompetitorJoinedPromo Kind = "competitor-joined-promo"
+	WorkingPhraseLost     Kind = "working-phrase-lost"
 )
 
 // Unit says what the two numbers on a change are counted in.
@@ -118,5 +130,9 @@ func Kinds() []Kind {
 		DeliveryTimeChanged, RegionAvailabilityChanged,
 		RatingChanged, ReviewCountChanged,
 		PromoJoined, PromoLeft, PromoPriceChanged,
+		UndercutByCompetitor, LostPriceLead,
+		CompetitorOutranked, CompetitorEnteredTop,
+		RatingFellBelowMedian, ContentGapWidened,
+		CompetitorJoinedPromo, WorkingPhraseLost,
 	}
 }

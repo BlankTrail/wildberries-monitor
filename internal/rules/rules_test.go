@@ -236,7 +236,7 @@ func TestValidate_RefusesAKindThisBuildCannotEmit(t *testing.T) {
 	// build still has no producer for. It used to be a promotion kind here,
 	// until promotions grew one.
 	r := watching()
-	r.Kind = "undercut-by-competitor"
+	r.Kind = "new-competitor-in-environment"
 	if err := r.Validate(); err == nil {
 		t.Fatal("a rule on an unemittable kind was accepted")
 	}

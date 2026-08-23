@@ -119,7 +119,7 @@ func TestSave_RefusesARuleThatCanNeverMatch(t *testing.T) {
 	// the thing they are watching never changes.
 	s := openStore(t)
 	broken := elaborate()
-	broken.Kind = "undercut-by-competitor"
+	broken.Kind = "new-competitor-in-environment"
 
 	if _, err := Save(t.Context(), s, broken); err == nil {
 		t.Fatal("a rule on a kind this build cannot emit was stored")

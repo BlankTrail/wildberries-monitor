@@ -5,6 +5,7 @@ package store
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strconv"
 	"time"
 )
@@ -356,6 +357,94 @@ const cardFullness = `(
 		                  ), 0)
 		           WHERE EXISTS (SELECT 1 FROM product_options o3 WHERE o3.nm_id = p.nm_id)
 		       )`
+
+// StandingKey identifies one comparison history: one product against one
+// baseline, for one phrase, in one region, for one audience.
+//
+// The baseline is part of it because it is part of the question. «Я против
+// медианы топа» and «я против вот этого продавца» are two series, and a diff
+// across them would report a move that never happened.
+type StandingKey struct {
+	ProfileID  int64
+	NmID       int64
+	Query      string
+	Dest       string
+	Baseline   string
+	BaselineID int64
+}
+
+// StandingsChangedSince lists the comparisons recomputed since a moment.
+func (s *Store) StandingsChangedSince(ctx context.Context, since int64) ([]StandingKey, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT DISTINCT profile_id, nm_id, query, dest, baseline, baseline_id
+		  FROM benchmarks
+		 WHERE ts > ?
+		 ORDER BY profile_id, nm_id, query, dest, baseline, baseline_id`, since)
+	if err != nil {
+		return nil, fmt.Errorf("store: standings changed since %d: %w", since, err)
+	}
+	defer rows.Close()
+
+	var out []StandingKey
+	for rows.Next() {
+		var k StandingKey
+		if err := rows.Scan(&k.ProfileID, &k.NmID, &k.Query, &k.Dest, &k.Baseline, &k.BaselineID); err != nil {
+			return nil, fmt.Errorf("store: standings changed since %d: %w", since, err)
+		}
+		out = append(out, k)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: standings changed since %d: %w", since, err)
+	}
+	return out, nil
+}
+
+// LastTwoStandings reads the two most recent comparisons under one key.
+//
+// Oldest first, like every other pair this package hands to the diff: the
+// order is what says which side is «было».
+func (s *Store) LastTwoStandings(ctx context.Context, k StandingKey) ([]BenchmarkRow, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT ts, position_organic, rival_position_organic,
+		       price, rival_price,
+		       rating, rival_rating,
+		       options_filled_pct, rival_options_filled_pct,
+		       rival_in_promo
+		  FROM benchmarks
+		 WHERE profile_id = ? AND nm_id = ? AND query = ? AND dest = ?
+		   AND baseline = ? AND baseline_id = ?
+		 ORDER BY ts DESC
+		 LIMIT 2`,
+		k.ProfileID, k.NmID, k.Query, k.Dest, k.Baseline, k.BaselineID)
+	if err != nil {
+		return nil, fmt.Errorf("store: last two standings of %d: %w", k.NmID, err)
+	}
+	defer rows.Close()
+
+	var out []BenchmarkRow
+	for rows.Next() {
+		b := BenchmarkRow{
+			ProfileID: k.ProfileID, NmID: k.NmID, Query: k.Query, Dest: k.Dest,
+			Baseline: k.Baseline, BaselineID: k.BaselineID,
+		}
+		if err := rows.Scan(&b.TS,
+			&b.PositionOrganic, &b.RivalPositionOrganic,
+			&b.Price, &b.RivalPrice,
+			&b.Rating, &b.RivalRating,
+			&b.OptionsFilledPct, &b.RivalOptionsFilledPct,
+			&b.RivalInPromo); err != nil {
+			return nil, fmt.Errorf("store: last two standings of %d: %w", k.NmID, err)
+		}
+		out = append(out, b)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: last two standings of %d: %w", k.NmID, err)
+	}
+	// Newest first out of the database, because that is what LIMIT 2 can do;
+	// oldest first to the caller, because that is what a diff means by «было».
+	slices.Reverse(out)
+	return out, nil
+}
 
 // SearchStanding is one product as it stood in one search, with the numbers a
 // comparison is made of.

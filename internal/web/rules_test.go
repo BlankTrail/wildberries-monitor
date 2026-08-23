@@ -57,11 +57,21 @@ func TestRules_OffersOnlyTheChangesThisBuildCanNotice(t *testing.T) {
 		if !strings.Contains(body, `value="`+string(k)+`"`) {
 			t.Errorf("the constructor does not offer %q", k)
 		}
-		if !strings.Contains(body, kindLabel(k)) {
+		// A label, and a Russian one. kindLabel falls back to the identifier
+		// itself, which is already on the screen as the option's value — so a
+		// kind added to the catalogue and forgotten in the label map rendered
+		// as «undercut-by-competitor» in a list of Russian sentences and
+		// nothing objected.
+		label := kindLabel(k)
+		if label == string(k) {
+			t.Errorf("у %q нет названия по-русски", k)
+			continue
+		}
+		if !strings.Contains(body, label) {
 			t.Errorf("%q has no label on screen", k)
 		}
 	}
-	for _, absent := range []string{"undercut-by-competitor", "working-phrase-lost", "outranked-by-ad"} {
+	for _, absent := range []string{"new-competitor-in-environment", "outranked-by-ad", "shelf-lost"} {
 		if strings.Contains(body, `value="`+absent+`"`) {
 			t.Errorf("the constructor offers %q, which nothing in this build emits", absent)
 		}
@@ -163,7 +173,7 @@ func TestSaveRule_AnEmptyConditionRowIsNotACondition(t *testing.T) {
 func TestSaveRule_RefusesWhatCanNeverFireAndSaysWhy(t *testing.T) {
 	srv, target := withTarget(t)
 	form := ruleFormValues(target)
-	form["kind"] = []string{"undercut-by-competitor"}
+	form["kind"] = []string{"new-competitor-in-environment"}
 
 	w := postForm(t, srv, "/rules", form)
 	if !strings.Contains(w.Body.String(), "не отслеживает") {
@@ -245,7 +255,7 @@ func TestRules_MarksARuleThatCannotFire(t *testing.T) {
 	// again — but never shown as healthy.
 	srv, target := withTarget(t)
 	if _, err := srv.Store.SaveRule(t.Context(), store.RuleRow{
-		Name: "из будущего", EventKind: "undercut-by-competitor", ScopeKind: "product",
+		Name: "из будущего", EventKind: "new-competitor-in-environment", ScopeKind: "product",
 		ScopeID: 1, Targets: fmt.Sprintf("[%d]", target), Enabled: true,
 	}, 0); err != nil {
 		t.Fatalf("SaveRule: %v", err)

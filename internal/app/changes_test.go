@@ -462,3 +462,82 @@ func TestDetectChanges_AFinishedSaleIsNotAProductVanishingFromSearch(t *testing.
 		t.Errorf("окончание акции сработало как «пропал из выдачи»: %+v", events)
 	}
 }
+
+// compared files one reading of one comparison, the way the profile's own
+// recompute files it.
+func compared(t *testing.T, a *App, profile int64, ts int64, mine, theirs int64) {
+	t.Helper()
+	if err := a.Store.SaveBenchmarks(t.Context(), []store.BenchmarkRow{{
+		ProfileID: profile, NmID: 100, Query: "платье летнее", Dest: "-1257786",
+		TS: ts, Baseline: store.BaselineRival, BaselineID: 200, Currency: "RUB",
+		Price: &mine, RivalPrice: &theirs,
+	}}); err != nil {
+		t.Fatalf("SaveBenchmarks: %v", err)
+	}
+}
+
+func TestDetectChanges_ARivalCuttingTheirPriceReachesTheOutbox(t *testing.T) {
+	// Spec section 6.1's last group, end to end. Every one of these is stated
+	// relative to «my» product, and they were excluded because «which product
+	// is mine comes from the seller profile, which this build does not have».
+	// It has had one for a while: a profile, its working phrases, its pinned
+	// rivals, and a comparison recomputed against them and stored. What was
+	// missing was the diff of two of those rows.
+	a := newApp(t)
+	ctx := t.Context()
+	watchEverything(t, a, track.UndercutByCompetitor)
+
+	profile, err := a.Store.SaveProfile(ctx, store.ProfileRow{
+		Name: "мой", SourceInput: "100",
+	})
+	if err != nil {
+		t.Fatalf("SaveProfile: %v", err)
+	}
+
+	first := time.Now().Add(-2 * time.Hour)
+	atWatermark(t, a, first.Add(-time.Hour))
+
+	// Cheaper, and then undercut.
+	compared(t, a, profile, first.Unix(), 99900, 109900)
+	compared(t, a, profile, first.Add(time.Hour).Unix(), 99900, 89900)
+
+	a.detectChanges(ctx)
+
+	events, err := a.Store.RecentEvents(ctx, 10)
+	if err != nil {
+		t.Fatalf("RecentEvents: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("сработок %d, ожидалась одна: %+v", len(events), events)
+	}
+
+	due, err := a.Store.DueMessages(ctx, time.Now().Add(time.Minute).Unix(), 10)
+	if err != nil {
+		t.Fatalf("DueMessages: %v", err)
+	}
+	if len(due) != 1 {
+		t.Fatalf("сообщений в очереди %d, ожидалось одно", len(due))
+	}
+	// The message says which product, which phrase and both numbers: «вас
+	// подрезали» about an unnamed product in an unnamed search is a
+	// notification somebody has to go and look up.
+	for _, want := range []string{"100", "платье летнее", "1099", "899"} {
+		if !strings.Contains(due[0].Body, want) {
+			t.Errorf("в сообщении нет %q: %q", want, due[0].Body)
+		}
+	}
+}
+
+func TestDetectChanges_TheBaselineSpellingsAgreeAcrossPackages(t *testing.T) {
+	// internal/track carries its own copy of the two baseline names, because
+	// it knows nothing about the database and is tested without one. Two
+	// spellings of one word is one word that can drift, and the drift would be
+	// silent: every comparison against a pinned rival would simply stop
+	// producing «конкурент зашёл в акцию» and nothing would fail.
+	if track.BaselineMedian != store.BaselineMedian {
+		t.Errorf("медиана: %q против %q", track.BaselineMedian, store.BaselineMedian)
+	}
+	if track.BaselineRival != store.BaselineRival {
+		t.Errorf("конкурент: %q против %q", track.BaselineRival, store.BaselineRival)
+	}
+}
