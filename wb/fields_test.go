@@ -469,7 +469,11 @@ func TestFields_MatchTheGoldenList(t *testing.T) {
 		{"subject_name", GroupContent, FieldText},
 		{"option", GroupContent, FieldText},
 		{"composition", GroupContent, FieldText},
-		{"card_created", GroupContent, FieldTime},
+		// Text, not time. 0001_core.sql keeps what the site sent, verbatim,
+		// and the domain makes no promise about its shape — so declaring it a
+		// time would promise an export consumer a parse this project never
+		// performs.
+		{"card_created", GroupContent, FieldText},
 
 		{"review_valuation", GroupReputation, FieldFloat},
 		{"review_count", GroupReputation, FieldInt},

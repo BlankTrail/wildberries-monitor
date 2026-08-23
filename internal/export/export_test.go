@@ -526,7 +526,7 @@ func allTypeColumns(t *testing.T) []wb.Field {
 		"name",              // text
 		"price_sale",        // money
 		"rating",            // float
-		"card_created",      // time
+		"review_created",    // time
 		"question_answered", // bool
 	)
 }
@@ -666,5 +666,49 @@ func TestExport_RefusesACancelledContextBeforeDeclaringColumns(t *testing.T) {
 	}
 	if len(w.begun) != 0 {
 		t.Errorf("the writer was told its columns %d time(s) for a run that never started", len(w.begun))
+	}
+}
+
+func TestRowOf_TheCardsOwnHalfIsExported(t *testing.T) {
+	// Spec section 4.4's «Описание и характеристики» is a group somebody ticks
+	// and pays a request per product for. Every column it produced came out
+	// empty: the row this switch reads did not carry the card's half at all,
+	// so the data was fetched, stored, and then not shown.
+	desc := "Водоотталкивающая, утеплённая."
+	code := "WJ-46-BLK"
+	subject := "Куртки"
+	opts := "Цвет: чёрный; Размер: 46"
+	comp := "полиэстер 100%"
+	created := "2026-07-30T14:08:39.823381Z"
+
+	row := store.ProductRow{
+		NmID: 100, Description: &desc, VendorCode: &code, SubjectName: &subject,
+		Options: &opts, Compositions: &comp, CardCreated: &created,
+	}
+	cols := columnsFor(t, "description", "vendor_code", "subject_name",
+		"option", "composition", "card_created")
+
+	got := RowOf(row, cols)
+	want := []string{desc, code, subject, opts, comp, created}
+	for i, v := range got {
+		if v.Absent {
+			t.Errorf("колонка %q пуста, хотя карточка её несёт", cols[i].Key)
+			continue
+		}
+		if v.Text != want[i] {
+			t.Errorf("колонка %q = %q, ожидалось %q", cols[i].Key, v.Text, want[i])
+		}
+	}
+}
+
+func TestRowOf_ACardNobodyReadStaysAbsent(t *testing.T) {
+	// Nil is «карточку не читали» and an empty string is «продавец оставил
+	// пусто». Rendered the same, the second would be said about every product
+	// met in a search and never opened — which is most of them.
+	cols := columnsFor(t, "description", "option")
+	for i, v := range RowOf(store.ProductRow{NmID: 100}, cols) {
+		if !v.Absent {
+			t.Errorf("колонка %q = %q, ожидалось «не читали»", cols[i].Key, v.Text)
+		}
 	}
 }

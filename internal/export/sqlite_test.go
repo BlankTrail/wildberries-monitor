@@ -177,7 +177,7 @@ func TestSQLite_ColumnsAreNamedAndOrderedByTheCatalogue(t *testing.T) {
 	// on column names, and allTypeColumns picks whichever column of each type
 	// the catalogue happens to declare first — a choice that moves when the
 	// catalogue grows. One of each type, chosen here so the two stay in step.
-	cols := columnsFor(t, "nm_id", "name", "price_sale", "rating", "card_created", "question_answered")
+	cols := columnsFor(t, "nm_id", "name", "price_sale", "rating", "review_created", "question_answered")
 
 	w, err := NewSQLite(path, Options{})
 	if err != nil {
@@ -244,7 +244,7 @@ func TestSQLite_ColumnTypesComeFromTheFieldTypes(t *testing.T) {
 		"name":              "TEXT",
 		"price_sale":        "REAL",
 		"rating":            "REAL",
-		"card_created":      "INTEGER",
+		"review_created":    "INTEGER",
 		"question_answered": "INTEGER",
 	}
 
@@ -329,7 +329,7 @@ func TestSQLite_AbsentIsNullAndZeroIsZero(t *testing.T) {
 	// Named explicitly rather than through allTypeColumns: this test asserts on
 	// column names, and allTypeColumns takes whichever column of each type the
 	// catalogue declares first — a choice that moves when the catalogue grows.
-	cols := columnsFor(t, "nm_id", "name", "price_sale", "rating", "card_created", "question_answered")
+	cols := columnsFor(t, "nm_id", "name", "price_sale", "rating", "review_created", "question_answered")
 
 	w, err := NewSQLite(path, Options{})
 	if err != nil {
@@ -356,7 +356,7 @@ func TestSQLite_AbsentIsNullAndZeroIsZero(t *testing.T) {
 
 	db := openExport(t, path)
 	q := `SELECT typeof(nm_id), typeof(name), typeof(price_sale),
-	             typeof(rating), typeof(card_created), typeof(question_answered)
+	             typeof(rating), typeof(review_created), typeof(question_answered)
 	      FROM ` + DefaultTable + ` ORDER BY rowid`
 
 	rows, err := db.Query(q)
@@ -498,7 +498,7 @@ func TestSQLite_TimeIsWholeUnixSeconds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSQLite: %v", err)
 	}
-	if err := w.Begin(columnsFor(t, "card_created")); err != nil {
+	if err := w.Begin(columnsFor(t, "review_created")); err != nil {
 		t.Fatalf("Begin: %v", err)
 	}
 	if err := w.Write([]Value{{Unix: 1755300000}}); err != nil {
@@ -510,11 +510,11 @@ func TestSQLite_TimeIsWholeUnixSeconds(t *testing.T) {
 
 	db := openExport(t, path)
 	var got int64
-	if err := db.QueryRow(`SELECT card_created FROM ` + DefaultTable).Scan(&got); err != nil {
+	if err := db.QueryRow(`SELECT review_created FROM ` + DefaultTable).Scan(&got); err != nil {
 		t.Fatalf("read: %v", err)
 	}
 	if got != 1755300000 {
-		t.Errorf("card_created = %d, want 1755300000", got)
+		t.Errorf("review_created = %d, want 1755300000", got)
 	}
 }
 

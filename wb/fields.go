@@ -196,10 +196,13 @@ var catalogue = []Field{
 	// visibly incomparable export was not going to be stopped by a returned
 	// error either, only annoyed by one.
 	//
-	// ts is FieldTime, not FieldInt, for the same reason card_created and
-	// review_created are: a writer that rendered a Unix second as a plain
-	// number would make every export's date column look like the one field
-	// nobody bothered to format. dest is FieldText: a region is WB's own
+	// ts is FieldTime, not FieldInt, for the same reason review_created is: a
+	// writer that rendered a Unix second as a plain number would make every
+	// export's date column look like the one field nobody bothered to format.
+	// card_created is the exception that proves it — it is FieldText, because
+	// the store keeps the site's own string and this project never parses it,
+	// so calling it a time would promise a shape nobody checked. dest is
+	// FieldText: a region is WB's own
 	// destination code (e.g. "-1257786", "12358499"), not a quantity, and
 	// nothing about it should ever go through a number formatter. app_type
 	// is FieldInt: it is one of a short closed set of audience codes (see
@@ -266,7 +269,12 @@ var catalogue = []Field{
 	{Key: "subject_name", Name: "Категория", Group: GroupContent, Type: FieldText, Source: FieldSourceCardDocument},
 	{Key: "option", Name: "Характеристика", Group: GroupContent, Type: FieldText, Source: FieldSourceCardDocument},
 	{Key: "composition", Name: "Состав", Group: GroupContent, Type: FieldText, Source: FieldSourceCardDocument},
-	{Key: "card_created", Name: "Карточка создана", Group: GroupContent, Type: FieldTime, Source: FieldSourceCardDocument},
+	// Text and not a time, which is what the site actually promises. The card
+	// carries its own raw string and this package does not parse it — see
+	// 0001_core.sql, which keeps the column as TEXT for the same reason:
+	// inventing a format contract the domain has not made would be a claim
+	// about every card ever collected.
+	{Key: "card_created", Name: "Карточка создана", Group: GroupContent, Type: FieldText, Source: FieldSourceCardDocument},
 
 	// Reputation: a request per product for reviews (Reviews), another for
 	// questions (Questions).

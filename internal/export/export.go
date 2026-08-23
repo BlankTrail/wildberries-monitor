@@ -192,11 +192,16 @@ func RowOf(r store.ProductRow, cols []wb.Field) []Value {
 // valueOf answers one column out of one reading.
 //
 // The default is Absent, and it is the honest answer rather than a gap in the
-// switch: ProductRow is the search page joined to its snapshot, so a column
-// fed by the card document (description), the review window (review_text) or a
-// shelf placement (shelf_position) has nothing in this row to be read from.
-// Rendering those as an empty string would be a claim about the product —
-// "the description is empty" — rather than about what was read.
+// switch: a column fed by the review window (review_text) or by a shelf
+// placement (shelf_position) has nothing in this row to be read from — those
+// are one-to-many against a reading, and a row is one reading. Rendering them
+// as an empty string would be a claim about the product — "there are no
+// reviews" — rather than about what was read.
+//
+// The card's own half used to be in that list and is not any more. It is
+// one-to-one with the product, it was already stored, and leaving it out meant
+// spec section 4.4's «Описание и характеристики» cost a request per product
+// and produced empty columns.
 func valueOf(r store.ProductRow, f wb.Field) Value {
 	switch f.Key {
 	case "ts":
@@ -234,6 +239,23 @@ func valueOf(r store.ProductRow, f wb.Field) Value {
 		return optInt(r.Feedbacks)
 	case "total_quantity":
 		return optInt(r.TotalQuantity)
+
+	// The card's half, which spec section 4.4 prices at a request per product
+	// and which this switch used to answer with Absent for every one of them.
+	// Ticking «Описание и характеристики» spent that request, stored what came
+	// back, and produced an empty column.
+	case "description":
+		return optText(r.Description)
+	case "vendor_code":
+		return optText(r.VendorCode)
+	case "subject_name":
+		return optText(r.SubjectName)
+	case "option":
+		return optText(r.Options)
+	case "composition":
+		return optText(r.Compositions)
+	case "card_created":
+		return optText(r.CardCreated)
 	}
 	return Value{Absent: true}
 }
@@ -247,6 +269,18 @@ func optInt(p *int64) Value {
 		return Value{Absent: true}
 	}
 	return Value{Int: *p}
+}
+
+// optText is the same rule for the card's strings.
+//
+// Nil is «карточку не читали» and an empty string is «продавец оставил пусто»,
+// and the two are different answers about the seller. A column that rendered
+// both as blank would say the second about every product met only in a search.
+func optText(p *string) Value {
+	if p == nil {
+		return Value{Absent: true}
+	}
+	return Value{Text: *p}
 }
 
 func optFloat(p *float64) Value {

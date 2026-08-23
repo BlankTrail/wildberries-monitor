@@ -52,6 +52,26 @@ type ProductRow struct {
 	PriceSale   *int64 // minor units
 	DiscountPct *int64
 	Currency    string
+
+	// What the card said, for the readings of products whose card has been
+	// read. Nil where it has not — a product met in a search and never opened
+	// has no description, and an empty string would be a claim that the seller
+	// left it blank.
+	//
+	// These were collected, stored and then not shown: spec section 4.4's
+	// «Описание и характеристики» is a group somebody ticks and pays a request
+	// per product for, and every column it produced came out empty because
+	// this row did not carry the card's half at all.
+	Description *string
+	VendorCode  *string
+	SubjectName *string
+	CardCreated *string
+	// Options and Compositions are the card's lists, joined for one cell:
+	// «Цвет: синий; Размер: M». A column is one value per reading, and a
+	// characteristics table is many — so they are shown the way a person would
+	// read them out rather than split across columns nobody selected.
+	Options      *string
+	Compositions *string
 }
 
 // ProductFilter narrows a stream of readings.
@@ -150,7 +170,25 @@ const productRowColumns = `
 	    s.price_base             AS price_base,
 	    s.price_sale             AS price_sale,
 	    s.discount_pct           AS discount_pct,
-	    COALESCE(s.currency, '') AS currency`
+	    COALESCE(s.currency, '') AS currency,
+	    p.description            AS description,
+	    p.vendor_code            AS vendor_code,
+	    p.subject_name           AS subject_name,
+	    p.card_created           AS card_created,
+	    (
+	        SELECT GROUP_CONCAT(o.name || ': ' || o.value, '; ')
+	          FROM (
+	              SELECT name, value FROM product_options
+	               WHERE nm_id = p.nm_id ORDER BY position
+	          ) o
+	    )                        AS options,
+	    (
+	        SELECT GROUP_CONCAT(c.name, '; ')
+	          FROM (
+	              SELECT name FROM product_compositions
+	               WHERE nm_id = p.nm_id ORDER BY position
+	          ) c
+	    )                        AS compositions`
 
 // productRowOutput names the same columns for the outer half of the streaming
 // query. Three copies of one list live in this file — this one,
@@ -160,7 +198,9 @@ const productRowColumns = `
 // file says so at once.
 const productRowOutput = `nm_id, imt_id, name, brand, supplier_id, supplier_name,
 	    dest, app_type, ts, rating, feedbacks, total_quantity,
-	    price_base, price_sale, discount_pct, currency`
+	    price_base, price_sale, discount_pct, currency,
+	    description, vendor_code, subject_name, card_created,
+	    options, compositions`
 
 // scanProductRow reads one row in the order productRowColumns names.
 //
@@ -174,7 +214,9 @@ func scanProductRow(sc rowScanner) (ProductRow, error) {
 	err := sc.Scan(
 		&r.NmID, &r.ImtID, &r.Name, &r.Brand, &r.SupplierID, &r.SupplierName,
 		&r.Dest, &r.AppType, &r.TS, &r.Rating, &r.Feedbacks, &r.TotalQuantity,
-		&r.PriceBase, &r.PriceSale, &r.DiscountPct, &r.Currency)
+		&r.PriceBase, &r.PriceSale, &r.DiscountPct, &r.Currency,
+		&r.Description, &r.VendorCode, &r.SubjectName, &r.CardCreated,
+		&r.Options, &r.Compositions)
 	return r, err
 }
 

@@ -1090,3 +1090,80 @@ func TestProducts_TiesKeepTheirOrderSoAPageDoesNotRepeatARow(t *testing.T) {
 		}
 	}
 }
+
+func TestProducts_CarriesTheCardsOwnHalf(t *testing.T) {
+	// The columns spec section 4.4 charges a request per product for.
+	//
+	// The Go side of this was already right — export.RowOf answers every one
+	// of these keys — and every column still came out empty, because the query
+	// underneath did not select them. That is the whole shape of the defect:
+	// collected, stored, and read back by nobody.
+	s := openTestStore(t)
+	if _, err := s.SaveCard(context.Background(), sampleCardFetch()); err != nil {
+		t.Fatalf("SaveCard: %v", err)
+	}
+
+	got := collectSeq(t, "Products", s.Products(context.Background(), ProductFilter{}))
+	if len(got) != 1 {
+		t.Fatalf("got %d rows, want 1", len(got))
+	}
+	r := got[0]
+
+	text := func(what string, p *string) string {
+		t.Helper()
+		if p == nil {
+			t.Errorf("%s: карточку прочитали, а колонка пуста", what)
+			return ""
+		}
+		return *p
+	}
+	if v := text("описание", r.Description); v != "Water repellent, insulated." {
+		t.Errorf("описание = %q", v)
+	}
+	if v := text("артикул", r.VendorCode); v != "WJ-46-BLK" {
+		t.Errorf("артикул продавца = %q", v)
+	}
+	if v := text("предмет", r.SubjectName); v != "Jackets" {
+		t.Errorf("предмет = %q", v)
+	}
+	if v := text("создана", r.CardCreated); v != "2024-11-02" {
+		t.Errorf("дата создания = %q", v)
+	}
+
+	// The card's lists, joined for one cell — a column is one value per
+	// reading. In the card's order, not the alphabet's: the seller chose it,
+	// and «Zip, Age, Care» sorted would be a different document.
+	if v := text("характеристики", r.Options); v != "Zip: two-way; Age: adult; Care: machine wash 30" {
+		t.Errorf("характеристики = %q", v)
+	}
+	if v := text("состав", r.Compositions); v != "polyester 100%; lining: polyamide" {
+		t.Errorf("состав = %q", v)
+	}
+}
+
+func TestProducts_AProductNobodyOpenedHasNoCardHalf(t *testing.T) {
+	// A search reading and nothing else. Nil is «карточку не читали»; an empty
+	// string would be «продавец оставил описание пустым», said about every
+	// product met in a search — which is most of them.
+	s := openTestStore(t)
+	at := time.Date(2026, 8, 16, 9, 0, 0, 0, time.UTC)
+	saveReading(t, s, readingAt(141504066, "-1257786", 1, 120000, at))
+
+	got := collectSeq(t, "Products", s.Products(context.Background(), ProductFilter{}))
+	if len(got) != 1 {
+		t.Fatalf("got %d rows, want 1", len(got))
+	}
+	for _, c := range []struct {
+		what string
+		got  *string
+	}{
+		{"описание", got[0].Description},
+		{"артикул продавца", got[0].VendorCode},
+		{"характеристики", got[0].Options},
+		{"состав", got[0].Compositions},
+	} {
+		if c.got != nil {
+			t.Errorf("%s = %q, а карточку не читали", c.what, *c.got)
+		}
+	}
+}

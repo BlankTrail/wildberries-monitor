@@ -693,7 +693,7 @@ func TestXLSX_AbsentValueEmitsNoCellAtAll(t *testing.T) {
 		{Absent: true}, // name
 		{Absent: true}, // price_sale
 		{Float: 4.1},
-		{Absent: true}, // card_created
+		{Absent: true}, // review_created
 		{Absent: true}, // question_answered
 	}}
 	parts := buildXLSX(t, cols, rows)
@@ -910,7 +910,7 @@ func TestXLSX_DateColumnIsWideEnoughToShowADate(t *testing.T) {
 	if len(sh.Cols) != len(cols) {
 		t.Fatalf("the sheet declares %d column widths, want %d", len(sh.Cols), len(cols))
 	}
-	// card_created is the fifth column, min/max are one-based.
+	// review_created is the fifth column, min/max are one-based.
 	if sh.Cols[4].Min != "5" || sh.Cols[4].Max != "5" {
 		t.Fatalf("the fifth col element covers %s..%s, want 5..5", sh.Cols[4].Min, sh.Cols[4].Max)
 	}
