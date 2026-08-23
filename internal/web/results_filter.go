@@ -99,13 +99,28 @@ func (s *Server) resultsChips(r *http.Request, q url.Values, total int64) string
 	add("from", "с", q.Get("from"))
 	add("to", "по", q.Get("to"))
 	if q.Get("latest") != "" {
-		add("latest", "только последнее чтение", "да")
+		add("latest", "только свежее", "по каждому товару")
 	}
 
 	var b strings.Builder
 	b.WriteString(`<div class="bt-chips">`)
 	b.WriteString(`<span class="bt-chips__count">` +
 		html.EscapeString(readingsText(total)) + `</span>`)
+	// The one narrowing people reach for as often as the search box, so it is
+	// beside the count rather than behind «Ещё условия».
+	//
+	// A row here is a reading, and a product read four times in one walk has
+	// four of them — same article, same region, different minute and often a
+	// different stock. They are not duplicates; they are the log this table is.
+	// But «покажи по одной строке на товар» is what somebody scanning an
+	// assortment means, and it was three presses away.
+	if q.Get("latest") == "" {
+		b.WriteString(`<button class="bt-chip bt-chip--add" type="button" data-get="` +
+			html.EscapeString(resultsURL(withParam(q, "latest", "1"))) +
+			`" data-target="#results-body" ` +
+			`title="По одной строке на товар — самое свежее чтение в каждом регионе">` +
+			`Только свежее</button>`)
+	}
 	for _, c := range chips {
 		b.WriteString(`<button class="bt-chip" type="button" data-get="` +
 			html.EscapeString(resultsURL(c.Drop)) + `" data-target="#results-body" ` +
@@ -172,7 +187,7 @@ func (s *Server) resultsMore(r *http.Request, q url.Values) string {
 		checked = " checked"
 	}
 	b.WriteString(`<label class="bt-checkbox"><input type="checkbox" name="latest" value="1"` + checked +
-		`> Только последнее чтение каждого товара</label>`)
+		`> Только свежее чтение каждого товара, без повторов</label>`)
 	b.WriteString(`<div class="bt-form-actions bt-form-actions--tight">` +
 		`<button class="bt-btn bt-btn--primary" type="submit">Показать</button></div>`)
 	b.WriteString(`</form></details>`)

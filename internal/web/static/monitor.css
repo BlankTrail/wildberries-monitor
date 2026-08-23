@@ -1475,3 +1475,11 @@ dialog.bt-modal > #settings-body {
     animation: none;
   }
 }
+
+/* A chip that adds a condition rather than removing one. The others carry a ×
+   and take something away; this one is an offer, so it is outlined rather than
+   filled and carries no cross to promise the opposite. */
+.bt[data-bt-theme="dashboard"] .bt-chip--add {
+  border-style: dashed;
+  color: var(--text-link);
+}

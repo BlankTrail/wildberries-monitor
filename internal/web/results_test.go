@@ -610,3 +610,42 @@ func TestResults_TheTableGetsTheWindowAndAScrollbarInsideIt(t *testing.T) {
 		t.Errorf("после фильтра таблица теряет своё окно:\n%s", firstLines(table))
 	}
 }
+
+func TestResults_OnePressCollapsesARowPerReadingToARowPerProduct(t *testing.T) {
+	// A row here is a reading, and a product read four times in one storefront
+	// walk has four of them — same article, same region, a different minute and
+	// often a different stock. They are not duplicates; they are the log this
+	// table is. But «покажи по одной строке на товар» is what somebody scanning
+	// an assortment means, and it was behind a disclosure and a checkbox.
+	srv := resultsServer(t, 9)
+
+	all := get(t, srv, "/results/table", "correct horse").Body.String()
+	from := strings.Index(all, `class="bt-chip bt-chip--add"`)
+	if from < 0 {
+		t.Fatalf("схлопнуть повторы одним нажатием нечем:\n%s", firstLines(all))
+	}
+	href := attr(t, all[from:], "data-get")
+	if !strings.Contains(href, "latest=1") {
+		t.Errorf("нажатие просит не свежее: %q", href)
+	}
+
+	// And it does collapse them: the fixture reads three products nine times.
+	one := get(t, srv, href, "correct horse").Body.String()
+	if rows := strings.Count(one, "<tr>"); rows >= strings.Count(all, "<tr>") {
+		t.Errorf("строк не убавилось: было %d, стало %d",
+			strings.Count(all, "<tr>"), rows)
+	}
+	// Once it is on, the offer is gone and the condition is a chip that removes
+	// it — one control per state, never both.
+	if strings.Contains(one, `bt-chip--add`) {
+		t.Error("предложение схлопнуть показано, когда уже схлопнуто")
+	}
+	if !strings.Contains(one, "только свежее") {
+		t.Errorf("условие не показано в строке условий:\n%s", firstLines(one))
+	}
+
+	// And the export carries it, or a file would hold what the screen does not.
+	if !strings.Contains(one, "latest=1&amp;format=csv") && !strings.Contains(one, "format=csv&amp;latest=1") {
+		t.Errorf("выгрузка не несёт условие:\n%s", firstLines(one))
+	}
+}
