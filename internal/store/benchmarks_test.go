@@ -435,3 +435,147 @@ func TestTopOfSearch_TheRateStartsFromTheOldestReadingThatCountedReviews(t *test
 		t.Errorf("темп %.2f, ожидалось около 2 — от замера десятидневной давности", v)
 	}
 }
+
+// cardWith saves one card in a subject, with the characteristics named.
+func cardWith(t *testing.T, s *Store, nmID, subject int64, options ...string) {
+	t.Helper()
+	cf := sampleCardFetch()
+	cf.Card.NmID, cf.Product.ID = nmID, nmID
+	cf.Product.SubjectID = ptrTo(subject)
+	cf.Card.Options = nil
+	for _, name := range options {
+		cf.Card.Options = append(cf.Card.Options, wb.Option{Name: name, Value: "есть"})
+	}
+	if _, err := s.SaveCard(context.Background(), cf); err != nil {
+		t.Fatalf("SaveCard: %v", err)
+	}
+}
+
+func TestTopOfSearch_SaysHowFullEachCardIs(t *testing.T) {
+	// Spec section 4.7 breaks card completeness out of the comparison instead
+	// of folding it into one score, because it is the only gap a seller can
+	// close today — no money, no waiting. It was in the schema and nothing
+	// ever filled it, so the screen showed the price gap and the rating gap
+	// and stayed silent about the one thing anybody could act on this evening.
+	//
+	// WB does not publish how many characteristics a category supports, so the
+	// denominator is what sellers in that category have between them actually
+	// filled in — a real number, and one that sharpens as more cards are read.
+	s := openTestStore(t)
+	ctx := context.Background()
+	at := time.Date(2026, 8, 20, 9, 0, 0, 0, time.UTC)
+	s.SetClock(func() time.Time { return at })
+
+	cardWith(t, s, 100, 115, "Цвет", "Размер")
+	cardWith(t, s, 200, 115, "Цвет", "Размер", "Состав", "Сезон")
+	searchReading(t, s, "платье", "-1257786", 100, 200)
+
+	top, err := s.TopOfSearch(ctx, "платье", "-1257786", 10)
+	if err != nil {
+		t.Fatalf("TopOfSearch: %v", err)
+	}
+	got := map[int64]int64{}
+	for _, st := range top {
+		if st.OptionsFilledPct == nil {
+			t.Fatalf("товар %d: полнота карточки не посчитана", st.NmID)
+		}
+		got[st.NmID] = *st.OptionsFilledPct
+	}
+	if got[100] != 50 {
+		t.Errorf("моя карточка заполнена на %d%%, ожидалось 50 — две из четырёх", got[100])
+	}
+	if got[200] != 100 {
+		t.Errorf("карточка конкурента заполнена на %d%%, ожидалось 100", got[200])
+	}
+}
+
+func TestTopOfSearch_CompletenessIsMeasuredInsideItsOwnCategory(t *testing.T) {
+	// A dress and a drill have different characteristics, and counting them
+	// together makes every card look sparse: the denominator becomes every
+	// name anybody ever filled in anywhere.
+	s := openTestStore(t)
+	ctx := context.Background()
+	at := time.Date(2026, 8, 20, 9, 0, 0, 0, time.UTC)
+	s.SetClock(func() time.Time { return at })
+
+	cardWith(t, s, 100, 115, "Цвет", "Размер")
+	cardWith(t, s, 900, 777, "Патрон", "Крутящий момент", "Питание", "Вес")
+	searchReading(t, s, "платье", "-1257786", 100)
+
+	top, err := s.TopOfSearch(ctx, "платье", "-1257786", 10)
+	if err != nil {
+		t.Fatalf("TopOfSearch: %v", err)
+	}
+	if top[0].OptionsFilledPct == nil || *top[0].OptionsFilledPct != 100 {
+		t.Errorf("полнота = %v, ожидалось 100: в своей категории заполнено всё известное",
+			top[0].OptionsFilledPct)
+	}
+}
+
+func TestTopOfSearch_ACardNobodyReadHasNoCompleteness(t *testing.T) {
+	// A product met in a search but never opened has no characteristics on
+	// file. Reported as nought it would read as «продавец не заполнил ничего»
+	// — an accusation built out of the fact that we have not looked.
+	s := openTestStore(t)
+	ctx := context.Background()
+	at := time.Date(2026, 8, 20, 9, 0, 0, 0, time.UTC)
+	s.SetClock(func() time.Time { return at })
+
+	// A neighbour's card is on file, so the category's vocabulary is known —
+	// which is exactly the case where a missing card turns into a confident
+	// nought instead of a shrug.
+	cardWith(t, s, 200, 115, "Цвет", "Размер", "Состав")
+	searchReading(t, s, "платье", "-1257786", 100, 200)
+
+	top, err := s.TopOfSearch(ctx, "платье", "-1257786", 10)
+	if err != nil {
+		t.Fatalf("TopOfSearch: %v", err)
+	}
+	for _, st := range top {
+		switch st.NmID {
+		case 100:
+			if st.OptionsFilledPct != nil {
+				t.Errorf("у непрочитанной карточки объявлена полнота %d%%", *st.OptionsFilledPct)
+			}
+		case 200:
+			if st.OptionsFilledPct == nil || *st.OptionsFilledPct != 100 {
+				t.Errorf("у прочитанной карточки полнота = %v", st.OptionsFilledPct)
+			}
+		}
+	}
+}
+
+func TestSaveBenchmarks_CardCompletenessSurvivesBeingWrittenDown(t *testing.T) {
+	// Twenty-eight columns listed against thirty values is a mismatch the
+	// compiler cannot see: the number computed on the way in is simply not in
+	// the row that comes back out, and the screen shows a dash.
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	id, err := s.SaveProfile(ctx, ProfileRow{Name: "мой", SourceInput: "141504066"})
+	if err != nil {
+		t.Fatalf("SaveProfile: %v", err)
+	}
+	mine, theirs := int64(50), int64(90)
+	if err := s.SaveBenchmarks(ctx, []BenchmarkRow{{
+		ProfileID: id, NmID: 100, Query: "платье", Dest: "-1257786", TS: 1000,
+		Baseline: BaselineMedian, Currency: "RUB",
+		OptionsFilledPct: &mine, RivalOptionsFilledPct: &theirs,
+	}}); err != nil {
+		t.Fatalf("SaveBenchmarks: %v", err)
+	}
+
+	back, err := s.Benchmarks(ctx, id)
+	if err != nil {
+		t.Fatalf("Benchmarks: %v", err)
+	}
+	if len(back) != 1 {
+		t.Fatalf("сравнений прочитано %d", len(back))
+	}
+	if back[0].OptionsFilledPct == nil || *back[0].OptionsFilledPct != 50 {
+		t.Errorf("моя полнота = %v, записывали 50", back[0].OptionsFilledPct)
+	}
+	if back[0].RivalOptionsFilledPct == nil || *back[0].RivalOptionsFilledPct != 90 {
+		t.Errorf("полнота конкурента = %v, записывали 90", back[0].RivalOptionsFilledPct)
+	}
+}

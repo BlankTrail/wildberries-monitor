@@ -68,18 +68,19 @@ func (s *Server) compareHTML(r *http.Request) (string, error) {
 				`Срез не считался. Нужны рабочие фразы и собранная по ним выдача — тогда «Пересчитать» соберёт сравнение.</div>`)
 		} else {
 			b.WriteString(compareTable(rows))
+			b.WriteString(fullnessTable(rows))
 		}
 		b.WriteString(`<div class="bt-form-actions bt-form-actions--tight">`)
 		b.WriteString(action(fmt.Sprintf("/compare/recompute?id=%d", p.ID), "#compare-body", "Пересчитать срез"))
 		b.WriteString(`</div>`)
 	}
 
-	// Said once, at the bottom, rather than as an empty column per row: three
-	// of section 4.7's comparisons have no source in this build, and a column
-	// of dashes reads like «у всех поровну».
+	// Said once, at the bottom, rather than as an empty column per row: two of
+	// section 4.7's comparisons have no source in this build, and a column of
+	// dashes reads like «у всех поровну».
 	b.WriteString(`<div class="bt-alert bt-alert--neutral">` +
-		`Не сравнивается в этой сборке: участие в акции, число фото и наличие видео, ` +
-		`доля заполненных характеристик — для них нет источника, а пустая колонка читалась бы как «поровну».</div>`)
+		`Не сравнивается в этой сборке: участие в акции, число фото и наличие видео — ` +
+		`для них нет источника, а пустая колонка читалась бы как «поровну».</div>`)
 	b.WriteString(`</section>`)
 	return b.String(), nil
 }
@@ -93,7 +94,7 @@ func compareTable(rows []store.BenchmarkRow) string {
 		`<th class="bt-num">Рейтинг</th><th class="bt-num">Отзывов</th>` +
 		`<th class="bt-num">Отзывов в день</th>` +
 		`<th class="bt-num">Остаток</th><th class="bt-num">Доставка</th>` +
-		`<th class="bt-num">Описание</th><th>Реклама</th>` +
+		`<th>Реклама</th>` +
 		`</tr></thead><tbody>`)
 
 	for _, r := range rows {
@@ -110,12 +111,77 @@ func compareTable(rows []store.BenchmarkRow) string {
 		b.WriteString(floatCell(r.FeedbacksPerDay, r.RivalFeedbacksPerDay))
 		b.WriteString(deltaCell(r.TotalQuantity, r.RivalTotalQuantity, higherIsBetter, plainInt))
 		b.WriteString(deltaCell(r.DeliveryTime2, r.RivalDeliveryTime2, lowerIsBetter, hours))
-		b.WriteString(deltaCell(r.DescriptionLen, r.RivalDescriptionLen, higherIsBetter, plainInt))
 		b.WriteString(flagCell(r.HasAd, r.RivalHasAd))
 		b.WriteString(`</tr>`)
 	}
 	b.WriteString(`</tbody></table></div>`)
 	return b.String()
+}
+
+// fullnessTable is spec section 4.7's card completeness, kept apart from the
+// rest of the comparison because the spec keeps it apart: everything in the
+// wide table above costs money or time to close, and everything here closes
+// this evening for free.
+//
+// One row per product and phrase, and only against the median — «медиана топа»
+// is the shelf's own standard of a filled-in card, and a pinned rival's row
+// would say the same thing about one seller who may simply be lazy.
+func fullnessTable(rows []store.BenchmarkRow) string {
+	var shown []store.BenchmarkRow
+	for _, r := range rows {
+		if r.Baseline != store.BaselineMedian {
+			continue
+		}
+		if r.OptionsFilledPct == nil && r.DescriptionLen == nil {
+			continue
+		}
+		shown = append(shown, r)
+	}
+	if len(shown) == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+	b.WriteString(`<h4 class="bt-form-head">Полнота карточки</h4>`)
+	b.WriteString(`<p class="bt-form-hint">Единственный разрыв в этой таблице, ` +
+		`который закрывается сегодня и бесплатно — без ставок, ремаркетинга и ожидания.</p>`)
+	b.WriteString(`<div class="bt-table-wrap"><table class="bt-table"><thead><tr>` +
+		`<th>Товар</th><th>Фраза</th>` +
+		`<th class="bt-num">Характеристики</th><th class="bt-num">Описание</th>` +
+		`<th>Что сделать</th>` +
+		`</tr></thead><tbody>`)
+
+	for _, r := range shown {
+		fmt.Fprintf(&b, `<tr><td class="bt-mono">%d</td><td>%s</td>`,
+			r.NmID, html.EscapeString(r.Query))
+		b.WriteString(deltaCell(r.OptionsFilledPct, r.RivalOptionsFilledPct, higherIsBetter, percent))
+		b.WriteString(deltaCell(r.DescriptionLen, r.RivalDescriptionLen, higherIsBetter, plainInt))
+		fmt.Fprintf(&b, `<td>%s</td></tr>`, html.EscapeString(fullnessAdvice(r)))
+	}
+	b.WriteString(`</tbody></table></div>`)
+	return b.String()
+}
+
+// fullnessAdvice is the row said out loud: what to do, or that there is
+// nothing to do.
+//
+// Named in the order the work goes — characteristics first, because they are
+// a form to fill in, and the description after, because it has to be written.
+func fullnessAdvice(r store.BenchmarkRow) string {
+	var parts []string
+	if r.OptionsFilledPct != nil && r.RivalOptionsFilledPct != nil &&
+		*r.OptionsFilledPct < *r.RivalOptionsFilledPct {
+		parts = append(parts, "заполнить характеристики")
+	}
+	if r.DescriptionLen != nil && r.RivalDescriptionLen != nil &&
+		*r.DescriptionLen < *r.RivalDescriptionLen {
+		parts = append(parts, fmt.Sprintf("описание короче медианы на %d знаков",
+			*r.RivalDescriptionLen-*r.DescriptionLen))
+	}
+	if len(parts) == 0 {
+		return "карточка не отстаёт"
+	}
+	return strings.Join(parts, "; ")
 }
 
 func baselineText(r store.BenchmarkRow) string {

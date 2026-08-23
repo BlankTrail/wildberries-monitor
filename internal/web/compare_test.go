@@ -240,25 +240,112 @@ func TestCompare_WithNothingCollectedSaysSoRatherThanShowingZeroes(t *testing.T)
 	}
 }
 
-func TestCompareTable_EveryRowHasACellForEveryHeading(t *testing.T) {
+func TestCompareTables_EveryRowHasACellForEveryHeading(t *testing.T) {
 	// A column added to the head and not to the body — or the other way about
 	// — does not fail anything: the browser draws the table anyway, one cell
 	// short, and from that point every value on the row is under the wrong
 	// heading. Ratings read as review counts and nobody is told.
+	//
+	// Both tables on this screen, because both were edited on the same day the
+	// completeness columns were split out of the wide one.
+	pct, len1 := int64(50), int64(120)
 	rows := []store.BenchmarkRow{{
 		NmID: 100, Query: "платье", Dest: "-1257786", Baseline: store.BaselineMedian,
-		Currency: "RUB",
+		Currency: "RUB", OptionsFilledPct: &pct, DescriptionLen: &len1,
 	}}
-	html := compareTable(rows)
-
-	head := html[:strings.Index(html, "</thead>")]
-	headings := strings.Count(head, "<th>") + strings.Count(head, "<th ")
-	body := html[strings.Index(html, "<tbody>"):]
-	cells := strings.Count(body, "<td")
-	if headings != cells {
-		t.Errorf("заголовков %d, ячеек в строке %d", headings, cells)
+	for name, table := range map[string]string{
+		"сравнение":        compareTable(rows),
+		"полнота карточки": fullnessTable(rows),
+	} {
+		head := table[:strings.Index(table, "</thead>")]
+		headings := strings.Count(head, "<th>") + strings.Count(head, "<th ")
+		body := table[strings.Index(table, "<tbody>"):]
+		cells := strings.Count(body, "<td")
+		if headings != cells {
+			t.Errorf("%s: заголовков %d, ячеек в строке %d", name, headings, cells)
+		}
+		if headings == 0 {
+			t.Errorf("%s: таблица без заголовков — считать нечего", name)
+		}
 	}
-	if headings == 0 {
-		t.Error("таблица без заголовков — считать нечего")
+}
+
+func TestFullness_SaysWhatToDoAndStaysQuietWhenThereIsNothing(t *testing.T) {
+	// The block exists to be acted on, so it says the action rather than the
+	// delta twice. And where the card is not behind, it says so: a row that
+	// only ever nags would be one somebody learns to skip.
+	mine, theirs := int64(50), int64(90)
+	short, long := int64(120), int64(900)
+	behind := store.BenchmarkRow{
+		NmID: 100, Query: "платье", Baseline: store.BaselineMedian,
+		OptionsFilledPct: &mine, RivalOptionsFilledPct: &theirs,
+		DescriptionLen: &short, RivalDescriptionLen: &long,
+	}
+	got := fullnessAdvice(behind)
+	if !strings.Contains(got, "характеристики") {
+		t.Errorf("не сказано про характеристики: %q", got)
+	}
+	if !strings.Contains(got, "780") {
+		t.Errorf("не сказано, насколько короче описание: %q", got)
+	}
+
+	ahead := behind
+	ahead.OptionsFilledPct, ahead.RivalOptionsFilledPct = &theirs, &mine
+	ahead.DescriptionLen, ahead.RivalDescriptionLen = &long, &short
+	if got := fullnessAdvice(ahead); got != "карточка не отстаёт" {
+		t.Errorf("карточка впереди, а сказано: %q", got)
+	}
+}
+
+func TestFullness_ShowsNothingWhereTheCardsWereNeverRead(t *testing.T) {
+	// Both numbers come from a card somebody opened. Without one, the block
+	// would be a table of dashes under a heading promising the one gap that
+	// closes for free.
+	rows := []store.BenchmarkRow{{
+		NmID: 100, Query: "платье", Baseline: store.BaselineMedian,
+	}}
+	if got := fullnessTable(rows); got != "" {
+		t.Errorf("нарисован блок полноты по пустым данным:\n%s", got)
+	}
+
+	// And a pinned rival's row is not it either: the standard here is the
+	// shelf's, not one competitor who may simply be lazy.
+	pct := int64(50)
+	rows[0].Baseline, rows[0].OptionsFilledPct = store.BaselineRival, &pct
+	if got := fullnessTable(rows); got != "" {
+		t.Errorf("полнота посчитана против закреплённого конкурента:\n%s", got)
+	}
+}
+
+func TestCompare_TheScreenActuallyShowsTheCardCompletenessBlock(t *testing.T) {
+	// The table can be right and still reach nobody: drawn by a function the
+	// page never calls, «полнота карточки» is a feature that exists only in
+	// the tests for it. Which is how the advertising column spent a milestone.
+	srv := newServer(t)
+	ctx := t.Context()
+
+	id, err := srv.Store.SaveProfile(ctx, store.ProfileRow{Name: "мой"})
+	if err != nil {
+		t.Fatalf("SaveProfile: %v", err)
+	}
+	mine, theirs := int64(40), int64(90)
+	if err := srv.Store.SaveBenchmarks(ctx, []store.BenchmarkRow{{
+		ProfileID: id, NmID: 100, Query: "платье", Dest: "-1257786", TS: 1000,
+		Baseline: store.BaselineMedian, Currency: "RUB",
+		OptionsFilledPct: &mine, RivalOptionsFilledPct: &theirs,
+	}}); err != nil {
+		t.Fatalf("SaveBenchmarks: %v", err)
+	}
+
+	body := get(t, srv, "/compare", "").Body.String()
+	if !strings.Contains(body, "Полнота карточки") {
+		t.Fatalf("на экране нет блока полноты карточки:\n%s", firstLines(body))
+	}
+	if !strings.Contains(body, "заполнить характеристики") {
+		t.Error("блок есть, но не говорит, что сделать")
+	}
+	// And the old apology no longer claims this one has no source.
+	if strings.Contains(body, "доля заполненных характеристик") {
+		t.Error("экран всё ещё пишет, что доля характеристик не сравнивается")
 	}
 }

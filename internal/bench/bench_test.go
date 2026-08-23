@@ -206,3 +206,30 @@ func TestCompare_ARateNobodyCouldMeasureStaysAbsent(t *testing.T) {
 			got[0].FeedbacksPerDay, got[0].RivalFeedbacksPerDay)
 	}
 }
+
+func TestCompare_CarriesHowFullEachCardIs(t *testing.T) {
+	// The one gap in the comparison a seller closes for free, so it has to
+	// reach the row: computed in the store and dropped here, the screen shows
+	// a dash and the person is told nothing about the only thing they could
+	// have done this evening.
+	mine := standing(100, 8, 149900, 4.5, 12)
+	mine.OptionsFilledPct = ptr(int64(40))
+
+	top := []store.SearchStanding{
+		standing(200, 1, 99900, 4.9, 900),
+		standing(300, 2, 109900, 4.8, 500),
+		standing(400, 3, 119900, 4.7, 100),
+	}
+	top[0].OptionsFilledPct = ptr(int64(100))
+	top[1].OptionsFilledPct = ptr(int64(90))
+	top[2].OptionsFilledPct = ptr(int64(60))
+
+	got := Compare(7, "платье", "-1257786", mine, top, nil)
+	b := got[0]
+	if b.OptionsFilledPct == nil || *b.OptionsFilledPct != 40 {
+		t.Errorf("моя полнота = %v, ожидалось 40", b.OptionsFilledPct)
+	}
+	if b.RivalOptionsFilledPct == nil || *b.RivalOptionsFilledPct != 90 {
+		t.Errorf("медианная полнота = %v, ожидалось 90 — медиана из 100, 90 и 60", b.RivalOptionsFilledPct)
+	}
+}

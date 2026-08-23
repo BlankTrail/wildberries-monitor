@@ -67,6 +67,11 @@ type BenchmarkRow struct {
 	FeedbacksPerDay      *float64
 	RivalFeedbacksPerDay *float64
 
+	// Card completeness, which section 4.7 keeps apart from the rest: the only
+	// gap here that closes without money.
+	OptionsFilledPct      *int64
+	RivalOptionsFilledPct *int64
+
 	TotalQuantity      *int64
 	RivalTotalQuantity *int64
 
@@ -109,8 +114,9 @@ func (s *Store) SaveBenchmarks(ctx context.Context, rows []BenchmarkRow) error {
 				total_quantity, rival_total_quantity,
 				delivery_time2, rival_delivery_time2,
 				description_len, rival_description_len,
+				options_filled_pct, rival_options_filled_pct,
 				has_ad, rival_has_ad
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT (profile_id, nm_id, query, dest, ts, baseline, baseline_id) DO NOTHING`,
 			r.ProfileID, r.NmID, r.Query, r.Dest, r.TS, r.Baseline, r.BaselineID,
 			r.PositionOrganic, r.RivalPositionOrganic,
@@ -122,6 +128,7 @@ func (s *Store) SaveBenchmarks(ctx context.Context, rows []BenchmarkRow) error {
 			r.TotalQuantity, r.RivalTotalQuantity,
 			r.DeliveryTime2, r.RivalDeliveryTime2,
 			r.DescriptionLen, r.RivalDescriptionLen,
+			r.OptionsFilledPct, r.RivalOptionsFilledPct,
 			r.HasAd, r.RivalHasAd); err != nil {
 			return fmt.Errorf("store: save benchmark %d/%q: %w", r.NmID, r.Query, err)
 		}
@@ -148,6 +155,7 @@ func (s *Store) Benchmarks(ctx context.Context, profileID int64) ([]BenchmarkRow
 		       b.total_quantity, b.rival_total_quantity,
 		       b.delivery_time2, b.rival_delivery_time2,
 		       b.description_len, b.rival_description_len,
+		       b.options_filled_pct, b.rival_options_filled_pct,
 		       b.has_ad, b.rival_has_ad
 		FROM benchmarks b
 		JOIN newest n ON n.nm_id = b.nm_id AND n.query = b.query AND n.dest = b.dest
@@ -173,6 +181,7 @@ func (s *Store) Benchmarks(ctx context.Context, profileID int64) ([]BenchmarkRow
 			&b.TotalQuantity, &b.RivalTotalQuantity,
 			&b.DeliveryTime2, &b.RivalDeliveryTime2,
 			&b.DescriptionLen, &b.RivalDescriptionLen,
+			&b.OptionsFilledPct, &b.RivalOptionsFilledPct,
 			&b.HasAd, &b.RivalHasAd); err != nil {
 			return nil, fmt.Errorf("store: benchmarks of profile %d: %w", profileID, err)
 		}
@@ -286,6 +295,36 @@ var (
 	velocityFloorSeconds  = strconv.FormatInt(int64(velocityFloor/time.Second), 10)
 )
 
+// cardFullness is how much of its category's characteristics one card fills
+// in, as a percentage.
+//
+// Spec section 4.7 breaks this out of the comparison rather than folding it
+// into one score, and gives the reason: it is the only gap in the table a
+// seller can close today, without money and without waiting for anything.
+//
+// The denominator is the awkward part, and it is stated here rather than
+// guessed. WB does not publish how many characteristics a category supports,
+// so what stands in for it is what sellers in that category have between them
+// actually filled in — every distinct characteristic name seen on any card of
+// the same subject. It is a real number rather than an invented one, and it
+// sharpens as more cards are read: with one card on file everybody is at a
+// hundred percent, which is true and useless, and by the time a search has
+// been walked it is the vocabulary of that shelf.
+//
+// Null, not nought, for a product whose card nobody has opened. Nought would
+// read as "this seller filled in nothing" — an accusation assembled out of the
+// fact that we have not looked.
+const cardFullness = `(
+		           SELECT (SELECT COUNT(*) FROM product_options o WHERE o.nm_id = p.nm_id) * 100
+		                  / NULLIF((
+		                      SELECT COUNT(DISTINCT o2.name)
+		                      FROM product_options o2
+		                      JOIN products pr2 ON pr2.nm_id = o2.nm_id
+		                      WHERE pr2.subject_id = pr.subject_id
+		                  ), 0)
+		           WHERE EXISTS (SELECT 1 FROM product_options o3 WHERE o3.nm_id = p.nm_id)
+		       )`
+
 // SearchStanding is one product as it stood in one search, with the numbers a
 // comparison is made of.
 type SearchStanding struct {
@@ -305,6 +344,10 @@ type SearchStanding struct {
 	// FeedbacksPerDay is how fast this listing is collecting reviews, or nil
 	// where the history is too short to say. See reviewsPerDay.
 	FeedbacksPerDay *float64
+
+	// OptionsFilledPct is how much of its category's characteristics this
+	// card fills in, or nil where the card has not been read. See cardFullness.
+	OptionsFilledPct *int64
 }
 
 // TopOfSearch reads the best-placed products of the newest reading of one
@@ -326,7 +369,8 @@ func (s *Store) TopOfSearch(ctx context.Context, query, dest string, limit int) 
 		       s.total_quantity, s.time2,
 		       LENGTH(COALESCE(pr.description, '')),
 		       `+wasAdvertised+`,
-		       `+reviewsPerDay+`
+		       `+reviewsPerDay+`,
+		       `+cardFullness+`
 		FROM positions p
 		JOIN latest l ON l.ts = p.ts
 		LEFT JOIN snapshots s ON s.nm_id = p.nm_id AND s.dest = p.dest AND s.ts = p.ts
@@ -346,7 +390,7 @@ func (s *Store) TopOfSearch(ctx context.Context, query, dest string, limit int) 
 		if err := rows.Scan(&st.NmID, &st.Rank, &st.TS,
 			&st.Price, &st.DiscountPct, &st.Currency, &st.Rating, &st.Feedbacks,
 			&st.TotalQuantity, &st.DeliveryTime2, &st.DescriptionLen, &st.HasAd,
-			&st.FeedbacksPerDay); err != nil {
+			&st.FeedbacksPerDay, &st.OptionsFilledPct); err != nil {
 			return nil, fmt.Errorf("store: top of %q in %q: %w", query, dest, err)
 		}
 		out = append(out, st)
@@ -385,7 +429,8 @@ func (s *Store) StandingOf(ctx context.Context, nmID int64, query, dest string) 
 		       s.total_quantity, s.time2,
 		       LENGTH(COALESCE(pr.description, '')),
 		       `+wasAdvertised+`,
-		       `+reviewsPerDay+`
+		       `+reviewsPerDay+`,
+		       `+cardFullness+`
 		FROM positions p
 		JOIN latest l ON l.ts = p.ts
 		LEFT JOIN snapshots s ON s.nm_id = p.nm_id AND s.dest = p.dest AND s.ts = p.ts
@@ -395,7 +440,7 @@ func (s *Store) StandingOf(ctx context.Context, nmID int64, query, dest string) 
 		Scan(&st.NmID, &st.Rank, &st.TS,
 			&st.Price, &st.DiscountPct, &st.Currency, &st.Rating, &st.Feedbacks,
 			&st.TotalQuantity, &st.DeliveryTime2, &st.DescriptionLen, &st.HasAd,
-			&st.FeedbacksPerDay)
+			&st.FeedbacksPerDay, &st.OptionsFilledPct)
 	if err != nil {
 		return SearchStanding{}, false, nil
 	}

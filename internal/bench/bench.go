@@ -87,6 +87,9 @@ func against(profileID int64, query, dest string, mine, theirs store.SearchStand
 		DescriptionLen:      mine.DescriptionLen,
 		RivalDescriptionLen: theirs.DescriptionLen,
 
+		OptionsFilledPct:      mine.OptionsFilledPct,
+		RivalOptionsFilledPct: theirs.OptionsFilledPct,
+
 		HasAd:      &hasAd,
 		RivalHasAd: &rivalHasAd,
 	}
@@ -112,6 +115,7 @@ func medianOf(top []store.SearchStanding) store.SearchStanding {
 	out.TotalQuantity = medianPtr(collect(top, func(s store.SearchStanding) *int64 { return s.TotalQuantity }))
 	out.DeliveryTime2 = medianPtr(collect(top, func(s store.SearchStanding) *int64 { return s.DeliveryTime2 }))
 	out.DescriptionLen = medianPtr(collect(top, func(s store.SearchStanding) *int64 { return s.DescriptionLen }))
+	out.OptionsFilledPct = medianPtr(collect(top, func(s store.SearchStanding) *int64 { return s.OptionsFilledPct }))
 
 	out.Rating = medianFloat(collectFloat(top, func(s store.SearchStanding) *float64 { return s.Rating }))
 	out.FeedbacksPerDay = medianFloat(collectFloat(top, func(s store.SearchStanding) *float64 { return s.FeedbacksPerDay }))
