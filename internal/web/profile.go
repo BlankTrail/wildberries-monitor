@@ -91,6 +91,9 @@ func (s *Server) profileHTML(r *http.Request) (string, error) {
 	}
 
 	b.WriteString(profileForm())
+	// Every form the region directory's controls name, at the very end and
+	// outside all the others.
+	b.WriteString(regionHelpForms())
 	return b.String(), nil
 }
 
@@ -123,6 +126,7 @@ func (s *Server) profileCard(r *http.Request, p store.ProfileRow) string {
 	b.WriteString(s.phrasesHTML(r, p))
 	b.WriteString(s.competitorsHTML(r, p))
 	b.WriteString(s.profilePlanForm(r, p))
+	b.WriteString(s.regionHelp(r))
 	b.WriteString(`<div class="bt-form-actions">`)
 	if !p.Running() {
 		b.WriteString(action(fmt.Sprintf("/profile/scan?id=%d", p.ID), "#profile-body",
@@ -240,12 +244,13 @@ func (s *Server) profilePlanForm(r *http.Request, p store.ProfileRow) string {
 		`<input class="bt-input bt-input--mono" name="regions" value="`+
 			html.EscapeString(strings.Join(p.Regions, ", "))+`" placeholder="`+profileRegion+`">`,
 		"Коды dest через запятую. Каждый регион — отдельный проход: цены, остатки и места "+
-			"в выдаче у Wildberries свои для каждого. Справочник регионов — на вкладке «Задачи»."))
+			"в выдаче у Wildberries свои для каждого. Где взять код — «Справочник регионов» ниже."))
 	b.WriteString(field("Страниц витрины",
 		fmt.Sprintf(`<input class="bt-input" name="max_pages" type="number" min="0" value="%d" placeholder="0">`,
 			p.MaxPages),
-		"0 — до конца витрины, сколько бы её ни было: обход продлевает себя сам, пока страницы "+
-			"не кончатся. Число — жёсткий предел, если ассортимент огромен, а нужен только верх."))
+		"Сколько страниц витрины обойти: на странице около сотни товаров. Ноль и единица — "+
+			"одна страница: дойти до конца витрины эта программа не умеет, поэтому предел "+
+			"называется числом, а не обещанием."))
 	b.WriteString(field("Фраз на товар",
 		fmt.Sprintf(`<input class="bt-input" name="phrases_per_product" type="number" min="0" value="%d" placeholder="20">`,
 			p.PhrasesPerProduct),

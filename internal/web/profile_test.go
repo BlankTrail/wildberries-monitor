@@ -510,3 +510,32 @@ func TestProfile_TheTabWalksTheStagesWithoutAReload(t *testing.T) {
 		t.Error("панель на вкладке заданий тоже что-то дёргает по окончании")
 	}
 }
+
+func TestProfile_TheRegionDirectoryIsHereButFoldedAway(t *testing.T) {
+	// «Регионы» asks for a dest code and the answer used to be on another tab.
+	// Folded, because it is a question somebody has once and a form that opened
+	// with a map of four thousand settlements in it would bury the seven fields
+	// it is actually about.
+	srv := newServer(t)
+	if _, err := srv.Store.SaveProfile(t.Context(), store.ProfileRow{
+		Name: "мой", SourceInput: "141504066",
+	}); err != nil {
+		t.Fatalf("SaveProfile: %v", err)
+	}
+
+	body := get(t, srv, "/profile", "correct horse").Body.String()
+	if !strings.Contains(body, "<summary>Справочник регионов: выбрать код</summary>") {
+		t.Errorf("справочника регионов на вкладке нет:\n%s", firstLines(body))
+	}
+	if !strings.Contains(body, `id="regions-box"`) || !strings.Contains(body, `id="pickup-box"`) {
+		t.Errorf("справочник пуст — обе половины должны быть здесь:\n%s", firstLines(body))
+	}
+	// Folded: no open attribute on it.
+	if strings.Contains(body, `<details class="bt-more" open><summary>Справочник регионов`) {
+		t.Error("справочник раскрыт с самого начала")
+	}
+	// And the hint stops sending people to another tab for it.
+	if strings.Contains(body, "Справочник регионов — на вкладке «Задачи»") {
+		t.Error("подсказка всё ещё отправляет на вкладку задач")
+	}
+}

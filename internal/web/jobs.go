@@ -122,6 +122,19 @@ func (s *Server) jobsHTML(r *http.Request, open bool) (string, error) {
 		`<div id="job-new">` + region + `</div>`, nil
 }
 
+// regionHelp is the region directory, folded away, wherever a region code is
+// asked for.
+//
+// Inside the form rather than under it, which is what it is for: «Регионы»
+// wants a dest code and this is where the code comes from. That is possible
+// only because the picker carries no forms of its own any more — what to add
+// travels in each press's address — and a form inside a form is not HTML.
+func (s *Server) regionHelp(r *http.Request) string {
+	return `<details class="bt-more"><summary>Справочник регионов: выбрать код</summary>` +
+		`<div class="bt-stack">` + s.pickupSection(r) + s.regionsSection(r) + `</div>` +
+		`</details>`
+}
+
 // jobConstructor is what sits under the list: the press that opens the
 // constructor, or the constructor itself.
 //
@@ -147,9 +160,7 @@ func (s *Server) jobConstructor(r *http.Request, open bool) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return constructor +
-		`<section class="bt-card">` + s.pickupSection(r) + `</section>` +
-		`<section class="bt-card">` + s.regionsSection(r) + `</section>`, nil
+	return constructor, nil
 }
 
 // newJobHandler opens the constructor, or puts the press back.
@@ -436,6 +447,10 @@ func (s *Server) constructorHTML(r *http.Request) (string, error) {
 	// into a third of the row every line of it wraps.
 	b.WriteString(field("Регионы", s.regionControl(r),
 		"Цена, остаток и место в выдаче — все региональные, поэтому регион обязателен. Строка внизу — то, что сохранится."))
+	// Where the codes come from, under the field that asks for them and folded
+	// away — it is a question somebody has once, and open it would bury the
+	// rest of the form under a map of four thousand settlements.
+	b.WriteString(s.regionHelp(r))
 	b.WriteString(`<div class="bt-form-grid">`)
 	b.WriteString(field("Аудитория", `<input class="bt-input" name="app_type" type="number" value="1" data-estimate>`,
 		"Код приложения. Одно задание — одна аудитория: место в выдаче для веба и для Android — разные факты."))
@@ -470,6 +485,9 @@ func (s *Server) constructorHTML(r *http.Request) (string, error) {
 	// constructor, because a form inside a form is not HTML — see
 	// categoryRefreshHTML for what that cost.
 	b.WriteString(refreshForms())
+	// And every form the region directory's own controls name. Outside the
+	// constructor, because a form inside a form is not HTML.
+	b.WriteString(regionHelpForms())
 	b.WriteString(`</section>`)
 	return b.String(), nil
 }
@@ -1078,19 +1096,21 @@ func (s *Server) jobDetail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	b.WriteString(`<div class="bt-table-wrap"><table class="bt-table"><thead><tr>` +
-		`<th>Начало</th><th>Длилось</th><th>Чем кончилось</th><th class="bt-num">Позиций</th>` +
+		`<th>Начало</th><th>Длилось</th><th>Чем кончилось</th><th>Ход</th>` +
+		`<th class="bt-num">Позиций</th>` +
 		`<th class="bt-num">Запросов</th><th class="bt-num">Отказов</th>` +
 		`</tr></thead><tbody>`)
 	for _, run := range runs {
-		fmt.Fprintf(&b, `<tr><td>%s</td><td>%s</td><td>%s</td>`+
+		fmt.Fprintf(&b, `<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td>`+
 			`<td class="bt-num">%d</td><td class="bt-num">%d</td><td class="bt-num">%d</td></tr>`,
 			html.EscapeString(readAtText(run.StartedAt)), html.EscapeString(runLength(run)),
-			runStateHTML(run), run.Items, run.Requests, run.Errors)
+			runStateHTML(run), s.runStandingHTML(ctx, run),
+			run.Items, run.Requests, run.Errors)
 
 		// The reason under the row it belongs to, because a failure and the
 		// run it ended is one fact, and a column would truncate it.
 		if run.Error != "" {
-			fmt.Fprintf(&b, `<tr><td colspan="6"><div class="bt-alert bt-alert--error">%s</div></td></tr>`,
+			fmt.Fprintf(&b, `<tr><td colspan="7"><div class="bt-alert bt-alert--error">%s</div></td></tr>`,
 				html.EscapeString(run.Error))
 		}
 	}
@@ -1099,6 +1119,25 @@ func (s *Server) jobDetail(w http.ResponseWriter, r *http.Request) {
 	b.WriteString(s.failuresHTML(ctx, runs[0]))
 	b.WriteString(`</section>`)
 	s.writeHTML(w, b.String())
+}
+
+// runStandingHTML is how far a run has got, for a run that is still going.
+//
+// The three counts beside it — позиций, запросов, отказов — are written by
+// FinishRun and are therefore zero for the whole of a run, so a person who
+// opened this screen to see whether anything was happening read «идёт 0 0 0»
+// and could not tell it from a run that had hung. The plan is written before
+// the run starts, so how many of its items have finished is a fact this screen
+// can have at any moment.
+func (s *Server) runStandingHTML(ctx context.Context, run store.RunRow) string {
+	if run.FinishedAt != nil {
+		return `<span class="bt-dim">—</span>`
+	}
+	done, total, err := s.Store.RunStanding(ctx, run.ID)
+	if err != nil || total == 0 {
+		return `<span class="bt-dim">—</span>`
+	}
+	return fmt.Sprintf(`<span class="bt-mono">%d из %d</span>`, done, total)
 }
 
 // failuresHTML is what went wrong inside the newest run.

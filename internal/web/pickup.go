@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"html"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -51,7 +52,7 @@ func (s *Server) pickupBody(r *http.Request) string {
 			`Справочник пунктов выдачи ещё не загружен. Один запрос — и появится вся страна: ` +
 			`регионы, населённые пункты и адреса пунктов в них.</div>`)
 		b.WriteString(`<div class="bt-form-actions bt-form-actions--tight">` +
-			action("/pickup/refresh", "#pickup-box", "Загрузить справочник") + `</div>`)
+			press("/pickup/refresh", "#pickup-box", "Загрузить справочник", "bt-btn bt-btn--ghost bt-btn--sm") + `</div>`)
 		return b.String()
 	}
 
@@ -69,7 +70,7 @@ func (s *Server) pickupBody(r *http.Request) string {
 	b.WriteString(`<span class="bt-form-hint">` + html.EscapeString(fmt.Sprintf(
 		"Пунктов %d в %d населённых пунктах, код региона известен у %d. Справочник прочитан %s.",
 		state.Points, state.Settlements, state.Resolved, fetched)) + ` ` +
-		action("/pickup/refresh", "#pickup-box", "Обновить справочник") + `</span>`)
+		press("/pickup/refresh", "#pickup-box", "Обновить справочник", "bt-btn bt-btn--ghost bt-btn--sm") + `</span>`)
 	return b.String()
 }
 
@@ -93,15 +94,14 @@ func (s *Server) pickupPresets() string {
 		{store.PartEast, "Центры восточной части",
 			"Уральский, Сибирский и Дальневосточный округа."},
 	} {
-		b.WriteString(`<form class="bt-inline" data-post="/pickup/add" data-target="#pickup-box">` +
-			hidden("scope", store.ScopeCentres) + hidden("part", p.part) +
-			`<select class="bt-input bt-input--sm" name="pick">` +
-			`<option value="` + store.PickCentral + `">центральный пункт</option>` +
-			`<option value="` + store.PickRandom + `">случайный пункт</option>` +
-			`</select>` +
-			`<button class="bt-btn bt-btn--secondary bt-btn--sm" type="submit">` +
-			html.EscapeString(p.label) + `</button>` +
-			info(p.hint) + `</form>`)
+		// Two presses rather than a dropdown and a button: the choice is now in
+		// the address, so this control carries no form state — which is what
+		// lets the whole picker sit inside the form it is filling in.
+		b.WriteString(`<div class="bt-inline">` +
+			`<span class="bt-label">` + html.EscapeString(p.label) + info(p.hint) + `</span>` +
+			press(pickupCentresURL(p.part, store.PickCentral), "#pickup-box", "центральный", "") +
+			press(pickupCentresURL(p.part, store.PickRandom), "#pickup-box", "случайный", "") +
+			`</div>`)
 	}
 	b.WriteString(`</div>`)
 	return b.String()
@@ -159,18 +159,23 @@ func (s *Server) pickupSettlements(w http.ResponseWriter, r *http.Request) {
 	for _, row := range rows {
 		total += row.Points
 	}
-	b.WriteString(`<form class="bt-inline" data-post="/pickup/add" data-target="#pickup-box">` +
-		hidden("scope", store.ScopeRegion) + hidden("region", code) + hidden("pick", store.PickAll) +
-		fmt.Sprintf(`<button class="bt-btn bt-btn--ghost bt-btn--sm" type="submit">Весь регион: %d пунктов</button>`, total) +
+	b.WriteString(`<div class="bt-inline">` +
+		press(pickupRegionURL(code), "#pickup-box",
+			fmt.Sprintf("Весь регион: %d пунктов", total), "bt-btn bt-btn--ghost bt-btn--sm") +
 		info("Каждый пункт региона отдельным запросом. Это самый дорогой выбор: столько же кодов "+
 			"придётся узнать один раз, и на столько же умножится каждый запрос задания.") +
-		`</form>`)
+		`</div>`)
 
-	b.WriteString(`<form class="bt-inline" data-get-form="/pickup/settlements" data-target="#pickup-settlements">` +
-		hidden("region", code) +
-		`<input class="bt-input bt-input--sm" name="q" placeholder="поиск по названию" value="` +
+	// A field, so this one keeps a form of its own — declared outside every
+	// other form on the screen and named by the two controls that belong to it.
+	b.WriteString(`<div class="bt-inline">` +
+		`<input type="hidden" form="` + pickupSearchForm + `" name="region" value="` +
+		html.EscapeString(code) + `">` +
+		`<input class="bt-input bt-input--sm" form="` + pickupSearchForm +
+		`" name="q" placeholder="поиск по названию" value="` +
 		html.EscapeString(search) + `">` +
-		`<button class="bt-btn bt-btn--ghost bt-btn--sm" type="submit">Найти</button></form>`)
+		`<button class="bt-btn bt-btn--ghost bt-btn--sm" type="submit" form="` + pickupSearchForm +
+		`">Найти</button></div>`)
 
 	if len(rows) == 0 {
 		s.writeHTML(w, b.String()+pickupHint("Ничего не нашлось."))
@@ -235,11 +240,10 @@ func (s *Server) pickupPoints(w http.ResponseWriter, r *http.Request) {
 		{store.PickRandom, "Случайный пункт",
 			"Когда важен город, а не адрес. В следующий раз может выпасть другой — если это важно, выберите пункт вручную."},
 	} {
-		b.WriteString(`<form class="bt-inline" data-post="/pickup/add" data-target="#pickup-box">` +
-			hidden("scope", store.ScopeSettlement) + hidden("region", code) +
-			hidden("place", place) + hidden("pick", opt.pick) +
-			`<button class="bt-btn bt-btn--ghost bt-btn--sm" type="submit">` +
-			html.EscapeString(opt.label) + `</button>` + info(opt.hint) + `</form>`)
+		b.WriteString(`<div class="bt-inline">` +
+			press(pickupSettlementURL(code, place, opt.pick), "#pickup-box",
+				opt.label, "bt-btn bt-btn--ghost bt-btn--sm") +
+			info(opt.hint) + `</div>`)
 	}
 
 	b.WriteString(`<div class="bt-list">`)
@@ -248,10 +252,10 @@ func (s *Server) pickupPoints(w http.ResponseWriter, r *http.Request) {
 		if row.Dest != 0 {
 			code9 = `<span class="bt-mono">` + strconv.FormatInt(row.Dest, 10) + `</span>`
 		}
-		fmt.Fprintf(&b, `<form class="bt-list-row" data-post="/pickup/add" data-target="#pickup-box">`+
-			`%s%s<button class="bt-linklike" type="submit">%s</button>%s</form>`,
-			hidden("scope", store.ScopePoint), hidden("point", strconv.FormatInt(row.ID, 10)),
-			html.EscapeString(row.Address), code9)
+		fmt.Fprintf(&b, `<div class="bt-list-row">%s%s</div>`,
+			pressRaw(pickupPointURL(row.ID), "#pickup-box",
+				html.EscapeString(row.Address), "bt-linklike"),
+			code9)
 	}
 	b.WriteString(`</div>`)
 	s.writeHTML(w, b.String())
@@ -288,13 +292,17 @@ func (s *Server) addPickup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	point, _ := strconv.ParseInt(r.PostFormValue("point"), 10, 64)
+	// Read from the whole request, not from the body alone: what to add travels
+	// in the address now, which is what lets a row of this picker be a press
+	// rather than a form of its own — and a picker with no forms in it is one
+	// that can live inside the form it fills in.
+	point, _ := strconv.ParseInt(r.FormValue("point"), 10, 64)
 	choice := store.PickupChoice{
-		Scope:  r.PostFormValue("scope"),
-		Region: r.PostFormValue("region"),
-		Place:  r.PostFormValue("place"),
-		Part:   r.PostFormValue("part"),
-		Pick:   r.PostFormValue("pick"),
+		Scope:  r.FormValue("scope"),
+		Region: r.FormValue("region"),
+		Place:  r.FormValue("place"),
+		Part:   r.FormValue("part"),
+		Pick:   r.FormValue("pick"),
 		Point:  point,
 	}
 	groups, err := s.Store.ExpandPickup(r.Context(), choice)
@@ -326,6 +334,55 @@ func (s *Server) addPickup(w http.ResponseWriter, r *http.Request) {
 		kind = "error"
 	}
 	s.writeHTML(w, alert(kind, msg)+s.pickupBody(r))
+}
+
+// pickupSearchForm is the id of the one form in this picker that has a field.
+//
+// Everything else here presses an address: what to add travels in the URL, so
+// the control needs no fields and therefore no form of its own. That is what
+// lets this whole picker live inside the job form it fills in — a form inside a
+// form is not HTML, and the browser answers it by closing the outer one.
+const pickupSearchForm = "pickup-search"
+
+// pickupForms are the forms this picker's controls name, rendered outside every
+// other form on the screen.
+func pickupForms() string {
+	return `<form id="` + pickupSearchForm + `" class="bt-inline" ` +
+		`data-get-form="/pickup/settlements" data-target="#pickup-settlements"></form>`
+}
+
+// regionHelpForms are every form the region directory's controls name.
+//
+// Rendered by each screen that shows the directory, at its very end — outside
+// every other form on it. A button that names a form which is not on the page
+// is a button that does nothing when pressed, silently, which is exactly what
+// these were until this function had a caller.
+func regionHelpForms() string {
+	return sharedForm() + pickupForms() + regionForms()
+}
+
+// The addresses this picker presses. One place, because each of them is read
+// back by addPickup and a parameter spelled differently at either end is a
+// press that quietly adds nothing.
+func pickupCentresURL(part, pick string) string {
+	return "/pickup/add?scope=" + url.QueryEscape(store.ScopeCentres) +
+		"&part=" + url.QueryEscape(part) + "&pick=" + url.QueryEscape(pick)
+}
+
+func pickupRegionURL(code string) string {
+	return "/pickup/add?scope=" + url.QueryEscape(store.ScopeRegion) +
+		"&region=" + url.QueryEscape(code) + "&pick=" + url.QueryEscape(store.PickAll)
+}
+
+func pickupSettlementURL(code, place, pick string) string {
+	return "/pickup/add?scope=" + url.QueryEscape(store.ScopeSettlement) +
+		"&region=" + url.QueryEscape(code) + "&place=" + url.QueryEscape(place) +
+		"&pick=" + url.QueryEscape(pick)
+}
+
+func pickupPointURL(id int64) string {
+	return "/pickup/add?scope=" + url.QueryEscape(store.ScopePoint) +
+		"&point=" + strconv.FormatInt(id, 10)
 }
 
 // hidden is one form value the person does not fill in.

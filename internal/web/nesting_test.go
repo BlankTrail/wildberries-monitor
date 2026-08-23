@@ -67,3 +67,38 @@ func excerptAround(body string, at int) string {
 	from := max(at-120, 0)
 	return body[from:min(at+160, len(body))]
 }
+
+// TestForms_EveryNamedFormIsOnTheScreenThatNamesIt is the other half of the
+// nesting rule.
+//
+// A control inside a form submits a different one by naming it with the form
+// attribute, which is the shape HTML gives for «press this without nesting a
+// form». The name is a promise: if the form is not on the page, the press does
+// nothing at all, silently, and the screen looks exactly as it should.
+//
+// That is what happened the first time this was used: pickupForms and
+// regionForms were written, and nobody called them — so every row of the region
+// picker named a form that was not there.
+func TestForms_EveryNamedFormIsOnTheScreenThatNamesIt(t *testing.T) {
+	srv := populated(t)
+
+	for _, path := range []string{
+		"/", "/jobs", "/jobs/new", "/rules", "/channels", "/track", "/results",
+		"/settings", "/profile", "/compare",
+	} {
+		body := get(t, srv, path, "correct horse").Body.String()
+		// The attribute itself, not the several that end in it: data-get-form
+		// and data-post-form are addresses, and the substring they share with
+		// this one would have this test reporting them as missing forms.
+		named := map[string]bool{}
+		for _, id := range attrValues(body, " form") {
+			named[strings.TrimSpace(id)] = true
+		}
+		for id := range named {
+			if !strings.Contains(body, `id="`+id+`"`) {
+				t.Errorf("%s: кнопка отправляет форму %q, которой на экране нет — нажатие ничего не делает",
+					path, id)
+			}
+		}
+	}
+}

@@ -100,13 +100,18 @@
       form.dataset.wired = "1";
       form.addEventListener("submit", async (ev) => {
         ev.preventDefault();
+        // The button may name its own address, which is what lets a hundred
+        // rows of a picker share one form: their parameters travel in the URL
+        // rather than in hidden fields, so the picker carries no form state and
+        // can sit inside the form it is filling in. A form inside a form is not
+        // HTML, and that is the only other way to give a row its own address.
+        const by = ev.submitter;
+        const url = (by && by.dataset.post) || form.dataset.post;
+        const into = (by && by.dataset.target) || form.dataset.target || "#main";
         // FormData over a file input streams the file rather than reading it
         // in: a hundred thousand phrases must not have to fit in the tab's
         // memory before the upload starts.
-        await swap(form.dataset.target || "#main", form.dataset.post, {
-          method: "POST",
-          body: new FormData(form),
-        });
+        await swap(into, url, { method: "POST", body: new FormData(form) });
       });
     });
 

@@ -114,6 +114,38 @@ func picker(legend, field, attrs string, picks []pick) string {
 // clicking them did nothing whatsoever. One mechanism leaves nothing to get
 // wrong, and lets a test here say «everything that posts is a form» — which
 // is what nobody could check while there were two.
+// sharedFormID is the empty form every stateless press submits.
+//
+// One per screen. A press whose parameters are all in its address needs no
+// fields of its own, so it needs no form of its own either — which is what lets
+// a picker of a hundred rows live inside the form it is filling in. A form
+// inside a form is not HTML.
+const sharedFormID = "bt-press"
+
+// SharedForm is that form. Rendered once, outside every other form on the
+// screen.
+func sharedForm() string {
+	return `<form id="` + sharedFormID + `" class="bt-inline"></form>`
+}
+
+// press is a button that posts to its own address, through the shared form.
+func press(url, target, label, class string) string {
+	if class == "" {
+		class = "bt-btn bt-btn--secondary bt-btn--sm"
+	}
+	return `<button class="` + class + `" type="submit" form="` + sharedFormID +
+		`" data-post="` + html.EscapeString(url) +
+		`" data-target="` + html.EscapeString(target) + `">` +
+		html.EscapeString(label) + `</button>`
+}
+
+// pressRaw is press for a label that is already markup.
+func pressRaw(url, target, inner, class string) string {
+	return `<button class="` + class + `" type="submit" form="` + sharedFormID +
+		`" data-post="` + html.EscapeString(url) +
+		`" data-target="` + html.EscapeString(target) + `">` + inner + `</button>`
+}
+
 // outerAction is the same press for a button that sits inside another form.
 //
 // A form inside a form is not HTML: the browser closes the outer one at the

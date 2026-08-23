@@ -23,6 +23,15 @@ import (
 // directory is built a place at a time, from links off a map the person is
 // already using.
 
+// regionAddForm is the id of the one form this directory has.
+const regionAddForm = "regions-add"
+
+// regionForms is that form, rendered outside every other form on the screen.
+func regionForms() string {
+	return `<form id="` + regionAddForm + `" class="bt-form-row" ` +
+		`data-post="/regions" data-target="#regions-box"></form>`
+}
+
 // regionsSection is the directory with the form that adds to it.
 func (s *Server) regionsSection(r *http.Request) string {
 	var b strings.Builder
@@ -54,19 +63,25 @@ func (s *Server) regionsBody(r *http.Request) string {
 			fmt.Fprintf(&b, `<tr><td>%s</td><td class="bt-mono bt-num">%d</td>`+
 				`<td class="bt-cell-wrap">%s</td><td class="bt-row-actions">%s</td></tr>`,
 				html.EscapeString(row.Name), row.Dest, html.EscapeString(row.Address),
-				action(fmt.Sprintf("/regions/delete?dest=%d", row.Dest), "#regions-box", "Убрать"))
+				press(fmt.Sprintf("/regions/delete?dest=%d", row.Dest), "#regions-box", "Убрать",
+					"bt-btn bt-btn--ghost bt-btn--sm"))
 		}
 		b.WriteString(`</tbody></table></div>`)
 	}
 
-	b.WriteString(`<form class="bt-form-row" data-post="/regions" data-target="#regions-box">`)
+	// A field, so this one keeps a form — declared outside every other form on
+	// the screen and named by the two controls that belong to it. That is what
+	// lets this directory sit inside the form it fills in: a form inside a form
+	// is not HTML, and the browser answers it by closing the outer one.
+	b.WriteString(`<div class="bt-form-row">`)
 	b.WriteString(field("Пункт выдачи",
-		`<input class="bt-input" name="point" placeholder="ссылка на пункт или его номер">`,
+		`<input class="bt-input" form="`+regionAddForm+`" name="point" placeholder="ссылка на пункт или его номер">`,
 		"Ссылка с карты пунктов выдачи или число из неё. Программа спросит у сайта адрес пункта "+
 			"и код региона, которым он считает цены и сроки для этого места."))
 	b.WriteString(`<div class="bt-form-actions bt-form-actions--tight">` +
-		`<button class="bt-btn bt-btn--secondary bt-btn--sm" type="submit">Добавить регион</button></div>`)
-	b.WriteString(`</form>`)
+		`<button class="bt-btn bt-btn--secondary bt-btn--sm" type="submit" form="` + regionAddForm +
+		`">Добавить регион</button></div>`)
+	b.WriteString(`</div>`)
 	return b.String()
 }
 
