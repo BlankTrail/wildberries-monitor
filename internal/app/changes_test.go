@@ -773,3 +773,52 @@ func TestDetectChanges_TheSlotSourceSpellingsAgreeAcrossPackages(t *testing.T) {
 		t.Errorf("товар: %q против %q", track.SlotSourceProduct, store.ShelfSourceProduct)
 	}
 }
+
+func TestDetectChanges_ARewrittenCardReachesTheOutbox(t *testing.T) {
+	// The last of spec section 6.1's names, end to end — and the one that
+	// could not be a diff of two readings, because the card's static half is
+	// one row per product, overwritten each time it is read.
+	a := newApp(t)
+	ctx := t.Context()
+	watchEverything(t, a, track.ContentChanged)
+
+	first := time.Now().Add(-2 * time.Hour)
+	atWatermark(t, a, first.Add(-time.Hour))
+
+	cf := sampleCardFetchFor(141504066)
+	a.Store.SetClock(func() time.Time { return first })
+	if _, err := a.Store.SaveCard(ctx, cf); err != nil {
+		t.Fatalf("SaveCard: %v", err)
+	}
+	cf.Card.Description = "Продавец переписал описание."
+	a.Store.SetClock(func() time.Time { return first.Add(time.Hour) })
+	if _, err := a.Store.SaveCard(ctx, cf); err != nil {
+		t.Fatalf("SaveCard: %v", err)
+	}
+
+	a.detectChanges(ctx)
+
+	events, err := a.Store.RecentEvents(ctx, 10)
+	if err != nil {
+		t.Fatalf("RecentEvents: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("сработок %d, ожидалась одна: %+v", len(events), events)
+	}
+	// And the message says which part, because «переписал карточку» without
+	// that sends somebody to go and look.
+	if events[0].Subject != "описание" {
+		t.Errorf("сказано про %q, ожидалось «описание»", events[0].Subject)
+	}
+}
+
+// sampleCardFetchFor is one card of one product, as a reading of it.
+func sampleCardFetchFor(nmID int64) wb.CardFetch {
+	return wb.CardFetch{
+		Card: wb.Card{
+			NmID: nmID, ImtID: 7788, Name: "Платье", Slug: "dress",
+			Description: "Летнее платье.", VendorCode: "PL-1",
+			Options: []wb.Option{{Name: "Цвет", Value: "синий"}},
+		},
+	}
+}

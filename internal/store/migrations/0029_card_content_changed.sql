@@ -1,0 +1,22 @@
+-- When the seller last edited the card, and what they edited.
+--
+-- Spec section 6.1's ContentChanged, the last name in the list with no
+-- producer. Everything else in the change detector compares two readings, and
+-- the card's static half — what the seller wrote — is stored as one row per
+-- product and overwritten on every reading. There is no earlier version to
+-- compare against, and keeping one would mean a history of every description
+-- of every product this program has ever met.
+--
+-- So the comparison happens at the moment of writing, where both versions are
+-- in hand for one statement's worth of time, and what it finds is recorded
+-- here. Two columns rather than a table: what the detector needs is «что-то
+-- поменялось после такого-то момента», and what the message needs is which
+-- part — «название», «описание», «характеристики». Neither needs the old text,
+-- and keeping the old text is the thing that would grow without bound.
+--
+-- Nought for the rows that are already here, and it means «не замечали»:
+-- these cards have been read before, but not by a build that could tell.
+-- Stamping them now would announce every product in the database as edited
+-- the first time the rules run after an upgrade.
+ALTER TABLE products ADD COLUMN content_changed_at INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE products ADD COLUMN content_edit_parts TEXT NOT NULL DEFAULT '';

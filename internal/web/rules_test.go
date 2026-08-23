@@ -71,7 +71,11 @@ func TestRules_OffersOnlyTheChangesThisBuildCanNotice(t *testing.T) {
 			t.Errorf("%q has no label on screen", k)
 		}
 	}
-	for _, absent := range []string{"outranked-by-ad", "ad-bid-changed", "content-changed"} {
+	// The two spec section 6.1 names this build cannot emit, and it is worth
+	// keeping them written out: one because Wildberries stopped publishing the
+	// number, one because it claims a relation nothing observes. See
+	// track.Kind, which carries both reasons.
+	for _, absent := range []string{"outranked-by-ad", "ad-bid-changed"} {
 		if strings.Contains(body, `value="`+absent+`"`) {
 			t.Errorf("the constructor offers %q, which nothing in this build emits", absent)
 		}

@@ -105,6 +105,15 @@ func (s *Store) SaveCard(ctx context.Context, cf wb.CardFetch) (SaveStats, error
 	var stats SaveStats
 
 	if hasStatic {
+		// What the seller wrote, before this reading overwrites it. Read here
+		// and nowhere else: this is the one moment both versions exist, and
+		// keeping the old one instead would mean a history of every
+		// description of every product ever met. See content.go.
+		was, had, err := contentBefore(ctx, tx, cf.Card.NmID)
+		if err != nil {
+			return SaveStats{}, err
+		}
+
 		// The products row first: foreign keys are on and enforced
 		// immediately, so the two lists below cannot reference a product that
 		// is not there yet.
@@ -116,6 +125,14 @@ func (s *Store) SaveCard(ctx context.Context, cf wb.CardFetch) (SaveStats, error
 		}
 		if err := replaceCompositions(ctx, tx, cf.Card); err != nil {
 			return SaveStats{}, err
+		}
+		// A first reading is not an edit: without this every product would be
+		// announced as rewritten on the day it was first collected.
+		if had {
+			if err := noteContentEdit(ctx, tx, cf.Card.NmID, now,
+				editedParts(was, contentOf(cf.Card))); err != nil {
+				return SaveStats{}, err
+			}
 		}
 		stats.Products++
 	}

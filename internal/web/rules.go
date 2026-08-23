@@ -67,6 +67,7 @@ var kindLabelsRU = map[track.Kind]string{
 	track.ShelfEntered:               "Товар попал на чужую полку",
 	track.ShelfLost:                  "Товар пропал с чужой полки",
 	track.ShelfCompetitorEntered:     "Конкурент встал на полку вашего товара",
+	track.ContentChanged:             "Продавец переписал карточку",
 }
 
 func kindLabel(k track.Kind) string {

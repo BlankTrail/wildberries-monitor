@@ -86,6 +86,13 @@ func (a *App) detectChanges(ctx context.Context) {
 		highest = max(highest, at)
 	}
 
+	if n, at, err := a.applyCardEdits(ctx, engine, all, since); err != nil {
+		a.Log.Printf("правила: правки карточек: %v", err)
+	} else {
+		fired += n
+		highest = max(highest, at)
+	}
+
 	if n, at, err := a.applySlots(ctx, engine, all, since); err != nil {
 		a.Log.Printf("правила: реклама и полки: %v", err)
 	} else {
@@ -336,6 +343,49 @@ func (a *App) applyPromotion(ctx context.Context, e *rules.Engine, all []rules.R
 		fired += n
 	}
 	return fired, newest, nil
+}
+
+// applyCardEdits tells the rules that a seller rewrote a card.
+//
+// The last of spec section 6.1's names to have no producer, and the one that
+// could not be a diff of two readings: the card's static half is one row per
+// product, overwritten each time it is read. The comparison happens where both
+// versions exist — at the moment of writing, in the store — and this reads what
+// it recorded.
+//
+// The parts travel as the change's subject, because «продавец переписал
+// карточку» without saying which part is a message that sends somebody to look.
+func (a *App) applyCardEdits(ctx context.Context, e *rules.Engine, all []rules.Rule, since int64) (int, int64, error) {
+	edits, err := a.Store.EditedCardsSince(ctx, since)
+	if err != nil {
+		return 0, 0, err
+	}
+
+	fired, highest := 0, int64(0)
+	for _, edit := range edits {
+		highest = max(highest, edit.At)
+		facts, err := a.Store.Facts(ctx, edit.NmID)
+		if err != nil {
+			return fired, highest, err
+		}
+		jobs, err := a.Store.JobsOfProduct(ctx, edit.NmID)
+		if err != nil {
+			return fired, highest, err
+		}
+		n, err := e.Apply(ctx, all, rules.Event{
+			Change: track.Change{
+				Kind: track.ContentChanged, NmID: edit.NmID, TS: edit.At,
+				Subject: edit.What, Unit: track.UnitItems,
+			},
+			Brand: facts.Brand, SupplierID: facts.SupplierID, SubjectID: facts.SubjectID,
+			JobIDs: jobs,
+		})
+		if err != nil {
+			return fired, highest, err
+		}
+		fired += n
+	}
+	return fired, highest, nil
 }
 
 // applySlots tells the rules who came and went in the paid placements and on

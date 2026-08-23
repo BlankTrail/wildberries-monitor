@@ -32,17 +32,12 @@ package track
 //     halves it needs are «моя органика не изменилась» and «сверху встал
 //     конкурент», and only the first is observable. What is observable of the
 //     second has its own name: AdCompetitorEntered.
-//   - ContentChanged. The card's static half — what the seller wrote — is
-//     stored as one row per product and overwritten on every reading, so
-//     there is no earlier version to compare against. It needs a history of
-//     the card, or a comparison made at the moment of writing, and neither
-//     exists yet. The rest of the assortment group is here: see
-//     AssortmentSizeChanged below, which stands where spec section 6.1 says
-//     BrandAssortmentChanged — the same fact, and named for what it is
-//     rather than for one of the two kinds of storefront it happens on.
+//   - AssortmentSizeChanged below stands where spec section 6.1 says
+//     BrandAssortmentChanged — the same fact, named for what it is rather
+//     than for one of the two kinds of storefront it happens on.
 type Kind string
 
-// The thirty-six kinds this build can emit, grouped by what they are about. The
+// The thirty-seven kinds this build can emit, grouped by what they are about. The
 // spec section 6.1 names that are absent are listed on Kind above, with
 // the reason each of them has no producer here.
 //
@@ -122,6 +117,9 @@ const (
 	ShelfEntered           Kind = "shelf-entered"
 	ShelfLost              Kind = "shelf-lost"
 	ShelfCompetitorEntered Kind = "shelf-competitor-entered"
+
+	// And the card itself: what the seller wrote, when they rewrite it.
+	ContentChanged Kind = "content-changed"
 )
 
 // Unit says what the two numbers on a change are counted in.
@@ -171,5 +169,6 @@ func Kinds() []Kind {
 		ProductAdded, ProductRemoved, AssortmentSizeChanged,
 		AdAppeared, AdLost, AdCompetitorEntered,
 		ShelfEntered, ShelfLost, ShelfCompetitorEntered,
+		ContentChanged,
 	}
 }
