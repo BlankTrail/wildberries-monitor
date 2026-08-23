@@ -1429,3 +1429,49 @@ dialog.bt-modal > #settings-body {
 .bt[data-bt-theme="dashboard"] .bt-table--results td:nth-child(2) {
   max-width: 34rem;
 }
+
+/* ---- a region waiting on the server ------------------------------------- */
+
+/* swap() has set aria-busy on every fragment exchange since it was written and
+   nothing ever showed it. So a press whose answer takes five seconds — a
+   directory read through the proxy, a list of promotions, a gateway listing —
+   looked exactly like a button that did nothing, and the natural response was
+   to press it again. */
+.bt[data-bt-theme="dashboard"] [aria-busy="true"] {
+  position: relative;
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+/* A line along the top of the region rather than a spinner in the middle of it:
+   the region keeps its own layout, so nothing jumps when the answer arrives. */
+.bt[data-bt-theme="dashboard"] [aria-busy="true"]::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--accent);
+  animation: bt-busy 1.1s ease-in-out infinite;
+}
+
+@keyframes bt-busy {
+  0% {
+    clip-path: inset(0 100% 0 0);
+  }
+  50% {
+    clip-path: inset(0 0 0 0);
+  }
+  100% {
+    clip-path: inset(0 0 0 100%);
+  }
+}
+
+/* Movement is the part that is optional; saying «идёт запрос» is not. */
+@media (prefers-reduced-motion: reduce) {
+  .bt[data-bt-theme="dashboard"] [aria-busy="true"]::after {
+    animation: none;
+  }
+}

@@ -176,16 +176,21 @@
     // kind needs no line in this file. Without the script every group stays
     // visible and the server reads only what the choice uses, so the form
     // still works — it is just longer.
-    root.querySelectorAll("form[data-switch]").forEach((form) => {
-      if (form.dataset.switchWired) return;
-      form.dataset.switchWired = "1";
-      const name = form.dataset.switch;
+    // Any element and not only a form, and each switch owns the groups whose
+    // nearest switch it is. That is what lets one live inside another: the
+    // kind chooses which fields a job has, and inside the phrase fields a
+    // second switch chooses whether they are typed or uploaded.
+    root.querySelectorAll("[data-switch]").forEach((box) => {
+      if (box.dataset.switchWired) return;
+      box.dataset.switchWired = "1";
+      const name = box.dataset.switch;
       const apply = () => {
         const picked =
-          form.querySelector(`[name="${name}"]:checked`) ||
-          form.querySelector(`select[name="${name}"], input[name="${name}"]`);
+          box.querySelector(`[name="${name}"]:checked`) ||
+          box.querySelector(`select[name="${name}"], input[name="${name}"]`);
         const value = picked ? picked.value : "";
-        form.querySelectorAll("[data-when]").forEach((group) => {
+        box.querySelectorAll("[data-when]").forEach((group) => {
+          if (group.closest("[data-switch]") !== box) return;
           const applies = group.dataset.when.split(" ").includes(value);
           group.hidden = !applies;
           group
@@ -193,7 +198,7 @@
             .forEach((c) => (c.disabled = !applies));
         });
       };
-      form.addEventListener("change", (ev) => {
+      box.addEventListener("change", (ev) => {
         if (ev.target.name === name) apply();
       });
       apply();

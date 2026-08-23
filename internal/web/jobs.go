@@ -9,6 +9,7 @@ import (
 	"html"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -38,7 +39,7 @@ import (
 // list of things a user can choose.
 var kindLabels = map[job.Kind]string{
 	job.KindPhrase:    "Поисковая выдача по фразе",
-	job.KindCatalog:   "Узел каталога",
+	job.KindCatalog:   "Товары в категории",
 	job.KindSeller:    "Витрина продавца",
 	job.KindBrand:     "Товары бренда",
 	job.KindArticles:  "Список артикулов",
@@ -57,7 +58,7 @@ var kindLabels = map[job.Kind]string{
 // added without a card is a kind nobody can pick.
 var kindWhat = map[job.Kind]string{
 	job.KindPhrase:    "Страницы выдачи по каждой фразе: какие товары там стоят и на каком месте.",
-	job.KindCatalog:   "Категория целиком: что в ней стоит и на каком месте. Тем же запросом, которым сайт наполняет её страницу.",
+	job.KindCatalog:   "Вся категория из каталога Wildberries: какие товары в ней и на каком месте. Категория выбирается из справочника ниже.",
 	job.KindSeller:    "Всё, что выставил один продавец — по его артикулу.",
 	job.KindBrand:     "Все товары бренда — по его идентификатору.",
 	job.KindArticles:  "Только перечисленные артикулы, без поиска.",
@@ -405,11 +406,10 @@ func (s *Server) constructorHTML(r *http.Request) (string, error) {
 
 	// The parameters, one group per kind. What a kind does not use is out of
 	// the way rather than sitting empty in a column of fifteen fields.
-	b.WriteString(whenAny(
-		field("Фразы",
-			`<textarea class="bt-textarea" name="phrases" rows="4" data-estimate placeholder="по одной в строке"></textarea>`,
-			"По одной в строке. Большой список — файлом ниже.")+
-			s.phraseListField(lists),
+	// Typed or uploaded, and never both: the two are alternatives the job
+	// itself refuses together — «pick one» — and offering both at once was a
+	// form that let somebody fill in a refusal.
+	b.WriteString(whenAny(phraseSource(s.phraseListField(lists)),
 		job.KindPhrase, job.KindPhraseAds, job.KindPositions))
 
 	b.WriteString(whenAny(s.categoryBox(r, ""), job.KindCatalog))
@@ -488,6 +488,42 @@ func kindPicker() string {
 		picks = append(picks, pick{Value: string(k), Label: label, What: kindWhat[k]})
 	}
 	return picker("Что перечислять", "kind", " data-estimate", picks)
+}
+
+// phrasesFromForm reads whichever of the two phrase sources was chosen.
+//
+// The choice decides, here and nowhere else. The job refuses typed phrases and
+// an uploaded list together, and without the script both boxes post — so
+// reading both would turn a form somebody filled in correctly into «pick one».
+func phrasesFromForm(f url.Values) ([]string, int64) {
+	if f.Get("phrase_source") == "file" {
+		return nil, atoi64(f.Get("phrase_list_id"))
+	}
+	return splitLines(f.Get("phrases")), 0
+}
+
+// phraseSource is the choice of where the phrases come from, and the half of
+// the form that choice reveals.
+//
+// A switch of its own inside the kind's group. The job refuses typed phrases
+// and an uploaded list together — which one the estimate priced and which one
+// the run walked would be two different answers — and a form that shows both
+// boxes is a form inviting exactly that.
+func phraseSource(uploaded string) string {
+	var b strings.Builder
+	b.WriteString(`<div class="bt-stack" data-switch="phrase_source">`)
+	b.WriteString(picker("Откуда фразы", "phrase_source", " data-estimate", []pick{
+		{Value: "typed", Label: "Вписать", What: "Несколько фраз, по одной в строке."},
+		{Value: "file", Label: "Из файла", What: "Готовый список, загруженный сюда файлом."},
+	}))
+	b.WriteString(whenAny(
+		field("Фразы",
+			`<textarea class="bt-textarea" name="phrases" rows="4" data-estimate placeholder="по одной в строке"></textarea>`,
+			"По одной в строке."),
+		"typed"))
+	b.WriteString(whenAny(uploaded, "file"))
+	b.WriteString(`</div>`)
+	return b.String()
 }
 
 // phraseListField is the uploaded-file half of the phrase question.
@@ -716,12 +752,10 @@ func (s *Server) jobFromForm(r *http.Request) (job.Job, error) {
 	case job.KindPositions:
 		// The one kind that is a pair: which products, and which searches to
 		// look for them in.
-		j.Phrases = splitLines(f.Get("phrases"))
-		j.PhraseListID = atoi64(f.Get("phrase_list_id"))
+		j.Phrases, j.PhraseListID = phrasesFromForm(f)
 		j.Articles = articleNumbers(f.Get("articles"))
 	case job.KindPhrase, job.KindPhraseAds:
-		j.Phrases = splitLines(f.Get("phrases"))
-		j.PhraseListID = atoi64(f.Get("phrase_list_id"))
+		j.Phrases, j.PhraseListID = phrasesFromForm(f)
 	case job.KindSeller:
 		j.SupplierID = atoi64(f.Get("supplier_id"))
 	case job.KindBrand:

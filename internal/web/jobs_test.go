@@ -366,6 +366,9 @@ func TestJobFromForm_TakesTheListSizeFromTheStoreNotTheBrowser(t *testing.T) {
 
 	form := goodForm()
 	form["kind"] = []string{"phrase-ads"}
+	// From the file, which is a choice the form now makes rather than a pair
+	// of boxes the job would refuse together.
+	form["phrase_source"] = []string{"file"}
 	form["phrases"] = []string{""}
 	form["phrase_list_id"] = []string{fmt.Sprint(lists[0].ID)}
 	form["phrase_list_count"] = []string{"1"} // a lie the form should not be believed about

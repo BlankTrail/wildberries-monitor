@@ -64,3 +64,24 @@ func TestStyles_EveryTokenSpentIsOneTheSystemMints(t *testing.T) {
 			"так пропали отступы у заголовков.", strings.Join(missing, ", "))
 	}
 }
+
+func TestStyles_TheBusyFlagTheScriptSetsIsOneTheEyeCanSee(t *testing.T) {
+	// swap() marks the region it is waiting on with aria-busy, and has since it
+	// was written. Nothing styled it, so a press whose answer takes five
+	// seconds — a directory read through the proxy — looked exactly like a
+	// button that did nothing, and the natural response was to press again.
+	script, err := staticFS.ReadFile("static/app.js")
+	if err != nil {
+		t.Fatalf("app.js: %v", err)
+	}
+	if !strings.Contains(string(script), `"aria-busy"`) {
+		t.Skip("скрипт больше не отмечает ожидание — стиль ни к чему")
+	}
+	styles, err := staticFS.ReadFile("static/monitor.css")
+	if err != nil {
+		t.Fatalf("monitor.css: %v", err)
+	}
+	if !strings.Contains(string(styles), `[aria-busy="true"]`) {
+		t.Error("ожидание отмечается и никак не показывается — нажатие выглядит как ничего")
+	}
+}
