@@ -500,7 +500,10 @@ func (s *Server) constructorHTML(r *http.Request) (string, error) {
 			"один — порт меняет отпечаток и личность, оставаясь на том же адресе.",
 			wb.DefaultAttemptsPooled, wb.DefaultAttemptsDirect)))
 	b.WriteString(field("Пауза, мс", `<input class="bt-input" name="delay_ms" type="number" min="0" value="0" data-estimate>`,
-		"Задержка между запросами одного потока."))
+		"Пауза потока между элементами плана — страницами, карточками, витринами. "+
+			"Из неё же выводится минимальный промежуток между двумя запросами через один и тот же порт: "+
+			"он вдвое больше, потому что на поток приходится два порта. "+
+			"0 — не ждать нигде, и это значение по умолчанию."))
 	b.WriteString(`</div>`)
 
 	b.WriteString(`<h3 class="bt-form-head">Что снимать с каждого товара</h3>`)

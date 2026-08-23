@@ -7,6 +7,7 @@ import (
 	"errors"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -649,5 +650,77 @@ func TestRun_EverythingItPublishesIsNamedForTheJob(t *testing.T) {
 				t.Errorf("событие %q названо заданием %d, а прогон шёл по %d", kind, got, j.ID)
 			}
 		}
+	}
+}
+
+func TestRun_KeepsTalkingWhileOneLongItemIsInFlight(t *testing.T) {
+	// One item is not one request. A storefront page is one item and up to
+	// three hundred requests — a card, its reviews and its questions for each
+	// of a hundred products — so a run doing exactly what it should stood at
+	// «14 из 21» for minutes while the log scrolled past it. Nothing published
+	// anything between items, and the ports table beside the bar, which is the
+	// part that actually moves, was as stale as the bar.
+	// The port has done three requests when the item starts and thirty by the
+	// time it ends, which is what a real one looks like mid-page.
+	var made atomic.Int64
+	made.Store(3)
+
+	release := make(chan struct{})
+	slow := FetcherFunc(func(ctx context.Context, _ Item) (int, error) {
+		made.Store(30)
+		select {
+		case <-release:
+		case <-ctx.Done():
+		}
+		return 27, nil
+	})
+
+	r, s, b := newRunner(t, []Item{{Kind: "product", Key: "a"}}, slow)
+	r.Ports = func() []PortStat {
+		return []PortStat{{Port: 20001, Channel: "vpn", Requests: int(made.Load())}}
+	}
+
+	j := savedJob(t, s)
+	j.Threads = 1
+
+	var seen []Progress
+	var mu sync.Mutex
+	if err := b.Subscribe("progress", events.RunProgress, func(_ context.Context, ev events.Event) error {
+		p, ok := ev.Payload.(Progress)
+		if !ok {
+			return nil
+		}
+		mu.Lock()
+		seen = append(seen, p)
+		mu.Unlock()
+		return nil
+	}); err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+
+	go func() {
+		time.Sleep(2500 * time.Millisecond)
+		close(release)
+	}()
+	if _, err := r.Run(context.Background(), j); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	// Something was said before the first item ever finished.
+	spoke := false
+	for _, p := range seen {
+		if p.Done == 0 {
+			spoke = true
+			// And what it said was what the ports had actually done, not the
+			// nought that «items finished so far» adds up to mid-item.
+			if p.Requests < 30 {
+				t.Errorf("посреди длинного элемента сказано «запросов %d», а порт сделал 30", p.Requests)
+			}
+		}
+	}
+	if !spoke {
+		t.Error("пока шёл первый элемент, прогон не сказал о себе ничего")
 	}
 }

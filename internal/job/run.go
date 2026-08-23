@@ -116,29 +116,33 @@ const progressEvery = time.Second
 // caller would put the throttle there too — in the hot loop, once per item,
 // per thread.
 func (r *Runner) reporter(jobID, total int64,
-	items, failed, requests *atomic.Int64, done *atomic.Int64) func(context.Context) {
+	items, failed, requests *atomic.Int64, done *atomic.Int64) (afterItem, heartbeat func(context.Context)) {
 
 	var mu sync.Mutex
 	var last time.Time
 
-	return func(ctx context.Context) {
-		finished := done.Add(1)
-
-		mu.Lock()
-		now := r.now()
-		if finished < total && now.Sub(last) < progressEvery {
-			mu.Unlock()
-			return
-		}
-		last = now
-		mu.Unlock()
-
+	publish := func(ctx context.Context, finished int64) {
 		p := Progress{
 			Done: finished, Total: total,
 			Items: items.Load(), Failed: failed.Load(), Requests: requests.Load(),
 		}
 		if r.Ports != nil {
 			p.Ports = r.Ports()
+			// What the ports have actually done, when there are ports to ask.
+			//
+			// requests is added up as items finish, so during one long item —
+			// a storefront page whose hundred products each cost a card, its
+			// reviews and its questions — it stands still for minutes while
+			// the ports beside it climb into the hundreds. The screen then
+			// showed «запросов 15» above a table of ports that had made six
+			// hundred between them, and contradicted itself in one glance.
+			var byPort int64
+			for _, st := range p.Ports {
+				byPort += int64(st.Requests)
+			}
+			if byPort > p.Requests {
+				p.Requests = byPort
+			}
 		}
 		// The publish is on a context of its own for the same reason closing
 		// the run is: a stop must not also cancel the last thing the screen
@@ -147,6 +151,39 @@ func (r *Runner) reporter(jobID, total int64,
 		defer cancel()
 		_ = r.Bus.Publish(pub, events.Event{Kind: events.RunProgress, JobID: jobID, Payload: p})
 	}
+
+	// Both paths publish while holding the lock, which is what keeps them in
+	// order. Reading the counter and publishing it as two steps lets a
+	// heartbeat that read «2 из 3» land after the final item published «3 из
+	// 3», and «2 из 3» is then the frame left on the screen of a finished run.
+	afterItem = func(ctx context.Context) {
+		finished := done.Add(1)
+
+		mu.Lock()
+		defer mu.Unlock()
+		now := r.now()
+		if finished < total && now.Sub(last) < progressEvery {
+			return
+		}
+		last = now
+		publish(ctx, finished)
+	}
+
+	// heartbeat is the same reading, published because time passed rather than
+	// because an item finished.
+	//
+	// One item is not one request. A storefront page is one item and up to
+	// three hundred requests, so a run doing exactly what it should looks
+	// frozen for minutes at a time: the bar holds at «14 из 21» while the log
+	// scrolls past. What moves in between is the ports and the bill, and
+	// nothing was publishing them until the next item landed.
+	heartbeat = func(ctx context.Context) {
+		mu.Lock()
+		defer mu.Unlock()
+		last = r.now()
+		publish(ctx, done.Load())
+	}
+	return afterItem, heartbeat
 }
 
 // ErrStopped is returned when a run ended because it was asked to.
@@ -300,9 +337,25 @@ func (r *Runner) walk(ctx context.Context, j Job, runID int64, todo []store.Item
 
 	var stopped atomic.Bool
 	var done atomic.Int64
-	report := r.reporter(j.ID, total, items, failed, requests, &done)
+	report, beat := r.reporter(j.ID, total, items, failed, requests, &done)
 	work := make(chan store.ItemRow)
 	var wg sync.WaitGroup
+
+	// The heartbeat runs for as long as the walk does, and stops with it.
+	beating, stopBeating := context.WithCancel(context.WithoutCancel(ctx))
+	defer stopBeating()
+	go func() {
+		t := time.NewTicker(progressEvery)
+		defer t.Stop()
+		for {
+			select {
+			case <-beating.Done():
+				return
+			case <-t.C:
+				beat(beating)
+			}
+		}
+	}()
 
 	for i := 0; i < threads; i++ {
 		wg.Add(1)
