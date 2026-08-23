@@ -90,9 +90,8 @@ func (s *Server) promotionState(list []store.PromotionRow, skipped int) string {
 
 // promotionRefreshHTML is the button that re-reads the list.
 func promotionRefreshHTML() string {
-	return `<form class="bt-inline" data-post="/jobs/promotions" data-target="#promotion-box">` +
-		`<button class="bt-btn bt-btn--secondary bt-btn--sm" type="submit">Обновить список акций</button>` +
-		`</form>`
+	return `<button class="bt-btn bt-btn--secondary bt-btn--sm" type="submit" form="` +
+		promotionRefreshForm + `">Обновить список акций</button>`
 }
 
 // promotionBox is the picker with its own region around it, so a refresh can

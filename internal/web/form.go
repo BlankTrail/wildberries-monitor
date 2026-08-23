@@ -114,6 +114,39 @@ func picker(legend, field, attrs string, picks []pick) string {
 // clicking them did nothing whatsoever. One mechanism leaves nothing to get
 // wrong, and lets a test here say «everything that posts is a form» — which
 // is what nobody could check while there were two.
+// outerAction is the same press for a button that sits inside another form.
+//
+// A form inside a form is not HTML: the browser closes the outer one at the
+// inner tag and every field below stops belonging to it. So a control that
+// posts from inside a form is an empty form beside it — rendered by
+// outerActionForms — and a button naming that form.
+//
+// The id is derived from the address so the two halves cannot drift: one call
+// draws the button, the other draws the form, and both spell the id the same
+// way because neither spells it at all.
+func outerAction(url, label string) string {
+	return `<button class="bt-btn bt-btn--ghost bt-btn--sm" type="submit" form="` +
+		html.EscapeString(outerActionID(url)) + `">` + html.EscapeString(label) + `</button>`
+}
+
+// outerActionForms are the empty forms those buttons submit, for one target.
+func outerActionForms(target string, urls ...string) string {
+	var b strings.Builder
+	for _, url := range urls {
+		b.WriteString(`<form id="` + html.EscapeString(outerActionID(url)) +
+			`" class="bt-inline" data-post="` + html.EscapeString(url) +
+			`" data-target="` + html.EscapeString(target) + `"></form>`)
+	}
+	return b.String()
+}
+
+// outerActionID is the id both halves agree on: the address with the characters
+// an id may not carry replaced.
+func outerActionID(url string) string {
+	return "act-" + strings.NewReplacer("/", "-", "?", "-", "=", "-", "&", "-", ".", "-").
+		Replace(strings.TrimPrefix(url, "/"))
+}
+
 func action(url, target, label string) string {
 	return `<form class="bt-inline" data-post="` + html.EscapeString(url) +
 		`" data-target="` + html.EscapeString(target) + `">` +

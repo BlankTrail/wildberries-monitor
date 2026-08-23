@@ -78,15 +78,15 @@ func (s *Server) googleState(r *http.Request) string {
 	ctx := r.Context()
 	if s.Store.SettingOr(ctx, store.SettingGoogleRefresh, "") == "" {
 		return `Доступ не выдан. Заполните поля, сохраните настройки и нажмите ` +
-			action("/google/connect", "#settings-body", "Подключить таблицу")
+			outerAction("/google/connect", "Подключить таблицу")
 	}
 	name := s.Store.SettingOr(ctx, store.SettingGoogleTitle, "")
 	if name == "" {
 		name = "таблица"
 	}
 	return `Подключена: <strong>` + html.EscapeString(name) + `</strong>. ` +
-		action("/google/connect", "#settings-body", "Переподключить") + ` ` +
-		action("/google/forget", "#settings-body", "Отключить")
+		outerAction("/google/connect", "Переподключить") + ` ` +
+		outerAction("/google/forget", "Отключить")
 }
 
 // googleConfig is the OAuth client as the settings hold it, with the redirect

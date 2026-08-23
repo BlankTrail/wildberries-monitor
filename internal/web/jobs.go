@@ -465,7 +465,12 @@ func (s *Server) constructorHTML(r *http.Request) (string, error) {
 	  <button class="bt-btn bt-btn--secondary" type="button" data-post-form="/jobs/estimate" data-target="#estimate">Пересчитать оценку</button>
 	  <button class="bt-btn bt-btn--ghost" type="button" data-get="/jobs/new?close=1" data-target="#job-new">Отмена</button>
 	</div>`)
-	b.WriteString(`</form></section>`)
+	b.WriteString(`</form>`)
+	// The empty forms the two directory buttons inside it submit. Beside the
+	// constructor, because a form inside a form is not HTML — see
+	// categoryRefreshHTML for what that cost.
+	b.WriteString(refreshForms())
+	b.WriteString(`</section>`)
 	return b.String(), nil
 }
 

@@ -168,6 +168,11 @@ func (s *Server) writeSettingsForm(w http.ResponseWriter, r *http.Request, notic
   <button class="bt-btn bt-btn--ghost" type="button" data-close-settings>Закрыть</button>
 </div>`)
 	b.WriteString(`</form>`)
+	// The empty forms the Google buttons inside it submit. Beside the settings
+	// form, because a form inside a form is not HTML — the browser closes the
+	// outer one at the inner tag, and every field of this screen below the
+	// Google line stopped belonging to it.
+	b.WriteString(outerActionForms("#settings-body", "/google/connect", "/google/forget"))
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	fmt.Fprint(w, b.String())

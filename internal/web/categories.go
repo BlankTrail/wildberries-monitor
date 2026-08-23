@@ -93,9 +93,32 @@ func (s *Server) categoryState(r *http.Request, total, skipped int) string {
 
 // categoryRefreshHTML is the button that re-downloads the directory.
 func categoryRefreshHTML() string {
-	return `<form class="bt-inline" data-post="/jobs/categories" data-target="#category-box">` +
-		`<button class="bt-btn bt-btn--secondary bt-btn--sm" type="submit">Обновить справочник</button>` +
-		`</form>`
+	return `<button class="bt-btn bt-btn--secondary bt-btn--sm" type="submit" form="` +
+		categoryRefreshForm + `">Обновить справочник</button>`
+}
+
+// categoryRefreshForm is the id of the empty form that button submits, and
+// RefreshForms is where it is rendered — outside whatever form the button sits
+// in.
+//
+// A form inside a form is not HTML: the browser closes the outer one at the
+// inner tag and everything after it stops belonging to it. That is what this
+// was, and what it cost was the whole job constructor — regions, fields, page
+// bound and schedule all fell outside the form that was supposed to carry them,
+// so «Сохранить задание» posted a job with none of them and the screen answered
+// with the validator's own English.
+const (
+	categoryRefreshForm  = "categories-afresh"
+	promotionRefreshForm = "promotions-afresh"
+)
+
+// RefreshForms are the empty forms the directory buttons submit. Rendered once,
+// beside the constructor rather than inside it.
+func refreshForms() string {
+	return `<form id="` + categoryRefreshForm + `" class="bt-inline" ` +
+		`data-post="/jobs/categories" data-target="#category-box"></form>` +
+		`<form id="` + promotionRefreshForm + `" class="bt-inline" ` +
+		`data-post="/jobs/promotions" data-target="#promotion-box"></form>`
 }
 
 // categoryBox is the picker with its own region around it, so a refresh can
