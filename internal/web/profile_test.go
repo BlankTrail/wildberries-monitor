@@ -838,3 +838,74 @@ func TestProfileScreen_ThePhrasesTableNamesItsProduct(t *testing.T) {
 		}
 	}
 }
+
+func TestStorefront_OneRowPerProductRatherThanOnePerRegion(t *testing.T) {
+	// A reading is per region, and the list showed readings. One article over
+	// eighty-five regions filled the whole table with what looked like the
+	// same line repeated — different price, different stock, same article —
+	// and the heading above it promised one row per product.
+	srv := newServer(t)
+	ctx := t.Context()
+	base := time.Date(2026, 8, 23, 9, 0, 0, 0, time.UTC)
+
+	for i, dest := range []string{"-1257786", "-2133463", "-5818687"} {
+		p := wb.Product{
+			ID: 100, Name: "Топ на бретелях", Brand: "KODALIFE",
+			SupplierID: ptrTo(int64(4242)), Rating: ptrTo(4.8),
+			Feedbacks: ptrTo(int64(7043)), Dest: dest, AppType: 1,
+			Rank: 1, Page: 1, FetchedAt: base.Add(time.Duration(i) * time.Minute),
+			Sizes: []wb.Size{{
+				Name:       "M",
+				PriceBasic: ptrTo(int64(98400)),
+				// 430,00 в двух регионах и 492,00 в третьем — ровно то, что
+				// на экране читалось как дубли с разными числами.
+				PriceProduct: ptrTo(int64(43000 + 6200*int64(i%2))),
+				Stocks:       []wb.Stock{{WarehouseID: 507, Qty: 38}},
+			}},
+		}
+		if _, err := srv.Store.SaveProduct(ctx, p, ""); err != nil {
+			t.Fatalf("SaveProduct %s: %v", dest, err)
+		}
+	}
+
+	id, err := srv.Store.SaveProfile(ctx, store.ProfileRow{Name: "мой"})
+	if err != nil {
+		t.Fatalf("SaveProfile: %v", err)
+	}
+	if err := srv.Store.AddProfileItem(ctx, id, store.ProfileProduct, 100); err != nil {
+		t.Fatalf("AddProfileItem: %v", err)
+	}
+
+	body := get(t, srv, "/profile", "").Body.String()
+	if n := strings.Count(body, `<td class="bt-num bt-mono">100</td>`); n != 1 {
+		t.Errorf("артикул 100 в списке %d раз, ожидался один", n)
+	}
+	// The two things the fold has to say: what the regions charged, and how
+	// many of them there were. Without the second, one row for eighty-five
+	// regions is a row that quietly drops eighty-four readings.
+	if !strings.Contains(body, "430,00 — 492,00") {
+		t.Error("цена не показана диапазоном, хотя регионы назвали разные")
+	}
+	if !strings.Contains(body, `<th class="bt-num">Регионов</th>`) {
+		t.Error("не сказано, по скольким регионам сложена строка")
+	}
+
+	// And the ordinary case reads as one number. «430,00 — 430,00» is a range
+	// of one price written twice, which is how a fold announces itself where
+	// there was nothing to fold.
+	agreed := wb.Product{
+		ID: 101, Name: "Топ на бретелях", Brand: "KODALIFE",
+		SupplierID: ptrTo(int64(4242)), Dest: "-2133463", AppType: 1,
+		Rank: 1, Page: 1, FetchedAt: base,
+		Sizes: []wb.Size{{Name: "M", PriceProduct: ptrTo(int64(43000))}},
+	}
+	if _, err := srv.Store.SaveProduct(ctx, agreed, ""); err != nil {
+		t.Fatalf("SaveProduct: %v", err)
+	}
+	if err := srv.Store.AddProfileItem(ctx, id, store.ProfileProduct, 101); err != nil {
+		t.Fatalf("AddProfileItem: %v", err)
+	}
+	if body := get(t, srv, "/profile", "").Body.String(); strings.Contains(body, "430,00 — 430,00") {
+		t.Error("согласные регионы показаны диапазоном из одного числа")
+	}
+}

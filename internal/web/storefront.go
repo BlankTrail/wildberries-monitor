@@ -93,38 +93,42 @@ func (s *Server) storefrontTable(r *http.Request, p store.ProfileRow) string {
 	}
 
 	var b strings.Builder
+	// One row per product, not per reading. A reading is per region, so a job
+	// over eighty-five regions used to print one article eighty-five times
+	// with eighty-five prices, and the list read as a wall of duplicates.
+	rows, err := s.Store.Storefront(ctx, items, storefrontShown)
+	if err != nil {
+		return alert("error", err.Error())
+	}
+
 	b.WriteString(`<h4 class="bt-form-head">Товары` +
-		info("Последнее прочитанное по каждому товару. Полная таблица со всеми полями, "+
-			"регионами и историей — на вкладке «Результаты».") + `</h4>`)
-	b.WriteString(`<div class="bt-table-wrap"><table class="bt-table"><thead><tr>` +
+		info("Одна строка на товар: цена — диапазон по регионам, остаток — все склады, "+
+			"которые из них видно, каждый по одному разу. Полная таблица с разбивкой "+
+			"по регионам и историей — на вкладке «Результаты».") + `</h4>`)
+	b.WriteString(`<div class="bt-table-wrap bt-table-wrap--capped"><table class="bt-table"><thead><tr>` +
 		`<th class="bt-num">Артикул</th><th>Название</th><th>Бренд</th>` +
 		`<th class="bt-num">Цена</th><th class="bt-num">Остаток</th>` +
+		`<th class="bt-num">Регионов</th>` +
 		`<th class="bt-num">Рейтинг</th><th class="bt-num">Отзывов</th>` +
 		`<th class="bt-num">Фраз</th><th class="bt-num">Рабочих</th><th>Прочитано</th>` +
 		`</tr></thead><tbody>`)
 
-	shown := 0
-	for row, err := range s.Store.Products(ctx, store.ProductFilter{NmIDs: items, Latest: true}) {
-		if err != nil {
-			b.WriteString(`</tbody></table></div>` + alert("error", err.Error()))
-			return b.String()
-		}
-		if shown >= storefrontShown {
-			break
-		}
-		shown++
+	for _, row := range rows {
 		n := counts[row.NmID]
 		fmt.Fprintf(&b, `<tr><td class="bt-num bt-mono">%d</td><td class="bt-cell-wrap">%s</td>`+
 			`<td>%s</td><td class="bt-num">%s</td><td class="bt-num">%s</td>`+
+			`<td class="bt-num">%d</td>`+
 			`<td class="bt-num">%s</td><td class="bt-num">%s</td>`+
 			`<td class="bt-num">%s</td><td class="bt-num">%s</td><td class="bt-mono">%s</td></tr>`,
 			row.NmID, html.EscapeString(row.Name), html.EscapeString(row.Brand),
-			moneyOrDash(row.PriceSale), intOrDash(row.TotalQuantity),
+			priceRange(row.PriceLow, row.PriceHigh), intOrDash(row.Stock),
+			row.Regions,
 			floatOrDash(row.Rating), intOrDash(row.Feedbacks),
 			countOrDash(n[0]), countOrDash(n[1]), stamp(row.TS))
 	}
 	b.WriteString(`</tbody></table></div>`)
 
+	shown := len(rows)
 	if len(items) > shown {
 		b.WriteString(`<span class="bt-form-hint">` + html.EscapeString(fmt.Sprintf(
 			"Показаны %d из %d.", shown, len(items))) + ` ` +
@@ -132,6 +136,22 @@ func (s *Server) storefrontTable(r *http.Request, p store.ProfileRow) string {
 			html.EscapeString(storefrontResultsLink(p)) + `">Все товары в «Результатах»</a></span>`)
 	}
 	return b.String()
+}
+
+// priceRange is what the regions charged: one number when they agree, both
+// ends when they do not.
+//
+// A range rather than an average or the newest of them. Читающий эту строку
+// спрашивает «сколько стоит мой товар», и «430 — 492» — правдивый ответ, тогда
+// как любое одно число из этих двух умалчивает о втором.
+func priceRange(low, high *int64) string {
+	if low == nil || high == nil {
+		return moneyOrDash(low)
+	}
+	if *low == *high {
+		return moneyOrDash(low)
+	}
+	return moneyOrDash(low) + " — " + moneyOrDash(high)
 }
 
 // storefrontResultsLink is the results screen filtered to this seller.
