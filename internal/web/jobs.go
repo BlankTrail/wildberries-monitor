@@ -770,6 +770,8 @@ func (s *Server) jobFromForm(r *http.Request) (job.Job, error) {
 		AppType:  int(atoi64(f.Get("app_type"))),
 		Fields:   wb.Selection(f["fields"]),
 		Threads:  int(atoi64(f.Get("threads"))),
+		Channels: idList(f["channels"]),
+		Attempts: int(atoi64(f.Get("attempts"))),
 		Delay:    time.Duration(atoi64(f.Get("delay_ms"))) * time.Millisecond,
 		Schedule: strings.TrimSpace(f.Get("schedule")),
 		Enabled:  f.Get("schedule") != "",
@@ -1002,12 +1004,14 @@ func splitLines(s string) []string {
 }
 
 // idList is a set of store ids as a form posts them: one value per ticked box.
+// idList is a set of checkboxes read as ids. The empty value a form posts
+// alongside them reads as nought and is dropped where every job passes —
+// job.Save — rather than here as well: two places dropping the same thing is
+// one place nobody tests.
 func idList(values []string) []int64 {
 	var out []int64
 	for _, v := range values {
-		if id := atoi64(v); id != 0 {
-			out = append(out, id)
-		}
+		out = append(out, atoi64(v))
 	}
 	return out
 }

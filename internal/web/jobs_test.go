@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -690,6 +691,68 @@ func TestPages_CloseEveryDivTheyOpen(t *testing.T) {
 		closed := strings.Count(body, "</div>")
 		if opened != closed {
 			t.Errorf("%s: открыто %d <div>, закрыто %d", path, opened, closed)
+		}
+	}
+}
+
+func TestConstructor_TheRunControlsItShowsReachTheSavedJob(t *testing.T) {
+	// «Через какие прокси» and «повторов запроса» were drawn on this screen
+	// and read by nobody: the form declared both, the builder read neither,
+	// and every job saved here still went through every enabled exit on the
+	// build's own retry budget. The settings looked present and did nothing.
+	srv := newServer(t)
+	ctx := t.Context()
+
+	form := goodForm()
+	form.Set("threads", "7")
+	form.Set("attempts", "12")
+	form["channels"] = []string{"1", "0", "4"}
+	if w := postForm(t, srv, "/jobs", form); w.Code != 200 {
+		t.Fatalf("POST /jobs = %d", w.Code)
+	}
+
+	jobs, err := srv.Store.Jobs(ctx)
+	if err != nil {
+		t.Fatalf("Jobs: %v", err)
+	}
+	if len(jobs) == 0 {
+		t.Fatal("задание не создано")
+	}
+	made, err := job.Load(ctx, srv.Store, jobs[len(jobs)-1].ID)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if made.Threads != 7 {
+		t.Errorf("потоков %d, форма просила 7", made.Threads)
+	}
+	if made.Attempts != 12 {
+		t.Errorf("повторов %d, форма просила 12", made.Attempts)
+	}
+	// The empty box a form always posts is dropped: channel nought is an exit
+	// nothing can build.
+	if !slices.Equal(made.Channels, []int64{1, 4}) {
+		t.Errorf("каналы %v, форма просила [1 4]", made.Channels)
+	}
+}
+
+func TestConstructor_EveryRunControlItDrawsIsOneTheBuilderReads(t *testing.T) {
+	// The shape of the defect above: an input on the screen whose name appears
+	// nowhere in the builder. Named one at a time rather than swept out of the
+	// HTML, because this screen also carries the region constructor, whose
+	// fields belong to a different handler.
+	src, err := os.ReadFile("jobs.go")
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	body := get(t, newServer(t), "/jobs/new", "").Body.String()
+	for _, name := range []string{"threads", "attempts", "channels"} {
+		if !strings.Contains(body, `name="`+name+`"`) {
+			t.Errorf("форма больше не показывает %q", name)
+			continue
+		}
+		if !strings.Contains(string(src), `f.Get("`+name+`")`) &&
+			!strings.Contains(string(src), `f["`+name+`"]`) {
+			t.Errorf("форма показывает %q, но jobFromForm его не читает", name)
 		}
 	}
 }
