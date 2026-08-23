@@ -15,6 +15,7 @@ import (
 	"github.com/BlankTrail/wildberries-monitor/blanktrail"
 	"github.com/BlankTrail/wildberries-monitor/internal/job"
 	"github.com/BlankTrail/wildberries-monitor/internal/store"
+	"github.com/BlankTrail/wildberries-monitor/internal/testutil/fakebt"
 	"github.com/BlankTrail/wildberries-monitor/wb"
 )
 
@@ -687,5 +688,66 @@ func TestServiceChannel_TheBuiltExitReachesThePoolThatOpensThePort(t *testing.T)
 	cfg = cfg[:strings.Index(cfg, "})")]
 	if !strings.Contains(cfg, "Channels:       channels,") {
 		t.Error("собранный канал не передан в пул — служебный порт откроется напрямую")
+	}
+}
+
+func TestTestChannel_ChecksEveryGatewayTheChannelNames(t *testing.T) {
+	// A gateway channel names its configurations one per line — ChannelRow
+	// says so, and buildChannel reads it that way. This check read the column
+	// whole, so it looked for one configuration named after the entire list,
+	// newlines included, and a channel of eleven working gateways failed its
+	// own «Проверить» with «конфигурации "A\nB\nC..." нет».
+	e := openEngine(t)
+	fake := fakebt.New(t)
+	fake.SetGateways([]fakebt.Gateway{
+		{Name: "WiseKeys.AE-OAE", Kind: "xray", Running: true, Ports: 4},
+		{Name: "WiseKeys.DE-Germaniya", Kind: "xray", Running: true, Ports: 2},
+		{Name: "WiseKeys.EE-Estoniya", Kind: "xray", Running: false},
+	})
+	configure(t, e, fake.URL(), fake.Key())
+
+	id := saveChannel(t, e, store.ChannelRow{
+		Name: "vpn", Kind: store.ChannelGateway, Enabled: true,
+		Source: "WiseKeys.AE-OAE\nWiseKeys.DE-Germaniya\nWiseKeys.EE-Estoniya",
+	})
+
+	got, err := e.TestChannel(t.Context(), id)
+	if err != nil {
+		t.Fatalf("проверка набора шлюзов не прошла: %v", err)
+	}
+	// What the set is, not what one name is: the pool asks the channel for an
+	// egress and gets whichever of these is next.
+	for _, want := range []string{"3", "2", "6"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("в ответе %q нет числа %s", got, want)
+		}
+	}
+}
+
+func TestTestChannel_NamesTheGatewaysBlankTrailDoesNotHave(t *testing.T) {
+	// The half worth keeping from the old message: a name that is not there,
+	// beside the names that are, is a typo somebody fixes in one glance. Only
+	// the missing ones now — listing all eleven when one is wrong buries it.
+	e := openEngine(t)
+	fake := fakebt.New(t)
+	fake.SetGateways([]fakebt.Gateway{
+		{Name: "WiseKeys.AE-OAE", Kind: "xray", Running: true},
+	})
+	configure(t, e, fake.URL(), fake.Key())
+
+	id := saveChannel(t, e, store.ChannelRow{
+		Name: "vpn", Kind: store.ChannelGateway, Enabled: true,
+		Source: "WiseKeys.AE-OAE\nWiseKeys.Opechatka",
+	})
+
+	_, err := e.TestChannel(t.Context(), id)
+	if err == nil {
+		t.Fatal("проверка прошла для шлюза, которого нет")
+	}
+	if !strings.Contains(err.Error(), "WiseKeys.Opechatka") {
+		t.Errorf("ошибка %q не называет отсутствующий шлюз", err)
+	}
+	if strings.Contains(err.Error(), "WiseKeys.AE-OAE;") {
+		t.Errorf("ошибка %q называет отсутствующим шлюз, который есть", err)
 	}
 }

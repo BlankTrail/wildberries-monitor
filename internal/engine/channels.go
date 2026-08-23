@@ -89,6 +89,15 @@ func (e *Engine) Channels(ctx context.Context, want ...int64) ([]blanktrail.Chan
 	return built, closeAll, nil
 }
 
+// gatewayState is what BlankTrail says about one configuration, kept by name
+// so a set of them can be checked in one pass rather than one scan of the list
+// per name.
+type gatewayState struct {
+	kind    string
+	running bool
+	ports   int
+}
+
 // buildChannel is one row, as the thing that dials it.
 func buildChannel(ctx context.Context, row store.ChannelRow) (blanktrail.Channel, error) {
 	switch row.Kind {
@@ -268,27 +277,57 @@ func (e *Engine) TestChannel(ctx context.Context, id int64) (string, error) {
 		if !list.Available {
 			return "", fmt.Errorf("шлюзы недоступны: %s", list.Reason)
 		}
+		have := make([]string, 0, len(list.Gateways))
+		known := make(map[string]gatewayState, len(list.Gateways))
 		for _, g := range list.Gateways {
-			if g.Name != row.Source {
+			have = append(have, g.Name)
+			known[g.Name] = gatewayState{kind: g.Kind, running: g.Running, ports: g.Ports}
+		}
+		if len(have) == 0 {
+			return "", fmt.Errorf("в BlankTrail нет ни одной конфигурации шлюза")
+		}
+
+		// Every name on the row, one per line — the same reading buildChannel
+		// does. Compared against row.Source whole, this looked for one
+		// configuration named after the entire list, newlines included, and a
+		// channel of eleven working gateways failed its own check.
+		want := row.GatewayNames()
+		if len(want) == 0 {
+			return "", fmt.Errorf("не отмечено ни одного шлюза")
+		}
+
+		var missing []string
+		running := 0
+		ports := 0
+		for _, name := range want {
+			g, ok := known[name]
+			if !ok {
+				missing = append(missing, name)
 				continue
 			}
+			if g.running {
+				running++
+			}
+			ports += g.ports
+		}
+		if len(missing) > 0 {
+			return "", fmt.Errorf("в BlankTrail нет: %s; есть: %s",
+				strings.Join(missing, ", "), strings.Join(have, ", "))
+		}
+		// One line for the set, because the set is the channel: the pool asks
+		// for an egress and gets whichever of these is next.
+		if len(want) == 1 {
+			g := known[want[0]]
 			state := "остановлен"
-			if g.Running {
+			if g.running {
 				state = "запущен"
 			}
 			return fmt.Sprintf("Шлюз %s (%s): %s, портов на нём сейчас %d.",
-				g.Name, g.Kind, state, g.Ports), nil
+				want[0], g.kind, state, g.ports), nil
 		}
-		// The names it does have, because "no such gateway" with a list of the
-		// real ones beside it is a typo somebody fixes in one glance.
-		names := make([]string, 0, len(list.Gateways))
-		for _, g := range list.Gateways {
-			names = append(names, g.Name)
-		}
-		if len(names) == 0 {
-			return "", fmt.Errorf("в BlankTrail нет ни одной конфигурации шлюза")
-		}
-		return "", fmt.Errorf("конфигурации %q нет; есть: %s", row.Source, strings.Join(names, ", "))
+		return fmt.Sprintf("Шлюзов в наборе %d, из них запущено %d, портов на них сейчас %d. "+
+			"Пул берёт их по очереди, так что смена личности порта переводит его на следующий.",
+			len(want), running, ports), nil
 	}
 
 	return "", fmt.Errorf("вид %q этой сборке неизвестен", row.Kind)
