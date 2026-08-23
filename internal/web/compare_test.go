@@ -202,16 +202,18 @@ func TestCompare_APinnedRivalGetsItsOwnRow(t *testing.T) {
 
 func TestCompare_SaysWhichComparisonsThisBuildCannotMake(t *testing.T) {
 	// What is left of section 4.7's deltas with no source here: photos and
-	// video, which no client in the wb package fetches. An empty column would
-	// read as «у всех поровну», which is the wrong answer rather than no
-	// answer — so the screen says it out loud instead, once, at the bottom.
+	// video, which no client in the wb package fetches, and the place with paid
+	// seats counted in, which an ads reading cannot reconstruct. An empty
+	// column would read as «у всех поровну», which is the wrong answer rather
+	// than no answer — so the screen says it out loud instead, once, at the
+	// bottom.
 	srv := newServer(t)
 	if _, err := srv.Store.SaveProfile(t.Context(), store.ProfileRow{Name: "мой"}); err != nil {
 		t.Fatalf("SaveProfile: %v", err)
 	}
 
 	body := get(t, srv, "/compare", "correct horse").Body.String()
-	for _, want := range []string{"число фото", "наличие видео", "нет источника"} {
+	for _, want := range []string{"число фото", "наличие видео", "место с учётом рекламы"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("не сказано про %q:\n%s", want, firstLines(body))
 		}

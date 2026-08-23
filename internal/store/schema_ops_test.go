@@ -50,6 +50,42 @@ func TestSchema_HoldsNoTableNothingWrites(t *testing.T) {
 	}
 }
 
+func TestBenchmarks_HoldNoColumnNothingFills(t *testing.T) {
+	// The same rule one level down. Eight columns of the comparison table were
+	// declared with the rest of it and never filled: the card's own media,
+	// which no client in the wb package fetches; the place with paid seats
+	// counted in, which cannot be reconstructed from what an ads reading
+	// gives; and «в наличии», which restated the stock column beside it.
+	//
+	// Named rather than swept for, for the same reason the tables are: a
+	// column with no INSERT naming it in the Go source is not something a test
+	// can decide. These eight are the ones migration 0027 dropped.
+	s := openTestStore(t)
+
+	got := columnNames(t, s, "benchmarks")
+	for _, gone := range []string{
+		"photo_count", "rival_photo_count",
+		"has_video", "rival_has_video",
+		"position_with_ads", "rival_position_with_ads",
+		"available", "rival_available",
+	} {
+		if contains(got, gone) {
+			t.Errorf("колонка benchmarks.%s вернулась — заполнять её по-прежнему нечем", gone)
+		}
+	}
+	// And the ones that are filled are still there, so this cannot pass by
+	// dropping the table.
+	for _, want := range []string{
+		"position_organic", "price", "rating", "feedbacks", "feedbacks_per_day",
+		"total_quantity", "delivery_time2", "description_len",
+		"options_filled_pct", "has_ad", "in_promo",
+	} {
+		if !contains(got, want) {
+			t.Errorf("колонка benchmarks.%s пропала, а её заполняют", want)
+		}
+	}
+}
+
 func TestProfiles_DeletingAProfileTakesEverythingHangingOffIt(t *testing.T) {
 	// Spec section 4.7: the "mine" flag lives on the profile, not on the
 	// product, because the same product is mine in one profile and a

@@ -79,8 +79,10 @@ func (s *Server) compareHTML(r *http.Request) (string, error) {
 	// section 4.7's comparisons have no source in this build, and a column of
 	// dashes reads like «у всех поровну».
 	b.WriteString(`<div class="bt-alert bt-alert--neutral">` +
-		`Не сравнивается в этой сборке: число фото и наличие видео — ` +
-		`для них нет источника, а пустая колонка читалась бы как «поровну».</div>`)
+		`Не сравнивается в этой сборке: число фото и наличие видео — их никто не снимает; ` +
+		`место с учётом рекламы — из рекламной выдачи видно, кого продвигали, но не на ` +
+		`каком месте стояла врезка. Сказано здесь, а не пустой колонкой: пустая читалась ` +
+		`бы как «поровну».</div>`)
 	b.WriteString(`</section>`)
 	return b.String(), nil
 }

@@ -337,3 +337,26 @@ func TestLoadMigrations_AcceptsASingleFile(t *testing.T) {
 		t.Errorf("loadMigrations = %+v, want one migration at version 1", got)
 	}
 }
+
+// columnNames is what one table actually has, as the database reports it.
+func columnNames(t *testing.T, s *Store, table string) []string {
+	t.Helper()
+	rows, err := s.db.QueryContext(context.Background(),
+		`SELECT name FROM pragma_table_info(?) ORDER BY name`, table)
+	if err != nil {
+		t.Fatalf("list columns of %s: %v", table, err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var n string
+		if err := rows.Scan(&n); err != nil {
+			t.Fatalf("scan column name: %v", err)
+		}
+		out = append(out, n)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("rows: %v", err)
+	}
+	return out
+}
