@@ -71,6 +71,12 @@ type Fetcher struct {
 	// job asks for as many pages as somebody was willing to pay for, and the
 	// walk finds out how many there actually are.
 	depth depth
+
+	// asked is which review and question windows this run has already read.
+	// See asked.go: both are published per group of colours rather than per
+	// article, so a model in six colours has one window and six articles that
+	// would each have asked for it.
+	asked asked
 }
 
 // Fetch does one item and reports how many requests it cost.
@@ -472,7 +478,7 @@ func (f *Fetcher) product(ctx context.Context, key job.Key) (int, error) {
 	}
 	f.scraped(ctx, "карточка %d — %s", key.NmID, fetch.Card.Name)
 
-	extra, err := f.signals(ctx, fetch.Card.ImtID, key.NmID)
+	extra, err := f.signals(ctx, fetch.Card.ImtID, key.NmID, fetch.Product.Feedbacks)
 	return requests + extra, err
 }
 
@@ -662,7 +668,7 @@ func (f *Fetcher) enrich(ctx context.Context, products []wb.Product, key job.Key
 			}
 		}
 
-		extra, err := f.signals(ctx, imtID, p.ID)
+		extra, err := f.signals(ctx, imtID, p.ID, p.Feedbacks)
 		requests += extra
 		if err != nil {
 			return requests, err
@@ -676,24 +682,33 @@ func (f *Fetcher) enrich(ctx context.Context, products []wb.Product, key job.Key
 // Both are keyed on the grouping id rather than the article number — one
 // review window covers every colour of the same model — so a product whose
 // grouping id is unknown is skipped rather than fetched under the wrong key.
-func (f *Fetcher) signals(ctx context.Context, imtID, nmID int64) (int, error) {
+//
+// feedbacks is the review count the page already carried, or nil when the
+// payload did not name one. Zero means the review window is empty and asking
+// for it would spend a request to be told so.
+func (f *Fetcher) signals(ctx context.Context, imtID, nmID int64, feedbacks *int64) (int, error) {
 	wants := f.sources()
 	requests := 0
 
-	if wants[wb.FieldSourceReviews] {
+	if wants[wb.FieldSourceReviews] && !noReviews(feedbacks) {
 		if imtID == 0 {
 			// Fetched under nmID, this would read another product's reviews or
 			// none at all, and either way the rows would look like this
 			// product's.
 			return requests, nil
 		}
-		reviews, err := f.Site.Reviews(ctx, f.Eps, imtID)
-		requests++
-		if err == nil {
-			if _, err := f.Store.SaveReviews(ctx, reviews); err != nil {
-				return requests, fmt.Errorf("collect: saving reviews for %d: %w", nmID, err)
+		// Once per group. Another colour of this model has already brought
+		// back the window, and it carried this article's reviews with it.
+		if !f.asked.already(wb.FieldSourceReviews, imtID) {
+			reviews, err := f.Site.Reviews(ctx, f.Eps, imtID)
+			requests++
+			if err == nil {
+				if _, err := f.Store.SaveReviews(ctx, reviews); err != nil {
+					return requests, fmt.Errorf("collect: saving reviews for %d: %w", nmID, err)
+				}
+				f.asked.read(wb.FieldSourceReviews, imtID)
+				f.scraped(ctx, "отзывы товара %d — %d", nmID, len(reviews.Items))
 			}
-			f.scraped(ctx, "отзывы товара %d — %d", nmID, len(reviews.Items))
 		}
 	}
 
@@ -701,17 +716,33 @@ func (f *Fetcher) signals(ctx context.Context, imtID, nmID int64) (int, error) {
 		if imtID == 0 {
 			return requests, nil
 		}
-		questions, err := f.Site.Questions(ctx, f.Eps, imtID, 0, 0)
-		requests++
-		if err == nil {
-			if _, err := f.Store.SaveQuestions(ctx, questions); err != nil {
-				return requests, fmt.Errorf("collect: saving questions for %d: %w", nmID, err)
+		if !f.asked.already(wb.FieldSourceQuestions, imtID) {
+			questions, err := f.Site.Questions(ctx, f.Eps, imtID, 0, 0)
+			requests++
+			if err == nil {
+				if _, err := f.Store.SaveQuestions(ctx, questions); err != nil {
+					return requests, fmt.Errorf("collect: saving questions for %d: %w", nmID, err)
+				}
+				f.asked.read(wb.FieldSourceQuestions, imtID)
+				f.scraped(ctx, "вопросы товара %d — %d", nmID, len(questions.Items))
 			}
-			f.scraped(ctx, "вопросы товара %d — %d", nmID, len(questions.Items))
 		}
 	}
 	return requests, nil
 }
+
+// noReviews reports whether the page already said this product has none.
+//
+// The search payload carries the count, and a storefront walk is mostly
+// products nobody has reviewed — so the request that follows is one that can
+// only come back empty. Spent per product, across a seller's eight hundred,
+// that is eight hundred round trips to be told zero.
+//
+// Nil is not zero. A payload that named no count has not said the window is
+// empty, and treating silence as «нет отзывов» would drop the reviews of every
+// product met through a response that spells the field differently — which is
+// why wb.Product records which key supplied it.
+func noReviews(feedbacks *int64) bool { return feedbacks != nil && *feedbacks == 0 }
 
 // sources is the set of responses this job's selection has to be read out of.
 //

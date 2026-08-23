@@ -45,6 +45,9 @@ type fakeSite struct {
 
 	products []wb.Product
 	cardImt  int64
+	// cardFeedbacks is the review count the card's live half carries, for the
+	// one kind of item that has no search page behind it.
+	cardFeedbacks *int64
 	// cardDest and cardApp are what the last card fetch was asked for. An
 	// empty region is a request the real site answers with 400, so a test that
 	// only counted card fetches could not tell a working call from that one.
@@ -54,6 +57,10 @@ type fakeSite struct {
 	// cardFail fails only the card fetches, so a test can let a page succeed
 	// and every card on it fail — which is the case worth pinning.
 	cardFail error
+	// reviewsFailOnce fails the first review window and answers the rest. A
+	// window that failed must not count as read, or the group's other articles
+	// would all skip it and one timeout would cost a model its reviews.
+	reviewsFailOnce bool
 }
 
 // PromotionPage records which promotion was walked and answers with whatever
@@ -146,6 +153,7 @@ func (f *fakeSite) Card(_ context.Context, _ *wb.Basket, _ wb.Endpoints, nm int6
 			ID: nm, Name: "Платье", Brand: "BrandCo",
 			SupplierID: ptrTo(int64(4242)), SupplierName: "ООО Ромашка",
 			Dest: dest, AppType: app, FetchedAt: time.Unix(1000, 0).UTC(),
+			Feedbacks: f.cardFeedbacks,
 		},
 	}, nil
 }
@@ -154,6 +162,9 @@ func (f *fakeSite) Reviews(_ context.Context, _ wb.Endpoints, imtID int64) (wb.R
 	f.reviews = append(f.reviews, imtID)
 	if f.fail != nil {
 		return wb.Reviews{}, f.fail
+	}
+	if f.reviewsFailOnce && len(f.reviews) == 1 {
+		return wb.Reviews{}, errors.New("окно отзывов не ответило")
 	}
 	return wb.Reviews{ImtID: imtID}, nil
 }
@@ -1126,5 +1137,208 @@ func TestSeller_APartlyReadRecordIsKeptAndTheFailureReported(t *testing.T) {
 	}
 	if got.Name != "частично" {
 		t.Errorf("запись = %+v", got)
+	}
+}
+
+func TestFetch_SkipsTheReviewWindowThePageAlreadySaidIsEmpty(t *testing.T) {
+	// The search row carries the review count. A storefront is mostly products
+	// nobody has reviewed, and asking each of them for its review window buys
+	// a round trip whose whole answer is a number the page already gave.
+	none := int64(0)
+	quiet := product(101)
+	quiet.MatchID, quiet.Feedbacks = 900, &none
+
+	site := &fakeSite{products: []wb.Product{quiet}, cardImt: 900}
+	f, _ := fetcherFor(t, site, "nm_id", "review_text")
+
+	n, err := f.Fetch(t.Context(), job.Item{Key: job.Key{
+		Kind: job.ItemPage, Phrase: "платье", Dest: "-1257786", AppType: 1, Page: 1,
+	}.String()})
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if len(site.reviews) != 0 {
+		t.Errorf("отзывы запрошены у %v, хотя страница уже сказала «ноль»", site.reviews)
+	}
+	if n != 1 {
+		t.Errorf("потрачено %d запросов, ожидалась только страница", n)
+	}
+}
+
+func TestFetch_StillAsksWhenThePageNamedNoReviewCount(t *testing.T) {
+	// Nil is silence, not zero. A response that spells the count under another
+	// key — wb.Product records which one supplied it — would otherwise lose
+	// every review it has.
+	loud := product(101)
+	loud.MatchID, loud.Feedbacks = 900, nil
+
+	site := &fakeSite{products: []wb.Product{loud}, cardImt: 900}
+	f, _ := fetcherFor(t, site, "nm_id", "review_text")
+
+	if _, err := f.Fetch(t.Context(), job.Item{Key: job.Key{
+		Kind: job.ItemPage, Phrase: "платье", Dest: "-1257786", AppType: 1, Page: 1,
+	}.String()}); err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if len(site.reviews) != 1 {
+		t.Errorf("окон отзывов запрошено %d, ожидалось одно", len(site.reviews))
+	}
+}
+
+func TestFetch_AProductWithReviewsIsStillAsked(t *testing.T) {
+	// The other side of the skip: a count above zero must not be read as a
+	// reason to save a request.
+	some := int64(3)
+	busy := product(101)
+	busy.MatchID, busy.Feedbacks = 900, &some
+
+	site := &fakeSite{products: []wb.Product{busy}, cardImt: 900}
+	f, _ := fetcherFor(t, site, "nm_id", "review_text")
+
+	if _, err := f.Fetch(t.Context(), job.Item{Key: job.Key{
+		Kind: job.ItemPage, Phrase: "платье", Dest: "-1257786", AppType: 1, Page: 1,
+	}.String()}); err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if len(site.reviews) != 1 {
+		t.Errorf("окон отзывов запрошено %d у товара с тремя отзывами", len(site.reviews))
+	}
+}
+
+// grouped is one article of a model, all of whose colours share imtID.
+func grouped(nmID, imtID int64) wb.Product {
+	p := product(nmID)
+	p.MatchID = imtID
+	return p
+}
+
+func TestFetch_AsksOneReviewWindowForAWholeGroup(t *testing.T) {
+	// Wildberries publishes reviews per group of colours, not per article. Six
+	// colours of one model are six articles and one window, and the window
+	// each of them would get is the same document — so five of six fetches buy
+	// the response already in hand.
+	site := &fakeSite{products: []wb.Product{
+		grouped(101, 900), grouped(102, 900), grouped(103, 900),
+	}}
+	f, _ := fetcherFor(t, site, "nm_id", "review_text")
+
+	n, err := f.Fetch(t.Context(), job.Item{Key: job.Key{
+		Kind: job.ItemPage, Phrase: "платье", Dest: "-1257786", AppType: 1, Page: 1,
+	}.String()})
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if len(site.reviews) != 1 {
+		t.Errorf("окон отзывов запрошено %d у трёх цветов одной модели: %v", len(site.reviews), site.reviews)
+	}
+	if n != 2 {
+		t.Errorf("потрачено %d запросов, ожидались страница и одно окно", n)
+	}
+}
+
+func TestFetch_AsksEachGroupsOwnWindow(t *testing.T) {
+	// The other side of it: two models are two windows, and a memo that keyed
+	// on nothing but «уже спрашивали» would give the second model the first
+	// one's reviews.
+	site := &fakeSite{products: []wb.Product{
+		grouped(101, 900), grouped(102, 900), grouped(201, 700),
+	}}
+	f, _ := fetcherFor(t, site, "nm_id", "review_text")
+
+	if _, err := f.Fetch(t.Context(), job.Item{Key: job.Key{
+		Kind: job.ItemPage, Phrase: "платье", Dest: "-1257786", AppType: 1, Page: 1,
+	}.String()}); err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if len(site.reviews) != 2 || site.reviews[0] != 900 || site.reviews[1] != 700 {
+		t.Errorf("запрошены окна %v, ожидались обе группы по одному разу", site.reviews)
+	}
+}
+
+func TestFetch_TheTwoWindowsOfAGroupAreAskedApart(t *testing.T) {
+	// Reviews and questions are separate requests to separate addresses. Keyed
+	// on the group alone, the reviews fetch would mark it read and the
+	// questions would never be asked for at all.
+	site := &fakeSite{products: []wb.Product{grouped(101, 900), grouped(102, 900)}}
+	f, _ := fetcherFor(t, site, "nm_id", "review_text", "question_text")
+
+	if _, err := f.Fetch(t.Context(), job.Item{Key: job.Key{
+		Kind: job.ItemPage, Phrase: "платье", Dest: "-1257786", AppType: 1, Page: 1,
+	}.String()}); err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if len(site.reviews) != 1 {
+		t.Errorf("окон отзывов %d, ожидалось одно", len(site.reviews))
+	}
+	if len(site.questions) != 1 {
+		t.Errorf("списков вопросов %d, ожидался один", len(site.questions))
+	}
+}
+
+func TestFetch_AWindowThatFailedIsAskedForAgain(t *testing.T) {
+	// Recorded before the answer came back, a group whose fetch failed would
+	// be marked read and every other colour would skip it — so one timeout
+	// would cost a model its reviews for the whole run, and the run would
+	// report success.
+	site := &fakeSite{
+		products:        []wb.Product{grouped(101, 900), grouped(102, 900)},
+		reviewsFailOnce: true,
+	}
+	f, _ := fetcherFor(t, site, "nm_id", "review_text")
+
+	if _, err := f.Fetch(t.Context(), job.Item{Key: job.Key{
+		Kind: job.ItemPage, Phrase: "платье", Dest: "-1257786", AppType: 1, Page: 1,
+	}.String()}); err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if len(site.reviews) != 2 {
+		t.Errorf("окон отзывов запрошено %d, а первое не ответило", len(site.reviews))
+	}
+}
+
+func TestFetch_AProductFetchedByArticleAlsoSkipsAnEmptyReviewWindow(t *testing.T) {
+	// The kind with no search page behind it: the count arrives on the card's
+	// live half instead. Same rule, or the saving stops at the door of the one
+	// item kind a profile is built from.
+	none := int64(0)
+	site := &fakeSite{cardImt: 900, cardFeedbacks: &none}
+	f, _ := fetcherFor(t, site, "nm_id", "review_text")
+
+	n, err := f.Fetch(t.Context(), job.Item{Key: job.Key{
+		Kind: job.ItemProduct, NmID: 101, Dest: "-1257786", AppType: 1,
+	}.String()})
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if len(site.reviews) != 0 {
+		t.Errorf("отзывы запрошены у %v, хотя карточка уже сказала «ноль»", site.reviews)
+	}
+	if n != 2 {
+		t.Errorf("потрачено %d запросов, ожидались только две половины карточки", n)
+	}
+}
+
+func TestFetch_NoReviewsIsNotAReasonToSkipTheQuestions(t *testing.T) {
+	// Two different things. A product nobody has bought is a product nobody
+	// has reviewed and exactly the kind buyers ask questions about, and the
+	// review count says nothing about how many there are — no payload this run
+	// pays for carries a question count at all.
+	none := int64(0)
+	quiet := product(101)
+	quiet.MatchID, quiet.Feedbacks = 900, &none
+
+	site := &fakeSite{products: []wb.Product{quiet}, cardImt: 900}
+	f, _ := fetcherFor(t, site, "nm_id", "review_text", "question_text")
+
+	if _, err := f.Fetch(t.Context(), job.Item{Key: job.Key{
+		Kind: job.ItemPage, Phrase: "платье", Dest: "-1257786", AppType: 1, Page: 1,
+	}.String()}); err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if len(site.reviews) != 0 {
+		t.Errorf("отзывы запрошены у %v при нулевом счётчике", site.reviews)
+	}
+	if len(site.questions) != 1 {
+		t.Errorf("списков вопросов %d — счётчик отзывов не говорит о вопросах", len(site.questions))
 	}
 }
