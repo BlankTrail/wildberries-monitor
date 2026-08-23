@@ -37,6 +37,12 @@ type rawProduct struct {
 	Feedbacks   *int64 `json:"feedbacks"`
 	NmFeedbacks *int64 `json:"nmFeedbacks"`
 
+	// Pics is the photograph count, spelled one way by every source: the
+	// search page, a category listing and the card's own detail half all put
+	// it here. No second key to fall back to, unlike the rating and the
+	// feedback count above.
+	Pics *int64 `json:"pics"`
+
 	SalePriceU *int64 `json:"salePriceU"`
 	PriceU     *int64 `json:"priceU"`
 
@@ -109,6 +115,8 @@ func extractProduct(raw json.RawMessage) (Product, bool) {
 	case r.NmFeedbacks != nil:
 		p.Feedbacks, p.FeedbackKey = r.NmFeedbacks, "nmFeedbacks"
 	}
+
+	p.Pics = r.Pics
 
 	p.flatSale, p.flatBase = r.SalePriceU, r.PriceU
 	return p, true

@@ -1167,3 +1167,48 @@ func TestProducts_AProductNobodyOpenedHasNoCardHalf(t *testing.T) {
 		}
 	}
 }
+
+func TestProducts_CarriesThePhotographCount(t *testing.T) {
+	// Free with every listing, and until migration 0031 read past and thrown
+	// away — so spec section 4.7's card completeness, the one gap it says a
+	// seller can close the same day, had no number behind it.
+	s := openTestStore(t)
+	at := time.Date(2026, 8, 24, 9, 0, 0, 0, time.UTC)
+	p := readingAt(141504066, "-1257786", 1, 120000, at)
+	p.Pics = ptrTo(int64(23))
+	saveReading(t, s, p)
+
+	got := collectSeq(t, "Products", s.Products(context.Background(), ProductFilter{}))
+	if len(got) != 1 {
+		t.Fatalf("строк %d", len(got))
+	}
+	if got[0].Pics == nil || *got[0].Pics != 23 {
+		t.Errorf("фотографий %v, ожидалось 23", got[0].Pics)
+	}
+}
+
+func TestProducts_APhotographAddedIsWorthItsOwnReading(t *testing.T) {
+	// The store thins readings whose volatile half did not change — that is
+	// what the digest is for. A column on the row that the digest does not
+	// cover has its changes suppressed and lost with no record that they
+	// happened, and this is the column a seller acts on.
+	s := openTestStore(t)
+	at := time.Date(2026, 8, 24, 9, 0, 0, 0, time.UTC)
+
+	first := readingAt(141504066, "-1257786", 1, 120000, at)
+	first.Pics = ptrTo(int64(3))
+	saveReading(t, s, first)
+
+	more := readingAt(141504066, "-1257786", 1, 120000, at.Add(time.Hour))
+	more.Pics = ptrTo(int64(9))
+	saveReading(t, s, more)
+
+	n, err := s.CountForTest(context.Background(),
+		`SELECT COUNT(*) FROM snapshots WHERE nm_id = 141504066`)
+	if err != nil {
+		t.Fatalf("CountForTest: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("снимков %d — добавленные фотографии не записались как изменение", n)
+	}
+}

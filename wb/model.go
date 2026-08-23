@@ -116,6 +116,15 @@ type Product struct {
 	Feedbacks   *int64   `json:"-"`
 	FeedbackKey string   `json:"-"`
 
+	// Pics is how many photographs the card has, which the site puts on every
+	// product of every listing at no extra cost.
+	//
+	// Spec section 4.7 calls card completeness the one gap a seller can close
+	// today, without money and without waiting, and this is the half of it the
+	// site hands over for free. Nil means the payload did not say — not that
+	// the card has no photographs, which for a live listing it never does.
+	Pics *int64 `json:"-"`
+
 	// Rank is the position in the result set, counted from one across pages, and
 	// Page is the page it was found on. For a seller, rank for a keyword is the
 	// product; the reference records neither.

@@ -1,0 +1,20 @@
+-- How many photographs a card has, on every reading.
+--
+-- Spec section 4.4 names «фото и видео» as one of nine field groups, and this
+-- schema had nothing for it: migration 0027 dropped the benchmarks pair that
+-- would have compared it, because no client in the wb package fetched a
+-- product's media and a column nothing fills is not free.
+--
+-- The count turned out never to have needed a fetch. Every listing the site
+-- answers with — search, category, a seller's storefront, the card's own
+-- detail half — puts `pics` on every product beside the rating and the stock,
+-- and it was being read past and thrown away.
+--
+-- On the snapshot rather than on the product, for the same reason rating and
+-- feedbacks are: it arrives with a reading, it can differ between two of them,
+-- and section 4.7 compares it per (nmID, query, dest, ts). A seller who added
+-- three photographs on Tuesday should be able to see Tuesday.
+--
+-- Nullable, and nil means «выдача не назвала» rather than «фотографий нет». A
+-- live card always has at least one, so zero would be a claim no payload made.
+ALTER TABLE snapshots ADD COLUMN pics INTEGER;

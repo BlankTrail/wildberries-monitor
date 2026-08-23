@@ -464,6 +464,8 @@ func TestFields_MatchTheGoldenList(t *testing.T) {
 		{"delivery_time2", GroupDelivery, FieldInt},
 		{"delivery_dist", GroupDelivery, FieldInt},
 
+		{"photo_count", GroupMedia, FieldInt},
+
 		{"description", GroupContent, FieldText},
 		{"vendor_code", GroupContent, FieldText},
 		{"subject_name", GroupContent, FieldText},

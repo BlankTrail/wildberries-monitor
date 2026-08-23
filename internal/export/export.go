@@ -240,6 +240,11 @@ func valueOf(r store.ProductRow, f wb.Field) Value {
 	case "total_quantity":
 		return optInt(r.TotalQuantity)
 
+	// Spec section 4.4's media group, the free half of it. See wb.GroupMedia
+	// for why the links are not beside it.
+	case "photo_count":
+		return optInt(r.Pics)
+
 	// The card's half, which spec section 4.4 prices at a request per product
 	// and which this switch used to answer with Absent for every one of them.
 	// Ticking «Описание и характеристики» spent that request, stored what came

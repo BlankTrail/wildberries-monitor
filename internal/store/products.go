@@ -266,12 +266,12 @@ func insertSnapshot(ctx context.Context, tx *sql.Tx, p wb.Product, fingerprint s
 		    nm_id, dest, app_type, ts, anchor, fingerprint,
 		    rating, rating_key, feedbacks, feedback_key, total_quantity,
 		    price_base, price_sale, discount_pct, currency,
-		    time1, time2, dist, warehouse_id
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		    time1, time2, dist, warehouse_id, pics
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		p.ID, p.Dest, p.AppType, ts, anchorFlag, fingerprint,
 		p.Rating, p.RatingKey, p.Feedbacks, p.FeedbackKey, snapshotStock(p),
 		base, sale, discount, currency,
-		p.Time1, p.Time2, p.Dist, p.WarehouseID)
+		p.Time1, p.Time2, p.Dist, p.WarehouseID, p.Pics)
 	if err != nil {
 		return 0, fmt.Errorf("store: write the snapshot of %d in %s: %w", p.ID, p.Dest, err)
 	}
@@ -406,12 +406,17 @@ func snapshotStock(p wb.Product) *int64 {
 // correct behaviour, since the first row computed under the new rule is the
 // first row that reflects it.
 //
-// Bumped to "2" here: app_type moved out of the digest and into
+// Bumped to "2" when app_type moved out of the digest and into
 // shouldWriteSnapshot's query scope, which is exactly the kind of change this
 // prefix exists to mark — a "1" digest and a "2" digest are not answers to
 // the same question, and comparing them would compare a reading against a
 // rule it was never checked against.
-const fingerprintVersion = "2"
+//
+// And to "3" when the photograph count joined the row (migration 0031). Same
+// rule: the digest covers exactly what the row carries, so a column added to
+// one is a column added to the other, and the prefix says which rule a stored
+// digest was computed under.
+const fingerprintVersion = "3"
 
 // fingerprintOf digests the volatile half of a reading.
 //
@@ -473,6 +478,10 @@ func fingerprintOf(p wb.Product) string {
 	fpOptInt(h, "time2", p.Time2)
 	fpOptInt(h, "dist", p.Dist)
 	fpOptInt(h, "warehouse_id", p.WarehouseID)
+	// A photograph added is a change worth a row: it is the one thing spec
+	// section 4.7 says a seller can act on the same day, and a reading that
+	// recorded it while the digest ignored it would be thinned away.
+	fpOptInt(h, "pics", p.Pics)
 
 	digests := make([]string, 0, len(p.Sizes))
 	for _, sz := range p.Sizes {

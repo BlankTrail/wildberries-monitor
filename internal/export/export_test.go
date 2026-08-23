@@ -712,3 +712,17 @@ func TestRowOf_ACardNobodyReadStaysAbsent(t *testing.T) {
 		}
 	}
 }
+
+func TestRowOf_ThePhotographCountIsExported(t *testing.T) {
+	// A group the catalogue declares and the switch has to answer, or ticking
+	// «Фотографий» produces an empty column — which is what «Описание и
+	// характеристики» did before it.
+	cols := columnsFor(t, "photo_count")
+	got := RowOf(store.ProductRow{NmID: 100, Pics: ptrInt64(23)}, cols)
+	if len(got) != 1 || got[0].Absent || got[0].Int != 23 {
+		t.Errorf("колонка = %+v, ожидалось 23", got[0])
+	}
+	if blank := RowOf(store.ProductRow{NmID: 100}, cols); !blank[0].Absent {
+		t.Errorf("колонка = %+v, а выдача о фотографиях не сказала", blank[0])
+	}
+}

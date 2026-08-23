@@ -462,3 +462,31 @@ func TestExtractProduct_AgainstACapturedProduct(t *testing.T) {
 		t.Errorf("WarehouseID=%v, want 117501", p.WarehouseID)
 	}
 }
+
+func TestExtractProduct_ReadsThePhotographCount(t *testing.T) {
+	// Spec section 4.4 names «фото и видео» as a group costing a request per
+	// product, and the count never needed one: every listing the site answers
+	// with carries it beside the rating and the stock. Migration 0027 dropped
+	// the comparison columns that would have used it, because nothing in this
+	// package was reading it.
+	p, ok := extractProduct([]byte(`{"id":152540730,"pics":23}`))
+	if !ok {
+		t.Fatal("товар не разобран")
+	}
+	if p.Pics == nil || *p.Pics != 23 {
+		t.Errorf("фотографий %v, ожидалось 23", p.Pics)
+	}
+}
+
+func TestExtractProduct_APayloadThatNamedNoCountSaysNothing(t *testing.T) {
+	// Nil, not zero. A live card always has at least one photograph, so zero
+	// would be a claim about the card that no payload made — and the one screen
+	// that reads this is about a card being incomplete.
+	p, ok := extractProduct([]byte(`{"id":152540730}`))
+	if !ok {
+		t.Fatal("товар не разобран")
+	}
+	if p.Pics != nil {
+		t.Errorf("фотографий %d, а выдача о них не сказала", *p.Pics)
+	}
+}

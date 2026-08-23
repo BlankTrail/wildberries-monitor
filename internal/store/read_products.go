@@ -47,6 +47,10 @@ type ProductRow struct {
 	Rating        *float64
 	Feedbacks     *int64
 	TotalQuantity *int64
+	// Pics is how many photographs the card had at this reading. Free with
+	// every listing the site answers with — see migration 0031 — and the
+	// half of spec section 4.7's card completeness that costs nothing.
+	Pics *int64
 
 	PriceBase   *int64 // minor units
 	PriceSale   *int64 // minor units
@@ -166,6 +170,7 @@ const productRowColumns = `
 	    COALESCE(s.ts, 0)        AS ts,
 	    s.rating                 AS rating,
 	    s.feedbacks              AS feedbacks,
+	    s.pics                   AS pics,
 	    s.total_quantity         AS total_quantity,
 	    s.price_base             AS price_base,
 	    s.price_sale             AS price_sale,
@@ -197,7 +202,7 @@ const productRowColumns = `
 // rather than subtle: Scan reports the column count and every test in the
 // file says so at once.
 const productRowOutput = `nm_id, imt_id, name, brand, supplier_id, supplier_name,
-	    dest, app_type, ts, rating, feedbacks, total_quantity,
+	    dest, app_type, ts, rating, feedbacks, pics, total_quantity,
 	    price_base, price_sale, discount_pct, currency,
 	    description, vendor_code, subject_name, card_created,
 	    options, compositions`
@@ -213,7 +218,7 @@ func scanProductRow(sc rowScanner) (ProductRow, error) {
 	var r ProductRow
 	err := sc.Scan(
 		&r.NmID, &r.ImtID, &r.Name, &r.Brand, &r.SupplierID, &r.SupplierName,
-		&r.Dest, &r.AppType, &r.TS, &r.Rating, &r.Feedbacks, &r.TotalQuantity,
+		&r.Dest, &r.AppType, &r.TS, &r.Rating, &r.Feedbacks, &r.Pics, &r.TotalQuantity,
 		&r.PriceBase, &r.PriceSale, &r.DiscountPct, &r.Currency,
 		&r.Description, &r.VendorCode, &r.SubjectName, &r.CardCreated,
 		&r.Options, &r.Compositions)

@@ -101,9 +101,19 @@ type FieldGroup string
 // The groups, in no particular order here — groupOrder below is what decides
 // the order a person reads them in, and it is free-first.
 const (
-	GroupBase       FieldGroup = "base"
-	GroupStock      FieldGroup = "stock"
-	GroupDelivery   FieldGroup = "delivery"
+	GroupBase     FieldGroup = "base"
+	GroupStock    FieldGroup = "stock"
+	GroupDelivery FieldGroup = "delivery"
+	// GroupMedia is spec section 4.4's «фото и видео», and it sits in the free
+	// block because the count arrives on every product of every listing.
+	//
+	// Only the count. The section also names the links, and those are not here
+	// on purpose: an address is built from the CDN's media-basket route (see
+	// wb.Basket), which is one request per run — a price this catalogue cannot
+	// state, since every group it has is priced per product or per phrase.
+	// Declaring the links without a way to quote them would put a checkbox on
+	// the constructor whose cost the estimate cannot count.
+	GroupMedia      FieldGroup = "media"
 	GroupContent    FieldGroup = "content"
 	GroupReputation FieldGroup = "reputation"
 	// GroupPhraseAds is priced per phrase × region, not per product — see
@@ -264,6 +274,8 @@ var catalogue = []Field{
 
 	// Content: one request per product (Client.Card's static half, Card),
 	// and the first group that costs.
+	{Key: "photo_count", Name: "Фотографий", Group: GroupMedia, Type: FieldInt, Source: FieldSourceSearchResult},
+
 	{Key: "description", Name: "Описание", Group: GroupContent, Type: FieldText, Source: FieldSourceCardDocument},
 	{Key: "vendor_code", Name: "Артикул продавца", Group: GroupContent, Type: FieldText, Source: FieldSourceCardDocument},
 	{Key: "subject_name", Name: "Категория", Group: GroupContent, Type: FieldText, Source: FieldSourceCardDocument},
@@ -315,7 +327,7 @@ var catalogue = []Field{
 // by what each additional one costs. A user ticking down the list spends
 // nothing until they reach GroupContent.
 var groupOrder = []FieldGroup{
-	GroupBase, GroupStock, GroupDelivery,
+	GroupBase, GroupStock, GroupDelivery, GroupMedia,
 	GroupContent, GroupReputation, GroupPhraseAds,
 }
 
