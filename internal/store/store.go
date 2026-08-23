@@ -47,6 +47,19 @@ type Store struct {
 	retention atomic.Pointer[Retention]
 }
 
+// maxIdleConns is how many connections the pool keeps warm.
+//
+// database/sql keeps two by default and closes every connection released above
+// that. A run in fifty threads crosses two constantly — a writer waiting on the
+// write lock holds its connection the whole time it waits — so at the default
+// the pool spends the run closing connections it needs again a moment later,
+// and each reopening replays the DSN's pragmas and builds a fresh page cache.
+//
+// Sixty-four covers the thread counts a run is actually given; the field takes
+// any number, and a run wider than this simply goes back to closing the
+// surplus, which costs time rather than correctness.
+const maxIdleConns = 64
+
 // Open opens the database at path, creating it if it does not exist.
 func Open(ctx context.Context, path string) (*Store, error) {
 	if path == "" {
@@ -77,10 +90,36 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	// is recorded in the database file itself and applies to every
 	// connection that opens it afterwards, so it is set once, below, rather
 	// than per connection.
+	//
+	// _txlock is not a pragma and is the reason a run in fifty threads used to
+	// fill its log with SQLITE_BUSY.
+	//
+	// database/sql issues a plain BEGIN, which SQLite reads as BEGIN DEFERRED:
+	// the transaction takes a read snapshot and asks for the write lock only
+	// at its first write. Two of those overlap constantly — every Save here
+	// reads before it writes — and when the second one asks, SQLite cannot
+	// make it wait. Waiting would mean holding a read snapshot the other
+	// writer is about to invalidate, which is a deadlock, so SQLite refuses
+	// immediately with SQLITE_BUSY and busy_timeout never applies. That is
+	// why the errors appeared instantly rather than five seconds later, and
+	// why raising the timeout alone changed nothing.
+	//
+	// BEGIN IMMEDIATE asks for the write lock up front, before it holds
+	// anything anyone needs — so waiting is safe, busy_timeout governs it, and
+	// writers queue instead of failing. Every transaction in this package is a
+	// write (SaveCard, SaveProduct, SaveReviews and their kin); no read path
+	// opens one, so nothing pays for a lock it did not need.
+	//
+	// The timeout is what a queue of writers needs rather than what a single
+	// one does: fifty threads each holding the lock for a few milliseconds
+	// clear in well under a second, but a retention sweep or a hundred-page
+	// save holds it far longer, and a card lost to a full queue is a hole in
+	// the history that no later run fills.
 	dsn := "file:" + path +
 		"?_pragma=foreign_keys(1)" +
-		"&_pragma=busy_timeout(5000)" +
-		"&_pragma=synchronous(1)"
+		"&_pragma=busy_timeout(30000)" +
+		"&_pragma=synchronous(1)" +
+		"&_txlock=immediate"
 
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
@@ -107,6 +146,24 @@ func Open(ctx context.Context, path string) (*Store, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("store: enable WAL: %w", err)
 	}
+
+	// Keep the connections a run opens instead of closing them behind it.
+	//
+	// database/sql keeps two idle connections by default and closes the rest
+	// the moment a caller lets go. Fifty collector threads open and close
+	// around that number constantly, and a SQLite connection is not cheap to
+	// reopen: the driver replays every _pragma in the DSN and builds a fresh
+	// page cache each time. Left at the default the pool spends a run
+	// rebuilding connections it is about to need again.
+	//
+	// Not capped with SetMaxOpenConns. Writers already serialise on the write
+	// lock, so a cap would buy nothing there, and readers under WAL are meant
+	// to run in parallel — the panel stays usable during a run because of it.
+	//
+	// Nor is there an idle lifetime. Connections released above the ceiling are
+	// closed by the pool anyway, the rest go when Close does, and a timer no
+	// test can observe is a setting the next person changes without knowing.
+	db.SetMaxIdleConns(maxIdleConns)
 
 	s := &Store{db: db, path: path, now: time.Now}
 	if err := s.migrate(ctx); err != nil {

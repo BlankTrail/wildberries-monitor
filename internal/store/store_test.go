@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
@@ -124,8 +125,11 @@ func TestOpen_EnforcesPerConnectionPragmasOnEveryPooledConnection(t *testing.T) 
 		if err := c.QueryRowContext(ctx, "PRAGMA busy_timeout").Scan(&busy); err != nil {
 			t.Fatalf("connection %d: PRAGMA busy_timeout: %v", i, err)
 		}
-		if busy != 5000 {
-			t.Errorf("connection %d has busy_timeout = %d, want 5000", i, busy)
+		// Thirty seconds, which is what a queue of writers needs rather than
+		// what a single one does — see the DSN in Open, and the concurrency
+		// test below for what the queue is.
+		if busy != 30000 {
+			t.Errorf("connection %d has busy_timeout = %d, want 30000", i, busy)
 		}
 
 		var sync int
@@ -187,5 +191,107 @@ func TestClose_IsSafeToCallTwice(t *testing.T) {
 	}
 	if err := s.Close(); err != nil {
 		t.Errorf("second Close: %v, want nil", err)
+	}
+}
+
+func TestOpen_ManyThreadsWriteWithoutFightingOverTheDatabase(t *testing.T) {
+	// A run in fifty threads used to fill its log with «database is locked (5)
+	// (SQLITE_BUSY)», and every one of those was a card, a review window or a
+	// page of products that never reached the history.
+	//
+	// The cause was not load. database/sql begins a transaction with a plain
+	// BEGIN, which is BEGIN DEFERRED: the transaction reads first and asks for
+	// the write lock later, and SQLite refuses that request outright — never
+	// waiting, whatever busy_timeout says — because the asker is holding a read
+	// snapshot the current writer is about to invalidate. So the failures
+	// arrived instantly and no timeout could have helped.
+	//
+	// Thirty-two writers, each doing what a collector thread does: read the
+	// product, then write it. Every one must land.
+	s := openTestStore(t)
+	at := time.Date(2026, 8, 23, 9, 0, 0, 0, time.UTC)
+
+	const threads, each = 32, 8
+	errs := make(chan error, threads*each)
+	var wg sync.WaitGroup
+	for th := range threads {
+		wg.Add(1)
+		go func(th int) {
+			defer wg.Done()
+			for i := range each {
+				// Distinct articles, so the only thing these contend for is
+				// the write lock itself — a conflict over one row would be a
+				// different test with a different answer.
+				nm := int64(1_000_000 + th*each + i)
+				// SaveCard, because it is the transaction the live log kept
+				// naming — and because of what it does first. It reads the
+				// card as it was, so that a changed description can be
+				// reported as an edit, and only then writes. Read first,
+				// write second is exactly the shape SQLite refuses to make
+				// wait.
+				cf := sampleCardFetch()
+				cf.Card.NmID, cf.Product.ID = nm, nm
+				cf.Product.FetchedAt = at
+				if _, err := s.SaveCard(context.Background(), cf); err != nil {
+					errs <- err
+				}
+			}
+		}(th)
+	}
+	wg.Wait()
+	close(errs)
+
+	var failed int
+	for err := range errs {
+		if failed == 0 {
+			t.Errorf("запись из нескольких потоков не прошла: %v", err)
+		}
+		failed++
+	}
+	if failed > 0 {
+		t.Errorf("потеряно записей: %d из %d", failed, threads*each)
+	}
+
+	var got int64
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM products`).Scan(&got); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if got != threads*each {
+		t.Errorf("в базе %d товаров, ожидалось %d", got, threads*each)
+	}
+}
+
+func TestOpen_ThePoolKeepsARunsConnectionsInsteadOfChurning(t *testing.T) {
+	// database/sql keeps two idle connections and closes every one released
+	// above that. A run in fifty threads holds far more than two at once — a
+	// writer waiting for the write lock holds its connection the whole time it
+	// waits — so at the default the pool closes them as fast as the threads
+	// hand them back, and each reopening replays the DSN's pragmas and builds
+	// a page cache from nothing.
+	//
+	// Held on purpose rather than measured during a collection: writers
+	// serialise on the lock, so how many connections a real run happens to
+	// hold at any instant is a matter of timing, and a test that depended on
+	// it would be measuring the scheduler.
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	const held = 32
+	conns := make([]*sql.Conn, 0, held)
+	for i := 0; i < held; i++ {
+		c, err := s.db.Conn(ctx)
+		if err != nil {
+			t.Fatalf("connection %d: %v", i, err)
+		}
+		conns = append(conns, c)
+	}
+	for _, c := range conns {
+		if err := c.Close(); err != nil {
+			t.Fatalf("возврат соединения: %v", err)
+		}
+	}
+
+	if idle := s.db.Stats().Idle; idle < held {
+		t.Errorf("в пуле осталось %d соединений из %d — остальные закрыты и будут открыты заново", idle, held)
 	}
 }
