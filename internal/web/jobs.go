@@ -164,8 +164,26 @@ func (s *Server) jobConstructor(r *http.Request, open bool) (string, error) {
 }
 
 // newJobHandler opens the constructor, or puts the press back.
+//
+// Two answers to one address, because it has two callers. The script asks for
+// the constructor alone and drops it into the region under the list. A person
+// who opens /jobs/new in the browser — from a bookmark, a link, or by typing
+// it — gets the tasks screen with the constructor already open: the same
+// screen the press would have produced, rather than a form with no navigation
+// above it and no script to make its own buttons work.
 func (s *Server) newJobHandler(w http.ResponseWriter, r *http.Request) {
-	body, err := s.jobConstructor(r, r.URL.Query().Get("close") == "")
+	open := r.URL.Query().Get("close") == ""
+	if !fragment(r) {
+		body, err := s.jobsHTML(r, open)
+		if err != nil {
+			http.Error(w, "jobs: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		s.render(w, r, page{Title: "Задачи", Body: rawHTML(body)})
+		return
+	}
+
+	body, err := s.jobConstructor(r, open)
 	if err != nil {
 		http.Error(w, "jobs: "+err.Error(), http.StatusInternalServerError)
 		return

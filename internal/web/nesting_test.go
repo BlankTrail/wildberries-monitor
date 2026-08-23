@@ -3,6 +3,7 @@
 package web
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -178,4 +179,87 @@ func formTags(body string) []string {
 		out = append(out, rest[:j+1])
 		rest = rest[j+1:]
 	}
+}
+
+// TestScreens_EveryAddressAPersonCanOpenAnswersAWholeScreen is the guard for
+// an address that works only when the script asks for it.
+//
+// Every route here is also a URL. A bookmark, a link in a chat, the back
+// button, somebody typing it — all of them arrive as an ordinary navigation,
+// and a route that answers those with a bare fragment gives a page with no
+// navigation, no styles and no script. Nothing on it works, including the
+// buttons it is made of, because the script arrives with the layout.
+//
+// /jobs/new was one: the whole job constructor, reachable only from the press
+// that swapped it in.
+//
+// The exceptions are listed with what they are, because each is a real one —
+// data for a control rather than something a person reads.
+func TestScreens_EveryAddressAPersonCanOpenAnswersAWholeScreen(t *testing.T) {
+	notAScreen := map[string]string{
+		"/static/":            "файлы, а не экран",
+		"/live":               "поток событий (SSE), у него нет разметки",
+		"/results/export":     "выгрузка файлом",
+		"/track/chart":        "картинка графика",
+		"/blanktrail/state":   "строка состояния для шапки",
+		"/settings/check":     "ответ проверки настроек",
+		"/settings/telegram":  "ответ проверки бота",
+		"/pickup/points":      "колонка справочника, часть уже открытого экрана",
+		"/pickup/settlements": "колонка справочника, часть уже открытого экрана",
+		"/channels/test":      "ответ проверки канала",
+		"/results/table":      "тело таблицы результатов",
+		"/jobs/detail":        "подробности задания под строкой списка",
+		"/channels/edit":      "форма правки канала на месте строки",
+		"/rules/log":          "журнал правила под строкой",
+		// Настройки — это модальное окно поверх любого экрана (см. layout.html,
+		// dialog#settings-dialog), а не вкладка. Отдельным адресом оно не
+		// открывается ни сейчас, ни задумано.
+		"/settings": "тело модального окна настроек",
+	}
+
+	srv := populated(t)
+	for _, path := range routesOf(t, "GET") {
+		if why, ok := notAScreen[path]; ok {
+			if why == "" {
+				t.Errorf("%s: причина не названа", path)
+			}
+			continue
+		}
+		body := get(t, srv, path, "correct horse").Body.String()
+		if !strings.Contains(body, "<!doctype html>") {
+			t.Errorf("%s: отвечает фрагментом на обычный переход — экран без навигации и без скрипта:\n  %s",
+				path, firstLines(body))
+		}
+	}
+}
+
+// routesOf is every path this server registers for one method, read off the
+// source that registers them so the list cannot go stale.
+func routesOf(t *testing.T, method string) []string {
+	t.Helper()
+	src, err := os.ReadFile("server.go")
+	if err != nil {
+		t.Fatalf("read server.go: %v", err)
+	}
+	var out []string
+	for _, line := range strings.Split(string(src), "\n") {
+		i := strings.Index(line, `mux.Handle("`+method+` `)
+		if i < 0 {
+			continue
+		}
+		rest := line[i+len(`mux.Handle("`+method+` `):]
+		j := strings.Index(rest, `"`)
+		// A route whose path is built from a constant rather than written out
+		// — the OAuth callback is one — is skipped rather than guessed at.
+		// Skipping it is honest; guessing would give this test an address the
+		// server does not serve.
+		if j <= 0 {
+			continue
+		}
+		out = append(out, rest[:j])
+	}
+	if len(out) == 0 {
+		t.Fatalf("в server.go не нашлось ни одного маршрута %s", method)
+	}
+	return out
 }

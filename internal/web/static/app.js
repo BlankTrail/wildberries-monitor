@@ -24,12 +24,21 @@
   // client-side templating, so what a person sees in "view source" is what
   // the server decided, and there is one place where markup is produced.
 
+  // Every request this panel makes wants a piece of a screen, not a screen.
+  // The header is what lets a route answer both: a person who opens the same
+  // address in the browser gets the whole page around it, rather than a
+  // fragment with no header, no navigation and — since the script arrives with
+  // the page — nothing wired.
+  const FRAGMENT = "X-Fragment";
+
   async function swap(target, url, init) {
     const el = document.querySelector(target);
     if (!el) return;
     el.setAttribute("aria-busy", "true");
     try {
-      const res = await fetch(url, init);
+      const asked = { ...(init || {}) };
+      asked.headers = { ...(asked.headers || {}), [FRAGMENT]: "1" };
+      const res = await fetch(url, asked);
       const html = await res.text();
       if (!res.ok) {
         el.innerHTML = `<div class="bt-alert bt-alert--error">${escapeHTML(html || res.statusText)}</div>`;

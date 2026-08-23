@@ -37,6 +37,18 @@ func parseForm(r *http.Request) error {
 	return nil
 }
 
+// fragment reports whether this request came from the panel's own script.
+//
+// Routes that answer a piece of a screen are also addresses: the browser can
+// be pointed at one directly — a bookmark, a link, the back button, a person
+// typing it — and answering that with a bare fragment gives a page with no
+// navigation, no styles and no script, which is to say a dead end. The header
+// is set by swap() in app.js and by nothing else, so «asked for by the script»
+// is a fact rather than a guess about the browser.
+func fragment(r *http.Request) bool {
+	return r.Header.Get("X-Fragment") != ""
+}
+
 // whenAny wraps the fields that apply to only some of a picker's choices.
 //
 // The names go into data-when, and app.js shows the group whose list holds

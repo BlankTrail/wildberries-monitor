@@ -756,3 +756,72 @@ func TestConstructor_EveryRunControlItDrawsIsOneTheBuilderReads(t *testing.T) {
 		}
 	}
 }
+
+// getFragment is the same request the panel's own script makes.
+func getFragment(t *testing.T, srv *Server, path string) *httptest.ResponseRecorder {
+	t.Helper()
+	r := httptest.NewRequest(http.MethodGet, path, nil)
+	r.Header.Set("X-Fragment", "1")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, r)
+	return w
+}
+
+func TestConstructor_OpenedAsAnAddressItIsAWholeScreen(t *testing.T) {
+	// /jobs/new was reachable only through the press that swapped it in. Typed
+	// into the browser, or opened from a bookmark, it answered the constructor
+	// alone: no navigation above it, no styles, and — since the script arrives
+	// with the layout — none of its own buttons working either.
+	srv := newServer(t)
+
+	page := get(t, srv, "/jobs/new", "").Body.String()
+	if !strings.Contains(page, "<!doctype html>") {
+		t.Fatalf("обычный переход отвечает фрагментом:\n%s", firstLines(page))
+	}
+	if !strings.Contains(page, `src="/static/app.js"`) {
+		t.Error("на странице нет скрипта — её кнопки не заработают")
+	}
+	// The constructor is open on it, which is what the address means, and the
+	// list is above it, which is what the screen is.
+	if !strings.Contains(page, `data-post="/jobs"`) {
+		t.Error("конструктор не открыт")
+	}
+	if !strings.Contains(page, `id="jobs-body"`) {
+		t.Error("список заданий не показан — это не экран задач, а форма")
+	}
+
+	// And the script still gets what it asks for: the constructor alone, to
+	// drop into the region under the list.
+	frag := getFragment(t, srv, "/jobs/new").Body.String()
+	if strings.Contains(frag, "<!doctype html>") {
+		t.Error("скрипту прислали целую страницу — она вложится внутрь текущей")
+	}
+	if !strings.Contains(frag, `data-post="/jobs"`) {
+		t.Error("фрагмент не содержит конструктор")
+	}
+	if strings.Contains(frag, `id="jobs-body"`) {
+		t.Error("фрагмент несёт список — он подменит собой только область под ним")
+	}
+}
+
+func TestConstructor_TheScriptSaysItIsAskingForAFragment(t *testing.T) {
+	// The header is the whole mechanism: without it every swap would get a
+	// full page and nest a second header, navigation and footer inside the
+	// region it was dropped into. Checked against the script itself, because
+	// the two halves are in different languages and nothing else would notice
+	// them drifting apart.
+	raw, err := staticFS.ReadFile("static/app.js")
+	if err != nil {
+		t.Fatalf("app.js: %v", err)
+	}
+	script := string(raw)
+	if !strings.Contains(script, `const FRAGMENT = "X-Fragment";`) {
+		t.Fatal("скрипт больше не знает имени заголовка")
+	}
+	// Naming it is not sending it: the constant can sit there while the line
+	// that puts it on the request is gone, and every swap would then be
+	// answered with a whole page nested inside the region it was dropped into.
+	if !strings.Contains(script, `[FRAGMENT]: "1"`) {
+		t.Error("скрипт не ставит заголовок на запрос — сервер будет отвечать ему целыми страницами")
+	}
+}
