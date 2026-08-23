@@ -5,6 +5,7 @@ package store
 import (
 	"context"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -680,5 +681,97 @@ func TestSaveBenchmarks_PromotionMembershipSurvivesBeingWrittenDown(t *testing.T
 	}
 	if back[0].RivalInPromo == nil || !*back[0].RivalInPromo {
 		t.Errorf("участие конкурента = %v, записывали true", back[0].RivalInPromo)
+	}
+}
+
+func TestPromotions_LeavingAPromotionIsFindableAtAll(t *testing.T) {
+	// A product that left has no row in the newest reading, so a query over
+	// new rows alone can never name it — and «вышел из акции» is precisely the
+	// half worth telling somebody about.
+	s := openTestStore(t)
+	ctx := context.Background()
+	at := time.Date(2026, 8, 20, 9, 0, 0, 0, time.UTC)
+
+	s.SetClock(func() time.Time { return at.Add(-time.Hour) })
+	promoReading(t, s, "letnie-skidki", "-1257786", 100, 200)
+	first := at.Add(-time.Hour).Unix()
+
+	// The second reading: 100 stayed, 200 is gone.
+	s.SetClock(func() time.Time { return at })
+	promoReading(t, s, "letnie-skidki", "-1257786", 100)
+
+	keys, err := s.PromotionsChangedSince(ctx, first)
+	if err != nil {
+		t.Fatalf("PromotionsChangedSince: %v", err)
+	}
+	seen := map[int64]bool{}
+	for _, k := range keys {
+		if k.Promo != "letnie-skidki" {
+			t.Errorf("ключ несёт акцию %q — префикс не снят", k.Promo)
+		}
+		seen[k.NmID] = true
+	}
+	if !seen[200] {
+		t.Error("вышедший из акции товар не попал в список изменившихся")
+	}
+	if !seen[100] {
+		t.Error("оставшийся в акции товар не попал в список изменившихся")
+	}
+}
+
+func TestPromotions_TheTwoReadingsSayWhoWasInEachOne(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	at := time.Date(2026, 8, 20, 9, 0, 0, 0, time.UTC)
+
+	s.SetClock(func() time.Time { return at.Add(-time.Hour) })
+	promoReading(t, s, "letnie-skidki", "-1257786", 100, 200)
+	s.SetClock(func() time.Time { return at })
+	promoReading(t, s, "letnie-skidki", "-1257786", 100)
+
+	key := PromoKey{NmID: 200, Promo: "letnie-skidki", Dest: "-1257786", AppType: wb.AppWeb}
+	points, err := s.LastTwoMemberships(ctx, key)
+	if err != nil {
+		t.Fatalf("LastTwoMemberships: %v", err)
+	}
+	if len(points) != 2 {
+		t.Fatalf("прочитано %d замеров, ожидалось 2", len(points))
+	}
+	if !points[0].In {
+		t.Error("в первом замере товар считается не бывшим в акции")
+	}
+	if points[1].In {
+		t.Error("во втором замере товар всё ещё в акции — выход не виден")
+	}
+	// The price comes from the snapshot of the same moment and region.
+	if points[0].Price == nil {
+		t.Error("цена первого замера не прочитана")
+	}
+}
+
+func TestPromotions_APromotionIsNotASearchPlacement(t *testing.T) {
+	// Both live in the query column. Fed to the placement diff, a promotion
+	// that ended came out as «выпал из поиска» under a phrase spelled
+	// «promo:letnie-skidki» — so a rule about products disappearing from
+	// search fired every time a sale finished.
+	s := openTestStore(t)
+	ctx := context.Background()
+	at := time.Date(2026, 8, 20, 9, 0, 0, 0, time.UTC)
+	s.SetClock(func() time.Time { return at })
+
+	searchReading(t, s, "платье", "-1257786", 100)
+	promoReading(t, s, "letnie-skidki", "-1257786", 100)
+
+	places, err := s.PlacementsChangedSince(ctx, 0)
+	if err != nil {
+		t.Fatalf("PlacementsChangedSince: %v", err)
+	}
+	for _, k := range places {
+		if strings.HasPrefix(k.Query, PromoQueryPrefix) {
+			t.Errorf("акция %q попала в позиции поиска", k.Query)
+		}
+	}
+	if len(places) == 0 {
+		t.Error("вместе с акцией пропала и обычная выдача")
 	}
 }

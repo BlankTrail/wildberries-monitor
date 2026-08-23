@@ -46,6 +46,9 @@ var kindLabelsRU = map[track.Kind]string{
 	track.RegionAvailabilityChanged: "Доступность в регионе изменилась",
 	track.RatingChanged:             "Рейтинг изменился",
 	track.ReviewCountChanged:        "Число отзывов изменилось",
+	track.PromoJoined:               "Зашёл в акцию",
+	track.PromoLeft:                 "Вышел из акции",
+	track.PromoPriceChanged:         "Цена в акции изменилась",
 }
 
 func kindLabel(k track.Kind) string {

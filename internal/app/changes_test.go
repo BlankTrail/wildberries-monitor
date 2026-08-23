@@ -394,3 +394,71 @@ func TestDetectChanges_ARuleScopedToAJobFires(t *testing.T) {
 		t.Errorf("сработка подавлена: %q", events[0].SuppressedBy)
 	}
 }
+
+// inPromotion files one reading of a promotion's contents, the way the
+// promotion job files it: positions under the promotion's own name.
+func inPromotion(t *testing.T, a *App, slug string, at time.Time, nmIDs ...int64) {
+	t.Helper()
+	page := make([]wb.Product, 0, len(nmIDs))
+	for i, nm := range nmIDs {
+		p := priced(nm, 70000, at)
+		p.Rank = i + 1
+		page = append(page, p)
+	}
+	if _, err := a.Store.SaveSearchPage(t.Context(),
+		wb.Envelope{Products: page}, store.PromoQueryPrefix+slug); err != nil {
+		t.Fatalf("SaveSearchPage: %v", err)
+	}
+}
+
+func TestDetectChanges_LeavingAPromotionFiresItsOwnRuleAndNotTheSearchOne(t *testing.T) {
+	// Spec section 6.1's promotions group, and the defect underneath it. Those
+	// readings were fed to the placement diff, so a product whose promotion
+	// ended came out as «выпал из выдачи» under a phrase spelled
+	// «promo:letnie-skidki» — a rule about products disappearing from search
+	// fired every time a sale finished, and no rule about promotions could
+	// fire at all.
+	a := newApp(t)
+	ctx := t.Context()
+	watchEverything(t, a, track.PromoLeft)
+
+	first := time.Now().Add(-2 * time.Hour)
+	atWatermark(t, a, first.Add(-time.Hour))
+
+	inPromotion(t, a, "letnie-skidki", first, 100, 200)
+	inPromotion(t, a, "letnie-skidki", first.Add(time.Hour), 100)
+
+	a.detectChanges(ctx)
+
+	events, err := a.Store.RecentEvents(ctx, 10)
+	if err != nil {
+		t.Fatalf("RecentEvents: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("сработок %d, ожидалась одна — вышедший из акции товар: %+v", len(events), events)
+	}
+}
+
+func TestDetectChanges_AFinishedSaleIsNotAProductVanishingFromSearch(t *testing.T) {
+	// The other half, and the one that was firing. A rule about disappearing
+	// from the results must stay silent when what ended was a promotion.
+	a := newApp(t)
+	ctx := t.Context()
+	watchEverything(t, a, track.LeftSearch)
+
+	first := time.Now().Add(-2 * time.Hour)
+	atWatermark(t, a, first.Add(-time.Hour))
+
+	inPromotion(t, a, "letnie-skidki", first, 100, 200)
+	inPromotion(t, a, "letnie-skidki", first.Add(time.Hour), 100)
+
+	a.detectChanges(ctx)
+
+	events, err := a.Store.RecentEvents(ctx, 10)
+	if err != nil {
+		t.Fatalf("RecentEvents: %v", err)
+	}
+	if len(events) != 0 {
+		t.Errorf("окончание акции сработало как «пропал из выдачи»: %+v", events)
+	}
+}

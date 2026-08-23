@@ -228,11 +228,15 @@ func TestValidate_ReportsEveryProblemAtOnce(t *testing.T) {
 }
 
 func TestValidate_RefusesAKindThisBuildCannotEmit(t *testing.T) {
-	// The whole reason track.Kinds() is a hand-written list: a rule on
-	// PromoJoined would sit in the database looking healthy and never fire,
-	// and its owner would conclude that no promotion ever changes.
+	// The whole reason track.Kinds() is a hand-written list: a rule on a kind
+	// nothing emits would sit in the database looking healthy and never fire,
+	// and its owner would conclude that the thing they watch never changes.
+	//
+	// UndercutByCompetitor is one of the nine spec section 6.1 names this
+	// build still has no producer for. It used to be a promotion kind here,
+	// until promotions grew one.
 	r := watching()
-	r.Kind = "promo-joined"
+	r.Kind = "undercut-by-competitor"
 	if err := r.Validate(); err == nil {
 		t.Fatal("a rule on an unemittable kind was accepted")
 	}

@@ -86,6 +86,25 @@ func (a *App) detectChanges(ctx context.Context) {
 		highest = max(highest, at)
 	}
 
+	promos, err := a.Store.PromotionsChangedSince(ctx, since)
+	if err != nil {
+		a.Log.Printf("правила: не прочитать изменившиеся акции: %v", err)
+		return
+	}
+	for _, key := range promos {
+		if seen >= changesPerPass {
+			break
+		}
+		seen++
+		n, at, err := a.applyPromotion(ctx, engine, all, key)
+		if err != nil {
+			a.Log.Printf("правила: товар %d в акции %q: %v", key.NmID, key.Promo, err)
+			continue
+		}
+		fired += n
+		highest = max(highest, at)
+	}
+
 	places, err := a.Store.PlacementsChangedSince(ctx, since)
 	if err != nil {
 		a.Log.Printf("правила: не прочитать изменившиеся позиции: %v", err)
@@ -223,6 +242,68 @@ func (a *App) applyPlacement(ctx context.Context, e *rules.Engine, all []rules.R
 		fired += n
 	}
 	return fired, newest, nil
+}
+
+// applyPromotion runs the rules over one product's standing in one promotion.
+//
+// Spec section 6.1's promotions group, and a defect as much as a gap: those
+// readings were being fed to the placement diff, so a product whose promotion
+// ended came out as «выпал из поиска» under a phrase spelled
+// «promo:letnie-skidki», and a rule written about products disappearing from
+// search fired every time a sale finished.
+func (a *App) applyPromotion(ctx context.Context, e *rules.Engine, all []rules.Rule, key store.PromoKey) (int, int64, error) {
+	points, err := a.Store.LastTwoMemberships(ctx, key)
+	if err != nil {
+		return 0, 0, err
+	}
+	if len(points) == 0 {
+		return 0, 0, nil
+	}
+	newest := points[len(points)-1].TS
+	if len(points) < 2 {
+		return 0, newest, nil
+	}
+
+	before := membershipOf(key, points[0])
+	now := membershipOf(key, points[1])
+	changes, err := track.DiffMembership(before, now)
+	if err != nil {
+		return 0, newest, fmt.Errorf("сравнение участия в акции: %w", err)
+	}
+	if len(changes) == 0 {
+		return 0, newest, nil
+	}
+
+	facts, err := a.Store.Facts(ctx, key.NmID)
+	if err != nil {
+		return 0, newest, err
+	}
+	jobs, err := a.Store.JobsOfProduct(ctx, key.NmID)
+	if err != nil {
+		return 0, newest, err
+	}
+
+	fired := 0
+	for _, c := range changes {
+		n, err := e.Apply(ctx, all, rules.Event{
+			Change: c,
+			Brand:  facts.Brand, SupplierID: facts.SupplierID, SubjectID: facts.SubjectID,
+			JobIDs: jobs,
+		})
+		if err != nil {
+			return fired, newest, err
+		}
+		fired += n
+	}
+	return fired, newest, nil
+}
+
+// membershipOf turns a stored reading into the shape track diffs.
+func membershipOf(key store.PromoKey, p store.PromoPoint) track.Membership {
+	return track.Membership{
+		NmID: key.NmID, Promo: key.Promo, Dest: key.Dest, AppType: key.AppType,
+		TS: p.TS, In: p.In, Price: p.Price,
+	}
 }
 
 // readingOf turns a stored point into the shape track diffs.

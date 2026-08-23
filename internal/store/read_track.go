@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 )
 
 // This file is what the change detector reads: which series moved recently, and
@@ -50,6 +51,123 @@ const PositionMainFeed = "main:"
 // One key for the whole feed rather than one per shelf: the page has no
 // shelves any more, which is what wb/mainfeed.go's own comment is about.
 const MainFeedQuery = PositionMainFeed + "feed"
+
+// PromoKey identifies one membership history: one product's standing inside one
+// promotion, in one region, for one audience.
+//
+// Its own key rather than a PhraseKey with a prefixed query, because it is
+// read a different way. A phrase's history is the rows this product has; a
+// promotion's is the readings of the promotion, with this product present at
+// some of them and absent from others — and absent is the half that matters,
+// since it is the whole of «вышел из акции».
+type PromoKey struct {
+	NmID    int64
+	Promo   string
+	Dest    string
+	AppType int
+}
+
+// PromoPoint is one reading of a promotion, as it concerns one product.
+type PromoPoint struct {
+	TS int64
+	// In is whether the product was among the promotion's products at that
+	// reading. The reading happened either way — that is what makes false
+	// mean «вышел» rather than «не знаем».
+	In bool
+	// Price is what the product cost at that moment, where a snapshot was
+	// taken for the same region and moment. Nil is «не читали», never nought.
+	Price *int64
+}
+
+// PromotionsChangedSince lists the promotion memberships touched since a
+// moment: every product that was in a promotion read after it, plus every
+// product that was in one of those promotions the reading before.
+//
+// The second half is what makes «вышел из акции» findable at all. A product
+// that left is a product with no row in the newest reading, so a query over
+// new rows alone can never name it — which is the shape of every «изменение,
+// которого не заметили» in this file.
+func (s *Store) PromotionsChangedSince(ctx context.Context, since int64) ([]PromoKey, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		WITH touched AS (
+			SELECT DISTINCT query, dest, app_type
+			  FROM positions
+			 WHERE ts > ? AND query LIKE ?
+		)
+		SELECT DISTINCT p.nm_id, p.query, p.dest, p.app_type
+		  FROM positions p
+		  JOIN touched t
+		    ON t.query = p.query AND t.dest = p.dest AND t.app_type = p.app_type
+		 ORDER BY p.nm_id, p.query, p.dest, p.app_type`,
+		since, PromoQueryPrefix+"%")
+	if err != nil {
+		return nil, fmt.Errorf("store: promotions changed since %d: %w", since, err)
+	}
+	defer rows.Close()
+
+	var out []PromoKey
+	for rows.Next() {
+		var k PromoKey
+		var query string
+		if err := rows.Scan(&k.NmID, &query, &k.Dest, &k.AppType); err != nil {
+			return nil, fmt.Errorf("store: promotions changed since %d: %w", since, err)
+		}
+		k.Promo = strings.TrimPrefix(query, PromoQueryPrefix)
+		out = append(out, k)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: promotions changed since %d: %w", since, err)
+	}
+	return out, nil
+}
+
+// LastTwoMemberships reads the two most recent readings of one promotion, and
+// whether one product was in each.
+//
+// The readings come first and the product second, which is the whole point:
+// asking for this product's rows would return one row for a product that has
+// just left and give nothing to compare it against.
+func (s *Store) LastTwoMemberships(ctx context.Context, k PromoKey) ([]PromoPoint, error) {
+	query := PromoQueryPrefix + k.Promo
+	rows, err := s.db.QueryContext(ctx, `
+		WITH reads AS (
+			SELECT DISTINCT ts FROM positions
+			 WHERE query = ? AND dest = ? AND app_type = ?
+			 ORDER BY ts DESC LIMIT 2
+		)
+		SELECT r.ts,
+		       EXISTS (
+		           SELECT 1 FROM positions p
+		            WHERE p.query = ? AND p.dest = ? AND p.app_type = ?
+		              AND p.nm_id = ? AND p.ts = r.ts
+		       ),
+		       (
+		           SELECT s.price_sale FROM snapshots s
+		            WHERE s.nm_id = ? AND s.dest = ? AND s.ts = r.ts
+		       )
+		  FROM reads r
+		 ORDER BY r.ts`,
+		query, k.Dest, k.AppType,
+		query, k.Dest, k.AppType, k.NmID,
+		k.NmID, k.Dest)
+	if err != nil {
+		return nil, fmt.Errorf("store: last two memberships of %d: %w", k.NmID, err)
+	}
+	defer rows.Close()
+
+	var out []PromoPoint
+	for rows.Next() {
+		var p PromoPoint
+		if err := rows.Scan(&p.TS, &p.In, &p.Price); err != nil {
+			return nil, fmt.Errorf("store: last two memberships of %d: %w", k.NmID, err)
+		}
+		out = append(out, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: last two memberships of %d: %w", k.NmID, err)
+	}
+	return out, nil
+}
 
 // PhraseKey identifies one placement history: one product's rank on one phrase
 // in one region for one audience.
@@ -130,8 +248,9 @@ func (s *Store) PlacementsChangedSince(ctx context.Context, since int64) ([]Phra
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT DISTINCT nm_id, query, dest, app_type
 		  FROM positions
-		 WHERE ts > ? AND query NOT LIKE ?
-		 ORDER BY nm_id, query, dest, app_type`, since, PositionMainFeed+"%")
+		 WHERE ts > ? AND query NOT LIKE ? AND query NOT LIKE ?
+		 ORDER BY nm_id, query, dest, app_type`,
+		since, PositionMainFeed+"%", PromoQueryPrefix+"%")
 	if err != nil {
 		return nil, fmt.Errorf("store: placements changed since %d: %w", since, err)
 	}

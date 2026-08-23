@@ -22,9 +22,6 @@ package track
 // with a producer: a rule on a kind nothing can emit never fires, and a person
 // whose rule never fires concludes that nothing is changing. Nine are absent:
 //
-//   - Promotions (PromoJoined, PromoLeft, PromoPriceChanged). This build has
-//     no promotions source at all — see the package comment in wb/fields.go,
-//     which leaves the same group out of the field catalogue.
 //   - Comparison against competitors (UndercutByCompetitor, LostPriceLead,
 //     CompetitorOutranked, CompetitorEnteredTop, NewCompetitorInEnvironment,
 //     RatingFellBelowMedian, ContentGapWidened, CompetitorJoinedPromo,
@@ -34,9 +31,17 @@ package track
 //     they would each need a "my product" nobody has set.
 type Kind string
 
-// The fifteen kinds this build can emit, grouped by what they are about. The
+// The eighteen kinds this build can emit, grouped by what they are about. The
 // nine spec section 6.1 names that are absent are listed on Kind above, with
 // the reason each of them has no producer here.
+//
+// The promotions group used to be on that list, excluded because «this build
+// has no promotions source at all». It has one: spec section 4.6's promotion
+// job walks a promotion and files its products the way a search files its
+// results. What that left behind was worse than an absence — those readings
+// were being diffed as search results, so a product whose promotion ended was
+// reported as having fallen out of the search under a phrase spelled
+// «promo:letnie-skidki».
 const (
 	// Price and what is left of it.
 	PriceChanged    Kind = "price-changed"
@@ -65,6 +70,13 @@ const (
 	// Reputation.
 	RatingChanged      Kind = "rating-changed"
 	ReviewCountChanged Kind = "review-count-changed"
+
+	// Promotions. «Кто из конкурентов зашёл в акцию и с какой ценой» is what
+	// the promotion job exists to answer, and these three are the answer as
+	// something a rule can be written about.
+	PromoJoined       Kind = "promo-joined"
+	PromoLeft         Kind = "promo-left"
+	PromoPriceChanged Kind = "promo-price-changed"
 )
 
 // Unit says what the two numbers on a change are counted in.
@@ -105,5 +117,6 @@ func Kinds() []Kind {
 		PositionChanged, EnteredTop, LeftTop, LeftSearch,
 		DeliveryTimeChanged, RegionAvailabilityChanged,
 		RatingChanged, ReviewCountChanged,
+		PromoJoined, PromoLeft, PromoPriceChanged,
 	}
 }
