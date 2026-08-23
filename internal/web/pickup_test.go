@@ -4,7 +4,9 @@ package web
 
 import (
 	"context"
+	"html"
 	"net/url"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -98,6 +100,82 @@ func TestPickup_EveryPressInThePickerKnowsWhichFieldItFills(t *testing.T) {
 		// a table of them under a form that still says «-1257786».
 		if !strings.Contains(body, `data-target="#`+screen.box+`-field"`) {
 			t.Errorf("%s: пресет перерисует не то поле", screen.path)
+		}
+	}
+}
+
+// pickupLinks is every address the picker's markup points at.
+var pickupLinks = regexp.MustCompile(`/pickup/[a-z]+\?[^"']*`)
+
+// boxless reports the picker addresses in body that do not say which field
+// they belong to.
+func boxless(t *testing.T, body, box string) []string {
+	t.Helper()
+	var bad []string
+	for _, raw := range pickupLinks.FindAllString(body, -1) {
+		u := html.UnescapeString(raw)
+		if !strings.Contains(u, "box="+box) {
+			bad = append(bad, u)
+		}
+	}
+	return bad
+}
+
+func TestPickup_WalkingTheDirectoryKeepsTheFieldItFills(t *testing.T) {
+	// Пресеты knew their box; the two presses that only walk the directory did
+	// not. So the column they answered with belonged to no field, every press
+	// in it carried box=, and the one that finally added a code answered with
+	// a region field whose tick-list pointed at «#». That is not a selector —
+	// querySelector throws rather than returning nothing — and the throw
+	// landed in the panel, replacing the half-filled form with its own text.
+	srv := newServer(t)
+	seedPickupPoints(t, srv)
+	const box = "job-regions"
+
+	body := get(t, srv, "/jobs/new", "").Body.String()
+	if bad := boxless(t, body, box); len(bad) > 0 {
+		t.Fatalf("в конструкторе есть адреса без поля: %v", bad)
+	}
+
+	// Down into a region, the way a person does it.
+	region := pickupLinks.FindString(body[strings.Index(body, "/pickup/settlements"):])
+	if region == "" {
+		t.Fatal("в справочнике нет ни одного региона")
+	}
+	column := get(t, srv, html.UnescapeString(region), "").Body.String()
+	if bad := boxless(t, column, box); len(bad) > 0 {
+		t.Errorf("колонка населённых пунктов отдаёт адреса без поля: %v", bad)
+	}
+	if !strings.Contains(column, `name="box" value="`+box+`"`) {
+		t.Error("поиск по региону отправится без поля, в которое пишет")
+	}
+
+	// And one more step, into a settlement.
+	at := strings.Index(column, "/pickup/points")
+	if at < 0 {
+		t.Fatal("в регионе нет ни одного населённого пункта")
+	}
+	points := get(t, srv, html.UnescapeString(pickupLinks.FindString(column[at:])), "").Body.String()
+	if bad := boxless(t, points, box); len(bad) > 0 {
+		t.Errorf("колонка пунктов отдаёт адреса без поля: %v", bad)
+	}
+}
+
+func TestPickup_TheTickListNeverPointsAtNothing(t *testing.T) {
+	// data-picklist is a selector this panel's script resolves as it wires the
+	// answer. An empty id makes «#», and querySelector throws on it — inside
+	// swap's own try, so the exception is caught and rendered where the form
+	// used to be. Одна пустая строка стоила заполненной формы.
+	srv := newServer(t)
+	seedPickupPoints(t, srv)
+
+	for _, path := range []string{"/jobs/new", "/profile"} {
+		body := get(t, srv, path, "").Body.String()
+		if strings.Contains(body, `data-picklist="#"`) {
+			t.Errorf("%s: список отметок указывает в «#»", path)
+		}
+		if strings.Contains(body, `data-target="#"`) || strings.Contains(body, `data-with="#"`) {
+			t.Errorf("%s: нажатие указывает в «#»", path)
 		}
 	}
 }

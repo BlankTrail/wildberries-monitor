@@ -140,7 +140,7 @@ func (s *Server) pickupRegions(r *http.Request, box regionBox) string {
 		}
 		fmt.Fprintf(&b, `<button class="bt-list-row" type="button" data-get="%s" data-target="#pickup-settlements">`+
 			`<span>%s</span><span class="bt-num bt-dim">%d</span></button>`,
-			html.EscapeString("/pickup/settlements?region="+row.Code),
+			html.EscapeString(pickupSettlementsURL(box, row.Code, "")),
 			html.EscapeString(row.Name), row.Points)
 	}
 	b.WriteString(`</div>`)
@@ -185,6 +185,11 @@ func (s *Server) pickupSettlements(w http.ResponseWriter, r *http.Request) {
 	b.WriteString(`<div class="bt-inline">` +
 		`<input type="hidden" form="` + pickupSearchForm + `" name="region" value="` +
 		html.EscapeString(code) + `">` +
+		// The box travels with the search too. Submitted without it, the
+		// filtered column comes back belonging to no field, exactly as a
+		// press without it would.
+		`<input type="hidden" form="` + pickupSearchForm + `" name="box" value="` +
+		html.EscapeString(box.ID) + `">` +
 		`<input class="bt-input bt-input--sm" form="` + pickupSearchForm +
 		`" name="q" placeholder="поиск по названию" value="` +
 		html.EscapeString(search) + `">` +
@@ -206,7 +211,7 @@ func (s *Server) pickupSettlements(w http.ResponseWriter, r *http.Request) {
 		// gap between them is what it costs once, now.
 		fmt.Fprintf(&b, `<button class="bt-list-row" type="button" data-get="%s" data-target="#pickup-points">`+
 			`<span>%s%s</span><span class="bt-num bt-dim">%d / %d</span></button>`,
-			html.EscapeString("/pickup/points?region="+code+"&place="+row.Key),
+			html.EscapeString(pickupPointsURL(box, code, row.Key)),
 			html.EscapeString(row.Name), mark, row.Ready, row.Points)
 	}
 	b.WriteString(`</div>`)
@@ -267,8 +272,12 @@ func (s *Server) pickupPoints(w http.ResponseWriter, r *http.Request) {
 		if row.Dest != 0 {
 			code9 = `<span class="bt-mono">` + strconv.FormatInt(row.Dest, 10) + `</span>`
 		}
+		// The same two things every other press here does: carry the box, and
+		// redraw the field rather than the picker inside it. Pointed at
+		// #pickup-box, the answer — an alert and a whole region field — would
+		// have been nested inside the region field it replaces.
 		fmt.Fprintf(&b, `<div class="bt-list-row">%s%s</div>`,
-			pressRaw(pickupPointURL(row.ID), "#pickup-box",
+			pressWith(pickupPointURL(box, row.ID), fieldTarget(box), box.ID,
 				html.EscapeString(row.Address), "bt-linklike"),
 			code9)
 	}
@@ -410,6 +419,29 @@ func regionHelpForms() string {
 // The addresses this picker presses. One place, because each of them is read
 // back by addPickup and a parameter spelled differently at either end is a
 // press that quietly adds nothing.
+// The two addresses that only walk the directory. They add nothing, and they
+// still carry the box — because what they answer with is more of this picker,
+// and every press in that answer is built from the box the handler read back.
+// Without it the column comes back belonging to no field: its presses write
+// into an id that is not on the screen, and the one that finally adds a code
+// answers with a region field whose tick-list points at «#» — which is not a
+// selector, so wiring the answer throws and takes the form down with it. That
+// is what «выбрать населённый пункт» did.
+func pickupSettlementsURL(box regionBox, code, search string) string {
+	u := "/pickup/settlements?region=" + url.QueryEscape(code) +
+		"&box=" + url.QueryEscape(box.ID)
+	if search != "" {
+		u += "&q=" + url.QueryEscape(search)
+	}
+	return u
+}
+
+func pickupPointsURL(box regionBox, code, place string) string {
+	return "/pickup/points?region=" + url.QueryEscape(code) +
+		"&place=" + url.QueryEscape(place) +
+		"&box=" + url.QueryEscape(box.ID)
+}
+
 func pickupCentresURL(box regionBox, part, pick string) string {
 	return "/pickup/add?scope=" + url.QueryEscape(store.ScopeCentres) +
 		"&part=" + url.QueryEscape(part) + "&pick=" + url.QueryEscape(pick) +
@@ -429,9 +461,10 @@ func pickupSettlementURL(box regionBox, code, place, pick string) string {
 		"&box=" + url.QueryEscape(box.ID)
 }
 
-func pickupPointURL(id int64) string {
+func pickupPointURL(box regionBox, id int64) string {
 	return "/pickup/add?scope=" + url.QueryEscape(store.ScopePoint) +
-		"&point=" + strconv.FormatInt(id, 10)
+		"&point=" + strconv.FormatInt(id, 10) +
+		"&box=" + url.QueryEscape(box.ID)
 }
 
 // hidden is one form value the person does not fill in.

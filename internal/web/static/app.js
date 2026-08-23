@@ -31,8 +31,25 @@
   // the page — nothing wired.
   const FRAGMENT = "X-Fragment";
 
+  // querySelector throws on a selector it cannot parse rather than returning
+  // null, and the markup here builds selectors out of ids the server sent. One
+  // empty id — a picker column that came back without knowing which field it
+  // belongs to — made "#", and the throw landed inside swap's own catch, which
+  // replaced the form somebody was filling in with the error message.
+  //
+  // A selector nothing matches and a selector nothing can parse are the same
+  // answer to this script: there is no such element.
+  function pick(selector) {
+    if (!selector) return null;
+    try {
+      return document.querySelector(selector);
+    } catch (err) {
+      return null;
+    }
+  }
+
   async function swap(target, url, init) {
-    const el = document.querySelector(target);
+    const el = pick(target);
     if (!el) return;
     el.setAttribute("aria-busy", "true");
     try {
@@ -131,7 +148,7 @@
         // in a box says which box, and the answer can add to it instead of
         // replacing it.
         const body = new FormData(form);
-        const with_ = by && by.dataset.with && document.querySelector(by.dataset.with);
+        const with_ = by && pick(by.dataset.with);
         if (with_ && with_.name) body.append(with_.name, with_.value);
         await swap(into, url, { method: "POST", body });
       });
@@ -161,7 +178,7 @@
       el.dataset.wired = "1";
       el.addEventListener("click", async (ev) => {
         ev.preventDefault();
-        const input = document.querySelector(el.dataset.file);
+        const input = pick(el.dataset.file);
         if (!input || !input.files || !input.files.length) return;
         const body = new FormData();
         body.append("name", input.files[0].name);
@@ -240,7 +257,7 @@
       if (el.dataset.wired) return;
       el.dataset.wired = "1";
       el.addEventListener("change", () => {
-        const target = document.querySelector(el.dataset.fill);
+        const target = pick(el.dataset.fill);
         if (!target || !el.value) return;
         target.value = el.value;
         target.dispatchEvent(new Event("input", { bubbles: true }));
@@ -254,7 +271,7 @@
       if (btn.dataset.wired) return;
       btn.dataset.wired = "1";
       btn.addEventListener("click", () => {
-        const list = document.querySelector(btn.dataset.addCondition);
+        const list = pick(btn.dataset.addCondition);
         const tpl = document.getElementById(btn.dataset.template);
         if (!list || !tpl) return;
         const n = Number(list.dataset.next || "1");
@@ -305,7 +322,7 @@
     root.querySelectorAll("[data-compose]").forEach((box) => {
       if (box.dataset.wired) return;
       box.dataset.wired = "1";
-      const target = document.querySelector(box.dataset.compose);
+      const target = pick(box.dataset.compose);
       const off = box.querySelector("[data-compose-off]");
       const count = box.querySelector("[data-compose-count]");
       const unit = box.querySelector("[data-compose-unit]");
@@ -342,7 +359,7 @@
     root.querySelectorAll("[data-picklist]").forEach((box) => {
       if (box.dataset.wired) return;
       box.dataset.wired = "1";
-      const target = document.querySelector(box.dataset.picklist);
+      const target = pick(box.dataset.picklist);
       if (!target) return;
       const all = box.querySelector("[data-picklist-all]");
       const boxes = [...box.querySelectorAll('input[type=checkbox][value]')];
