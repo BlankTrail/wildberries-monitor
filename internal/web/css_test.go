@@ -85,3 +85,44 @@ func TestStyles_TheBusyFlagTheScriptSetsIsOneTheEyeCanSee(t *testing.T) {
 		t.Error("ожидание отмечается и никак не показывается — нажатие выглядит как ничего")
 	}
 }
+
+func TestStyles_TheSettingsDialogIsWiderThanTheSystemsDefault(t *testing.T) {
+	// The vendored design system caps .bt-modal--md at 560px, which is right
+	// for a confirmation and wrong for this dialog: the settings form holds a
+	// grid of thresholds and a proxy picker, and at 560 it scrolled sideways —
+	// a scrollbar under a form nobody expects to scroll, half the labels off
+	// the edge.
+	//
+	// The system file is vendored and is not edited here, so the override has
+	// to exist in ours. Without it the cap silently comes back the next time
+	// the system is updated.
+	ours, err := staticFS.ReadFile("static/monitor.css")
+	if err != nil {
+		t.Fatalf("monitor.css: %v", err)
+	}
+	block := ruleBody(string(ours), "dialog.bt-modal {")
+	if block == "" {
+		t.Fatal("в monitor.css нет правила dialog.bt-modal")
+	}
+	if !strings.Contains(block, "max-width") {
+		t.Error("ширина окна настроек не переопределена — вернётся системные 560px и горизонтальная прокрутка")
+	}
+	// And it must not be a fixed width that overflows a narrow screen.
+	if !strings.Contains(block, "100vw") {
+		t.Error("ширина не считается от окна — на узком экране диалог вылезет за край")
+	}
+}
+
+// ruleBody is the declarations of one CSS rule, by its exact opening line.
+func ruleBody(css, opener string) string {
+	i := strings.Index(css, opener)
+	if i < 0 {
+		return ""
+	}
+	rest := css[i+len(opener):]
+	j := strings.Index(rest, "}")
+	if j < 0 {
+		return ""
+	}
+	return rest[:j]
+}

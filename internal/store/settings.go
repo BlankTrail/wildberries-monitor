@@ -26,8 +26,22 @@ const (
 	// and there was nothing on the screen to explain the disagreement.
 	DefaultBlankTrailURL    = "http://127.0.0.1:8891"
 	SettingBlankTrailAPIKey = "blanktrail.api_key"
-	SettingDataDir          = "data.dir"
-	SettingListenLAN        = "web.listen_lan"
+
+	// SettingServiceChannel is the proxy the standing port goes out through.
+	//
+	// That port serves the program's own errands — the region directory, the
+	// category directory, the list of promotions, the one-off checks a screen
+	// makes — and it used to have no channel at all, so those requests left
+	// from this machine's own address. Somebody who configured proxies so that
+	// their address is never the one Wildberries sees was having a dozen
+	// requests a day sent from it anyway.
+	//
+	// Empty, or an id nothing answers to, means direct: that is still the
+	// right answer for a fresh install with no channels yet, and it is the
+	// answer the screen names out loud rather than leaving to be discovered.
+	SettingServiceChannel = "blanktrail.service_channel"
+	SettingDataDir        = "data.dir"
+	SettingListenLAN      = "web.listen_lan"
 
 	// SettingRequireAuth turns the panel's password on. Off by default, and
 	// that is the decision rather than an oversight: the server listens on

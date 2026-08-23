@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"html"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/BlankTrail/wildberries-monitor/internal/store"
@@ -18,6 +19,58 @@ import (
 // their place — the requirement is that nothing reloads.
 func (s *Server) settingsForm(w http.ResponseWriter, r *http.Request) {
 	s.writeSettingsForm(w, r, "")
+}
+
+// serviceChannelField is which exit the standing port goes out through.
+//
+// That port carries the program's own errands — the region directory, the
+// category directory, the promotions list, the checks a screen makes — and it
+// had no channel at all, so those went out from this machine's own address.
+// Somebody who configured proxies precisely so that address is never the one
+// Wildberries sees was having a dozen requests a day sent from it anyway.
+//
+// One exit and not a set: these are errands, one at a time, on one standing
+// port. A set would be a mix of addresses for a single port that never moves.
+//
+// «Напрямую» stays on the list rather than being taken away. A fresh install
+// has no channels yet and still has to read a directory, and a person who
+// would rather not spend a metered address on a directory refresh is making a
+// real choice — it is just no longer the one nobody was asked about.
+func (s *Server) serviceChannelField(r *http.Request) string {
+	rows, err := s.Store.Channels(r.Context())
+	if err != nil {
+		return alert("error", err.Error())
+	}
+	chosen := s.Store.SettingOr(r.Context(), store.SettingServiceChannel, "")
+
+	var b strings.Builder
+	b.WriteString(`<div class="bt-field">`)
+	b.WriteString(`<label class="bt-label" for="bt-service-channel">Служебные запросы через</label>`)
+	b.WriteString(`<select class="bt-input" id="bt-service-channel" name="service_channel">`)
+	fmt.Fprintf(&b, `<option value="0"%s>напрямую — с адреса этой машины</option>`,
+		selectedIf(chosen == "" || chosen == "0"))
+
+	enabled := 0
+	for _, row := range rows {
+		if !row.Enabled {
+			continue
+		}
+		enabled++
+		fmt.Fprintf(&b, `<option value="%d"%s>%s</option>`,
+			row.ID, selectedIf(chosen == strconv.FormatInt(row.ID, 10)),
+			html.EscapeString(row.Name))
+	}
+	b.WriteString(`</select>`)
+
+	hint := "Справочники регионов и категорий, список акций и разовые проверки панели. " +
+		"Напрямую — их видит Wildberries с вашего адреса."
+	if enabled == 0 {
+		hint = "Пока нет ни одного включённого прокси — добавьте его на вкладке «Прокси», " +
+			"и он появится здесь."
+	}
+	b.WriteString(`<span class="bt-form-hint">` + hint + `</span>`)
+	b.WriteString(`</div>`)
+	return b.String()
 }
 
 func (s *Server) writeSettingsForm(w http.ResponseWriter, r *http.Request, notice string) {
@@ -82,6 +135,8 @@ func (s *Server) writeSettingsForm(w http.ResponseWriter, r *http.Request, notic
          autocomplete="off" value="` + html.EscapeString(key.Value) + `">
   <span class="bt-form-hint">` + keyHint + `</span>
 </div>`)
+
+	b.WriteString(s.serviceChannelField(r))
 
 	// The same masking as the API key, and for a stronger reason: whoever
 	// holds a bot token holds the bot, including every chat it has been added
@@ -285,6 +340,12 @@ func (s *Server) saveSettings(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "settings: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
+	}
+
+	if err := s.Store.SetSetting(ctx, store.SettingServiceChannel,
+		strings.TrimSpace(r.FormValue("service_channel")), store.SettingText); err != nil {
+		http.Error(w, "settings: "+err.Error(), http.StatusInternalServerError)
+		return
 	}
 
 	s.writeSettingsForm(w, r, `<div class="bt-alert bt-alert--success">Сохранено. Настройки переживут перезапуск.</div>`)

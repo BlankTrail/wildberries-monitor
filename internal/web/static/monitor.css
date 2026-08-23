@@ -407,8 +407,14 @@ dialog.bt-modal:not([open]) {
   display: none;
 }
 
+/* Wider than the design system's 560px, and the settings form is why: it holds
+   a three-column grid of thresholds and a proxy picker, and at 560 the dialog
+   scrolled sideways — a scrollbar under a form nobody expects to scroll, with
+   half the labels off the edge. The viewport still wins on a narrow screen. */
 dialog.bt-modal {
   margin: auto;
+  max-width: min(64rem, calc(100vw - 2 * var(--space-6)));
+  width: 100%;
   max-height: min(85vh, 60rem);
   padding: 0;
   border: 1px solid var(--border);

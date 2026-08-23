@@ -308,3 +308,41 @@ func TestSettings_FillsInTheAddressBothProgramsUseByDefault(t *testing.T) {
 		t.Error("умолчание всё ещё в поле")
 	}
 }
+
+func TestSettings_TheServiceChannelIsChosenAndRemembered(t *testing.T) {
+	// The standing port's exit had no place to be said, so it was always the
+	// machine's own address. The dialog offers it, and a choice that is not
+	// read back is a choice nobody made.
+	srv := newServer(t)
+	ctx := t.Context()
+
+	id, err := srv.Store.SaveChannel(ctx, store.ChannelRow{
+		Name: "vpn", Kind: store.ChannelDirect, Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("SaveChannel: %v", err)
+	}
+
+	body := get(t, srv, "/settings", "").Body.String()
+	if !strings.Contains(body, `name="service_channel"`) {
+		t.Fatalf("в настройках нет выбора служебного канала:\n%s", firstLines(body))
+	}
+	if !strings.Contains(body, "напрямую") {
+		t.Error("«напрямую» пропало из списка — на свежей установке выбирать будет нечего")
+	}
+
+	postForm(t, srv, "/settings", url.Values{
+		"url":             {store.DefaultBlankTrailURL},
+		"api_key":         {store.MaskedSecret()},
+		"service_channel": {itoa(id)},
+	})
+
+	if got := srv.Store.SettingOr(ctx, store.SettingServiceChannel, ""); got != itoa(id) {
+		t.Errorf("сохранено %q, выбирали %q", got, itoa(id))
+	}
+	// And the dialog comes back with it chosen rather than with the default.
+	back := get(t, srv, "/settings", "").Body.String()
+	if !strings.Contains(back, `value="`+itoa(id)+`" selected`) {
+		t.Error("окно настроек не показывает выбранный канал")
+	}
+}

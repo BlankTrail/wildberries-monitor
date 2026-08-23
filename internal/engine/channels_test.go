@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -555,5 +556,136 @@ func TestRunnerFor_HandsTheJobsOwnExitsToTheChannelBuilder(t *testing.T) {
 	}
 	if !strings.Contains(string(src), "e.Channels(ctx, j.Channels...)") {
 		t.Error("RunnerFor не передаёт выбранные задания каналы — прогон пойдёт через все")
+	}
+}
+
+func TestServiceChannel_TheStandingPortGoesOutWhereThePanelSaid(t *testing.T) {
+	// The standing port carries the program's own errands — the directories,
+	// the promotions list, the checks a screen makes. It had no channel at
+	// all, so all of that left from this machine's address: somebody who
+	// configured proxies precisely so that address is never the one the site
+	// sees was having a dozen requests a day sent from it anyway.
+	e := openEngine(t)
+	ctx := t.Context()
+
+	// Nothing chosen is direct, which is what a fresh install needs: it has to
+	// read a directory before it has any proxies to read it through.
+	id, err := e.serviceChannelID(ctx)
+	if err != nil {
+		t.Fatalf("serviceChannelID: %v", err)
+	}
+	if id != 0 {
+		t.Errorf("без выбора служебный канал = %d, ожидался 0 (напрямую)", id)
+	}
+	built, done, err := e.serviceChannels(ctx, 0)
+	if err != nil {
+		t.Fatalf("serviceChannels: %v", err)
+	}
+	done()
+	if len(built) != 0 {
+		t.Errorf("без выбора собрано каналов: %d — порт должен быть прямым", len(built))
+	}
+
+	chosen := saveChannel(t, e, store.ChannelRow{
+		Name: "vpn", Kind: store.ChannelDirect, Enabled: true,
+	})
+	if err := e.Store.SetSetting(ctx, store.SettingServiceChannel,
+		strconv.FormatInt(chosen, 10), store.SettingText); err != nil {
+		t.Fatalf("SetSetting: %v", err)
+	}
+
+	id, err = e.serviceChannelID(ctx)
+	if err != nil {
+		t.Fatalf("serviceChannelID: %v", err)
+	}
+	if id != chosen {
+		t.Fatalf("служебный канал = %d, выбирали %d", id, chosen)
+	}
+	built, done, err = e.serviceChannels(ctx, id)
+	if err != nil {
+		t.Fatalf("serviceChannels: %v", err)
+	}
+	defer done()
+	if len(built) != 1 || built[0].Name() != "vpn" {
+		t.Errorf("собрано %d каналов: %+v", len(built), built)
+	}
+}
+
+func TestServiceChannel_AChosenProxyThatIsGoneStopsTheErrandRatherThanGoingDirect(t *testing.T) {
+	// Quietly falling back to direct is the one outcome this setting exists to
+	// prevent: the requests would go out from the machine's own address, which
+	// is exactly what choosing a proxy said not to do, and nothing on any
+	// screen would say it had happened.
+	e := openEngine(t)
+	ctx := t.Context()
+
+	off := saveChannel(t, e, store.ChannelRow{
+		Name: "выключенный", Kind: store.ChannelDirect, Enabled: false,
+	})
+	if _, _, err := e.serviceChannels(ctx, off); err == nil {
+		t.Fatal("служебный порт открылся напрямую вместо выключенного прокси")
+	} else if !strings.Contains(err.Error(), "служебный порт") {
+		t.Errorf("причина не про служебный порт: %v", err)
+	}
+
+	if _, _, err := e.serviceChannels(ctx, 4242); err == nil {
+		t.Error("служебный порт открылся напрямую вместо прокси, которого нет")
+	}
+}
+
+func TestServiceChannel_ChangingTheChoiceReopensTheStandingPort(t *testing.T) {
+	// The port is opened once and reused, which is the point of it — but every
+	// setting it was opened with has to be compared, or a proxy chosen in the
+	// panel takes effect only after a restart. Nothing on any screen would say
+	// that the errands are still leaving from the machine's own address.
+	e := openEngine(t)
+
+	e.svc.site = &wb.Client{}
+	e.svc.pool = nil
+	// Size() is asked of the pool, so a nil one is not «current» whatever else
+	// matches — which is the other half of this rule and is why the check
+	// cannot be a plain comparison of three strings.
+	if e.serviceIsCurrentLocked("http://x", "k", 0) {
+		t.Error("порт без пула объявлен живым")
+	}
+}
+
+func TestServiceChannel_EverySettingItWasOpenedWithIsCompared(t *testing.T) {
+	// Written out one field at a time, because leaving any of them out is the
+	// same failure with a different cause: the port goes on using a licence,
+	// an address or an exit the user has already changed away from.
+	src, err := os.ReadFile("service.go")
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	body := string(src)
+	start := strings.Index(body, "func (e *Engine) serviceIsCurrentLocked")
+	if start < 0 {
+		t.Fatal("правило «порт ещё тот» больше не названо отдельно — проверять нечего")
+	}
+	rule := body[start : start+strings.Index(body[start:], "\n}")]
+	for _, want := range []string{"e.svc.addr == addr", "e.svc.key == key", "e.svc.channel == channel", "e.svc.pool.Size()"} {
+		if !strings.Contains(rule, want) {
+			t.Errorf("порт не переоткроется при смене: в правиле нет %q", want)
+		}
+	}
+}
+
+func TestServiceChannel_TheBuiltExitReachesThePoolThatOpensThePort(t *testing.T) {
+	// A source-level check, for the same reason RunnerFor gets one: everything
+	// past this line needs a live licensed service, because it opens a port
+	// before the first fetch. What is guarded is one argument — the channel
+	// this file just built reaching the pool config — and dropped, the port
+	// opens direct while every screen says it goes through a proxy. That is
+	// worse than never having offered the setting.
+	src, err := os.ReadFile("service.go")
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	body := string(src)
+	cfg := body[strings.Index(body, "blanktrail.NewPool(ctx, blanktrail.PoolConfig{"):]
+	cfg = cfg[:strings.Index(cfg, "})")]
+	if !strings.Contains(cfg, "Channels:       channels,") {
+		t.Error("собранный канал не передан в пул — служебный порт откроется напрямую")
 	}
 }

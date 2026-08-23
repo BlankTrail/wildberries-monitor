@@ -5,6 +5,8 @@ package engine
 import (
 	"context"
 	"fmt"
+	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/BlankTrail/wildberries-monitor/blanktrail"
@@ -47,6 +49,14 @@ type service struct {
 	site *wb.Client
 	addr string
 	key  string
+	// channel is which exit the standing port was opened on, so that choosing
+	// another one in the panel reopens it rather than going on using the one
+	// the user has just changed away from.
+	channel int64
+	// closeChannel releases what buildChannel opened. A pool torn down without
+	// it leaves a proxy-list rotor refreshing in the background for a port
+	// nobody holds.
+	closeChannel func()
 }
 
 // Service is the site client for the program's own errands.
@@ -65,11 +75,15 @@ func (e *Engine) Service(ctx context.Context) (*wb.Client, error) {
 	if err != nil {
 		return nil, err
 	}
+	channel, err := e.serviceChannelID(ctx)
+	if err != nil {
+		return nil, err
+	}
 
 	e.svc.mu.Lock()
 	defer e.svc.mu.Unlock()
 
-	if e.svc.site != nil && e.svc.addr == addr && e.svc.key == key && e.svc.pool.Size() > 0 {
+	if e.serviceIsCurrentLocked(addr, key, channel) {
 		return e.svc.site, nil
 	}
 	e.closeServiceLocked()
@@ -92,18 +106,29 @@ func (e *Engine) Service(ctx context.Context) (*wb.Client, error) {
 		return nil, fmt.Errorf("engine: прокси не готов: %s", firstBlocking(report))
 	}
 
-	// No egress channels on the standing port. The channels a run uses may be
-	// metered per address, and spending one on a directory refresh is not what
-	// somebody configured them for.
+	// Which exit the errands go out through, chosen in the panel. Nothing
+	// chosen means direct, which is what this port always was: a fresh install
+	// has no channels yet and still has to be able to read a directory.
+	//
+	// It is a choice rather than a rule either way. Through a proxy, a
+	// directory refresh spends an address that may be metered; from here, it
+	// tells Wildberries this machine's own address — and somebody who set up
+	// proxies did it so that address is never the one the site sees.
+	channels, closeChannels, err := e.serviceChannels(ctx, channel)
+	if err != nil {
+		return nil, err
+	}
 	pool, err := blanktrail.NewPool(ctx, blanktrail.PoolConfig{
 		Client:         client,
 		Threads:        1,
 		PortsPerThread: servicePorts,
+		Channels:       channels,
 		Spec:           wb.ModeOf(wb.AppWeb).Spec(blanktrail.DefaultPortSpec()),
 		CA:             report.CA,
 		RequestTimeout: requestTimeout,
 	})
 	if err != nil {
+		closeChannels()
 		return nil, fmt.Errorf("engine: не удалось открыть служебный порт: %w", err)
 	}
 
@@ -112,9 +137,30 @@ func (e *Engine) Service(ctx context.Context) (*wb.Client, error) {
 	// third on the same exit.
 	e.svc.pool = pool
 	e.svc.site = wb.NewClientWithRetry(wb.FromPool(pool), wb.NewSessions(), wb.DefaultRetryPolicy(false))
-	e.svc.addr, e.svc.key = addr, key
+	e.svc.addr, e.svc.key, e.svc.channel = addr, key, channel
+	e.svc.closeChannel = closeChannels
 	e.logf("служебный порт открыт — через него идут справочники и разовые запросы панели")
 	return e.svc.site, nil
+}
+
+// serviceIsCurrentLocked reports whether the standing port still matches what
+// the panel says it should be.
+//
+// Every setting it was opened with is compared, and each for the same reason:
+// an address, a key or an exit changed in the panel has to take effect. Leave
+// one out and the port goes on using what the user has just changed away from
+// — a licence they replaced, or the machine's own address they had just
+// stopped choosing — with nothing on any screen to say so.
+//
+// A pool that has lost its last port counts as not current: a caller cannot
+// tell «порт умер» from «нечего было отдавать» and would report the site as
+// unreachable.
+func (e *Engine) serviceIsCurrentLocked(addr, key string, channel int64) bool {
+	return e.svc.site != nil &&
+		e.svc.addr == addr &&
+		e.svc.key == key &&
+		e.svc.channel == channel &&
+		e.svc.pool.Size() > 0
 }
 
 // Warm opens the standing port ahead of the first errand.
@@ -143,6 +189,45 @@ func (e *Engine) closeServiceLocked() {
 	if err := e.svc.pool.Close(); err != nil {
 		e.logf("служебный порт не закрылся: %v", err)
 	}
+	// After the pool, because the pool is what holds the ports the channel
+	// dials for: releasing the channel first leaves a port whose exit has
+	// already gone.
+	if e.svc.closeChannel != nil {
+		e.svc.closeChannel()
+		e.svc.closeChannel = nil
+	}
 	e.svc.pool, e.svc.site = nil, nil
-	e.svc.addr, e.svc.key = "", ""
+	e.svc.addr, e.svc.key, e.svc.channel = "", "", 0
+}
+
+// serviceChannelID is which exit the panel chose for the standing port.
+//
+// Nought where nothing was chosen, and nought is direct — the answer a fresh
+// install needs, since it has to read a directory before it has any proxies to
+// read it through.
+func (e *Engine) serviceChannelID(ctx context.Context) (int64, error) {
+	raw, err := setting(ctx, e.Store, store.SettingServiceChannel, "")
+	if err != nil {
+		return 0, err
+	}
+	id, _ := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
+	return id, nil
+}
+
+// serviceChannels builds that one exit, or none at all.
+//
+// A channel that was chosen and then switched off or deleted is refused rather
+// than quietly demoted to direct. The whole point of choosing it is that these
+// requests should not come from this machine, and finding out afterwards that
+// they did is finding out too late — the same reasoning Channels applies to a
+// run, and the same wording, so the two failures read alike.
+func (e *Engine) serviceChannels(ctx context.Context, id int64) ([]blanktrail.Channel, func(), error) {
+	if id == 0 {
+		return nil, func() {}, nil
+	}
+	built, closeAll, err := e.Channels(ctx, id)
+	if err != nil {
+		return nil, nil, fmt.Errorf("engine: служебный порт: %w", err)
+	}
+	return built, closeAll, nil
 }
