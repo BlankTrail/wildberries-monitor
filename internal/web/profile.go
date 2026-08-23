@@ -374,13 +374,6 @@ func checkedIf(on bool) string {
 	return ""
 }
 
-func orDefault(v, fallback int) int {
-	if v <= 0 {
-		return fallback
-	}
-	return v
-}
-
 // saveProfile starts the resolution of what somebody pasted.
 //
 // A job rather than a request made here: the card is fetched from the site,

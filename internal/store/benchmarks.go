@@ -5,6 +5,8 @@ package store
 import (
 	"context"
 	"fmt"
+	"strconv"
+	"time"
 )
 
 // This file is spec section 4.7's comparison: what the profile's products look
@@ -172,6 +174,49 @@ func (s *Store) Benchmarks(ctx context.Context, profileID int64) ([]BenchmarkRow
 	return out, nil
 }
 
+// adWindow is how far apart the two readings of one search may be taken and
+// still describe the same moment.
+//
+// They are separate jobs — the organic walk and the paid seats are different
+// requests — so they never share a timestamp, and requiring them to was what
+// made this column unanswerable. A day either way is the span a comparison is
+// a snapshot of; wider, and a campaign that ended last month marks today.
+const adWindow = 24 * time.Hour
+
+// wasAdvertised answers, for one row of a search reading, whether WB was
+// showing that product as a paid placement in that same search.
+//
+// Read from shelves, which is where the ads job writes what it collects. It
+// used to be read from ad_placements — a table declared a milestone ahead of
+// its producer and never given one — so the answer was false for everybody
+// and the comparison said the same about a seat somebody paid for and a seat
+// nobody did.
+//
+// The phrase is trimmed on both sides because the two come from different
+// places: positions.query is what the person asked for, and shelves.source_key
+// is WB's own echo of it in the response metadata. Case is deliberately not
+// folded — SQLite's lower() is ASCII-only and would leave «Платье» and
+// «платье» different anyway, so folding here would promise something this
+// database cannot do. An echo that differs by more than padding reports no
+// advertising, which is wrong in the safe direction: absent rather than
+// invented.
+//
+// What is not relaxed at all is the region: a paid seat is bought for one, and
+// counted across them a Moscow campaign would mark the same product in Penza.
+var wasAdvertised = `EXISTS (
+		           SELECT 1 FROM shelves sh
+		           JOIN shelf_items si ON si.shelf_id = sh.id
+		           WHERE si.nm_id = p.nm_id
+		             AND sh.source = 'query'
+		             AND trim(sh.source_key) = trim(p.query)
+		             AND sh.dest = p.dest
+		             AND sh.ts BETWEEN p.ts - ` + adWindowSeconds + ` AND p.ts + ` + adWindowSeconds + `
+		       )`
+
+// adWindowSeconds is adWindow as the queries above splice it in — one source
+// of truth for the span, whichever of the two forms is being read.
+var adWindowSeconds = strconv.FormatInt(int64(adWindow/time.Second), 10)
+
 // SearchStanding is one product as it stood in one search, with the numbers a
 // comparison is made of.
 type SearchStanding struct {
@@ -207,10 +252,7 @@ func (s *Store) TopOfSearch(ctx context.Context, query, dest string, limit int) 
 		       s.price_sale, s.discount_pct, s.currency, s.rating, s.feedbacks,
 		       s.total_quantity, s.time2,
 		       LENGTH(COALESCE(pr.description, '')),
-		       EXISTS (
-		           SELECT 1 FROM ad_placements a
-		           WHERE a.nm_id = p.nm_id AND a.query = p.query AND a.dest = p.dest AND a.ts = p.ts
-		       )
+		       `+wasAdvertised+`
 		FROM positions p
 		JOIN latest l ON l.ts = p.ts
 		LEFT JOIN snapshots s ON s.nm_id = p.nm_id AND s.dest = p.dest AND s.ts = p.ts
@@ -267,10 +309,7 @@ func (s *Store) StandingOf(ctx context.Context, nmID int64, query, dest string) 
 		       s.price_sale, s.discount_pct, s.currency, s.rating, s.feedbacks,
 		       s.total_quantity, s.time2,
 		       LENGTH(COALESCE(pr.description, '')),
-		       EXISTS (
-		           SELECT 1 FROM ad_placements a
-		           WHERE a.nm_id = p.nm_id AND a.query = p.query AND a.dest = p.dest AND a.ts = p.ts
-		       )
+		       `+wasAdvertised+`
 		FROM positions p
 		JOIN latest l ON l.ts = p.ts
 		LEFT JOIN snapshots s ON s.nm_id = p.nm_id AND s.dest = p.dest AND s.ts = p.ts

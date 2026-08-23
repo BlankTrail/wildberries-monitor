@@ -143,11 +143,14 @@ WHERE rowid IN (
 // not — is harder to reason about than an unthinned one and there is no way
 // back to either.
 //
-// observations, events and ad placements are deliberately left alone. Those
-// are discrete facts rather than periodic samples: deleting an event deletes
-// the only record that something happened, and no other row carries it. See
-// spec section 5.2's own carve-out for ad_placements, which has no producer
-// yet in this milestone.
+// observations and events are deliberately left alone. Those are discrete
+// facts rather than periodic samples: deleting an event deletes the only
+// record that something happened, and no other row carries it.
+//
+// Spec section 5.2 names a third such carve-out, ad_placements. That table
+// still has no producer and now has no reader either — the comparison's
+// advertising column reads shelves, where the ads job actually writes — so
+// there is nothing in it to thin or to spare.
 func (s *Store) Thin(ctx context.Context) (ThinStats, error) {
 	// retentionOrDefault is dedupe.go's substitution of defaults for an
 	// unset field (task 6); Thin reads it rather than repeating that logic,
