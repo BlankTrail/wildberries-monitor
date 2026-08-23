@@ -388,7 +388,7 @@
     root.querySelectorAll("[data-follow]").forEach((el) => {
       if (el.dataset.wired) return;
       el.dataset.wired = "1";
-      follow(el.dataset.follow);
+      follow(el.dataset.follow, el);
     });
 
     // «Все» and «никакие», and the tallies beside them. A subscription of
@@ -506,7 +506,7 @@
 
   let live = null;
 
-  function follow(jobID) {
+  function follow(jobID, panel) {
     stopFollowing();
     live = new EventSource(`/live?job=${encodeURIComponent(jobID)}`);
     live.addEventListener("progress", (ev) => {
@@ -525,7 +525,15 @@
       // oldest lines of a log nobody scrolls back through.
       while (el.childElementCount > 200) el.lastElementChild.remove();
     });
-    live.addEventListener("done", () => stopFollowing());
+    live.addEventListener("done", () => {
+      stopFollowing();
+      // What to do now the run has ended. The jobs screen says nothing and the
+      // panel simply stops; the profile screen names a press that moves its
+      // chain on and a region to draw the answer into, so the tab walks the
+      // stages by itself instead of freezing on the first one.
+      const post = panel && panel.dataset.donePost;
+      if (post) swap(panel.dataset.doneTarget || "#main", post, { method: "POST" });
+    });
     live.onerror = () => stopFollowing();
   }
 

@@ -66,11 +66,13 @@ func TestProfilePlan_ANewProfileArrivesReadyToCollect(t *testing.T) {
 	if len(p.Fields) == 0 {
 		t.Error("у нового профиля не выбрано ни одного поля")
 	}
-	// Zero pages, and that is the answer rather than a gap: a storefront ends
-	// on its own and the run extends the plan as it goes, so «до конца» is
-	// what somebody asking for their own assortment means.
-	if p.MaxPages != 0 {
-		t.Errorf("у нового профиля предел страниц %d — витрина должна собираться до конца", p.MaxPages)
+	// More than one page, and that is the answer rather than a gap. Zero was
+	// written here to mean «до конца витрины», and nothing in this program can
+	// walk one to its end: the planner turns a storefront's zero into a single
+	// page, so the default collected a hundred goods and every stage after it
+	// was computed over that hundred.
+	if p.MaxPages <= 1 {
+		t.Errorf("у нового профиля предел страниц %d — витрина не соберётся глубже первой страницы", p.MaxPages)
 	}
 	if p.SuggestRounds <= 0 {
 		t.Error("у нового профиля выключено расширение фраз подсказками")
@@ -120,6 +122,7 @@ func TestProfileChain_WalksTheStagesInOrder(t *testing.T) {
 
 	// The catalogue lands with a product in it, and the phrase stage runs.
 	seedProfileProduct(t, a, p.ID, 100, "Платье летнее длинное")
+	seedStorefront(t, a, 4242)
 	landed(t, a, got.CatalogJob)
 	a.advanceProfiles(ctx)
 
@@ -282,17 +285,84 @@ func TestProfileDue_OnlyWithAScheduleAndOnlyAfterIt(t *testing.T) {
 	}
 }
 
-func TestProfileChain_RefusesAProfileWithNoSeller(t *testing.T) {
-	// There is nothing to walk. Started anyway it would make a storefront job
-	// for supplier zero, which the site answers with an empty catalogue —
-	// reading exactly like a seller who sells nothing.
+func TestProfileChain_WithNoSellerStartsByFindingOne(t *testing.T) {
+	// There is nothing to walk yet, and refusing was the wrong answer to that:
+	// the link is on the row, reading it is what names the seller, and that is
+	// the chain's own first stage. Refused, a profile whose card had not been
+	// read was a dead end whose only remaining control was «Удалить».
+	//
+	// What must not happen is the storefront walk: a job for supplier zero is
+	// answered with an empty catalogue, which reads exactly like a seller who
+	// sells nothing.
 	a := newApp(t)
-	id, err := a.Store.SaveProfile(t.Context(), store.ProfileRow{Name: "неразобранный"})
+	ctx := t.Context()
+	configured(t, a)
+	collecting(t, a)
+
+	id, err := a.Store.SaveProfile(ctx, store.ProfileRow{
+		Name: "неразобранный", SourceInput: "141504066",
+	})
 	if err != nil {
 		t.Fatalf("SaveProfile: %v", err)
 	}
-	if err := a.StartProfileChain(t.Context(), id); err == nil {
-		t.Error("сбор без продавца запущен")
+	if err := a.StartProfileChain(ctx, id); err != nil {
+		t.Fatalf("StartProfileChain: %v", err)
+	}
+
+	got, err := a.Store.Profile(ctx, id)
+	if err != nil {
+		t.Fatalf("Profile: %v", err)
+	}
+	if got.ResolveJob == 0 || got.StageJob != got.ResolveJob {
+		t.Fatalf("цепочка ждёт задание %d, а ссылку разбирает %d", got.StageJob, got.ResolveJob)
+	}
+	if got.CatalogJob != 0 {
+		t.Error("витрину пошли собирать, не зная продавца")
+	}
+	made, err := job.Load(ctx, a.Store, got.ResolveJob)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if made.Kind != job.KindProfile || made.Input != "141504066" {
+		t.Errorf("создано задание %+v", made)
+	}
+}
+
+func TestProfileChain_AResolveThatFoundNoSellerStopsWithAReason(t *testing.T) {
+	// The card was read and did not name an owner. The stage that needs the
+	// seller is the one that says so — before this the refusal lived where the
+	// chain was started, which is before the card has been read and therefore
+	// before anybody could know.
+	a := newApp(t)
+	ctx := t.Context()
+	configured(t, a)
+	collecting(t, a)
+
+	id, err := a.Store.SaveProfile(ctx, store.ProfileRow{
+		Name: "без владельца", SourceInput: "141504066",
+	})
+	if err != nil {
+		t.Fatalf("SaveProfile: %v", err)
+	}
+	if err := a.StartProfileChain(ctx, id); err != nil {
+		t.Fatalf("StartProfileChain: %v", err)
+	}
+	got, _ := a.Store.Profile(ctx, id)
+
+	// The resolve lands without writing a seller, which is what a card with no
+	// supplier on it leaves behind.
+	landed(t, a, got.ResolveJob)
+	a.advanceProfiles(ctx)
+
+	after, err := a.Store.Profile(ctx, id)
+	if err != nil {
+		t.Fatalf("Profile: %v", err)
+	}
+	if after.Stage != store.StageFailed {
+		t.Fatalf("этап %q — цепочка пошла дальше, не зная продавца", after.Stage)
+	}
+	if !strings.Contains(after.Failure, "продавец") {
+		t.Errorf("причина остановки не про продавца: %q", after.Failure)
 	}
 }
 
@@ -303,6 +373,21 @@ func seedProfileProduct(t *testing.T, a *App, profile, nm int64, name string) {
 	seedProfileProductOf(t, a, nm, 4242, name)
 	if err := a.Store.AddProfileItem(t.Context(), profile, store.ProfileProduct, nm); err != nil {
 		t.Fatalf("AddProfileItem: %v", err)
+	}
+}
+
+// seedStorefront is what a storefront walk leaves behind: the seller's goods in
+// the products table, more than the one the pasted link named.
+//
+// The chain refuses to call a profile collected when the seller has only that
+// one, because that is what a walk which read nothing looks like — so a fixture
+// that wants to get past the catalogue stage has to look like a walk that
+// worked. The extra goods are not profile items: they are adopted by the stage
+// itself, which is the thing being tested.
+func seedStorefront(t *testing.T, a *App, seller int64) {
+	t.Helper()
+	for i := range 2 {
+		seedProfileProductOf(t, a, seller*1000+int64(i), seller, "ту да")
 	}
 }
 
@@ -351,6 +436,7 @@ func TestProfilePhrases_TheTwoBoundsAreHonoured(t *testing.T) {
 		t.Fatalf("StartProfileChain: %v", err)
 	}
 	got, _ := a.Store.Profile(ctx, p.ID)
+	seedStorefront(t, a, 4242)
 	landed(t, a, got.CatalogJob)
 	a.advanceProfiles(ctx)
 
@@ -385,6 +471,7 @@ func TestProfilePhrases_WithNoCandidatesTheChainStillFinishes(t *testing.T) {
 		t.Fatalf("StartProfileChain: %v", err)
 	}
 	got, _ := a.Store.Profile(ctx, p.ID)
+	seedStorefront(t, a, 4242)
 	landed(t, a, got.CatalogJob)
 	a.advanceProfiles(ctx)
 
@@ -501,6 +588,7 @@ func TestProfileChain_ChecksAPhraseOnceHoweverManyVerdictsItHas(t *testing.T) {
 		t.Fatalf("StartProfileChain: %v", err)
 	}
 	got, _ := a.Store.Profile(ctx, p.ID)
+	seedStorefront(t, a, 4242)
 	landed(t, a, got.CatalogJob)
 	a.advanceProfiles(ctx)
 
@@ -604,6 +692,7 @@ func TestProfilePhrases_AreKeptAgainstTheProductTheyWereMadeFrom(t *testing.T) {
 		t.Fatalf("StartProfileChain: %v", err)
 	}
 	got, _ := a.Store.Profile(ctx, p.ID)
+	seedStorefront(t, a, 4242)
 	landed(t, a, got.CatalogJob)
 	a.advanceProfiles(ctx)
 
@@ -662,6 +751,7 @@ func TestProfileSubjects_NarrowTheExpensiveHalf(t *testing.T) {
 		t.Fatalf("StartProfileChain: %v", err)
 	}
 	got, _ := a.Store.Profile(ctx, p.ID)
+	seedStorefront(t, a, 4242)
 	landed(t, a, got.CatalogJob)
 	a.advanceProfiles(ctx)
 
@@ -693,6 +783,7 @@ func TestProfileCheck_KeepsTheWholePageSoThereAreCompetitors(t *testing.T) {
 		t.Fatalf("StartProfileChain: %v", err)
 	}
 	got, _ := a.Store.Profile(ctx, p.ID)
+	seedStorefront(t, a, 4242)
 	landed(t, a, got.CatalogJob)
 	a.advanceProfiles(ctx)
 
@@ -748,6 +839,7 @@ func TestProfileExpand_AsksTheSiteAndKeepsWhatItOffers(t *testing.T) {
 		t.Fatalf("StartProfileChain: %v", err)
 	}
 	got, _ := a.Store.Profile(ctx, p.ID)
+	seedStorefront(t, a, 4242)
 	landed(t, a, got.CatalogJob)
 	a.advanceProfiles(ctx)
 
@@ -800,6 +892,7 @@ func TestProfileExpand_AsksAboutOnePhraseOnce(t *testing.T) {
 		t.Fatalf("StartProfileChain: %v", err)
 	}
 	got, _ := a.Store.Profile(ctx, p.ID)
+	seedStorefront(t, a, 4242)
 	landed(t, a, got.CatalogJob)
 	a.advanceProfiles(ctx)
 
@@ -843,6 +936,7 @@ func TestProfileExpand_TheLimitIsHonoured(t *testing.T) {
 		t.Fatalf("StartProfileChain: %v", err)
 	}
 	got, _ := a.Store.Profile(ctx, p.ID)
+	seedStorefront(t, a, 4242)
 	landed(t, a, got.CatalogJob)
 	a.advanceProfiles(ctx)
 
@@ -875,6 +969,7 @@ func TestProfileExpand_ZeroRoundsSwitchesItOff(t *testing.T) {
 		t.Fatalf("StartProfileChain: %v", err)
 	}
 	got, _ := a.Store.Profile(ctx, p.ID)
+	seedStorefront(t, a, 4242)
 	landed(t, a, got.CatalogJob)
 	a.advanceProfiles(ctx)
 
@@ -884,5 +979,201 @@ func TestProfileExpand_ZeroRoundsSwitchesItOff(t *testing.T) {
 	after, _ := a.Store.Profile(ctx, p.ID)
 	if after.Stage == store.StageFailed {
 		t.Errorf("выключенное расширение остановило цепочку: %s", after.Failure)
+	}
+}
+
+// resolving is a collector that behaves the way the real one does on a resolve
+// item: it finds the profile the run belongs to and writes the seller onto it,
+// then leaves a storefront behind when the seller job runs.
+func resolving(t *testing.T, a *App, seller int64) {
+	t.Helper()
+	runner := &job.Runner{
+		Store:   a.Store,
+		Bus:     a.Bus,
+		Planner: job.StaticPlanner{},
+		Fetcher: job.FetcherFunc(func(ctx context.Context, it job.Item) (int, error) {
+			key, err := job.ParseKey(it.Key)
+			if err != nil {
+				return 1, err
+			}
+			switch key.Kind {
+			case job.ItemProfile:
+				// What collect.Fetcher.profile does: fill the row this run was
+				// started for rather than inserting one of its own.
+				owner, ok, err := a.Store.ProfileOfResolveJob(ctx, jobOfRun(t, a, key))
+				if err != nil {
+					return 1, err
+				}
+				if !ok {
+					return 1, nil
+				}
+				if _, err := a.Store.SaveProfile(ctx, store.ProfileRow{
+					ID: owner.ID, Name: "мой", SourceInput: owner.SourceInput, SellerID: &seller,
+				}); err != nil {
+					return 1, err
+				}
+				return 1, a.Store.AddProfileItem(ctx, owner.ID, store.ProfileProduct, key.NmID)
+			case job.ItemListing:
+				seedProfileProductOf(t, a, 900, seller, "Платье летнее длинное")
+				seedProfileProductOf(t, a, 901, seller, "ту да")
+			}
+			return 1, nil
+		}),
+	}
+	a.Scheduler = job.NewScheduler(runner)
+	a.primeSchedule(t.Context())
+}
+
+// jobOfRun is the resolve job a profile item belongs to.
+//
+// The fake fetcher is handed an item and not a job, the same as the real one;
+// what the real one reads off its Fetcher.Job, this reads back out of the only
+// profile that could have asked for this article.
+func jobOfRun(t *testing.T, a *App, key job.Key) int64 {
+	t.Helper()
+	profiles, err := a.Store.Profiles(t.Context())
+	if err != nil {
+		t.Fatalf("Profiles: %v", err)
+	}
+	for _, p := range profiles {
+		if nm, ok := wb.NmID(p.SourceInput); ok && nm == key.NmID {
+			return p.ResolveJob
+		}
+	}
+	return 0
+}
+
+func TestResolveProfile_OnePressCollectsTheWholeProfile(t *testing.T) {
+	// The whole point of the screen. A pasted link used to end at a card read
+	// and nothing else: the run that learned who the seller was handed the fact
+	// to nobody, and the profile sat at «продавец известен, данные ещё не
+	// собраны» until somebody found a second button.
+	a := newApp(t)
+	ctx := t.Context()
+	configured(t, a)
+	resolving(t, a, 4242)
+
+	id, err := a.ResolveProfile(ctx, "https://www.wildberries.ru/catalog/141504066/detail.aspx")
+	if err != nil {
+		t.Fatalf("ResolveProfile: %v", err)
+	}
+
+	// Every stage lands on the run before it, so the chain is walked by letting
+	// the runs finish — which is what the tick and the bus both do.
+	settled(t, "цепочка не дошла до конца", func() bool {
+		p, err := a.Store.Profile(ctx, id)
+		if err != nil {
+			return false
+		}
+		if p.Stage == store.StageFailed {
+			t.Fatalf("цепочка остановилась: %s", p.Failure)
+		}
+		if p.StageJob != 0 {
+			landed(t, a, p.StageJob)
+		}
+		a.advanceProfiles(ctx)
+		return p.Stage == store.StageDone
+	})
+
+	p, err := a.Store.Profile(ctx, id)
+	if err != nil {
+		t.Fatalf("Profile: %v", err)
+	}
+	if p.SellerID == nil || *p.SellerID != 4242 {
+		t.Fatalf("продавец профиля = %v", p.SellerID)
+	}
+	if !p.Collected() {
+		t.Error("профиль не помечен собранным")
+	}
+	// And it holds the three things «полный профиль» means: the seller's goods,
+	// phrases made from them, and the walk that checked those phrases.
+	if p.ResolveJob == 0 || p.CatalogJob == 0 || p.CheckJob == 0 {
+		t.Errorf("не все три задания созданы: разбор %d, витрина %d, проверка %d",
+			p.ResolveJob, p.CatalogJob, p.CheckJob)
+	}
+	items, err := a.Store.ProfileItems(ctx, id, store.ProfileProduct)
+	if err != nil {
+		t.Fatalf("ProfileItems: %v", err)
+	}
+	if len(items) < 2 {
+		t.Errorf("в профиле товаров: %d — витрина не подхватилась", len(items))
+	}
+	phrases, err := a.Store.ProfilePhrases(ctx, id, "")
+	if err != nil {
+		t.Fatalf("ProfilePhrases: %v", err)
+	}
+	if len(phrases) == 0 {
+		t.Error("под товары продавца не собрано ни одной фразы")
+	}
+}
+
+func TestResolveProfile_ASecondPasteIsTheSameProfile(t *testing.T) {
+	// The press that resolves is also the press somebody repeats when nothing
+	// appears. Inserting a row each time gave them a twin per attempt: two
+	// cards, two «Собрать всё», two schedules, and the plan they configured on
+	// the first one left behind on it.
+	a := newApp(t)
+	ctx := t.Context()
+	configured(t, a)
+	resolving(t, a, 4242)
+
+	first, err := a.ResolveProfile(ctx, "141504066")
+	if err != nil {
+		t.Fatalf("ResolveProfile: %v", err)
+	}
+	// A plan the person changed on the profile they already had.
+	p, _ := a.Store.Profile(ctx, first)
+	p.Schedule, p.Enabled, p.MaxPages = "every 24h", true, 7
+	if err := a.Store.SaveProfilePlan(ctx, p); err != nil {
+		t.Fatalf("SaveProfilePlan: %v", err)
+	}
+
+	// The same card, pasted as a full link this time.
+	again, err := a.ResolveProfile(ctx, "https://www.wildberries.ru/catalog/141504066/detail.aspx")
+	if err != nil {
+		t.Fatalf("ResolveProfile: %v", err)
+	}
+	if again != first {
+		t.Errorf("второй разбор завёл профиль %d вместо %d", again, first)
+	}
+	all, err := a.Store.Profiles(ctx)
+	if err != nil {
+		t.Fatalf("Profiles: %v", err)
+	}
+	if len(all) != 1 {
+		t.Fatalf("профилей стало %d", len(all))
+	}
+	if all[0].Schedule != "every 24h" || all[0].MaxPages != 7 {
+		t.Errorf("настройки профиля потеряны: %q, %d", all[0].Schedule, all[0].MaxPages)
+	}
+}
+
+func TestProfileChain_AdvancesWhenARunFinishes(t *testing.T) {
+	// Without this the chain moves on the tick alone, so every stage boundary
+	// costs up to a minute of a screen saying nothing — five boundaries, five
+	// minutes — while events.RunFinished was published after every run and read
+	// by a browser log pane and nobody else.
+	a := newApp(t)
+	ctx := t.Context()
+	configured(t, a)
+	resolving(t, a, 4242)
+
+	id, err := a.ResolveProfile(ctx, "141504066")
+	if err != nil {
+		t.Fatalf("ResolveProfile: %v", err)
+	}
+	// No Tick, no advanceProfiles: the runs finishing are the only thing moving
+	// this, which is the wire being tested.
+	settled(t, "цепочка не двинулась сама", func() bool {
+		p, err := a.Store.Profile(ctx, id)
+		return err == nil && (p.Stage == store.StageDone || p.Stage == store.StageFailed)
+	})
+
+	p, err := a.Store.Profile(ctx, id)
+	if err != nil {
+		t.Fatalf("Profile: %v", err)
+	}
+	if p.Stage != store.StageDone {
+		t.Fatalf("цепочка встала на %q: %s", p.Stage, p.Failure)
 	}
 }

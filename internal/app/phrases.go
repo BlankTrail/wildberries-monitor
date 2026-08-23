@@ -4,6 +4,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/BlankTrail/wildberries-monitor/internal/store"
 )
@@ -34,27 +35,39 @@ func (a *App) gradePhrases(ctx context.Context) {
 		a.Log.Printf("фразы: не прочитать профили: %v", err)
 		return
 	}
-	if len(profiles) == 0 {
-		return
+	for _, p := range profiles {
+		if err := a.gradeProfilePhrases(ctx, p); err != nil {
+			// One profile's failure is not the round's: the others still have
+			// verdicts waiting, and this one says so on its own screen.
+			a.Log.Printf("фразы: профиль %q: %v", p.Name, err)
+		}
 	}
+}
+
+// gradeProfilePhrases turns one profile's checks into verdicts, and says so
+// when it could not.
+//
+// Split out because the chain's last stage needs the answer for one profile:
+// the neighbours are computed from working phrases alone, so a grading that
+// failed and a seller with no competitors produce the same empty list, and the
+// chain used to stamp «собрано» over either.
+func (a *App) gradeProfilePhrases(ctx context.Context, p store.ProfileRow) error {
 	topN := a.Store.PhrasesTopN(ctx)
 
-	for _, p := range profiles {
+	{
 		// The threshold first. It is the cheap one — an UPDATE over rows that
 		// already have a place — and doing it before the new gradings means a
 		// threshold moved a minute ago applies to this round's verdicts too,
 		// rather than to the round after it.
 		if moved, err := a.Store.RegradePhrases(ctx, p.ID, topN); err != nil {
-			a.Log.Printf("фразы: профиль %d: %v", p.ID, err)
-			continue
+			return err
 		} else if moved > 0 {
 			a.Log.Printf("фразы: профиль %q: порог топ-%d пересудил фраз: %d", p.Name, topN, moved)
 		}
 
 		checks, err := a.Store.PhraseChecks(ctx, p.ID, gradesPerPass)
 		if err != nil {
-			a.Log.Printf("фразы: профиль %d: %v", p.ID, err)
-			continue
+			return err
 		}
 		working := 0
 		for _, c := range checks {
@@ -62,8 +75,7 @@ func (a *App) gradePhrases(ctx context.Context) {
 			// here from the same rank: one place decides where the line is.
 			state, err := a.Store.CheckedPhrase(ctx, p.ID, c.Text, c.NmID, c.Dest, c.Rank, topN)
 			if err != nil {
-				a.Log.Printf("фразы: профиль %d, фраза %q: %v", p.ID, c.Text, err)
-				continue
+				return fmt.Errorf("фраза %q: %w", c.Text, err)
 			}
 			if state == store.PhraseWorking {
 				working++
@@ -76,4 +88,5 @@ func (a *App) gradePhrases(ctx context.Context) {
 				p.Name, len(checks), working)
 		}
 	}
+	return nil
 }

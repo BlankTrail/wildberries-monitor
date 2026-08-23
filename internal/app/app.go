@@ -59,6 +59,14 @@ type App struct {
 	// than inside the tick because the bot and the panel start jobs too.
 	Engine    *engine.Engine
 	Scheduler *job.Scheduler
+
+	// profileMu holds the onboarding chain to one walker.
+	//
+	// It is stepped from the tick and from every run that finishes, and the
+	// two can meet on one profile: both read the same stage, both start the
+	// same job, and the second start meets a job already running — which the
+	// stage reports as a failure over a chain that was doing fine.
+	profileMu sync.Mutex
 	Bot       *telegram.Bot
 	MTProto   *telegram.MTProto
 	Commands  *telegram.Commands
@@ -103,6 +111,14 @@ type App struct {
 // drives App without Run — the caller's context detached from its cancellation:
 // nothing here has a longer life to offer, and a run cancelled by the request
 // that started it is the failure this whole thing exists to prevent.
+// profileChainBuffer is how many finished runs may queue behind the chain.
+//
+// Sixteen. The handler is one pass over the profiles and takes a lock, so a
+// burst of runs finishing together queues rather than piling up goroutines; and
+// a pass dropped for a full buffer costs at most a minute, because the tick
+// makes the same pass anyway.
+const profileChainBuffer = 16
+
 func (a *App) lifetime(ctx context.Context) context.Context {
 	if p := a.life.Load(); p != nil {
 		return *p
@@ -175,6 +191,23 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 		Log: log.New(os.Stderr, "wbmon ", log.LstdFlags),
 	}
 
+	// A run that ended is the one thing the onboarding chain is ever waiting
+	// for, and until now nothing told it. The chain moved on the tick alone, so
+	// every stage boundary cost up to a minute of a screen saying nothing — five
+	// boundaries, five minutes — while events.RunFinished was published after
+	// every run and read by a browser log pane and no one else.
+	//
+	// Asynchronous, because a run must not wait on a chain: the publish happens
+	// on the runner's own closing path, and a stage that starts the next job
+	// from inside it would hold the run open while doing so.
+	if err := a.Bus.SubscribeAsync("профиль: цепочка", events.RunFinished, profileChainBuffer,
+		func(ctx context.Context, _ events.Event) error {
+			a.advanceProfiles(a.lifetime(ctx))
+			return nil
+		}); err != nil {
+		return nil, fmt.Errorf("подписка на завершение прогонов: %w", err)
+	}
+
 	// The three rungs of spec section 8.1, in the order the spec puts them.
 	// Two share the Bot API and differ only in how they leave this machine;
 	// the third speaks Telegram's own protocol and depends on neither
@@ -241,6 +274,17 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 		// Section 4.7's whole chain for one profile, in the one order there is.
 		ScanProfile: func(ctx context.Context, id int64) error {
 			return a.StartProfileChain(a.lifetime(ctx), id)
+		},
+		// And the press that starts it all: a pasted link becomes a profile and
+		// the whole chain, rather than a job the panel built by hand and nobody
+		// was waiting on.
+		ResolveProfile: func(ctx context.Context, input string) (int64, error) {
+			return a.ResolveProfile(a.lifetime(ctx), input)
+		},
+		// One nudge for one profile, which is what the screen asks for when a
+		// run it was watching ends.
+		StepProfile: func(ctx context.Context, id int64) error {
+			return a.StepProfile(a.lifetime(ctx), id)
 		},
 		// The promotions the site is running, with the preset each one's goods
 		// are filed under. A promotion runs for a fortnight, so this is asked

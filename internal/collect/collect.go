@@ -535,6 +535,18 @@ func (f *Fetcher) profile(ctx context.Context, key job.Key) (int, error) {
 	}
 
 	row := store.ProfileRow{Name: name, SourceInput: f.Job.Input, SellerID: fetched.Product.SupplierID}
+	// The profile this run was started for, when it was started for one. Without
+	// it every resolve inserted a profile of its own: the chain waiting on this
+	// run was waiting on a row nobody was writing, and a person who pressed
+	// «Разобрать» twice got two of everything.
+	//
+	// No owner is ordinary — a KindProfile job started by hand from the jobs
+	// screen belongs to nobody — and then this inserts, as it always did.
+	if owner, ok, err := f.Store.ProfileOfResolveJob(ctx, f.Job.ID); err != nil {
+		return requests, fmt.Errorf("collect: профиль задания %d: %w", f.Job.ID, err)
+	} else if ok {
+		row.ID = owner.ID
+	}
 	id, err := f.Store.SaveProfile(ctx, row)
 	if err != nil {
 		return requests, fmt.Errorf("collect: saving profile: %w", err)

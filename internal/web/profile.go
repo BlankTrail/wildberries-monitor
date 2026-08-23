@@ -51,7 +51,8 @@ func (s *Server) profilePage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "profile: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	s.render(w, r, page{Title: "Мой профиль", Body: rawHTML(body)})
+	s.render(w, r, page{Title: "Мой профиль",
+		Body: rawHTML(`<section id="profile-body" class="bt-card">` + body + `</section>`)})
 }
 
 // profileFragment re-renders the screen after an action.
@@ -71,8 +72,13 @@ func (s *Server) profileHTML(r *http.Request) (string, error) {
 		return "", err
 	}
 
+	// The inside of that section and not the section itself: the script sets
+	// the target's innerHTML and the target is #profile-body, so a fragment
+	// carrying its own copy nested a second element of that id — and a second
+	// card frame — inside the first on every action. This screen redraws itself
+	// after every run now, so it would have nested once per stage.
 	var b strings.Builder
-	b.WriteString(`<section id="profile-body" class="bt-card"><h2>Мой профиль</h2>`)
+	b.WriteString(`<h2>Мой профиль</h2>`)
 
 	if len(profiles) == 0 {
 		b.WriteString(`<div class="bt-alert bt-alert--neutral">` +
@@ -85,7 +91,6 @@ func (s *Server) profileHTML(r *http.Request) (string, error) {
 	}
 
 	b.WriteString(profileForm())
-	b.WriteString(`</section>`)
 	return b.String(), nil
 }
 
@@ -119,7 +124,7 @@ func (s *Server) profileCard(r *http.Request, p store.ProfileRow) string {
 	b.WriteString(s.competitorsHTML(r, p))
 	b.WriteString(s.profilePlanForm(r, p))
 	b.WriteString(`<div class="bt-form-actions">`)
-	if p.SellerID != nil && !p.Running() {
+	if !p.Running() {
 		b.WriteString(action(fmt.Sprintf("/profile/scan?id=%d", p.ID), "#profile-body",
 			profileScanLabel(p)))
 	}
@@ -139,12 +144,38 @@ func profileScanLabel(p store.ProfileRow) string {
 }
 
 // stageNames are the chain's steps as a person reads them.
+//
+// Only the stages that run with no job of their own are named here. A stage
+// that waits on one is named for the job it is waiting on instead — see
+// stageLabel — because the stored stage is the step that runs *next*, so a
+// profile walking a storefront was stored as «phrases» and the screen said
+// «подбираем фразы» for the ten minutes it spent reading the storefront.
 var stageNames = map[string]string{
+	// Reachable with no job of its own for the moment between «сбор начат» and
+	// the resolve job being saved — and for as long as that save is refused.
 	store.StageResolve: "разбираем ссылку",
-	store.StageCatalog: "собираем ассортимент",
 	store.StagePhrases: "подбираем фразы",
-	store.StageCheck:   "проверяем позиции",
+	store.StageExpand:  "расширяем фразы подсказками",
 	store.StageRivals:  "считаем конкурентов",
+}
+
+// stageLabel is what the chain is doing right now.
+func stageLabel(p store.ProfileRow) string {
+	switch {
+	case p.StageJob != 0 && p.StageJob == p.ResolveJob:
+		return "разбираем ссылку"
+	case p.StageJob != 0 && p.StageJob == p.CatalogJob:
+		return "собираем ассортимент"
+	case p.StageJob != 0 && p.StageJob == p.CheckJob:
+		return "проверяем позиции"
+	}
+	if name := stageNames[p.Stage]; name != "" {
+		return name
+	}
+	// A stage this build does not name renders as its own identifier — ugly
+	// and visible — rather than as a blank a reader cannot act on. That is how
+	// «expand» reached the screen in Latin for as long as it did.
+	return p.Stage
 }
 
 // chainState is what the collection is doing, or what it last did.
@@ -156,11 +187,8 @@ var stageNames = map[string]string{
 func (s *Server) chainState(r *http.Request, p store.ProfileRow) string {
 	switch {
 	case p.Running():
-		name := stageNames[p.Stage]
-		if name == "" {
-			name = p.Stage
-		}
-		out := `<div class="bt-alert bt-alert--neutral">Идёт сбор: ` + html.EscapeString(name) + `.`
+		out := `<div class="bt-alert bt-alert--neutral">Идёт сбор: ` +
+			html.EscapeString(stageLabel(p)) + `.`
 		if p.StageJob != 0 {
 			out += ` Ход — на вкладке «Задачи», задание №` + strconv.FormatInt(p.StageJob, 10) + `.`
 		}
@@ -168,7 +196,12 @@ func (s *Server) chainState(r *http.Request, p store.ProfileRow) string {
 		// The live stream of the job this stage is waiting on, so the tab
 		// shows progress rather than asking somebody to go and look.
 		if p.StageJob != 0 {
-			out += runLiveHTML(p.StageJob)
+			// And when that run ends the tab moves itself on: it asks the chain
+			// to step and redraws, so the next stage's panel appears without
+			// anybody reloading. Before this the screen froze on the first
+			// stage's «Идёт сбор» for the whole of the chain.
+			out += runLiveDoneHTML(p.StageJob,
+				fmt.Sprintf("/profile/step?id=%d", p.ID), "#profile-body")
 		}
 		return out
 	case p.Stage == store.StageFailed:
@@ -180,7 +213,7 @@ func (s *Server) chainState(r *http.Request, p store.ProfileRow) string {
 				". Всё, что нужно для сравнения с конкурентами, на месте.") + `</div>`
 	case p.SellerID == nil:
 		return `<div class="bt-alert bt-alert--neutral">` +
-			`Ссылка разбирается — как только станет известен продавец, появится кнопка сбора.</div>`
+			`Продавец пока не определён — нажмите «Собрать всё», ссылка будет разобрана заново.</div>`
 	}
 	return `<div class="bt-alert bt-alert--neutral">` +
 		`Продавец известен, данные ещё не собраны. Одна кнопка внизу соберёт всё: ассортимент, ` +
@@ -320,35 +353,43 @@ func (s *Server) saveProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	j := job.Job{
-		Name:  "профиль: " + input,
-		Kind:  job.KindProfile,
-		Input: input,
-		// A region and an audience, because a card is read for one of each
-		// and the site refuses a request that names neither. The same first
-		// guess the storefront job below starts from, and the same one the
-		// jobs form pre-fills.
-		Regions: []string{profileRegion},
-		AppType: wb.AppWeb,
-		Fields:  wb.Selection{"nm_id"},
-		Threads: 1,
+	if s.ResolveProfile == nil {
+		s.profileFragment(w, r, alert("neutral", "Разбор ссылки недоступен в этой сборке."))
+		return
 	}
-	id, err := job.Save(r.Context(), s.Store, j)
-	if err != nil {
+	// The whole chain, not a job. Building the resolve job here was the shape
+	// of the defect: nothing was waiting on it, so the run that learned who the
+	// seller was handed that fact to nobody and the profile stopped there.
+	if _, err := s.ResolveProfile(r.Context(), input); err != nil {
 		s.profileFragment(w, r, alert("error", err.Error()))
 		return
 	}
-	if s.StartJob == nil {
-		s.profileFragment(w, r, alert("neutral",
-			"Задание на разбор сохранено, но запуск недоступен в этой сборке."))
-		return
-	}
-	if err := s.StartJob(r.Context(), id); err != nil {
-		s.profileFragment(w, r, alert("error", err.Error()))
-		return
-	}
+	// And the profile exists before this answer is written, so the fragment
+	// below carries the card, the stage and the live panel rather than a
+	// promise that something will appear.
 	s.profileFragment(w, r, alert("success",
-		"Разбираем ссылку. Как только карточка прочитана, профиль появится здесь.")+runLiveHTML(id))
+		"Разбираем ссылку и сразу собираем профиль: ассортимент, фразы, конкуренты. "+
+			"Ход — ниже, экран обновляется сам."))
+}
+
+// stepProfileHandler nudges one chain and draws where it landed.
+//
+// A press and not a link, because it moves the chain. The screen asks for it
+// when a run it was following ends: a plain redraw would race the same nudge
+// coming from the bus and could show the stage that just finished.
+func (s *Server) stepProfileHandler(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.URL.Query().Get("id"), 10, 64)
+	if err != nil {
+		http.Error(w, "profile: which profile?", http.StatusBadRequest)
+		return
+	}
+	if s.StepProfile != nil {
+		if err := s.StepProfile(r.Context(), id); err != nil {
+			s.profileFragment(w, r, alert("error", err.Error()))
+			return
+		}
+	}
+	s.profileFragment(w, r, "")
 }
 
 // scanProfile starts the whole chain — section 4.7 as one act.

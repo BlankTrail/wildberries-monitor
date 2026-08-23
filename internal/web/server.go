@@ -123,6 +123,18 @@ type Server struct {
 	// and a screen with five buttons on it does not carry an order.
 	ScanProfile func(ctx context.Context, id int64) error
 
+	// ResolveProfile turns a pasted link into a profile and collects the whole
+	// of it. A hook rather than a job this package builds itself: the order of
+	// the stages is the app's, and a panel that made the first job by hand
+	// handed the run to nobody — which is exactly how a pasted link used to end
+	// at a card read and nothing more.
+	ResolveProfile func(ctx context.Context, input string) (int64, error)
+
+	// StepProfile moves one profile's chain as far as it can go right now. The
+	// screen asks for it when a run it was watching ends, so that what it draws
+	// next is the stage after that run rather than the one that just finished.
+	StepProfile func(ctx context.Context, id int64) error
+
 	// PickupDirectory reads the site's whole directory of delivery points and
 	// stores it, returning how many settlements and how many points. One
 	// request for the country — see spec section 4.5's picker.
@@ -281,6 +293,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /profile/phrases", s.auth(http.HandlerFunc(s.makePhrases)))
 	mux.Handle("POST /profile/phrases/check", s.auth(http.HandlerFunc(s.checkPhrases)))
 	mux.Handle("POST /profile/scan", s.auth(http.HandlerFunc(s.scanProfile)))
+	mux.Handle("POST /profile/step", s.auth(http.HandlerFunc(s.stepProfileHandler)))
 	mux.Handle("POST /profile/plan", s.auth(http.HandlerFunc(s.saveProfilePlan)))
 	mux.Handle("POST /profile/phrases/top", s.auth(http.HandlerFunc(s.setPhrasesTopN)))
 	mux.Handle("POST /profile/phrases/delete", s.auth(http.HandlerFunc(s.dropPhrase)))

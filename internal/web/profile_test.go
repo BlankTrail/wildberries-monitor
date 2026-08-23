@@ -4,6 +4,7 @@ package web
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -51,31 +52,51 @@ func TestProfile_RefusesWhatCarriesNoArticleBeforeSpendingARequest(t *testing.T)
 	}
 }
 
-func TestProfile_ALinkBecomesAJobThatRunsThroughTheProxy(t *testing.T) {
-	// A card fetched from the panel itself would be the one request in this
-	// program that skipped the pool, the retries and the port discipline.
+func TestProfile_ThePasteAsksForTheWholeProfileAndShowsIt(t *testing.T) {
+	// The screen used to build the resolve job itself and start it, and nothing
+	// was waiting on that run: the card was read, the seller was learned, and
+	// the fact was handed to nobody. What a person saw was «профиль появится
+	// здесь» over an empty screen, for as long as they cared to look.
+	//
+	// The press asks for the chain now. Which stages it has is the app's
+	// business; what this screen owes is to ask for it and to draw what came
+	// back — the card, the stage, and something to watch.
 	srv := newServer(t)
-	var startedID int64
-	srv.StartJob = func(_ context.Context, id int64) error { startedID = id; return nil }
+	var asked string
+	srv.ResolveProfile = func(ctx context.Context, input string) (int64, error) {
+		asked = input
+		// What the app does: the row exists before this answer is written, so
+		// the fragment below has something to draw.
+		id, err := srv.Store.SaveProfile(ctx, store.ProfileRow{Name: input, SourceInput: input})
+		if err != nil {
+			return 0, err
+		}
+		// The shape the chain leaves behind: the stage that runs when the
+		// resolve lands, waiting on the resolve's own job.
+		if err := srv.Store.SetProfileJobs(ctx, id, 7, 0, 0); err != nil {
+			return 0, err
+		}
+		if err := srv.Store.StartProfileChain(ctx, id, store.StageCatalog, 7); err != nil {
+			return 0, err
+		}
+		return id, nil
+	}
 
 	const link = "https://www.wildberries.ru/catalog/141504066/detail.aspx"
 	body := postForm(t, srv, "/profile", url.Values{"input": {link}}).Body.String()
-	if !strings.Contains(body, "Разбираем ссылку") {
-		t.Errorf("разбор не начат:\n%s", firstLines(body))
-	}
-	if startedID == 0 {
-		t.Fatal("задание на разбор не запущено")
-	}
 
-	saved, err := job.Load(t.Context(), srv.Store, startedID)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
+	if asked != link {
+		t.Errorf("разбор попросили о %q", asked)
 	}
-	if saved.Kind != job.KindProfile {
-		t.Errorf("вид задания = %q", saved.Kind)
+	if !strings.Contains(body, "Разбираем ссылку и сразу собираем профиль") {
+		t.Errorf("экран не говорит, что собирается весь профиль:\n%s", firstLines(body))
 	}
-	if saved.Input != link {
-		t.Errorf("в задании ссылка %q", saved.Input)
+	// The card is on the screen, not a promise that one will appear.
+	if strings.Contains(body, "Вставьте ссылку на свой товар") {
+		t.Errorf("после разбора экран всё ещё пустой:\n%s", firstLines(body))
+	}
+	if !strings.Contains(body, "разбираем ссылку") {
+		t.Errorf("экран не называет этап:\n%s", firstLines(body))
 	}
 	// And the run says what it is doing, like every other run.
 	if !strings.Contains(body, "data-follow=") {
@@ -83,6 +104,17 @@ func TestProfile_ALinkBecomesAJobThatRunsThroughTheProxy(t *testing.T) {
 	}
 }
 
+func TestProfile_APasteWithNoWayToResolveSaysSo(t *testing.T) {
+	// A build without the collector cannot read a card. Silence would leave a
+	// screen whose only control does nothing.
+	srv := newServer(t)
+	srv.ResolveProfile = nil
+
+	body := postForm(t, srv, "/profile", url.Values{"input": {"141504066"}}).Body.String()
+	if !strings.Contains(body, "недоступен в этой сборке") {
+		t.Errorf("сборка без разбора молчит об этом:\n%s", firstLines(body))
+	}
+}
 func TestProfile_ShowsTheStorefrontAndOneButtonToCollectIt(t *testing.T) {
 	// The tab is a storefront, not a resolver with buttons under it. What it
 	// shows is the seller, their goods and what the chain last did; what it
@@ -428,31 +460,21 @@ func TestCompetitors_TheirPagesAreCollectedByAPhraseJob(t *testing.T) {
 	}
 }
 
-func TestProfile_TheJobItSavesNamesARegion(t *testing.T) {
-	// The screen saved a job with no region at all, and the card detail
-	// endpoint answers an empty dest with 400 — so every link anybody pasted
-	// produced a job that could not succeed, from a screen that never asked.
-	// Checked on the saved job rather than on the request, because this is the
-	// end that was wrong: the fetcher had nothing to be given.
+func TestProfile_ARefusedPasteSaysWhyAndKeepsTheScreen(t *testing.T) {
+	// «Не похоже на ссылку» is the cheap refusal this screen keeps for itself;
+	// everything past it belongs to the app. Both arrive as a line on the
+	// screen rather than as a status the browser renders as its own error.
 	srv := newServer(t)
-	if w := postForm(t, srv, "/profile", url.Values{
-		"input": {"https://www.wildberries.ru/catalog/190496459/detail.aspx"},
-	}); w.Code != 200 {
-		t.Fatalf("сохранение профиля = %d", w.Code)
+	srv.ResolveProfile = func(context.Context, string) (int64, error) {
+		return 0, errors.New("карточка не прочиталась")
 	}
 
-	jobs, err := srv.Store.Jobs(t.Context())
-	if err != nil || len(jobs) != 1 {
-		t.Fatalf("Jobs: %v, %d", err, len(jobs))
+	if body := postForm(t, srv, "/profile",
+		url.Values{"input": {"не ссылка"}}).Body.String(); !strings.Contains(body, "Не похоже на ссылку") {
+		t.Errorf("мусор принят молча:\n%s", firstLines(body))
 	}
-	j, err := job.Load(t.Context(), srv.Store, jobs[0].ID)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if j.FirstRegion() == "" {
-		t.Error("у разбора ссылки нет региона — карточка по такому заданию не читается")
-	}
-	if j.AppType == 0 {
-		t.Error("у разбора ссылки не выбрана аудитория")
+	if body := postForm(t, srv, "/profile",
+		url.Values{"input": {"141504066"}}).Body.String(); !strings.Contains(body, "карточка не прочиталась") {
+		t.Errorf("отказ разбора не показан:\n%s", firstLines(body))
 	}
 }

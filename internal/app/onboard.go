@@ -41,6 +41,13 @@ const profileCheckTopPages = 1
 // advanceProfiles moves every running chain one step, and starts the ones that
 // are due.
 func (a *App) advanceProfiles(ctx context.Context) {
+	// One walker at a time. The tick calls this and so does every run that
+	// finishes; two of them stepping one profile at once means the second
+	// StartJob meets a job already running, which the stage reports as a
+	// failure and the screen shows as «сбор остановился».
+	a.profileMu.Lock()
+	defer a.profileMu.Unlock()
+
 	profiles, err := a.Store.Profiles(ctx)
 	if err != nil {
 		a.Log.Printf("профиль: не прочитать: %v", err)
@@ -52,7 +59,7 @@ func (a *App) advanceProfiles(ctx context.Context) {
 			continue
 		}
 		if a.profileDue(p) {
-			if err := a.startProfileChain(ctx, p); err != nil {
+			if err := a.startProfileChain(ctx, p, false); err != nil {
 				a.Log.Printf("профиль %q: %v", p.Name, err)
 			}
 		}
@@ -87,27 +94,107 @@ func (a *App) profileDue(p store.ProfileRow) bool {
 // same whether a person asked for it or the schedule did, and two entry points
 // with two orders in them is how they come to differ.
 func (a *App) StartProfileChain(ctx context.Context, id int64) error {
+	a.profileMu.Lock()
+	defer a.profileMu.Unlock()
+
 	p, err := a.Store.Profile(ctx, id)
 	if err != nil {
 		return err
 	}
-	return a.startProfileChain(ctx, p)
+	return a.startProfileChain(ctx, p, false)
 }
 
-func (a *App) startProfileChain(ctx context.Context, p store.ProfileRow) error {
-	if p.SellerID == nil {
-		// Nothing to walk. The resolve stage is what fills this in, and it is
-		// where a profile with a pasted link but no seller belongs.
-		return fmt.Errorf("профиль %q: продавец не определён — разберите ссылку заново", p.Name)
+// ResolveProfile turns a pasted link into a profile and collects the whole of
+// it — spec section 4.7's onboarding from its first press.
+//
+// Find or create, keyed on the article in what was pasted. The press that
+// resolves is also the press somebody repeats when nothing appears, and a
+// resolve that inserted a row every time gave them a twin per attempt: two
+// cards, two «Собрать всё», two schedules, and the plan they had configured on
+// the first one left behind.
+func (a *App) ResolveProfile(ctx context.Context, input string) (int64, error) {
+	input = strings.TrimSpace(input)
+	nm, ok := wb.NmID(input)
+	if !ok {
+		return 0, fmt.Errorf("в %q нет артикула — нужна ссылка на карточку или само число", input)
 	}
-	if err := a.Store.StartProfileChain(ctx, p.ID, store.StageCatalog, 0); err != nil {
+
+	a.profileMu.Lock()
+	defer a.profileMu.Unlock()
+
+	known, err := a.Store.Profiles(ctx)
+	if err != nil {
+		return 0, err
+	}
+	var p store.ProfileRow
+	for _, row := range known {
+		if got, ok := wb.NmID(row.SourceInput); ok && got == nm {
+			p = row
+			break
+		}
+	}
+	if p.ID == 0 {
+		id, err := a.Store.SaveProfile(ctx, store.ProfileRow{Name: input, SourceInput: input})
+		if err != nil {
+			return 0, err
+		}
+		if p, err = a.Store.Profile(ctx, id); err != nil {
+			return 0, err
+		}
+	}
+
+	// From the resolve, because the link is what was just pasted: the card may
+	// be a different seller's than last time, and reading it again is the whole
+	// of what this press asked for.
+	if err := a.startProfileChain(ctx, p, true); err != nil {
+		return 0, err
+	}
+	return p.ID, nil
+}
+
+// startProfileChain begins a full collection for one profile.
+//
+// reresolve says whether to read the pasted link again first. A press of
+// «Разобрать» does; the «Собрать всё» button and the schedule do not, because a
+// card that has since been delisted would then fail a rescan of a perfectly
+// healthy seller. A profile whose seller is unknown resolves either way — that
+// is the only thing that can fill it in.
+func (a *App) startProfileChain(ctx context.Context, p store.ProfileRow, reresolve bool) error {
+	first := store.StageCatalog
+	if reresolve || p.SellerID == nil {
+		first = store.StageResolve
+	}
+	if err := a.Store.StartProfileChain(ctx, p.ID, first, 0); err != nil {
 		return err
 	}
 	a.Log.Printf("профиль %q: сбор начат", p.Name)
 	// Stepped immediately rather than on the next tick: a person who pressed
 	// the button is watching, and a minute of nothing looks like a button that
 	// did not work.
-	p.Stage, p.StageJob = store.StageCatalog, 0
+	p.Stage, p.StageJob = first, 0
+	a.stepProfile(ctx, p)
+	return nil
+}
+
+// StepProfile moves one profile as far as it can go right now.
+//
+// Exported for the screen: when a run the tab was watching ends, the browser
+// asks for this before redrawing, so the answer it draws is the stage after the
+// one that just finished rather than the one that just finished. Without it the
+// screen would either race the bus subscriber or show a stage that is over.
+func (a *App) StepProfile(ctx context.Context, id int64) error {
+	a.profileMu.Lock()
+	defer a.profileMu.Unlock()
+
+	p, err := a.Store.Profile(ctx, id)
+	if err != nil {
+		return err
+	}
+	if !p.Running() {
+		// Nothing to move. Not an error: the screen asks after every run it
+		// watched, including the last one of the chain.
+		return nil
+	}
 	a.stepProfile(ctx, p)
 	return nil
 }
@@ -156,10 +243,23 @@ func (a *App) stepProfileOnce(ctx context.Context, p store.ProfileRow) (store.Pr
 			a.Log.Printf("профиль %q: сбор остановлен на этапе %q: %s", p.Name, p.Stage, reason)
 			return store.ProfileRow{}, false
 		}
+		// Read again before deciding anything. The run that just landed is the
+		// thing that wrote to this profile — the resolve writes the seller —
+		// and the copy the caller is holding was read before it did. Acting on
+		// the stale one dispatches the storefront walk at a profile whose
+		// seller is still nil.
+		fresh, err := a.Store.Profile(ctx, p.ID)
+		if err != nil {
+			a.Log.Printf("профиль %d: %v", p.ID, err)
+			return store.ProfileRow{}, false
+		}
+		p = fresh
 	}
 
 	var err error
 	switch p.Stage {
+	case store.StageResolve:
+		err = a.profileResolve(ctx, p)
 	case store.StageCatalog:
 		err = a.profileCatalog(ctx, p)
 	case store.StagePhrases:
@@ -209,12 +309,56 @@ func (a *App) runState(ctx context.Context, jobID int64) (string, string, bool) 
 	return r.State, r.Error, true
 }
 
+// profileResolve reads the pasted card, which is what names the seller.
+//
+// A stage like any other: it starts a job and records the stage that runs when
+// that job lands. It was not one before — the paste started a KindProfile job
+// from the web handler and nobody was waiting on it, so the run that learned
+// who the seller was handed that fact to nothing. store.StageResolve was
+// declared for exactly this and never written by anything.
+func (a *App) profileResolve(ctx context.Context, p store.ProfileRow) error {
+	if _, ok := wb.NmID(p.SourceInput); !ok {
+		return fmt.Errorf("в ссылке %q нет артикула — вставьте ссылку на карточку заново", p.SourceInput)
+	}
+
+	j := job.Job{
+		ID:      p.ResolveJob,
+		Name:    "профиль: разбор " + p.SourceInput,
+		Kind:    job.KindProfile,
+		Input:   p.SourceInput,
+		Regions: p.Regions,
+		AppType: wb.AppWeb,
+		Fields:  wb.Selection{"nm_id"},
+		Threads: 1,
+	}
+	id, err := job.Save(ctx, a.Store, j)
+	if err != nil {
+		return fmt.Errorf("задание на разбор ссылки: %w", err)
+	}
+	if id != p.ResolveJob {
+		if err := a.Store.SetProfileJobs(ctx, p.ID, id, p.CatalogJob, p.CheckJob); err != nil {
+			return err
+		}
+	}
+	if err := a.StartJob(ctx, id); err != nil {
+		return fmt.Errorf("запуск разбора ссылки: %w", err)
+	}
+	return a.Store.SetProfileStage(ctx, p.ID, store.StageCatalog, id)
+}
+
 // profileCatalog walks the seller's storefront and their own record.
 //
 // The job is reused across rescans rather than recreated: a new one a week
 // would fill the jobs screen with copies, and the history of one storefront
 // would be split across them.
 func (a *App) profileCatalog(ctx context.Context, p store.ProfileRow) error {
+	if p.SellerID == nil {
+		// The stage that needs the seller is the stage that refuses without
+		// one. It used to be refused where the chain was started, which is
+		// before the resolve has run and therefore before anybody could know.
+		return fmt.Errorf("продавец не определён: карточка не назвала владельца")
+	}
+
 	j := job.Job{
 		ID:         p.CatalogJob,
 		Name:       "профиль: ассортимент " + p.Name,
@@ -231,7 +375,7 @@ func (a *App) profileCatalog(ctx context.Context, p store.ProfileRow) error {
 		return fmt.Errorf("задание на ассортимент: %w", err)
 	}
 	if id != p.CatalogJob {
-		if err := a.Store.SetProfileJobs(ctx, p.ID, id, p.CheckJob); err != nil {
+		if err := a.Store.SetProfileJobs(ctx, p.ID, p.ResolveJob, id, p.CheckJob); err != nil {
 			return err
 		}
 	}
@@ -262,12 +406,18 @@ func (a *App) profilePhrases(ctx context.Context, p store.ProfileRow) error {
 		}
 	}
 
-	all, err := a.Store.ProfileItems(ctx, p.ID, store.ProfileProduct)
-	if err != nil {
-		return err
-	}
-	if len(all) == 0 {
-		return fmt.Errorf("после сбора ассортимента в профиле нет товаров — витрина не прочиталась")
+	// Asked of the seller's goods, not of the profile's items: the resolve
+	// seeds one item — the product whose link was pasted — so a storefront walk
+	// that brought back nothing counted one, passed this guard, and the chain
+	// reached «собрано» over a profile holding a single product.
+	if p.SellerID != nil {
+		held, err := a.Store.SellerProductCount(ctx, *p.SellerID)
+		if err != nil {
+			return err
+		}
+		if held <= 1 {
+			return fmt.Errorf("витрина не прочиталась: у продавца собрано товаров — %d", held)
+		}
 	}
 
 	// The categories first, then the two bounds section 4.7 asks for. Zero on
@@ -315,8 +465,8 @@ func (a *App) profilePhrases(ctx context.Context, p store.ProfileRow) error {
 			made++
 		}
 	}
-	a.Log.Printf("профиль %q: товаров %d, фразы собраны с %d из них, кандидатов %d",
-		p.Name, len(all), len(from), made)
+	a.Log.Printf("профиль %q: фразы собраны с %d товаров, кандидатов %d",
+		p.Name, len(from), made)
 	// No job, so the chain carries straight on rather than waiting a tick.
 	return a.Store.SetProfileStage(ctx, p.ID, store.StageExpand, 0)
 }
@@ -482,7 +632,7 @@ func (a *App) profileCheck(ctx context.Context, p store.ProfileRow) error {
 		return fmt.Errorf("задание на проверку фраз: %w", err)
 	}
 	if id != p.CheckJob {
-		if err := a.Store.SetProfileJobs(ctx, p.ID, p.CatalogJob, id); err != nil {
+		if err := a.Store.SetProfileJobs(ctx, p.ID, p.ResolveJob, p.CatalogJob, id); err != nil {
 			return err
 		}
 	}
@@ -501,7 +651,13 @@ func (a *App) profileCheck(ctx context.Context, p store.ProfileRow) error {
 // end the chain with an empty competitor list and no way to tell it from a
 // seller who has none.
 func (a *App) profileRivals(ctx context.Context, p store.ProfileRow) error {
-	a.gradePhrases(ctx)
+	// The verdicts first, and the chain stops if they could not be read. The
+	// neighbours are computed from working phrases alone, so a grading that
+	// failed produces an empty competitor list — which is indistinguishable,
+	// on the screen, from a seller who has no competitors.
+	if err := a.gradeProfilePhrases(ctx, p); err != nil {
+		return fmt.Errorf("оценка фраз: %w", err)
+	}
 
 	found, err := a.Store.Neighbours(ctx, p.ID)
 	if err != nil {

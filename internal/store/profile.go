@@ -74,10 +74,16 @@ type ProfileRow struct {
 	// is waiting on — zero when the stage needs none.
 	Stage    string
 	StageJob int64
-	// CatalogJob and CheckJob are the two jobs the chain reuses. Kept rather
-	// than recreated per run: a rescan that made new ones would fill the jobs
-	// screen with a copy a week, and the history of one storefront would be
-	// split across them.
+	// ResolveJob, CatalogJob and CheckJob are the three jobs the chain reuses.
+	// Kept rather than recreated per run: a rescan that made new ones would
+	// fill the jobs screen with a copy a week, and the history of one
+	// storefront would be split across them.
+	//
+	// ResolveJob does one thing more: it is how the run that reads the pasted
+	// card finds the profile it was started for. Without it that run inserted
+	// a profile of its own every time, and the chain waiting on it was waiting
+	// on a row nobody was writing.
+	ResolveJob int64
 	CatalogJob int64
 	CheckJob   int64
 
@@ -157,14 +163,29 @@ func DefaultProfilePlan() ProfileRow {
 	return ProfileRow{
 		Regions: []string{DefaultProfileRegion},
 		Fields:  fields,
-		// Zero pages, not twenty: a storefront ends on its own and the run
-		// extends the plan as it goes, so this is «до конца» — which is what
-		// somebody asking for their own assortment means.
-		MaxPages: 0,
+		// Twenty pages, about two thousand goods.
+		//
+		// Zero was written here to mean «до конца витрины», and nothing in this
+		// program can do that: the planner turns a storefront's zero into one
+		// page and no code path has ever added an item to a run already open.
+		// So the default collected a hundred goods, every stage after it was
+		// computed over that hundred, and the screen said «собрано». A number
+		// that is honest beats a promise nothing keeps — and this one is the
+		// same twenty the profile screen was already offering.
+		MaxPages: DefaultProfilePages,
 		// One round of the site's own suggestions over every candidate.
 		SuggestRounds: 1,
 	}
 }
+
+// DefaultProfilePages is how deep a profile walks its own storefront.
+//
+// About two thousand goods, which covers all but the largest sellers, and a
+// bound the screen can show and a person can raise. Its opposite — «сколько
+// есть» — is not on offer here, because nothing in this program can walk a
+// storefront to its end: see the planner's own note on a storefront's page
+// count in internal/job.
+const DefaultProfilePages = 20
 
 // DefaultProfileRegion is the region a profile starts collecting for.
 const DefaultProfileRegion = "-1257786"
@@ -218,7 +239,7 @@ func (s *Store) SaveProfile(ctx context.Context, p ProfileRow) (int64, error) {
 func (s *Store) Profiles(ctx context.Context) ([]ProfileRow, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, name, source_input, seller_id, created_at, updated_at,
-		       stage, stage_job, catalog_job, check_job, regions, fields, max_pages,
+		       stage, stage_job, resolve_job, catalog_job, check_job, regions, fields, max_pages,
 		       phrases_per_product, phrase_products,
 		       subjects, suggest_limit, suggest_rounds,
 		       schedule, enabled, started_at, finished_at, failure
@@ -246,7 +267,7 @@ func (s *Store) Profiles(ctx context.Context) ([]ProfileRow, error) {
 func (s *Store) Profile(ctx context.Context, id int64) (ProfileRow, error) {
 	p, err := scanProfile(s.db.QueryRowContext(ctx, `
 		SELECT id, name, source_input, seller_id, created_at, updated_at,
-		       stage, stage_job, catalog_job, check_job, regions, fields, max_pages,
+		       stage, stage_job, resolve_job, catalog_job, check_job, regions, fields, max_pages,
 		       phrases_per_product, phrase_products,
 		       subjects, suggest_limit, suggest_rounds,
 		       schedule, enabled, started_at, finished_at, failure
@@ -269,7 +290,7 @@ func scanProfile(row scanner) (ProfileRow, error) {
 	var regions, fields, subjects string
 	var enabled int64
 	if err := row.Scan(&p.ID, &p.Name, &p.SourceInput, &p.SellerID, &p.CreatedAt, &p.UpdatedAt,
-		&p.Stage, &p.StageJob, &p.CatalogJob, &p.CheckJob, &regions, &fields, &p.MaxPages,
+		&p.Stage, &p.StageJob, &p.ResolveJob, &p.CatalogJob, &p.CheckJob, &regions, &fields, &p.MaxPages,
 		&p.PhrasesPerProduct, &p.PhraseProducts,
 		&subjects, &p.SuggestLimit, &p.SuggestRounds,
 		&p.Schedule, &enabled, &p.StartedAt, &p.FinishedAt, &p.Failure); err != nil {
@@ -367,11 +388,57 @@ func (s *Store) FailProfileChain(ctx context.Context, id int64, reason string) e
 }
 
 // SetProfileJobs remembers the two jobs the chain reuses.
-func (s *Store) SetProfileJobs(ctx context.Context, id, catalog, check int64) error {
+func (s *Store) SetProfileJobs(ctx context.Context, id, resolve, catalog, check int64) error {
 	_, err := s.db.ExecContext(ctx, `
-		UPDATE profiles SET catalog_job = ?, check_job = ?, updated_at = ? WHERE id = ?`,
-		catalog, check, s.now().UTC().Unix(), id)
+		UPDATE profiles SET resolve_job = ?, catalog_job = ?, check_job = ?, updated_at = ?
+		 WHERE id = ?`,
+		resolve, catalog, check, s.now().UTC().Unix(), id)
 	return wrapProfile(id, err)
+}
+
+// SellerProductCount is how many of a seller's goods this database holds.
+//
+// The fact the chain needs to tell «витрина прочиталась» from «витрина не
+// прочиталась». Its predecessor counted rows in profile_items, which the
+// resolve seeds with the one product the link named — so a storefront walk
+// that brought back nothing counted one, passed the guard, and the profile
+// reached «собрано» holding a single item.
+func (s *Store) SellerProductCount(ctx context.Context, sellerID int64) (int, error) {
+	var n int
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM products WHERE supplier_id = ?`, sellerID).Scan(&n); err != nil {
+		return 0, fmt.Errorf("store: товаров продавца %d: %w", sellerID, err)
+	}
+	return n, nil
+}
+
+// ProfileOfResolveJob is the profile a resolve run belongs to.
+//
+// The link the collector needs and could not have: a run knows its job, a job
+// knows nothing of profiles, and the profile is the only one of the three that
+// can be asked. Without this the run that reads the pasted card inserted a
+// profile of its own — a twin per press, none of them the one the chain was
+// waiting on.
+//
+// The bool rather than an error for the miss, because a miss is ordinary: a
+// KindProfile job started by hand from the jobs screen belongs to no profile.
+func (s *Store) ProfileOfResolveJob(ctx context.Context, jobID int64) (ProfileRow, bool, error) {
+	if jobID == 0 {
+		return ProfileRow{}, false, nil
+	}
+	p, err := scanProfile(s.db.QueryRowContext(ctx, `
+		SELECT id, name, source_input, seller_id, created_at, updated_at,
+		       stage, stage_job, resolve_job, catalog_job, check_job, regions, fields, max_pages,
+		       phrases_per_product, phrase_products, subjects, suggest_limit, suggest_rounds,
+		       schedule, enabled, started_at, finished_at, failure
+		  FROM profiles WHERE resolve_job = ?`, jobID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return ProfileRow{}, false, nil
+	}
+	if err != nil {
+		return ProfileRow{}, false, fmt.Errorf("store: профиль задания %d: %w", jobID, err)
+	}
+	return p, true, nil
 }
 
 func wrapProfile(id int64, err error) error {

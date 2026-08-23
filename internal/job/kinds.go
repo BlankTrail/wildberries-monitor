@@ -307,10 +307,13 @@ func (StaticPlanner) Plan(j Job) ([]Item, error) {
 			}
 			pages := j.MaxPages
 			if pages <= 0 {
-				// A storefront ends on its own, unlike a search. One page is
-				// the honest plan until the first response says otherwise;
-				// the run extends it, and that is the one case where the plan
-				// grows rather than being complete up front.
+				// One page, and that is all it is.
+				//
+				// This used to say the run extends the plan as the storefront
+				// answers. Nothing does: walk iterates a slice fixed before it
+				// starts, and the store has no way to add an item to an open
+				// run. A caller who wants a whole storefront names the pages —
+				// see store.DefaultProfilePages, which is what a profile uses.
 				pages = 1
 			}
 			for page := 1; page <= pages; page++ {

@@ -1277,8 +1277,23 @@ func destUseText(d store.DestUse) string {
 // data-follow is what starts the listening. The stream carries every event
 // this program emits, so the id is what the panel says it is watching rather
 // than a filter.
-func runLiveHTML(jobID int64) string {
-	return fmt.Sprintf(`<section class="bt-card" id="run-live" data-follow="%d">`+
+func runLiveHTML(jobID int64) string { return runLiveDoneHTML(jobID, "", "") }
+
+// runLiveDoneHTML is the same panel, plus what to do when the run it follows
+// ends.
+//
+// The jobs screen wants nothing: the run finished and the list beside it
+// already says so. The profile screen wants the chain stepped and itself
+// redrawn, because its next stage is a different job and nothing else would
+// ever start following it — the tab froze on the first stage until somebody
+// reloaded.
+func runLiveDoneHTML(jobID int64, donePost, doneTarget string) string {
+	done := ""
+	if donePost != "" {
+		done = ` data-done-post="` + html.EscapeString(donePost) +
+			`" data-done-target="` + html.EscapeString(doneTarget) + `"`
+	}
+	return fmt.Sprintf(`<section class="bt-card" id="run-live" data-follow="%d"`+done+`>`+
 		`<h3>Идёт сбор: задание №%d</h3>`+
 		`<div id="run-progress"><div class="bt-alert bt-alert--neutral">План составляется…</div></div>`+
 		`<h4 class="bt-form-head">Живой лог</h4>`+
