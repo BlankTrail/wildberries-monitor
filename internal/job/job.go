@@ -235,6 +235,17 @@ type Job struct {
 	// here.
 	Attempts int
 
+	// KeepRaw asks for the untouched response of every reading to be stored
+	// beside the parsed fields, which is what spec section 5.3's JSON and
+	// JSONL exports offer as an option.
+	//
+	// Off unless somebody ticks it, and the reason is size: a search-page
+	// payload is seven and a half kilobytes per product, so a storefront of
+	// eight hundred goods over eighty-five regions is two hundred megabytes a
+	// pass — the growth section 5.2 exists to prevent. A job that wants it is
+	// usually one product being looked into, not a storefront being watched.
+	KeepRaw bool
+
 	// Threads and Delay are how hard to push. Zero threads means one.
 	Threads int
 	Delay   time.Duration

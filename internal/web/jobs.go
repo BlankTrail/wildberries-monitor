@@ -631,6 +631,12 @@ func (s *Server) constructorHTML(r *http.Request, edit *job.Job) (string, error)
 
 	b.WriteString(`<h3 class="bt-form-head">Что снимать с каждого товара</h3>`)
 	b.WriteString(fieldCheckboxes(d.Fields, d.editing))
+	b.WriteString(field("Хранить ответы сайта", keepRawBox(d.KeepRaw),
+		"Кладёт рядом с разобранными полями нетронутый ответ Wildberries — то, из чего "+
+			"строка получилась. Нужно, когда сайт прислал не то, что ожидалось, и надо "+
+			"посмотреть, что именно. В выгрузке JSON и JSONL это отдельное поле. "+
+			"По умолчанию выключено: ответ на один товар — около семи килобайт, и на "+
+			"витрине в восемьдесят пять регионов это двести мегабайт за проход."))
 
 	b.WriteString(`<div id="estimate" class="bt-alert bt-alert--neutral">Отметьте поля — здесь появится оценка.</div>`)
 	b.WriteString(`<div class="bt-form-actions">
@@ -735,6 +741,16 @@ func (d draft) articlesText() string {
 }
 
 func (d draft) phrasesText() string { return strings.Join(d.Phrases, "\n") }
+
+// keepRawBox is the tick that decides whether responses are kept.
+func keepRawBox(on bool) string {
+	checked := ""
+	if on {
+		checked = " checked"
+	}
+	return `<label class="bt-checkbox"><input type="checkbox" name="keep_raw" value="1"` + checked +
+		`> хранить нетронутые ответы</label>`
+}
 
 // kindPicker is the choice of what the job enumerates.
 //
@@ -1031,6 +1047,7 @@ func (s *Server) jobFromForm(r *http.Request) (job.Job, error) {
 		Delay:    time.Duration(atoi64(f.Get("delay_ms"))) * time.Millisecond,
 		Schedule: strings.TrimSpace(f.Get("schedule")),
 		Enabled:  f.Get("schedule") != "",
+		KeepRaw:  f.Get("keep_raw") != "",
 	}
 
 	// Only the chosen kind's own parameters are read. The constructor shows

@@ -62,6 +62,10 @@ type params struct {
 	// rather than a column of its own: it is a setting of this job like the
 	// page bound beside it, and a column would be a migration for a number.
 	Attempts int `json:"attempts,omitempty"`
+
+	// KeepRaw asks the collector to store the untouched responses this job's
+	// readings are parsed from. Beside Attempts and for the same reason.
+	KeepRaw bool `json:"keep_raw,omitempty"`
 }
 
 // Save writes a job and returns its id.
@@ -90,6 +94,7 @@ func Save(ctx context.Context, s *store.Store, j Job) (int64, error) {
 		PromotionShard:  j.PromotionShard,
 		PromotionQuery:  j.PromotionQuery,
 		Attempts:        j.Attempts,
+		KeepRaw:         j.KeepRaw,
 		MaxPages:        j.MaxPages,
 	})
 	if err != nil {
@@ -181,6 +186,7 @@ func fromRow(row store.JobRow) (Job, error) {
 		PromotionQuery:  p.PromotionQuery,
 		MaxPages:        p.MaxPages,
 		Attempts:        p.Attempts,
+		KeepRaw:         p.KeepRaw,
 		Channels:        channels,
 		Threads:         row.Threads,
 		Delay:           time.Duration(row.DelayMS) * time.Millisecond,

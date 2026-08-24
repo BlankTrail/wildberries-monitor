@@ -64,6 +64,24 @@ type Writer interface {
 	Close() error
 }
 
+// writeRow emits one row, with its untouched response where both the writer
+// and the reading have one.
+//
+// A reading has one when the job that took it asked to keep responses — see
+// migration 0034 — and a writer has somewhere to put it when it is a JSON or a
+// JSONL. Everything else writes the row alone, which is the same file it wrote
+// before this existed.
+func writeRow(w Writer, values []Value, raw *string) error {
+	rw, ok := w.(RawWriter)
+	if !ok {
+		return w.Write(values)
+	}
+	if raw == nil {
+		return rw.WriteRaw(values, nil)
+	}
+	return rw.WriteRaw(values, json.RawMessage(*raw))
+}
+
 // RawWriter is a Writer that can also keep WB's own response beside the parsed
 // fields, which is what Options.IncludeRaw asks for.
 //
@@ -74,15 +92,16 @@ type Writer interface {
 // alone would break the very claim this package exists to keep. So it travels
 // beside the row, and only the writers that can carry it implement this.
 //
-// This is not an unfinished edge of the design, so the reasoning is written
-// out rather than left to be rediscovered. The untouched response is not in
-// the database at all: store.ProductRow does not carry one, and neither
-// products nor snapshots has a column for one — it lives in wb.Product.Raw, in
-// the collector, before anything is written. So Options.IncludeRaw is an
-// option about exporting a live pass, not about exporting history. Export,
-// which reads the store, therefore writes the absence honestly (a null), and
-// WriteRaw is called by the one caller that has the payload in hand: the
-// collector, exporting straight off the pass that fetched it.
+// Where the payload comes from is the part worth stating. It used to be
+// nowhere: the response lived in wb.Product.Raw, in the collector, and was
+// dropped before anything was written — so this interface had no caller and
+// ticking the option produced a file with «"raw": null» on every row.
+//
+// Migration 0034 gave the snapshot a column for it, filled only for the jobs
+// that tick «хранить ответы» — seven and a half kilobytes a product is not
+// something to keep by default, and spec section 5.2 is about exactly that. So
+// a row carries its payload when the job that took it asked to, and a null
+// when it did not, which is the honest answer either way.
 type RawWriter interface {
 	Writer
 	// WriteRaw emits one row together with the untouched response it was
@@ -411,7 +430,7 @@ func Export(ctx context.Context, rows iter.Seq2[store.ProductRow, error], sel wb
 			failure = fmt.Errorf("export: after row %d: %w", n, err)
 			break
 		}
-		if err := w.Write(RowOf(r, cols)); err != nil {
+		if err := writeRow(w, RowOf(r, cols), r.Raw); err != nil {
 			failure = fmt.Errorf("export: write row %d: %w", n+1, err)
 			break
 		}

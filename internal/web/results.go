@@ -432,8 +432,36 @@ func (s *Server) exportButtons(r *http.Request, q url.Values) string {
 			info("Лист очищается и заполняется заново тем, что показано сейчас. "+
 				"Дозапись пачками по 500 строк.") + `</form>`)
 	}
-	b.WriteString(`</div><div id="export-note"></div>`)
+	b.WriteString(`</div>`)
+	b.WriteString(s.rawLink(r, q, base))
+	b.WriteString(`<div id="export-note"></div>`)
 	return b.String()
+}
+
+// rawLink offers the JSON export with the site's own responses in it.
+//
+// Only where there is something to offer. The payload is kept for the readings
+// of jobs that ticked «хранить ответы» and for no others, so on a database
+// where nobody has, this link would produce a file with «"raw": null» on every
+// row — which is what the option did for as long as there was nowhere to keep
+// a response, and the reason there is a column for one now.
+func (s *Server) rawLink(r *http.Request, q url.Values, base string) string {
+	kept, err := s.Store.AnyRawKept(r.Context())
+	if err != nil || !kept {
+		return ""
+	}
+	sep := "&"
+	if q.Encode() == "" {
+		sep = ""
+	}
+	return `<div class="bt-field bt-field--row"><span class="bt-label">С ответами сайта` +
+		info("Тот же JSON, но рядом с каждой строкой — нетронутый ответ Wildberries, из которого "+
+			"она получилась. Есть только у чтений тех заданий, где включено «хранить ответы»; "+
+			"у остальных в этом поле будет пусто.") + `</span>` +
+		`<a class="bt-btn bt-btn--secondary bt-btn--sm" href="` +
+		html.EscapeString(base+sep+"format=json&raw=1") + `">JSON</a>` +
+		`<a class="bt-btn bt-btn--secondary bt-btn--sm" href="` +
+		html.EscapeString(base+sep+"format=jsonl&raw=1") + `">JSONL</a></div>`
 }
 
 // exportHandler writes the file straight into the response.

@@ -1280,3 +1280,86 @@ func saveReading2(t *testing.T, s *Store, p wb.Product, jobID int64) {
 		t.Fatalf("SaveProduct %d for job %d: %v", p.ID, jobID, err)
 	}
 }
+
+func TestProducts_KeepTheUntouchedResponseWhenOneWasHandedOver(t *testing.T) {
+	// Spec section 5.3 offers the site's own response beside the parsed fields
+	// as an option of the JSON exports. Everything for it existed except a
+	// place to keep it, so ticking it produced «"raw": null» on every row.
+	s := openTestStore(t)
+	at := time.Date(2026, 8, 24, 9, 0, 0, 0, time.UTC)
+	p := readingAt(141504066, "-1257786", 1, 120000, at)
+	p.Raw = []byte(`{"id":141504066,"experiment":"b"}`)
+	saveReading(t, s, p)
+
+	got := collectSeq(t, "Products", s.Products(context.Background(), ProductFilter{}))
+	if len(got) != 1 {
+		t.Fatalf("строк %d", len(got))
+	}
+	if got[0].Raw == nil || *got[0].Raw != `{"id":141504066,"experiment":"b"}` {
+		t.Errorf("ответ = %v, а его передали на запись", got[0].Raw)
+	}
+}
+
+func TestProducts_AReadingWithNoResponseHandedOverKeepsNone(t *testing.T) {
+	// The ordinary case, and the one the column is empty for: seven and a half
+	// kilobytes a product is not something to keep by default.
+	s := openTestStore(t)
+	at := time.Date(2026, 8, 24, 9, 0, 0, 0, time.UTC)
+	saveReading(t, s, readingAt(141504066, "-1257786", 1, 120000, at))
+
+	got := collectSeq(t, "Products", s.Products(context.Background(), ProductFilter{}))
+	if len(got) != 1 {
+		t.Fatalf("строк %d", len(got))
+	}
+	if got[0].Raw != nil {
+		t.Errorf("ответ = %q, а его не передавали", *got[0].Raw)
+	}
+}
+
+func TestProducts_AChangingPayloadIsNotAChangedReading(t *testing.T) {
+	// The digest deliberately does not cover the payload. A response carries a
+	// tracking token and an experiment flag that differ on every request and
+	// describe nothing about the product — digested, every pass would write a
+	// row and spec section 5.2's «пишем только при изменении» would be off for
+	// any job that asked to keep responses.
+	s := openTestStore(t)
+	at := time.Date(2026, 8, 24, 9, 0, 0, 0, time.UTC)
+
+	first := readingAt(141504066, "-1257786", 1, 120000, at)
+	first.Raw = []byte(`{"id":141504066,"token":"aaa"}`)
+	saveReading(t, s, first)
+
+	same := readingAt(141504066, "-1257786", 1, 120000, at.Add(time.Hour))
+	same.Raw = []byte(`{"id":141504066,"token":"bbb"}`)
+	saveReading(t, s, same)
+
+	n, err := s.CountForTest(context.Background(),
+		`SELECT COUNT(*) FROM snapshots WHERE nm_id = 141504066`)
+	if err != nil {
+		t.Fatalf("CountForTest: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("снимков %d — сменившийся токен в ответе записался как изменение товара", n)
+	}
+}
+
+func TestAnyRawKept_IsFalseUntilAJobKeepsOne(t *testing.T) {
+	// The one screen that offers to export responses asks this first: a link
+	// producing «"raw": null» on every row is the promise this column exists to
+	// stop making.
+	s := openTestStore(t)
+	ctx := context.Background()
+	at := time.Date(2026, 8, 24, 9, 0, 0, 0, time.UTC)
+	saveReading(t, s, readingAt(100, "-1257786", 1, 120000, at))
+
+	if kept, err := s.AnyRawKept(ctx); err != nil || kept {
+		t.Errorf("AnyRawKept = %v, %v — ответов никто не хранил", kept, err)
+	}
+
+	with := readingAt(101, "-1257786", 1, 120000, at)
+	with.Raw = []byte(`{"id":101}`)
+	saveReading(t, s, with)
+	if kept, err := s.AnyRawKept(ctx); err != nil || !kept {
+		t.Errorf("AnyRawKept = %v, %v — один ответ сохранён", kept, err)
+	}
+}

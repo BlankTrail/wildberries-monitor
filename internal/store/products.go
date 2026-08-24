@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"hash"
 	"math"
@@ -270,12 +271,12 @@ func insertSnapshot(ctx context.Context, tx *sql.Tx, p wb.Product, fingerprint s
 		    nm_id, dest, app_type, ts, anchor, fingerprint,
 		    rating, rating_key, feedbacks, feedback_key, total_quantity,
 		    price_base, price_sale, discount_pct, currency,
-		    time1, time2, dist, warehouse_id, pics, job_id
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		    time1, time2, dist, warehouse_id, pics, job_id, raw
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		p.ID, p.Dest, p.AppType, ts, anchorFlag, fingerprint,
 		p.Rating, p.RatingKey, p.Feedbacks, p.FeedbackKey, snapshotStock(p),
 		base, sale, discount, currency,
-		p.Time1, p.Time2, p.Dist, p.WarehouseID, p.Pics, nullableID(jobID))
+		p.Time1, p.Time2, p.Dist, p.WarehouseID, p.Pics, nullableID(jobID), nullableJSON(p.Raw))
 	if err != nil {
 		return 0, fmt.Errorf("store: write the snapshot of %d in %s: %w", p.ID, p.Dest, err)
 	}
@@ -436,6 +437,19 @@ func nullableID(id int64) any {
 	return id
 }
 
+// nullableJSON is a payload as the column stores it: the text, or NULL for none.
+//
+// Empty is NULL rather than an empty string, because the two say different
+// things about a reading: «этот прогон не просили хранить ответы» and «сайт
+// прислал пустоту». Only the first ever happens, and an empty string would
+// make it look like the second.
+func nullableJSON(raw json.RawMessage) any {
+	if len(raw) == 0 {
+		return nil
+	}
+	return string(raw)
+}
+
 // fingerprintOf digests the volatile half of a reading.
 //
 // It is the handle the volume strategy in spec section 5.2 is built on: the
@@ -500,6 +514,22 @@ func fingerprintOf(p wb.Product) string {
 	// section 4.7 says a seller can act on the same day, and a reading that
 	// recorded it while the digest ignored it would be thinned away.
 	fpOptInt(h, "pics", p.Pics)
+
+	// The untouched payload is the one column of this row the digest does not
+	// cover, and the exception is deliberate rather than an oversight of the
+	// rule stated above.
+	//
+	// A payload carries things that change on every request and describe
+	// nothing about the product: a tracking token, an experiment flag, the
+	// order of keys in an object. Digested, every pass would differ from the
+	// last, every pass would write a row, and spec section 5.2's whole
+	// mechanism — «снимок пишется только когда что-то изменилось» — would be
+	// off for any job that ticked «хранить ответы».
+	//
+	// What the row then holds is the payload the reading was written from,
+	// which is what it claims to be. A reading not written has no payload
+	// because it has no row, and that is the same answer the rest of its
+	// columns give.
 
 	digests := make([]string, 0, len(p.Sizes))
 	for _, sz := range p.Sizes {

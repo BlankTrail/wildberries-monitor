@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"html"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -964,5 +965,69 @@ func TestResults_AShortValueIsNotPutInABox(t *testing.T) {
 	}
 	if strings.Contains(body, `<div class="bt-cell-long">Платье 0</div>`) {
 		t.Error("короткое значение положено в бокс — полоса прокрутки в каждой ячейке")
+	}
+}
+
+func TestResults_TheResponseExportIsOfferedOnlyWhenThereAreResponses(t *testing.T) {
+	// Spec section 5.3's option. It was reachable only by hand-editing the
+	// address and produced «"raw": null» on every row, because nothing kept a
+	// response — which is the promise migration 0034 exists to stop making. So
+	// the link appears when there is something behind it and not before.
+	srv := newServer(t)
+	ctx := t.Context()
+	seedReadings(t, srv.Store, 1)
+
+	if body := get(t, srv, "/results", "").Body.String(); strings.Contains(body, "raw=1") {
+		t.Error("выгрузка с ответами предложена, а ответов никто не хранил")
+	}
+
+	p := wb.Product{
+		ID: 200, Name: "Топ", Dest: "-1257786", AppType: 1, Rank: 1, Page: 1,
+		FetchedAt: time.Date(2026, 8, 24, 9, 0, 0, 0, time.UTC),
+		Sizes:     []wb.Size{{Name: "M", PriceProduct: ptrTo(int64(43000))}},
+		Raw:       []byte(`{"id":200}`),
+	}
+	if _, err := srv.Store.SaveProduct(ctx, p, "", 0); err != nil {
+		t.Fatalf("SaveProduct: %v", err)
+	}
+
+	body := get(t, srv, "/results", "").Body.String()
+	if !strings.Contains(body, "format=json&amp;raw=1") {
+		t.Errorf("выгрузки с ответами нет, хотя ответ сохранён: %s", firstLines(body))
+	}
+	if !strings.Contains(body, "format=jsonl&amp;raw=1") {
+		t.Error("предложен только один из двух форматов, которые умеют нести ответ")
+	}
+}
+
+func TestJobConstructor_OffersToKeepTheSitesResponses(t *testing.T) {
+	// The tick that fills the column. Off by default and said why: seven and a
+	// half kilobytes a product is two hundred megabytes a pass on a storefront
+	// over eighty-five regions.
+	srv := newServer(t)
+	body := get(t, srv, "/jobs/new", "").Body.String()
+	if !strings.Contains(body, `name="keep_raw"`) {
+		t.Fatalf("в конструкторе нет галочки «хранить ответы»: %s", firstLines(body))
+	}
+	if strings.Contains(body, `name="keep_raw" value="1" checked`) {
+		t.Error("хранение ответов включено по умолчанию")
+	}
+
+	// And it reaches the saved job, or the tick is a control wired to nothing.
+	postForm(t, srv, "/jobs", url.Values{
+		"name": {"с ответами"}, "kind": {"articles"}, "articles": {"100"},
+		"regions": {"-1257786"}, "app_type": {"1"}, "threads": {"1"},
+		"delay_ms": {"0"}, "fields": {"nm_id"}, "keep_raw": {"1"},
+	})
+	list, err := srv.Store.Jobs(t.Context())
+	if err != nil || len(list) != 1 {
+		t.Fatalf("Jobs: %v, %d строк", err, len(list))
+	}
+	saved, err := job.Load(t.Context(), srv.Store, list[0].ID)
+	if err != nil {
+		t.Fatalf("job.Load: %v", err)
+	}
+	if !saved.KeepRaw {
+		t.Error("галочка «хранить ответы» не дошла до задания")
 	}
 }

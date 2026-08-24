@@ -3,10 +3,12 @@
 package export
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"iter"
 	"math"
+	"strings"
 	"testing"
 
 	"github.com/BlankTrail/wildberries-monitor/internal/store"
@@ -724,5 +726,41 @@ func TestRowOf_ThePhotographCountIsExported(t *testing.T) {
 	}
 	if blank := RowOf(store.ProductRow{NmID: 100}, cols); !blank[0].Absent {
 		t.Errorf("колонка = %+v, а выдача о фотографиях не сказала", blank[0])
+	}
+}
+
+func TestExport_TheResponseTravelsToAWriterThatCanHoldIt(t *testing.T) {
+	// The interface had no caller: the payload lived in the collector, was
+	// dropped before anything was written, and ticking the option produced a
+	// file with «"raw": null» on every row. Migration 0034 gave the reading a
+	// column for it, and this is the line that carries it across.
+	raw := `{"id":100,"experiment":"b"}`
+	rows := []store.ProductRow{
+		{NmID: 100, Raw: &raw},
+		{NmID: 101}, // a reading of a job that did not ask
+	}
+
+	var out bytes.Buffer
+	w, err := NewWriter("jsonl", &out, Options{IncludeRaw: true})
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	if _, err := Export(t.Context(), seqOf(rows, nil), wb.Selection{"nm_id"}, w); err != nil {
+		t.Fatalf("Export: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("строк %d: %s", len(lines), out.String())
+	}
+	if !strings.Contains(lines[0], `"experiment":"b"`) {
+		t.Errorf("ответ не попал в файл: %s", lines[0])
+	}
+	// And a reading with none says so rather than inventing an empty object.
+	if !strings.Contains(lines[1], `"raw":null`) {
+		t.Errorf("чтение без ответа записано не как null: %s", lines[1])
 	}
 }

@@ -52,6 +52,12 @@ type ProductRow struct {
 	// half of spec section 4.7's card completeness that costs nothing.
 	Pics *int64
 
+	// Raw is the untouched response this reading was parsed from, for the
+	// jobs that asked to keep it, and nil for every other reading. See
+	// migration 0034 and spec section 5.3's «опция сохранить сырой ответ WB
+	// рядом с разобранными полями».
+	Raw *string
+
 	PriceBase   *int64 // minor units
 	PriceSale   *int64 // minor units
 	DiscountPct *int64
@@ -187,6 +193,7 @@ const productRowColumns = `
 	    s.rating                 AS rating,
 	    s.feedbacks              AS feedbacks,
 	    s.pics                   AS pics,
+	    s.raw                    AS raw,
 	    s.total_quantity         AS total_quantity,
 	    s.price_base             AS price_base,
 	    s.price_sale             AS price_sale,
@@ -218,7 +225,7 @@ const productRowColumns = `
 // rather than subtle: Scan reports the column count and every test in the
 // file says so at once.
 const productRowOutput = `nm_id, imt_id, name, brand, supplier_id, supplier_name,
-	    dest, app_type, ts, rating, feedbacks, pics, total_quantity,
+	    dest, app_type, ts, rating, feedbacks, pics, raw, total_quantity,
 	    price_base, price_sale, discount_pct, currency,
 	    description, vendor_code, subject_name, card_created,
 	    options, compositions`
@@ -234,7 +241,7 @@ func scanProductRow(sc rowScanner) (ProductRow, error) {
 	var r ProductRow
 	err := sc.Scan(
 		&r.NmID, &r.ImtID, &r.Name, &r.Brand, &r.SupplierID, &r.SupplierName,
-		&r.Dest, &r.AppType, &r.TS, &r.Rating, &r.Feedbacks, &r.Pics, &r.TotalQuantity,
+		&r.Dest, &r.AppType, &r.TS, &r.Rating, &r.Feedbacks, &r.Pics, &r.Raw, &r.TotalQuantity,
 		&r.PriceBase, &r.PriceSale, &r.DiscountPct, &r.Currency,
 		&r.Description, &r.VendorCode, &r.SubjectName, &r.CardCreated,
 		&r.Options, &r.Compositions)
@@ -486,6 +493,25 @@ func orderBy(f ProductFilter) string {
 // The window function is kept for the same reason it is in the stream — with
 // Latest set, «сколько всего» means how many series there are and not how many
 // readings they hold.
+// AnyRawKept reports whether any reading carries the site's own response.
+//
+// For the one screen that offers to export them: a link that produces a file
+// with «"raw": null» on every row is the promise this column exists to stop
+// making, and on a database where no job has ever ticked «хранить ответы»
+// that is exactly what it would produce.
+//
+// EXISTS rather than a count: the question is whether there is one, and
+// counting two hundred thousand rows to answer it is a table scan for a
+// boolean.
+func (s *Store) AnyRawKept(ctx context.Context) (bool, error) {
+	var kept int64
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT EXISTS (SELECT 1 FROM snapshots WHERE raw IS NOT NULL)`).Scan(&kept); err != nil {
+		return false, fmt.Errorf("store: are any responses kept: %w", err)
+	}
+	return kept == 1, nil
+}
+
 func (s *Store) CountProducts(ctx context.Context, f ProductFilter) (int64, error) {
 	// The page has no bearing on the total.
 	f.Limit, f.Offset, f.Sort = 0, 0, ""

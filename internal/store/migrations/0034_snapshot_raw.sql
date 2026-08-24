@@ -1,0 +1,24 @@
+-- The untouched response a reading was parsed from, for the jobs that ask.
+--
+-- Spec section 5.3 lists it as an option of the JSON and JSONL exports:
+-- «опция сохранить сырой ответ WB рядом с разобранными полями». Everything for
+-- it existed except a place to keep it — wb.Product.Raw is filled by the
+-- decoder, export.RawWriter is implemented by the JSON writer, and the panel
+-- reads a `raw` parameter — and with nothing in the database to read, ticking
+-- it produced a file with «"raw": null» on every row. A promise with a column
+-- of nulls behind it is the failure this schema has already been cleaned of
+-- twice.
+--
+-- Nullable, and off unless a job asks. A search-page payload is seven and a
+-- half kilobytes per product: a storefront of eight hundred goods over
+-- eighty-five regions is two hundred megabytes a pass, which is exactly the
+-- growth section 5.2 exists to prevent. So the collector clears it for every
+-- job that did not tick «хранить ответы», and this column is empty for all of
+-- them.
+--
+-- Not in the change digest. See fingerprintOf: a payload carries a tracking
+-- token and an experiment flag that differ on every request and describe
+-- nothing about the product, so digesting it would make every pass a change
+-- and switch off section 5.2's «пишем только при изменении» for any job that
+-- asked to keep responses.
+ALTER TABLE snapshots ADD COLUMN raw TEXT;

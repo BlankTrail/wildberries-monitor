@@ -162,7 +162,7 @@ func (f *Fetcher) page(ctx context.Context, key job.Key) (int, error) {
 	// The query is passed on, so the page earns organic positions. Left out,
 	// every rank this product exists to watch would be silently absent — and
 	// the rows would look complete.
-	if _, err := f.Store.SaveSearchPage(ctx, kept, key.Phrase, f.Job.ID); err != nil {
+	if _, err := f.Store.SaveSearchPage(ctx, f.stored(kept), key.Phrase, f.Job.ID); err != nil {
 		return requests, fmt.Errorf("collect: saving search %q page %d: %w", key.Phrase, key.Page, err)
 	}
 	if err := f.link(ctx, kept.Products); err != nil {
@@ -206,7 +206,7 @@ func (f *Fetcher) listing(ctx context.Context, key job.Key) (int, error) {
 	}
 	requests := 1
 
-	if _, err := f.Store.SaveSearchPage(ctx, env, "", f.Job.ID); err != nil {
+	if _, err := f.Store.SaveSearchPage(ctx, f.stored(env), "", f.Job.ID); err != nil {
 		return requests, fmt.Errorf("collect: сохранение: %s %d, страница %d: %w", what, key.ID, key.Page, err)
 	}
 	if err := f.link(ctx, env.Products); err != nil {
@@ -269,7 +269,7 @@ func (f *Fetcher) catalog(ctx context.Context, key job.Key) (int, error) {
 	// node. A person who types exactly «cat:8126» into a phrase job would
 	// collide with it — vanishingly unlikely, and cheaper to say than to guard
 	// against with a column nothing else needs.
-	if _, err := f.Store.SaveSearchPage(ctx, env, catalogQueryKey(key.ID), f.Job.ID); err != nil {
+	if _, err := f.Store.SaveSearchPage(ctx, f.stored(env), catalogQueryKey(key.ID), f.Job.ID); err != nil {
 		return requests, fmt.Errorf("collect: saving catalogue node %d page %d: %w", key.ID, key.Page, err)
 	}
 	if err := f.link(ctx, env.Products); err != nil {
@@ -321,7 +321,7 @@ func (f *Fetcher) promo(ctx context.Context, key job.Key) (int, error) {
 	// promotion's own name rather than under the preset. The preset is a
 	// number the site can reissue; the slug is what the promotion is, and
 	// «третий в акции» has to keep meaning the same thing next season.
-	if _, err := f.Store.SaveSearchPage(ctx, env, promoQueryKey(p.Slug), f.Job.ID); err != nil {
+	if _, err := f.Store.SaveSearchPage(ctx, f.stored(env), promoQueryKey(p.Slug), f.Job.ID); err != nil {
 		return requests, fmt.Errorf("collect: сохранение акции %q страница %d: %w", p.Slug, key.Page, err)
 	}
 	if err := f.link(ctx, env.Products); err != nil {
@@ -391,7 +391,7 @@ func (f *Fetcher) mainFeed(ctx context.Context, key job.Key) (int, error) {
 	}
 	requests := 1
 
-	if _, err := f.Store.SaveSearchPage(ctx, env, store.MainFeedQuery, f.Job.ID); err != nil {
+	if _, err := f.Store.SaveSearchPage(ctx, f.stored(env), store.MainFeedQuery, f.Job.ID); err != nil {
 		return requests, fmt.Errorf("collect: сохранение главной страницы %d: %w", key.Page, err)
 	}
 	if err := f.link(ctx, env.Products); err != nil {
@@ -618,11 +618,43 @@ func (f *Fetcher) profile(ctx context.Context, key job.Key) (int, error) {
 
 	// The card itself is worth keeping: it is a reading like any other, and
 	// the profile screen shows the product it resolved to.
-	if _, err := f.Store.SaveProduct(ctx, fetched.Product, "", f.Job.ID); err != nil {
+	if _, err := f.Store.SaveProduct(ctx, f.storedOne(fetched.Product), "", f.Job.ID); err != nil {
 		return requests, fmt.Errorf("collect: saving the resolved product: %w", err)
 	}
 	f.scraped(ctx, "профиль по товару %d — %s", key.NmID, name)
 	return requests, nil
+}
+
+// storedOne is stored for a single product.
+func (f *Fetcher) storedOne(p wb.Product) wb.Product {
+	if !f.Job.KeepRaw {
+		p.Raw = nil
+	}
+	return p
+}
+
+// stored is one page as it is to be written.
+//
+// The untouched payload the decoder attached to each of them is dropped unless
+// this job asked to keep it. Done here rather than in the store, so that «за
+// что платим местом» is decided in one place by the one thing that knows what
+// the job asked for — and so the store writes what it is handed rather than
+// consulting a job it has no other reason to know about.
+//
+// Seven and a half kilobytes a product is why it is off by default: a
+// storefront of eight hundred goods over eighty-five regions is two hundred
+// megabytes a pass, which is the growth spec section 5.2 exists to prevent.
+func (f *Fetcher) stored(env wb.Envelope) wb.Envelope {
+	if f.Job.KeepRaw {
+		return env
+	}
+	out := make([]wb.Product, len(env.Products))
+	for i, p := range env.Products {
+		p.Raw = nil
+		out[i] = p
+	}
+	env.Products = out
+	return env
 }
 
 // enrich fetches whatever the field selection asks for beyond the page.

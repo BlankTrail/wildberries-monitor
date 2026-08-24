@@ -1380,3 +1380,44 @@ func TestFetch_TheReadingsItWritesSayWhichJobAskedForThem(t *testing.T) {
 		t.Errorf("снимков без задания: %d, а их заказало задание %d", orphans, id)
 	}
 }
+
+func TestFetch_TheResponseIsKeptOnlyForAJobThatAskedForIt(t *testing.T) {
+	// Seven and a half kilobytes a product: a storefront of eight hundred goods
+	// over eighty-five regions is two hundred megabytes a pass, which is the
+	// growth spec section 5.2 exists to prevent. So the payload the decoder
+	// attached is dropped unless the job ticked «хранить ответы», and the
+	// dropping happens in the one place that knows what the job asked.
+	keeps := product(101)
+	keeps.Raw = []byte(`{"id":101}`)
+	site := &fakeSite{products: []wb.Product{keeps}}
+
+	f, s := fetcherFor(t, site, "nm_id", "price_sale")
+	if _, err := f.Fetch(t.Context(), job.Item{Key: job.Key{
+		Kind: job.ItemPage, Phrase: "платье", Dest: "-1257786", AppType: 1, Page: 1,
+	}.String()}); err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	n, err := s.CountForTest(t.Context(), `SELECT COUNT(*) FROM snapshots WHERE raw IS NOT NULL`)
+	if err != nil {
+		t.Fatalf("CountForTest: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("сохранено ответов %d, а задание об этом не просило", n)
+	}
+
+	// And with the tick, it is kept.
+	f2, s2 := fetcherFor(t, site, "nm_id", "price_sale")
+	f2.Job.KeepRaw = true
+	if _, err := f2.Fetch(t.Context(), job.Item{Key: job.Key{
+		Kind: job.ItemPage, Phrase: "платье", Dest: "-1257786", AppType: 1, Page: 1,
+	}.String()}); err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	n, err = s2.CountForTest(t.Context(), `SELECT COUNT(*) FROM snapshots WHERE raw IS NOT NULL`)
+	if err != nil {
+		t.Fatalf("CountForTest: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("сохранено ответов %d, а задание просило хранить", n)
+	}
+}
