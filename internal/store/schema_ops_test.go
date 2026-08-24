@@ -52,19 +52,22 @@ func TestSchema_HoldsNoTableNothingWrites(t *testing.T) {
 
 func TestBenchmarks_HoldNoColumnNothingFills(t *testing.T) {
 	// The same rule one level down. Eight columns of the comparison table were
-	// declared with the rest of it and never filled: the card's own media,
-	// which no client in the wb package fetches; the place with paid seats
-	// counted in, which cannot be reconstructed from what an ads reading
-	// gives; and «в наличии», which restated the stock column beside it.
+	// declared with the rest of it and never filled, and migration 0027
+	// dropped them: the card's own media, the place with paid seats counted
+	// in, and «в наличии», which restated the stock column beside it.
+	//
+	// Six of the eight are still gone and still for their own reasons. The
+	// photograph pair came back with migration 0033, and what changed is not
+	// the rule but the facts: `pics` rides on every listing the site answers
+	// with, so the count never needed the media group nobody fetches.
 	//
 	// Named rather than swept for, for the same reason the tables are: a
 	// column with no INSERT naming it in the Go source is not something a test
-	// can decide. These eight are the ones migration 0027 dropped.
+	// can decide.
 	s := openTestStore(t)
 
 	got := columnNames(t, s, "benchmarks")
 	for _, gone := range []string{
-		"photo_count", "rival_photo_count",
 		"has_video", "rival_has_video",
 		"position_with_ads", "rival_position_with_ads",
 		"available", "rival_available",
@@ -78,7 +81,7 @@ func TestBenchmarks_HoldNoColumnNothingFills(t *testing.T) {
 	for _, want := range []string{
 		"position_organic", "price", "rating", "feedbacks", "feedbacks_per_day",
 		"total_quantity", "delivery_time2", "description_len",
-		"options_filled_pct", "has_ad", "in_promo",
+		"options_filled_pct", "photo_count", "rival_photo_count", "has_ad", "in_promo",
 	} {
 		if !contains(got, want) {
 			t.Errorf("колонка benchmarks.%s пропала, а её заполняют", want)

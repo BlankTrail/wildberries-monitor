@@ -383,3 +383,49 @@ func TestCompare_TheScreenShowsWhoIsInAPromotion(t *testing.T) {
 		t.Fatalf("на экране нет колонки про акцию:\n%s", firstLines(body))
 	}
 }
+
+func TestCompare_TheCardsPhotographsAreCompared(t *testing.T) {
+	// The third of spec section 4.7's four completeness measures, and the one
+	// that was missing: migration 0027 dropped its columns because no client
+	// fetched a product's media. It never needed one — `pics` rides on every
+	// listing — so the comparison has it back, and the advice line names the
+	// shortest job first.
+	srv := newServer(t)
+	ctx := t.Context()
+	id, err := srv.Store.SaveProfile(ctx, store.ProfileRow{Name: "мой"})
+	if err != nil {
+		t.Fatalf("SaveProfile: %v", err)
+	}
+	mine, theirs := int64(2), int64(5)
+	filled, rivalFilled := int64(90), int64(90)
+	if err := srv.Store.SaveBenchmarks(ctx, []store.BenchmarkRow{{
+		ProfileID: id, NmID: 100, Query: "платье", Dest: "-1257786", TS: 1000,
+		Baseline:   store.BaselineMedian,
+		PhotoCount: &mine, RivalPhotoCount: &theirs,
+		OptionsFilledPct: &filled, RivalOptionsFilledPct: &rivalFilled,
+	}}); err != nil {
+		t.Fatalf("SaveBenchmarks: %v", err)
+	}
+
+	body := get(t, srv, "/compare", "").Body.String()
+	if !strings.Contains(body, `<th class="bt-num">Фотографий</th>`) {
+		t.Error("в полноте карточки нет колонки фотографий")
+	}
+	if !strings.Contains(body, "снять ещё 3 фотографии") {
+		t.Errorf("не сказано, сколько фотографий не хватает: %s", firstLines(body))
+	}
+
+	// And a comparison whose only completeness measure is the photograph
+	// count is still a row. A card nobody has read has no description length
+	// and no characteristics share, and it is exactly the card most worth
+	// telling somebody about.
+	if err := srv.Store.SaveBenchmarks(ctx, []store.BenchmarkRow{{
+		ProfileID: id, NmID: 200, Query: "боди", Dest: "-1257786", TS: 1000,
+		Baseline: store.BaselineMedian, PhotoCount: &mine, RivalPhotoCount: &theirs,
+	}}); err != nil {
+		t.Fatalf("SaveBenchmarks: %v", err)
+	}
+	if body := get(t, srv, "/compare", "").Body.String(); !strings.Contains(body, "боди") {
+		t.Error("строка, у которой из полноты есть только фотографии, не показана")
+	}
+}

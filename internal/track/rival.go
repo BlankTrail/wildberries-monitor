@@ -199,6 +199,18 @@ func fellBelow(wasMine, wasTheirs, isMine, isTheirs *float64) bool {
 }
 
 // gapGrew reports how far behind the card was and is, when it fell further.
+//
+// The share of characteristics filled, and not the photograph count beside it
+// on the comparison screen. Both are spec section 4.7's card completeness and
+// only one of them is a ratio: «заполнено 40% против 90%» means the same thing
+// in every category, while «на две фотографии меньше медианы» does not — a
+// dress is photographed eight ways and a phone case two, so the same shortfall
+// is a real gap in one shelf and rounding in another.
+//
+// So the photograph gap is advice where it can be read against its own shelf —
+// the «что сделать» column, which says «снять ещё три фотографии» — and not a
+// notification that would fire on the arithmetic of a category it knows
+// nothing about.
 func gapGrew(before, after Standing) (was, now int64, ok bool) {
 	if before.MyFullness == nil || before.RivalFullness == nil ||
 		after.MyFullness == nil || after.RivalFullness == nil {

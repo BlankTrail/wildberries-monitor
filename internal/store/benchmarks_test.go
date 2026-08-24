@@ -852,3 +852,64 @@ func TestSlots_APhrasesPlacementsAndAProductsShelfAreTwoThings(t *testing.T) {
 		t.Errorf("источники = %v, ожидались оба", sources)
 	}
 }
+
+func TestTopOfSearch_CarriesThePhotographCount(t *testing.T) {
+	// Spec section 4.7's card completeness has four measures and this is the
+	// one that had no source: migration 0027 dropped its comparison columns
+	// because no client fetched a product's media. It turned out never to have
+	// needed one — every listing carries `pics` — so the standing reads it
+	// from the reading it already has.
+	s := openTestStore(t)
+	ctx := context.Background()
+	at := time.Date(2026, 8, 24, 9, 0, 0, 0, time.UTC)
+
+	p := sampleProduct()
+	p.ID, p.Dest, p.AppType, p.FetchedAt = 100, "-1257786", 1, at
+	p.Pics = ptrTo(int64(23))
+	if _, err := s.SaveProduct(ctx, p, "платье", 0); err != nil {
+		t.Fatalf("SaveProduct: %v", err)
+	}
+
+	top, err := s.TopOfSearch(ctx, "платье", "-1257786", 10)
+	if err != nil {
+		t.Fatalf("TopOfSearch: %v", err)
+	}
+	if len(top) != 1 {
+		t.Fatalf("строк %d, ожидалась одна", len(top))
+	}
+	if top[0].PhotoCount == nil || *top[0].PhotoCount != 23 {
+		t.Errorf("фотографий %v, ожидалось 23", top[0].PhotoCount)
+	}
+}
+
+func TestSaveBenchmarks_KeepsThePhotographComparison(t *testing.T) {
+	// Written and read back, because a column the writer fills and the reader
+	// skips is a comparison that exists in the database and nowhere a person
+	// can see it — which is how the previous pair of these columns lived.
+	s := openTestStore(t)
+	ctx := context.Background()
+	id, err := s.SaveProfile(ctx, ProfileRow{Name: "мой"})
+	if err != nil {
+		t.Fatalf("SaveProfile: %v", err)
+	}
+	mine, theirs := int64(2), int64(5)
+	if err := s.SaveBenchmarks(ctx, []BenchmarkRow{{
+		ProfileID: id, NmID: 100, Query: "платье", Dest: "-1257786", TS: 1000,
+		Baseline: BaselineMedian, PhotoCount: &mine, RivalPhotoCount: &theirs,
+	}}); err != nil {
+		t.Fatalf("SaveBenchmarks: %v", err)
+	}
+
+	rows, err := s.Benchmarks(ctx, id)
+	if err != nil {
+		t.Fatalf("Benchmarks: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("строк %d", len(rows))
+	}
+	if rows[0].PhotoCount == nil || *rows[0].PhotoCount != 2 ||
+		rows[0].RivalPhotoCount == nil || *rows[0].RivalPhotoCount != 5 {
+		t.Errorf("фотографии %v против %v, сохраняли 2 против 5",
+			rows[0].PhotoCount, rows[0].RivalPhotoCount)
+	}
+}

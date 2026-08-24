@@ -260,3 +260,50 @@ func TestMedian_OfPromotionsIsWhetherMostOfTheTopIsDiscounting(t *testing.T) {
 		t.Error("один из троих в акции, а медиана говорит, что акция идёт")
 	}
 }
+
+func TestCompare_TakesThePhotographCountToTheMedianToo(t *testing.T) {
+	// Spec section 4.7's card completeness, third measure. The median rather
+	// than the best-photographed listing, for the same reason as every other
+	// column here: one seller who shot twenty angles is not the shelf's
+	// standard.
+	mine := standing(100, 8, 149900, 4.5, 12)
+	mine.PhotoCount = ptr(int64(2))
+
+	top := make([]store.SearchStanding, 0, 3)
+	for i, n := range []int64{4, 6, 12} {
+		st := standing(int64(200+i*100), int64(i+1), 99900, 4.9, 900)
+		st.PhotoCount = ptr(n)
+		top = append(top, st)
+	}
+
+	got := Compare(7, "платье", "-1257786", mine, top, nil)
+	if len(got) != 1 {
+		t.Fatalf("сравнений %d", len(got))
+	}
+	if got[0].PhotoCount == nil || *got[0].PhotoCount != 2 {
+		t.Errorf("моих фотографий %v, ожидалось 2", got[0].PhotoCount)
+	}
+	if got[0].RivalPhotoCount == nil || *got[0].RivalPhotoCount != 6 {
+		t.Errorf("медиана фотографий %v, ожидалось 6", got[0].RivalPhotoCount)
+	}
+}
+
+func TestMedian_APhotographCountNobodyReadIsLeftOutOfIt(t *testing.T) {
+	// The same rule the rest of the median follows: a listing whose count the
+	// payload did not carry is not a listing with no photographs, and counting
+	// it as zero would drag the shelf's standard below every card on it.
+	mine := standing(100, 8, 149900, 4.5, 12)
+	top := []store.SearchStanding{
+		standing(200, 1, 99900, 4.9, 900),
+		standing(300, 2, 109900, 4.8, 500),
+	}
+	top[0].PhotoCount = ptr(int64(8))
+
+	got := Compare(7, "платье", "-1257786", mine, top, nil)
+	if len(got) != 1 {
+		t.Fatalf("сравнений %d", len(got))
+	}
+	if got[0].RivalPhotoCount == nil || *got[0].RivalPhotoCount != 8 {
+		t.Errorf("медиана фотографий %v, а её назвал только один товар из двух", got[0].RivalPhotoCount)
+	}
+}

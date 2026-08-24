@@ -135,7 +135,7 @@ func fullnessTable(rows []store.BenchmarkRow) string {
 		if r.Baseline != store.BaselineMedian {
 			continue
 		}
-		if r.OptionsFilledPct == nil && r.DescriptionLen == nil {
+		if r.OptionsFilledPct == nil && r.DescriptionLen == nil && r.PhotoCount == nil {
 			continue
 		}
 		shown = append(shown, r)
@@ -150,6 +150,7 @@ func fullnessTable(rows []store.BenchmarkRow) string {
 		`который закрывается сегодня и бесплатно — без ставок, ремаркетинга и ожидания.</p>`)
 	b.WriteString(`<div class="bt-table-wrap"><table class="bt-table"><thead><tr>` +
 		`<th>Товар</th><th>Фраза</th>` +
+		`<th class="bt-num">Фотографий</th>` +
 		`<th class="bt-num">Характеристики</th><th class="bt-num">Описание</th>` +
 		`<th>Что сделать</th>` +
 		`</tr></thead><tbody>`)
@@ -157,6 +158,7 @@ func fullnessTable(rows []store.BenchmarkRow) string {
 	for _, r := range shown {
 		fmt.Fprintf(&b, `<tr><td class="bt-mono">%d</td><td>%s</td>`,
 			r.NmID, html.EscapeString(r.Query))
+		b.WriteString(deltaCell(r.PhotoCount, r.RivalPhotoCount, higherIsBetter, plainInt))
 		b.WriteString(deltaCell(r.OptionsFilledPct, r.RivalOptionsFilledPct, higherIsBetter, percent))
 		b.WriteString(deltaCell(r.DescriptionLen, r.RivalDescriptionLen, higherIsBetter, plainInt))
 		fmt.Fprintf(&b, `<td>%s</td></tr>`, html.EscapeString(fullnessAdvice(r)))
@@ -168,10 +170,16 @@ func fullnessTable(rows []store.BenchmarkRow) string {
 // fullnessAdvice is the row said out loud: what to do, or that there is
 // nothing to do.
 //
-// Named in the order the work goes — characteristics first, because they are
-// a form to fill in, and the description after, because it has to be written.
+// Named in the order the work goes — photographs first, because they are the
+// shortest job and the one a shopper sees before anything else; then the
+// characteristics, which are a form to fill in; then the description, which
+// has to be written.
 func fullnessAdvice(r store.BenchmarkRow) string {
 	var parts []string
+	if r.PhotoCount != nil && r.RivalPhotoCount != nil && *r.PhotoCount < *r.RivalPhotoCount {
+		parts = append(parts, fmt.Sprintf("снять ещё %s",
+			countOf(*r.RivalPhotoCount-*r.PhotoCount, "фотографию", "фотографии", "фотографий")))
+	}
 	if r.OptionsFilledPct != nil && r.RivalOptionsFilledPct != nil &&
 		*r.OptionsFilledPct < *r.RivalOptionsFilledPct {
 		parts = append(parts, "заполнить характеристики")

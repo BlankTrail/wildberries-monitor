@@ -73,6 +73,9 @@ type BenchmarkRow struct {
 	OptionsFilledPct      *int64
 	RivalOptionsFilledPct *int64
 
+	PhotoCount      *int64
+	RivalPhotoCount *int64
+
 	InPromo      *bool
 	RivalInPromo *bool
 
@@ -119,9 +122,10 @@ func (s *Store) SaveBenchmarks(ctx context.Context, rows []BenchmarkRow) error {
 				delivery_time2, rival_delivery_time2,
 				description_len, rival_description_len,
 				options_filled_pct, rival_options_filled_pct,
+				photo_count, rival_photo_count,
 				has_ad, rival_has_ad,
 				in_promo, rival_in_promo
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT (profile_id, nm_id, query, dest, ts, baseline, baseline_id) DO NOTHING`,
 			r.ProfileID, r.NmID, r.Query, r.Dest, r.TS, r.Baseline, r.BaselineID,
 			r.PositionOrganic, r.RivalPositionOrganic,
@@ -134,6 +138,7 @@ func (s *Store) SaveBenchmarks(ctx context.Context, rows []BenchmarkRow) error {
 			r.DeliveryTime2, r.RivalDeliveryTime2,
 			r.DescriptionLen, r.RivalDescriptionLen,
 			r.OptionsFilledPct, r.RivalOptionsFilledPct,
+			r.PhotoCount, r.RivalPhotoCount,
 			r.HasAd, r.RivalHasAd,
 			r.InPromo, r.RivalInPromo); err != nil {
 			return fmt.Errorf("store: save benchmark %d/%q: %w", r.NmID, r.Query, err)
@@ -162,6 +167,7 @@ func (s *Store) Benchmarks(ctx context.Context, profileID int64) ([]BenchmarkRow
 		       b.delivery_time2, b.rival_delivery_time2,
 		       b.description_len, b.rival_description_len,
 		       b.options_filled_pct, b.rival_options_filled_pct,
+		       b.photo_count, b.rival_photo_count,
 		       b.has_ad, b.rival_has_ad,
 		       b.in_promo, b.rival_in_promo
 		FROM benchmarks b
@@ -189,6 +195,7 @@ func (s *Store) Benchmarks(ctx context.Context, profileID int64) ([]BenchmarkRow
 			&b.DeliveryTime2, &b.RivalDeliveryTime2,
 			&b.DescriptionLen, &b.RivalDescriptionLen,
 			&b.OptionsFilledPct, &b.RivalOptionsFilledPct,
+			&b.PhotoCount, &b.RivalPhotoCount,
 			&b.HasAd, &b.RivalHasAd,
 			&b.InPromo, &b.RivalInPromo); err != nil {
 			return nil, fmt.Errorf("store: benchmarks of profile %d: %w", profileID, err)
@@ -409,6 +416,7 @@ func (s *Store) LastTwoStandings(ctx context.Context, k StandingKey) ([]Benchmar
 		       price, rival_price,
 		       rating, rival_rating,
 		       options_filled_pct, rival_options_filled_pct,
+		       photo_count, rival_photo_count,
 		       rival_in_promo
 		  FROM benchmarks
 		 WHERE profile_id = ? AND nm_id = ? AND query = ? AND dest = ?
@@ -432,6 +440,7 @@ func (s *Store) LastTwoStandings(ctx context.Context, k StandingKey) ([]Benchmar
 			&b.Price, &b.RivalPrice,
 			&b.Rating, &b.RivalRating,
 			&b.OptionsFilledPct, &b.RivalOptionsFilledPct,
+			&b.PhotoCount, &b.RivalPhotoCount,
 			&b.RivalInPromo); err != nil {
 			return nil, fmt.Errorf("store: last two standings of %d: %w", k.NmID, err)
 		}
@@ -470,6 +479,16 @@ type SearchStanding struct {
 	// card fills in, or nil where the card has not been read. See cardFullness.
 	OptionsFilledPct *int64
 
+	// PhotoCount is how many photographs the card had at this reading, or nil
+	// where the listing did not say.
+	//
+	// The third of spec section 4.7's four completeness measures, and the one
+	// that was missing: migration 0027 dropped the columns for it because no
+	// client fetched a product's media. It turned out never to have needed a
+	// fetch — every listing carries `pics` — so the comparison has it back,
+	// free, as migration 0033 says.
+	PhotoCount *int64
+
 	// InPromo is whether this listing was inside a promotion around the time
 	// of the reading. See inPromotion.
 	InPromo bool
@@ -491,7 +510,7 @@ func (s *Store) TopOfSearch(ctx context.Context, query, dest string, limit int) 
 		)
 		SELECT p.nm_id, p.rank, p.ts,
 		       s.price_sale, s.discount_pct, s.currency, s.rating, s.feedbacks,
-		       s.total_quantity, s.time2,
+		       s.total_quantity, s.time2, s.pics,
 		       LENGTH(COALESCE(pr.description, '')),
 		       `+wasAdvertised+`,
 		       `+reviewsPerDay+`,
@@ -515,7 +534,7 @@ func (s *Store) TopOfSearch(ctx context.Context, query, dest string, limit int) 
 		var st SearchStanding
 		if err := rows.Scan(&st.NmID, &st.Rank, &st.TS,
 			&st.Price, &st.DiscountPct, &st.Currency, &st.Rating, &st.Feedbacks,
-			&st.TotalQuantity, &st.DeliveryTime2, &st.DescriptionLen, &st.HasAd,
+			&st.TotalQuantity, &st.DeliveryTime2, &st.PhotoCount, &st.DescriptionLen, &st.HasAd,
 			&st.FeedbacksPerDay, &st.OptionsFilledPct, &st.InPromo); err != nil {
 			return nil, fmt.Errorf("store: top of %q in %q: %w", query, dest, err)
 		}
@@ -552,7 +571,7 @@ func (s *Store) StandingOf(ctx context.Context, nmID int64, query, dest string) 
 		)
 		SELECT p.nm_id, p.rank, p.ts,
 		       s.price_sale, s.discount_pct, s.currency, s.rating, s.feedbacks,
-		       s.total_quantity, s.time2,
+		       s.total_quantity, s.time2, s.pics,
 		       LENGTH(COALESCE(pr.description, '')),
 		       `+wasAdvertised+`,
 		       `+reviewsPerDay+`,
@@ -566,7 +585,7 @@ func (s *Store) StandingOf(ctx context.Context, nmID int64, query, dest string) 
 		query, dest, query, dest, nmID).
 		Scan(&st.NmID, &st.Rank, &st.TS,
 			&st.Price, &st.DiscountPct, &st.Currency, &st.Rating, &st.Feedbacks,
-			&st.TotalQuantity, &st.DeliveryTime2, &st.DescriptionLen, &st.HasAd,
+			&st.TotalQuantity, &st.DeliveryTime2, &st.PhotoCount, &st.DescriptionLen, &st.HasAd,
 			&st.FeedbacksPerDay, &st.OptionsFilledPct, &st.InPromo)
 	if err != nil {
 		return SearchStanding{}, false, nil
