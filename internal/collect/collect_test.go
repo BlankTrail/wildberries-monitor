@@ -29,9 +29,12 @@ type fakeSite struct {
 	// test can tell which storefront was asked.
 	brandListings []int64
 	cards         []int64
-	reviews       []int64
-	questions     []int64
-	shelves       []wb.SearchQuery
+	// details is the live-half-only fetches, kept apart from cards so a test
+	// can tell which half a collection asked for.
+	details   []int64
+	reviews   []int64
+	questions []int64
+	shelves   []wb.SearchQuery
 	// productShelves records which products were asked for their own row, and
 	// shelfOf answers for them. A nil shelfOf gives the answer the live site
 	// gives most of the time — a named shelf with nobody in it — which is the
@@ -134,6 +137,27 @@ func (f *fakeSite) BrandCatalogPage(_ context.Context, _ wb.Endpoints, id int64,
 		return wb.Envelope{}, f.fail
 	}
 	return wb.Envelope{Products: f.products}, nil
+}
+
+// Detail is the live half on its own, for a job that reads nothing out of the
+// card document. Recorded apart from the cards, so a test can tell which of
+// the two a collection actually asked for.
+func (f *fakeSite) Detail(_ context.Context, _ wb.Endpoints, nm int64, dest string, app int) (wb.CardFetch, error) {
+	f.details = append(f.details, nm)
+	if f.fail != nil {
+		return wb.CardFetch{}, f.fail
+	}
+	if f.cardFail != nil {
+		return wb.CardFetch{}, f.cardFail
+	}
+	return wb.CardFetch{
+		Product: wb.Product{
+			ID: nm, Name: "Платье", Brand: "BrandCo", MatchID: f.cardImt,
+			SupplierID: ptrTo(int64(4242)), SupplierName: "ООО Ромашка",
+			Dest: dest, AppType: app, FetchedAt: time.Unix(1000, 0).UTC(),
+			Feedbacks: f.cardFeedbacks,
+		},
+	}, nil
 }
 
 func (f *fakeSite) Card(_ context.Context, _ *wb.Basket, _ wb.Endpoints, nm int64, dest string, app int) (wb.CardFetch, error) {
@@ -479,9 +503,14 @@ func TestFetch_ReadsTheAdsForAPhrase(t *testing.T) {
 }
 
 func TestFetch_FetchesAProductByArticleNumber(t *testing.T) {
-	// The one kind with no search behind it: the card is the only way it
-	// learns the product exists, so it is fetched whether or not a card field
-	// was ticked.
+	// The one kind with no search behind it: the live half is the only way it
+	// learns anything about the product, so it is fetched whatever is ticked.
+	//
+	// Only the live half here. The card document is the description, the
+	// characteristics and the composition, and this job reads none of them —
+	// fetched anyway it was a request per article per region spent on a
+	// document nobody opens, which on eight hundred articles is eight hundred
+	// requests a pass.
 	site := &fakeSite{cardImt: 900}
 	f, s := fetcherFor(t, site, "nm_id", "price_sale")
 
@@ -491,11 +520,14 @@ func TestFetch_FetchesAProductByArticleNumber(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Fetch: %v", err)
 	}
-	if len(site.cards) != 1 || site.cards[0] != 101 {
-		t.Errorf("fetched %v", site.cards)
+	if len(site.details) != 1 || site.details[0] != 101 {
+		t.Errorf("живая половина запрошена для %v", site.details)
 	}
-	if n != 2 {
-		t.Errorf("cost %d requests, want the card's two halves", n)
+	if len(site.cards) != 0 {
+		t.Errorf("документ карточки запрошен для %v, а из него ничего не читают", site.cards)
+	}
+	if n != 1 {
+		t.Errorf("потрачено %d запросов, ожидалась одна живая половина", n)
 	}
 	saved, err := s.CountForTest(t.Context(), `SELECT COUNT(*) FROM products WHERE nm_id = 101`)
 	if err != nil {
@@ -1313,8 +1345,8 @@ func TestFetch_AProductFetchedByArticleAlsoSkipsAnEmptyReviewWindow(t *testing.T
 	if len(site.reviews) != 0 {
 		t.Errorf("отзывы запрошены у %v, хотя карточка уже сказала «ноль»", site.reviews)
 	}
-	if n != 2 {
-		t.Errorf("потрачено %d запросов, ожидались только две половины карточки", n)
+	if n != 1 {
+		t.Errorf("потрачено %d запросов, ожидалась одна живая половина", n)
 	}
 }
 
@@ -1419,5 +1451,48 @@ func TestFetch_TheResponseIsKeptOnlyForAJobThatAskedForIt(t *testing.T) {
 	}
 	if n != 1 {
 		t.Errorf("сохранено ответов %d, а задание просило хранить", n)
+	}
+}
+
+func TestFetch_TheCardDocumentIsFetchedWhenSomethingIsReadOutOfIt(t *testing.T) {
+	// The other half of the rule. A job that ticked «Описание и
+	// характеристики» is paying for the document on purpose, and skipping it
+	// would produce the empty columns this project has already cleaned out of
+	// the export twice.
+	site := &fakeSite{cardImt: 900}
+	f, _ := fetcherFor(t, site, "nm_id", "description")
+
+	n, err := f.Fetch(t.Context(), job.Item{Key: job.Key{
+		Kind: job.ItemProduct, NmID: 101, Dest: "-1257786", AppType: 1,
+	}.String()})
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if len(site.cards) != 1 || site.cards[0] != 101 {
+		t.Errorf("документ карточки не запрошен: %v", site.cards)
+	}
+	if len(site.details) != 0 {
+		t.Errorf("живая половина запрошена отдельно: %v — Card берёт обе", site.details)
+	}
+	if n != 2 {
+		t.Errorf("потрачено %d запросов, ожидались две половины карточки", n)
+	}
+}
+
+func TestFetch_TheReviewWindowIsReachableWithoutTheDocument(t *testing.T) {
+	// Reviews are keyed on the grouping id, and without the document that id
+	// has to come from the live half — the detail response carries it as
+	// matchId. Missed, an article list would silently stop collecting reviews
+	// the moment it stopped fetching documents.
+	site := &fakeSite{cardImt: 900}
+	f, _ := fetcherFor(t, site, "nm_id", "review_text")
+
+	if _, err := f.Fetch(t.Context(), job.Item{Key: job.Key{
+		Kind: job.ItemProduct, NmID: 101, Dest: "-1257786", AppType: 1,
+	}.String()}); err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if len(site.reviews) != 1 || site.reviews[0] != 900 {
+		t.Errorf("окно отзывов запрошено для %v, ожидалась группа 900", site.reviews)
 	}
 }

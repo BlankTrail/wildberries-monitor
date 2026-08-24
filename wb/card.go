@@ -223,21 +223,58 @@ func (c *Client) Card(ctx context.Context, b *Basket, eps Endpoints, nm int64, d
 	}
 	out.Card = card
 
+	live, err := c.detail(ctx, eps, nm, dest, app, referer, &out)
+	if err != nil {
+		return out, err
+	}
+	out.Product = live
+	return out, nil
+}
+
+// Detail is the live half of a product on its own: price, per-size stock,
+// delivery and promotions for one region, with no card document beside it.
+//
+// The half a job that watches prices actually needs. Client.Card fetches both
+// because a card is both, and an article-list job that collects nothing out of
+// the document was paying for one anyway — a request per article per region,
+// which on eight hundred articles is eight hundred requests a pass spent on a
+// document nobody reads.
+//
+// The returned CardFetch carries no Card, and store.SaveCard is built for
+// that: it writes whichever halves it was given.
+func (c *Client) Detail(ctx context.Context, eps Endpoints, nm int64, dest string, app int) (CardFetch, error) {
+	if app == 0 {
+		app = AppWeb
+	}
+	var out CardFetch
+	live, err := c.detail(ctx, eps, nm, dest, app, eps.CardPageURL(nm), &out)
+	if err != nil {
+		return out, err
+	}
+	out.Product = live
+	return out, nil
+}
+
+// detail fetches and reads the live half, appending its provenance to out.
+//
+// Shared by Card and Detail rather than written twice: the check below is the
+// kind of thing that gets fixed in one copy.
+func (c *Client) detail(ctx context.Context, eps Endpoints, nm int64, dest string, app int, referer string, out *CardFetch) (Product, error) {
 	liveRes, err := c.Get(ctx, eps.CardDetailURL(nm, dest, app), KindAPI, referer)
 	if err != nil {
 		out.Fetches = append(out.Fetches, lostFetch(SourceCardDetail, err))
-		return out, err
+		return Product{}, err
 	}
 	out.Fetches = append(out.Fetches, fetchOf(SourceCardDetail, liveRes))
 	if liveRes.Class != ClassOK {
-		return out, fmt.Errorf("card %d detail: status %d (%s)", nm, liveRes.Status, liveRes.Class)
+		return Product{}, fmt.Errorf("card %d detail: status %d (%s)", nm, liveRes.Status, liveRes.Class)
 	}
 	env, err := decodeEnvelope(liveRes.Body)
 	if err != nil {
-		return out, err
+		return Product{}, err
 	}
 	if len(env.Products) == 0 {
-		return out, fmt.Errorf("card %d detail: no product in the response (%d item(s) dropped by extraction)", nm, env.Dropped)
+		return Product{}, fmt.Errorf("card %d detail: no product in the response (%d item(s) dropped by extraction)", nm, env.Dropped)
 	}
 	live := env.Products[0]
 	// decodeEnvelope silently drops a malformed item rather than failing the
@@ -248,11 +285,10 @@ func (c *Client) Card(ctx context.Context, b *Basket, eps Endpoints, nm int64, d
 	// {"products":[<malformed>, <nm 141504066's data>]} would silently attach
 	// a different product's price, stock and promotions to this card.
 	if live.ID != nm {
-		return out, fmt.Errorf("card %d detail: response carries product %d instead (%d item(s) dropped by extraction)", nm, live.ID, env.Dropped)
+		return Product{}, fmt.Errorf("card %d detail: response carries product %d instead (%d item(s) dropped by extraction)", nm, live.ID, env.Dropped)
 	}
 	live.Dest = dest
 	live.AppType = app
 	live.FetchedAt = c.now()
-	out.Product = live
-	return out, nil
+	return live, nil
 }

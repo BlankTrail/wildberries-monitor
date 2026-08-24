@@ -531,7 +531,15 @@ func (j Job) Estimate(items int) Estimate {
 	case KindBrand:
 		e.Requests += pages * regions
 	case KindArticles:
-		// No walk: the list is the enumeration.
+		// No walk: the list is the enumeration. But every article costs its
+		// live half — this kind has no search page for prices and stock to
+		// ride on, so the detail request is the job rather than an extra, and
+		// the field catalogue prices FieldSourceCardDetail at zero precisely
+		// because everywhere else it does ride along.
+		//
+		// Left out, an article list collecting nothing but base fields was
+		// quoted at nought requests and made one per article per region.
+		e.Requests += len(j.Articles) * regions
 	case KindPromotion, KindMainFeed:
 		// One request per page, the same as a search: both are listings in the
 		// same index, asked for a preset or for nothing at all.

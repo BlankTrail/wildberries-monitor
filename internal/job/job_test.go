@@ -145,9 +145,10 @@ func TestEstimate_AnArticleListKnowsItsOwnSize(t *testing.T) {
 	if e.Items != 3 {
 		t.Errorf("Items = %d, want 3 — the list, not the caller's guess", e.Items)
 	}
-	// description costs one request per product, per region.
-	if e.Requests != 3 {
-		t.Errorf("Requests = %d, want 3", e.Requests)
+	// Two per article: the live half, which this kind has no search page to
+	// ride on, and the card document «description» is read out of.
+	if e.Requests != 6 {
+		t.Errorf("Requests = %d, want 6", e.Requests)
 	}
 }
 
@@ -285,10 +286,11 @@ func TestEstimate_TheFieldCostItselfMultipliesByRegion(t *testing.T) {
 	three := base
 	three.Regions = []string{"a", "b", "c"}
 
-	if got, want := one.Estimate(0).Requests, 5; got != want {
+	// Ten: five live halves and five documents. Both are paid per region.
+	if got, want := one.Estimate(0).Requests, 10; got != want {
 		t.Fatalf("one region = %d requests, want %d", got, want)
 	}
-	if got, want := three.Estimate(0).Requests, 15; got != want {
+	if got, want := three.Estimate(0).Requests, 30; got != want {
 		t.Errorf("three regions = %d requests, want %d — the field cost is paid once per region", got, want)
 	}
 }

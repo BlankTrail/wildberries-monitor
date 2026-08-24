@@ -40,6 +40,7 @@ type Site interface {
 	SellerCatalogPage(ctx context.Context, eps wb.Endpoints, id int64, q wb.SearchQuery) (wb.Envelope, error)
 	BrandCatalogPage(ctx context.Context, eps wb.Endpoints, id int64, q wb.SearchQuery) (wb.Envelope, error)
 	Card(ctx context.Context, b *wb.Basket, eps wb.Endpoints, nm int64, dest string, app int) (wb.CardFetch, error)
+	Detail(ctx context.Context, eps wb.Endpoints, nm int64, dest string, app int) (wb.CardFetch, error)
 	Reviews(ctx context.Context, eps wb.Endpoints, imtID int64) (wb.Reviews, error)
 	Questions(ctx context.Context, eps wb.Endpoints, imtID int64, take, skip int) (wb.Questions, error)
 	Shelves(ctx context.Context, eps wb.Endpoints, q wb.SearchQuery) (wb.Shelves, error)
@@ -462,13 +463,29 @@ func CatalogNode(query string) (int64, bool) {
 // asks for card fields: it is the only way this kind learns the product exists
 // at all. Everything beyond it still follows the selection.
 func (f *Fetcher) product(ctx context.Context, key job.Key) (int, error) {
-	fetch, err := f.Site.Card(ctx, f.Basket, f.Eps, key.NmID, key.Dest, key.AppType)
-	if err != nil {
-		return 1, fmt.Errorf("collect: card %d: %w", key.NmID, err)
+	// The document only when something selected is read out of it.
+	//
+	// A card is two requests — the live half from the detail endpoint and the
+	// static half from the CDN — and this kind has no search page to ride on,
+	// so the live half is what it is for. The static half is the description,
+	// the characteristics and the composition, and a job watching prices reads
+	// none of them: fetched anyway, it was a request per article per region
+	// spent on a document nobody opens, which on eight hundred articles is
+	// eight hundred requests a pass.
+	wantsCard := f.sources()[wb.FieldSourceCardDocument]
+
+	var fetch wb.CardFetch
+	var err error
+	requests := 1
+	if wantsCard {
+		fetch, err = f.Site.Card(ctx, f.Basket, f.Eps, key.NmID, key.Dest, key.AppType)
+		requests = 2
+	} else {
+		fetch, err = f.Site.Detail(ctx, f.Eps, key.NmID, key.Dest, key.AppType)
 	}
-	// Two requests: a card is the live half and the static half, and the
-	// estimate priced it that way.
-	requests := 2
+	if err != nil {
+		return requests, fmt.Errorf("collect: card %d: %w", key.NmID, err)
+	}
 
 	if _, err := f.Store.SaveCard(ctx, fetch); err != nil {
 		return requests, fmt.Errorf("collect: saving card %d: %w", key.NmID, err)
@@ -476,10 +493,26 @@ func (f *Fetcher) product(ctx context.Context, key job.Key) (int, error) {
 	if err := f.link(ctx, []wb.Product{fetch.Product}); err != nil {
 		return requests, err
 	}
-	f.scraped(ctx, "карточка %d — %s", key.NmID, fetch.Card.Name)
+	f.scraped(ctx, "карточка %d — %s", key.NmID, productName(fetch))
 
-	extra, err := f.signals(ctx, fetch.Card.ImtID, key.NmID, fetch.Product.Feedbacks)
+	// The grouping id, from whichever half was read. The detail response
+	// carries it as matchId, which is what makes the review window reachable
+	// without the document beside it.
+	imtID := fetch.Card.ImtID
+	if imtID == 0 {
+		imtID = fetch.Product.MatchID
+	}
+	extra, err := f.signals(ctx, imtID, key.NmID, fetch.Product.Feedbacks)
 	return requests + extra, err
+}
+
+// productName is what to call this product in the log, from whichever half was
+// read. The document's name when there is one; otherwise the listing's.
+func productName(fetch wb.CardFetch) string {
+	if fetch.Card.Name != "" {
+		return fetch.Card.Name
+	}
+	return fetch.Product.Name
 }
 
 // link records that this job collects these products.
