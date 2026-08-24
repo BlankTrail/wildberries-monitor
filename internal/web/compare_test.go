@@ -425,7 +425,20 @@ func TestCompare_TheCardsPhotographsAreCompared(t *testing.T) {
 	}}); err != nil {
 		t.Fatalf("SaveBenchmarks: %v", err)
 	}
-	if body := get(t, srv, "/compare", "").Body.String(); !strings.Contains(body, "боди") {
+	// Inside the completeness table and not merely somewhere on the page: the
+	// wide comparison above it lists every benchmark whatever it holds, so a
+	// search of the whole body finds the phrase either way.
+	if !strings.Contains(fullnessPart(t, get(t, srv, "/compare", "").Body.String()), "боди") {
 		t.Error("строка, у которой из полноты есть только фотографии, не показана")
 	}
+}
+
+// fullnessPart is the «Полнота карточки» table and nothing above it.
+func fullnessPart(t *testing.T, body string) string {
+	t.Helper()
+	at := strings.Index(body, "Полнота карточки")
+	if at < 0 {
+		t.Fatalf("на экране нет полноты карточки: %s", firstLines(body))
+	}
+	return body[at:]
 }
