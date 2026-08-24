@@ -48,7 +48,7 @@ func withHistory(t *testing.T, phrase string) *App {
 	now := time.Now().UTC()
 	for day := 30; day >= 0; day-- {
 		p := chartProduct(now.AddDate(0, 0, -day), int64(300000-day*1000), 12+day%7)
-		if _, err := a.Store.SaveProduct(t.Context(), p, phrase); err != nil {
+		if _, err := a.Store.SaveProduct(t.Context(), p, phrase, 0); err != nil {
 			t.Fatalf("SaveProduct: %v", err)
 		}
 	}

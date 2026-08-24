@@ -113,17 +113,20 @@ type ProductFilter struct {
 	// overall.
 	Latest bool
 
-	// JobID keeps only the products one job collects. nil means every product,
-	// whoever collected it.
+	// JobID keeps only what one job collected. nil means everything, whoever
+	// collected it.
 	//
-	// Through job_products rather than through the readings, and the
-	// difference matters: a reading carries no job, because the same reading
-	// serves every job that met the product. What a job owns is the set of
-	// products it walked — see internal/collect's link — so «результаты этого
-	// задания» means every reading of those products, including ones taken
-	// before this job existed. That is the honest reading of the question
-	// somebody asks by pressing «результаты» on a job: they mean «мои товары
-	// отсюда», not «строки, записанные этим прогоном».
+	// Exact for every reading written since migration 0032: the run that
+	// asked for a reading is recorded on the row, so this is «строки, которые
+	// собрало вот это задание» and not an approximation of it.
+	//
+	// With one clause for the rows that came before. A reading with no job on
+	// it is either older than the column or was never scheduled — a profile
+	// resolution, a shelf's holder product — and the two cannot be told apart
+	// from the row. So those fall back to job_products, the set of articles
+	// the job walked, which is the answer this filter gave before the column
+	// existed. An existing database keeps answering; new readings answer
+	// exactly; and the fallback fades as the old rows age out of retention.
 	JobID *int64
 
 	// Search is free text matched against the words on a product: its name,
@@ -293,9 +296,9 @@ func productsQuery(f ProductFilter) (string, []any) {
 		args = append(args, *f.AppType)
 	}
 	if f.JobID != nil {
-		where = append(where,
-			"EXISTS (SELECT 1 FROM job_products jp WHERE jp.nm_id = p.nm_id AND jp.job_id = ?)")
-		args = append(args, *f.JobID)
+		where = append(where, "(s.job_id = ? OR (s.job_id IS NULL AND EXISTS ("+
+			"SELECT 1 FROM job_products jp WHERE jp.nm_id = p.nm_id AND jp.job_id = ?)))")
+		args = append(args, *f.JobID, *f.JobID)
 	}
 	if q := f.Search; q != "" {
 		// Four columns and one term, «содержит», folded in every alphabet —

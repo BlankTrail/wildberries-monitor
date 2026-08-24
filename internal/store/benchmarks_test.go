@@ -52,7 +52,7 @@ func withFeedbacks(t *testing.T, s *Store, query, dest string, counts map[int64]
 		page = append(page, p)
 	}
 	if _, err := s.SaveSearchPage(context.Background(),
-		wb.Envelope{Products: page}, query); err != nil {
+		wb.Envelope{Products: page}, query, 0); err != nil {
 		t.Fatalf("SaveSearchPage: %v", err)
 	}
 }
@@ -67,7 +67,7 @@ func searchReading(t *testing.T, s *Store, query, dest string, nmIDs ...int64) {
 		page = append(page, p)
 	}
 	if _, err := s.SaveSearchPage(context.Background(),
-		wb.Envelope{Products: page}, query); err != nil {
+		wb.Envelope{Products: page}, query, 0); err != nil {
 		t.Fatalf("SaveSearchPage: %v", err)
 	}
 }

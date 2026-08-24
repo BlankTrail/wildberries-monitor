@@ -20,7 +20,7 @@ func standing(t *testing.T, s *Store, nm int64, query, dest string, rank int, at
 		Dest: dest, AppType: 1, Rank: rank, Page: 1, FetchedAt: at,
 		Sizes: []wb.Size{{Name: "M", PriceProduct: ptrTo(int64(100000 + nm))}},
 	}
-	if _, err := s.SaveSearchPage(context.Background(), wb.Envelope{Products: []wb.Product{p}}, query); err != nil {
+	if _, err := s.SaveSearchPage(context.Background(), wb.Envelope{Products: []wb.Product{p}}, query, 0); err != nil {
 		t.Fatalf("SaveSearchPage: %v", err)
 	}
 }

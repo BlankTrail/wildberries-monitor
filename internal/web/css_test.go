@@ -270,3 +270,29 @@ func TestScripts_AComposerDoesNotOverwriteWhatTheServerFilledIn(t *testing.T) {
 		t.Error("композитор не смотрит, есть ли уже значение — перезапишет сохранённое расписание")
 	}
 }
+
+func TestStyles_ALongValueScrollsInsideItsCell(t *testing.T) {
+	// A description is two hundred words on every row. Printed plainly the
+	// column is wider than the screen and the thirty columns after it are out
+	// of reach. Cut with an ellipsis it would fit and be useless, because the
+	// text is what that column was opened to read — so it scrolls inside
+	// itself and the whole of it stays selectable.
+	ours, err := staticFS.ReadFile("static/monitor.css")
+	if err != nil {
+		t.Fatalf("monitor.css: %v", err)
+	}
+	block := ruleBody(string(ours), ".bt-cell-long {")
+	if block == "" {
+		t.Fatal("в monitor.css нет правила для длинного значения в ячейке")
+	}
+	for _, want := range []string{"max-width", "max-height", "overflow: auto"} {
+		if !strings.Contains(block, want) {
+			t.Errorf("в правиле нет %q", want)
+		}
+	}
+	// Not truncated: an ellipsis here would hide the thing the box exists to
+	// show.
+	if strings.Contains(block, "text-overflow: ellipsis") {
+		t.Error("длинное значение обрезано многоточием — выделить его целиком нельзя")
+	}
+}

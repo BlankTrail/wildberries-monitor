@@ -45,7 +45,7 @@ func TestGradePhrases_AWalkTurnsACandidateIntoAWorkingPhrase(t *testing.T) {
 	at := time.Unix(1_700_000_000, 0).UTC()
 	profile := profileWatching(t, a, 100, "платье летнее")
 
-	if _, err := a.Store.SaveProduct(t.Context(), ranked(100, 12, at), "платье летнее"); err != nil {
+	if _, err := a.Store.SaveProduct(t.Context(), ranked(100, 12, at), "платье летнее", 0); err != nil {
 		t.Fatalf("SaveProduct: %v", err)
 	}
 	a.gradePhrases(t.Context())
@@ -73,7 +73,7 @@ func TestGradePhrases_APlaceBelowTheLineIsPutAside(t *testing.T) {
 	at := time.Unix(1_700_000_000, 0).UTC()
 	profile := profileWatching(t, a, 100, "платье")
 
-	if _, err := a.Store.SaveProduct(t.Context(), ranked(100, 340, at), "платье"); err != nil {
+	if _, err := a.Store.SaveProduct(t.Context(), ranked(100, 340, at), "платье", 0); err != nil {
 		t.Fatalf("SaveProduct: %v", err)
 	}
 	a.gradePhrases(t.Context())
@@ -100,7 +100,7 @@ func TestGradePhrases_TheThresholdSettingDecides(t *testing.T) {
 	if err := a.Store.SetSetting(t.Context(), store.SettingPhrasesTopN, "500", store.SettingInt); err != nil {
 		t.Fatalf("SetSetting: %v", err)
 	}
-	if _, err := a.Store.SaveProduct(t.Context(), ranked(100, 340, at), "платье"); err != nil {
+	if _, err := a.Store.SaveProduct(t.Context(), ranked(100, 340, at), "платье", 0); err != nil {
 		t.Fatalf("SaveProduct: %v", err)
 	}
 	a.gradePhrases(t.Context())
@@ -118,7 +118,7 @@ func TestGradePhrases_MovingTheLineRejudgesWithoutANewWalk(t *testing.T) {
 	at := time.Unix(1_700_000_000, 0).UTC()
 	profile := profileWatching(t, a, 100, "платье")
 
-	if _, err := a.Store.SaveProduct(t.Context(), ranked(100, 40, at), "платье"); err != nil {
+	if _, err := a.Store.SaveProduct(t.Context(), ranked(100, 40, at), "платье", 0); err != nil {
 		t.Fatalf("SaveProduct: %v", err)
 	}
 	a.gradePhrases(t.Context())
@@ -164,7 +164,7 @@ func TestGradePhrases_WorkingPhrasesAreWhatTheCompetitorsAreBuiltFrom(t *testing
 
 	// Ours twelfth, a stranger tenth, in the same reading.
 	for _, p := range []wb.Product{ranked(100, 12, at), ranked(999, 10, at)} {
-		if _, err := a.Store.SaveProduct(t.Context(), p, "платье летнее"); err != nil {
+		if _, err := a.Store.SaveProduct(t.Context(), p, "платье летнее", 0); err != nil {
 			t.Fatalf("SaveProduct: %v", err)
 		}
 	}
@@ -190,7 +190,7 @@ func TestTick_GradesPhrases(t *testing.T) {
 	ctx := t.Context()
 	profile := profileWatching(t, a, 100, "платье летнее")
 
-	if _, err := a.Store.SaveProduct(ctx, ranked(100, 12, time.Now()), "платье летнее"); err != nil {
+	if _, err := a.Store.SaveProduct(ctx, ranked(100, 12, time.Now()), "платье летнее", 0); err != nil {
 		t.Fatalf("SaveProduct: %v", err)
 	}
 

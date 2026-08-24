@@ -160,7 +160,7 @@ func TestContent_ASearchReadingBetweenTwoCardReadingsIsNotAnEdit(t *testing.T) {
 	s.SetClock(func() time.Time { return at.Add(-time.Hour) })
 	p := sampleProduct()
 	p.Name = "Куртка зимняя — так её называет выдача"
-	if _, err := s.SaveProduct(ctx, p, ""); err != nil {
+	if _, err := s.SaveProduct(ctx, p, "", 0); err != nil {
 		t.Fatalf("SaveProduct: %v", err)
 	}
 
@@ -211,7 +211,7 @@ func TestContent_TheTwoNamesAreKeptApartInTheRow(t *testing.T) {
 	s.SetClock(func() time.Time { return at.Add(-time.Hour) })
 	p := sampleProduct()
 	p.Name = "Так называет выдача"
-	if _, err := s.SaveProduct(ctx, p, ""); err != nil {
+	if _, err := s.SaveProduct(ctx, p, "", 0); err != nil {
 		t.Fatalf("SaveProduct: %v", err)
 	}
 
@@ -279,7 +279,7 @@ func TestContent_ACardFillsANameASearchLeftEmpty(t *testing.T) {
 	s.SetClock(func() time.Time { return at.Add(-time.Hour) })
 	p := sampleProduct()
 	p.ID, p.Name = 424243, ""
-	if _, err := s.SaveProduct(ctx, p, ""); err != nil {
+	if _, err := s.SaveProduct(ctx, p, "", 0); err != nil {
 		t.Fatalf("SaveProduct: %v", err)
 	}
 
@@ -308,7 +308,7 @@ func TestContent_TheFirstCardOfASearchKnownProductIsNotARename(t *testing.T) {
 	s.SetClock(func() time.Time { return at.Add(-time.Hour) })
 	p := sampleProduct()
 	p.ID = 424244
-	if _, err := s.SaveProduct(ctx, p, ""); err != nil {
+	if _, err := s.SaveProduct(ctx, p, "", 0); err != nil {
 		t.Fatalf("SaveProduct: %v", err)
 	}
 

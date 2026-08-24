@@ -62,7 +62,7 @@ func (s *Server) resultsFragment(w http.ResponseWriter, r *http.Request) {
 func (s *Server) resultsHTML(r *http.Request) (string, error) {
 	q := r.URL.Query()
 	filter := filterFromQuery(q)
-	sel := selectionFromQuery(q)
+	sel := shownColumns(q)
 
 	cols, unknown := export.Columns(sel)
 	if len(unknown) > 0 {
@@ -243,11 +243,38 @@ func resultsCell(q url.Values, names map[int64]string, row store.ProductRow, c w
 		narrowed = withParam(q, "dest", value)
 	}
 	if narrowed == nil {
-		return `<td>` + html.EscapeString(text) + `</td>`
+		return `<td>` + longText(text) + `</td>`
 	}
 	return `<td><button class="bt-narrow" type="button" data-get="` +
 		html.EscapeString(resultsURL(narrowed)) + `" data-target="#results-body" ` +
 		`title="Показать только это">` + html.EscapeString(text) + `</button></td>`
+}
+
+// longRun is how many characters a value may have before the cell puts it in a
+// box of its own.
+//
+// Sixty: a name, a seller and a region all fit; a description, a list of
+// characteristics and a composition do not. The number is a threshold and not
+// a truncation — nothing is cut, and what the box holds can still be selected
+// whole.
+const longRun = 60
+
+// longText is a value as a cell shows it.
+//
+// A description is two hundred words on every row. Printed plainly it made one
+// column wider than the screen and took the thirty columns after it out of
+// reach — a table several screens across, scrolled sideways to read a price.
+//
+// Cut with an ellipsis, it would fit and be useless: the text is the thing
+// somebody opened that column to read, and half of it is not a shorter version
+// of it. So the long ones go in a box that scrolls inside itself. The column
+// keeps its width, the whole value stays there, and a selection dragged
+// through it copies all of it — which is what it is for.
+func longText(text string) string {
+	if len([]rune(text)) <= longRun {
+		return html.EscapeString(text)
+	}
+	return `<div class="bt-cell-long">` + html.EscapeString(text) + `</div>`
 }
 
 // pager is the strip under the table.
@@ -540,11 +567,12 @@ func optionsFromQuery(q url.Values) export.Options {
 	return o
 }
 
-// selectionFromQuery is which columns to show.
+// selectionFromQuery is which columns an export writes.
 //
-// An empty selection means the whole catalogue rather than nothing: arriving
-// at the results screen with no query at all must show what was collected,
-// not an empty table with a note about ticking boxes.
+// An empty selection means the whole catalogue rather than nothing: a download
+// with no boxes ticked is a request for what was collected, not for four of
+// its columns, and a file is read once somewhere else where a missing column
+// cannot be turned back on.
 func selectionFromQuery(q url.Values) wb.Selection {
 	if got := q["fields"]; len(got) > 0 {
 		return wb.Selection(got)
@@ -554,6 +582,28 @@ func selectionFromQuery(q url.Values) wb.Selection {
 		all = append(all, f.Key)
 	}
 	return all
+}
+
+// shownColumns is which columns the table draws, and its empty answer is a
+// different one on purpose.
+//
+// The whole catalogue is forty columns wide. Drawn, the description alone —
+// two hundred words on every row — pushed the table several screens sideways,
+// and the columns somebody came to read went with it. So the table opens on
+// the base group: article, name, brand, price, rating, region, time. That is
+// what a person scanning results actually reads, and the rest is one press
+// away in «Колонки».
+//
+// A file is not a table and does not follow this: see selectionFromQuery.
+func shownColumns(q url.Values) wb.Selection {
+	if got := q["fields"]; len(got) > 0 {
+		return wb.Selection(got)
+	}
+	var base wb.Selection
+	for _, f := range wb.FieldsOfGroup(wb.GroupBase) {
+		base = append(base, f.Key)
+	}
+	return base
 }
 
 func filterFromQuery(q url.Values) store.ProductFilter {

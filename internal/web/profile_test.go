@@ -326,7 +326,7 @@ func TestCompetitors_AreRecomputedFromWhatWasCollected(t *testing.T) {
 			ID: p.nm, Name: "товар", Brand: "BrandCo", Dest: "-1257786", AppType: 1,
 			Rank: p.rank, Page: 1, FetchedAt: at,
 			Sizes: []wb.Size{{Name: "M", PriceProduct: ptrTo(int64(100000))}},
-		}}}, "платье"); err != nil {
+		}}}, "платье", 0); err != nil {
 			t.Fatalf("SaveSearchPage: %v", err)
 		}
 	}
@@ -377,7 +377,7 @@ func TestCompetitors_TheSetIsTheTopOfTheListRatherThanThePage(t *testing.T) {
 			Sizes: []wb.Size{{Name: "M", PriceProduct: ptrTo(int64(100000))}},
 		})
 	}
-	if _, err := srv.Store.SaveSearchPage(ctx, wb.Envelope{Products: products}, "платье"); err != nil {
+	if _, err := srv.Store.SaveSearchPage(ctx, wb.Envelope{Products: products}, "платье", 0); err != nil {
 		t.Fatalf("SaveSearchPage: %v", err)
 	}
 
@@ -863,7 +863,7 @@ func TestStorefront_OneRowPerProductRatherThanOnePerRegion(t *testing.T) {
 				Stocks:       []wb.Stock{{WarehouseID: 507, Qty: 38}},
 			}},
 		}
-		if _, err := srv.Store.SaveProduct(ctx, p, ""); err != nil {
+		if _, err := srv.Store.SaveProduct(ctx, p, "", 0); err != nil {
 			t.Fatalf("SaveProduct %s: %v", dest, err)
 		}
 	}
@@ -899,7 +899,7 @@ func TestStorefront_OneRowPerProductRatherThanOnePerRegion(t *testing.T) {
 		Rank: 1, Page: 1, FetchedAt: base,
 		Sizes: []wb.Size{{Name: "M", PriceProduct: ptrTo(int64(43000))}},
 	}
-	if _, err := srv.Store.SaveProduct(ctx, agreed, ""); err != nil {
+	if _, err := srv.Store.SaveProduct(ctx, agreed, "", 0); err != nil {
 		t.Fatalf("SaveProduct: %v", err)
 	}
 	if err := srv.Store.AddProfileItem(ctx, id, store.ProfileProduct, 101); err != nil {

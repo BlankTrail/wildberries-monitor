@@ -68,7 +68,7 @@ func TestRegions_TheNameReachesTheRegionPicker(t *testing.T) {
 	// A code the picker knows about because something was collected for it.
 	if _, err := srv.Store.SaveSearchPage(t.Context(), wb.Envelope{Products: []wb.Product{{
 		ID: 100, Name: "товар", Dest: "-2133462", AppType: 1,
-	}}}, "платье"); err != nil {
+	}}}, "платье", 0); err != nil {
 		t.Fatalf("SaveSearchPage: %v", err)
 	}
 

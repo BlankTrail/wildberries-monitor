@@ -407,7 +407,7 @@ func seedProfileProductOf(t *testing.T, a *App, nm, seller int64, name string) {
 		ID: nm, Name: name, Brand: "BrandCo", Dest: "-1257786", AppType: 1,
 		SupplierID: ptrTo(seller), FetchedAt: time.Now(),
 		Sizes: []wb.Size{{Name: "M", PriceProduct: ptrTo(int64(100000))}},
-	}, ""); err != nil {
+	}, "", 0); err != nil {
 		t.Fatalf("SaveProduct: %v", err)
 	}
 }
@@ -636,7 +636,7 @@ func TestProfileChain_TheNeighboursAreComputedAfterTheVerdictsAreRead(t *testing
 	// stranger tenth.
 	at := time.Now()
 	for _, pr := range []wb.Product{ranked(100, 12, at), ranked(999, 10, at)} {
-		if _, err := a.Store.SaveProduct(ctx, pr, "платье"); err != nil {
+		if _, err := a.Store.SaveProduct(ctx, pr, "платье", 0); err != nil {
 			t.Fatalf("SaveProduct: %v", err)
 		}
 	}
@@ -817,7 +817,7 @@ func seedSubjectProduct(t *testing.T, a *App, nm, seller int64, name string, sub
 		ID: nm, Name: name, Brand: "BrandCo", Dest: "-1257786", AppType: 1,
 		SupplierID: ptrTo(seller), SubjectID: ptrTo(subject), FetchedAt: time.Now(),
 		Sizes: []wb.Size{{Name: "M", PriceProduct: ptrTo(int64(100000))}},
-	}, ""); err != nil {
+	}, "", 0); err != nil {
 		t.Fatalf("SaveProduct: %v", err)
 	}
 }

@@ -33,7 +33,7 @@ func tracked(t *testing.T, srv *Server, phrase string) int64 {
 				PriceProduct: ptrTo(int64(300000 - day*1000)),
 			}},
 		}
-		if _, err := srv.Store.SaveProduct(context.Background(), p, phrase); err != nil {
+		if _, err := srv.Store.SaveProduct(context.Background(), p, phrase, 0); err != nil {
 			t.Fatalf("SaveProduct: %v", err)
 		}
 	}
@@ -245,7 +245,7 @@ func TestTrack_APhraseWithNoMeasurementsInTheWindowSaysSo(t *testing.T) {
 		Rank: 3, Page: 1, FetchedAt: time.Now().UTC().AddDate(-2, 0, 0),
 		Sizes: []wb.Size{{Name: "M", PriceProduct: ptrTo(int64(300000))}},
 	}
-	if _, err := srv.Store.SaveProduct(context.Background(), old, "давняя фраза"); err != nil {
+	if _, err := srv.Store.SaveProduct(context.Background(), old, "давняя фраза", 0); err != nil {
 		t.Fatalf("SaveProduct: %v", err)
 	}
 

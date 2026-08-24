@@ -58,7 +58,7 @@ func (t SaveStats) Add(o SaveStats) SaveStats {
 // of each (see spec section 4.5). An empty query means this page is not a
 // search — a seller's own storefront is the case in hand — and no organic
 // position is recorded for it.
-func (s *Store) SaveSearchPage(ctx context.Context, env wb.Envelope, query string) (SaveStats, error) {
+func (s *Store) SaveSearchPage(ctx context.Context, env wb.Envelope, query string, jobID int64) (SaveStats, error) {
 	var stats SaveStats
 	if len(env.Products) == 0 {
 		// The last page of a result set is regularly empty, and paging asks
@@ -80,7 +80,7 @@ func (s *Store) SaveSearchPage(ctx context.Context, env wb.Envelope, query strin
 	fallback := s.now().UTC().Unix()
 
 	for _, p := range env.Products {
-		one, err := s.saveProductTx(ctx, tx, p, query, fallback)
+		one, err := s.saveProductTx(ctx, tx, p, query, fallback, jobID)
 		if err != nil {
 			return SaveStats{}, err
 		}
@@ -95,7 +95,11 @@ func (s *Store) SaveSearchPage(ctx context.Context, env wb.Envelope, query strin
 
 // SaveProduct writes one reading. It is the single-product form of
 // SaveSearchPage and takes the same transaction discipline.
-func (s *Store) SaveProduct(ctx context.Context, p wb.Product, query string) (SaveStats, error) {
+// jobID is the run that asked for this reading, or zero for one nothing
+// scheduled — a profile resolution, a shelf's holder product, a directory
+// refresh. It is recorded on the row so that «результаты этого задания» can be
+// answered exactly; see migration 0032 for what null in that column means.
+func (s *Store) SaveProduct(ctx context.Context, p wb.Product, query string, jobID int64) (SaveStats, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return SaveStats{}, fmt.Errorf("store: save product %d: %w", p.ID, err)
@@ -104,7 +108,7 @@ func (s *Store) SaveProduct(ctx context.Context, p wb.Product, query string) (Sa
 
 	// Same fallback role as SaveSearchPage's: only used when p carries no
 	// FetchedAt of its own — see effectiveTS.
-	stats, err := s.saveProductTx(ctx, tx, p, query, s.now().UTC().Unix())
+	stats, err := s.saveProductTx(ctx, tx, p, query, s.now().UTC().Unix(), jobID)
 	if err != nil {
 		return SaveStats{}, err
 	}
@@ -122,7 +126,7 @@ func (s *Store) SaveProduct(ctx context.Context, p wb.Product, query string) (Sa
 // is one decision rather than one per caller. The order matters: the products
 // row goes first because foreign keys are on and enforced immediately, so a
 // snapshot cannot reference a product that is not there yet.
-func (s *Store) saveProductTx(ctx context.Context, tx *sql.Tx, p wb.Product, query string, fallback int64) (SaveStats, error) {
+func (s *Store) saveProductTx(ctx context.Context, tx *sql.Tx, p wb.Product, query string, fallback, jobID int64) (SaveStats, error) {
 	var stats SaveStats
 	if p.ID == 0 {
 		// nmID is the identity of everything below. Without one, every
@@ -150,7 +154,7 @@ func (s *Store) saveProductTx(ctx context.Context, tx *sql.Tx, p wb.Product, que
 		stats.Unchanged++
 	}
 	if write {
-		snapshotID, err := insertSnapshot(ctx, tx, p, fp, ts, anchor)
+		snapshotID, err := insertSnapshot(ctx, tx, p, fp, ts, jobID, anchor)
 		if err != nil {
 			return SaveStats{}, err
 		}
@@ -253,7 +257,7 @@ func upsertProductRow(ctx context.Context, tx *sql.Tx, p wb.Product, now int64) 
 // nothing changing, not because something moved. Retention keeps anchors and
 // any "what changed" query has to skip them, so the two must stay
 // distinguishable; see shouldWriteSnapshot.
-func insertSnapshot(ctx context.Context, tx *sql.Tx, p wb.Product, fingerprint string, ts int64, anchor bool) (int64, error) {
+func insertSnapshot(ctx context.Context, tx *sql.Tx, p wb.Product, fingerprint string, ts, jobID int64, anchor bool) (int64, error) {
 	base, sale, discount, currency := snapshotPrices(p)
 
 	anchorFlag := 0
@@ -266,12 +270,12 @@ func insertSnapshot(ctx context.Context, tx *sql.Tx, p wb.Product, fingerprint s
 		    nm_id, dest, app_type, ts, anchor, fingerprint,
 		    rating, rating_key, feedbacks, feedback_key, total_quantity,
 		    price_base, price_sale, discount_pct, currency,
-		    time1, time2, dist, warehouse_id, pics
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		    time1, time2, dist, warehouse_id, pics, job_id
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		p.ID, p.Dest, p.AppType, ts, anchorFlag, fingerprint,
 		p.Rating, p.RatingKey, p.Feedbacks, p.FeedbackKey, snapshotStock(p),
 		base, sale, discount, currency,
-		p.Time1, p.Time2, p.Dist, p.WarehouseID, p.Pics)
+		p.Time1, p.Time2, p.Dist, p.WarehouseID, p.Pics, nullableID(jobID))
 	if err != nil {
 		return 0, fmt.Errorf("store: write the snapshot of %d in %s: %w", p.ID, p.Dest, err)
 	}
@@ -417,6 +421,20 @@ func snapshotStock(p wb.Product) *int64 {
 // one is a column added to the other, and the prefix says which rule a stored
 // digest was computed under.
 const fingerprintVersion = "3"
+
+// nullableID is an identifier as the column stores it: the number, or NULL for
+// zero.
+//
+// NULL rather than 0, because zero is not a job — no row in jobs has it — and a
+// column full of zeroes reads as «задание номер ноль» to every query that joins
+// on it. The distinction the schema wants is «принадлежит заданию» against «не
+// принадлежит никакому», which is exactly what NULL says.
+func nullableID(id int64) any {
+	if id == 0 {
+		return nil
+	}
+	return id
+}
 
 // fingerprintOf digests the volatile half of a reading.
 //

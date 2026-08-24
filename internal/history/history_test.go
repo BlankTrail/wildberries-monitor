@@ -53,7 +53,7 @@ func collected(t *testing.T, phrase string) Reader {
 		if day == 15 {
 			rank = 3
 		}
-		if _, err := s.SaveProduct(t.Context(), reading(now.AddDate(0, 0, -day), int64(300000-day*1000), rank), phrase); err != nil {
+		if _, err := s.SaveProduct(t.Context(), reading(now.AddDate(0, 0, -day), int64(300000-day*1000), rank), phrase, 0); err != nil {
 			t.Fatalf("SaveProduct: %v", err)
 		}
 	}
@@ -139,7 +139,7 @@ func TestPrice_AReadingWithNoPriceIsAHoleAndNotAZero(t *testing.T) {
 
 	now := time.Now().UTC()
 	for i, price := range []int64{300000, 0, 290000} {
-		if _, err := s.SaveProduct(t.Context(), reading(now.Add(time.Duration(i-3)*time.Hour), price, 5), "куртка"); err != nil {
+		if _, err := s.SaveProduct(t.Context(), reading(now.Add(time.Duration(i-3)*time.Hour), price, 5), "куртка", 0); err != nil {
 			t.Fatalf("SaveProduct: %v", err)
 		}
 	}

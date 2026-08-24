@@ -142,7 +142,10 @@ func (s *Store) SaveCard(ctx context.Context, cf wb.CardFetch) (SaveStats, error
 		// ranked for a phrase and saveProductTx records no organic position
 		// for it. Writing the Rank the live half happens to carry would invent
 		// a position for a query nobody ran.
-		one, err := s.saveProductTx(ctx, tx, cf.Product, "", now)
+		// Zero: a card fetch is a reading of one product, and which job
+		// asked for it is recorded on the search readings that job took —
+		// see migration 0032.
+		one, err := s.saveProductTx(ctx, tx, cf.Product, "", now, 0)
 		if err != nil {
 			return SaveStats{}, err
 		}

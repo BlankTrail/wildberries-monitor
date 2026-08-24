@@ -472,7 +472,7 @@ func TestSaveCard_DoesNotLoseTheDescriptionToALaterSearchReading(t *testing.T) {
 	}
 
 	*at = start.Add(3 * time.Hour)
-	if _, err := s.SaveProduct(ctx, sampleProduct(), "winter jacket"); err != nil {
+	if _, err := s.SaveProduct(ctx, sampleProduct(), "winter jacket", 0); err != nil {
 		t.Fatalf("SaveProduct: %v", err)
 	}
 
@@ -553,7 +553,7 @@ func TestSaveCard_BackfillsTheCardColumnsOfARowASearchReadingCreated(t *testing.
 	start := time.Date(2026, 8, 16, 9, 0, 0, 0, time.UTC)
 	at := freezeClock(s, start)
 
-	if _, err := s.SaveProduct(ctx, sampleProduct(), "winter jacket"); err != nil {
+	if _, err := s.SaveProduct(ctx, sampleProduct(), "winter jacket", 0); err != nil {
 		t.Fatalf("SaveProduct: %v", err)
 	}
 

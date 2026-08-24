@@ -42,7 +42,7 @@ func carded(t *testing.T, tweak func(*wb.Product)) *App {
 	if tweak != nil {
 		tweak(&p)
 	}
-	if _, err := a.Store.SaveProduct(t.Context(), p, "куртка"); err != nil {
+	if _, err := a.Store.SaveProduct(t.Context(), p, "куртка", 0); err != nil {
 		t.Fatalf("SaveProduct: %v", err)
 	}
 	return a

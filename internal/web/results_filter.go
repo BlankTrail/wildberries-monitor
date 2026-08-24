@@ -8,6 +8,8 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+
+	"github.com/BlankTrail/wildberries-monitor/wb"
 )
 
 // This file is the narrowing on the results screen.
@@ -62,7 +64,78 @@ func (s *Server) resultsSearch(r *http.Request, q url.Values, total int64) strin
 	b.WriteString(`</form>`)
 
 	b.WriteString(s.resultsChips(r, q, total))
+	b.WriteString(s.resultsColumns(q))
 	b.WriteString(s.resultsMore(r, q))
+	return b.String()
+}
+
+// resultsColumns is which of the forty columns the table draws.
+//
+// Folded away and beside «Ещё условия», because it is the same kind of thing:
+// a decision somebody makes once and leaves. What makes it worth its own
+// disclosure rather than a row inside that one is that it answers a different
+// question — «что показывать», not «что показывать из» — and the two read
+// badly stacked.
+//
+// The base group is ticked when nothing else is, which is what shownColumns
+// draws. Everything else starts off: the catalogue is forty columns and the
+// description alone is two hundred words a row, so a table that opened on all
+// of them opened several screens wide.
+func (s *Server) resultsColumns(q url.Values) string {
+	chosen := map[string]bool{}
+	for _, k := range q["fields"] {
+		chosen[k] = true
+	}
+	if len(chosen) == 0 {
+		for _, f := range wb.FieldsOfGroup(wb.GroupBase) {
+			chosen[f.Key] = true
+		}
+	}
+
+	var b strings.Builder
+	b.WriteString(`<details class="bt-more"><summary>Колонки</summary>`)
+	b.WriteString(`<form class="bt-form" data-get-form="/results/table" data-target="#results-body">`)
+	// Everything the view is qualified by travels hidden, so choosing columns
+	// narrows what is on the screen rather than replacing it. fields is the
+	// one key left out: it is what this form is for.
+	for _, key := range filterKeys {
+		if key == "fields" {
+			continue
+		}
+		for _, v := range q[key] {
+			b.WriteString(hidden(key, v))
+		}
+	}
+
+	for _, g := range wb.Groups() {
+		fields := wb.FieldsOfGroup(g)
+		if len(fields) == 0 {
+			continue
+		}
+		label := groupLabels[g]
+		if label == "" {
+			label = string(g)
+		}
+		b.WriteString(`<fieldset class="bt-fieldset bt-fieldset--inset">`)
+		b.WriteString(`<legend>` + html.EscapeString(label) + `</legend>`)
+		b.WriteString(`<div class="bt-checks">`)
+		for _, f := range fields {
+			mark := ""
+			if chosen[f.Key] {
+				mark = " checked"
+			}
+			b.WriteString(`<label class="bt-checkbox"><input type="checkbox" name="fields" value="` +
+				html.EscapeString(f.Key) + `"` + mark + `> ` + html.EscapeString(f.Name) + `</label>`)
+		}
+		b.WriteString(`</div></fieldset>`)
+	}
+
+	b.WriteString(`<div class="bt-form-actions bt-form-actions--tight">` +
+		`<button class="bt-btn bt-btn--primary" type="submit">Показать</button>` +
+		`<button class="bt-btn bt-btn--ghost" type="button" data-get="` +
+		html.EscapeString(resultsURL(withoutParam(q, "fields"))) +
+		`" data-target="#results-body">Только базовые</button></div>`)
+	b.WriteString(`</form></details>`)
 	return b.String()
 }
 

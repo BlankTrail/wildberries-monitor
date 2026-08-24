@@ -33,7 +33,7 @@ func TestSaveProduct_WritesNothingWhenNothingChangedButStillAnchorsTheDay(t *tes
 	at := freezeClock(s, start)
 	p := sampleProduct()
 
-	first, err := s.SaveProduct(ctx, p, "winter jacket")
+	first, err := s.SaveProduct(ctx, p, "winter jacket", 0)
 	if err != nil {
 		t.Fatalf("first SaveProduct: %v", err)
 	}
@@ -42,7 +42,7 @@ func TestSaveProduct_WritesNothingWhenNothingChangedButStillAnchorsTheDay(t *tes
 	}
 
 	*at = start.Add(time.Hour)
-	second, err := s.SaveProduct(ctx, p, "winter jacket")
+	second, err := s.SaveProduct(ctx, p, "winter jacket", 0)
 	if err != nil {
 		t.Fatalf("second SaveProduct: %v", err)
 	}
@@ -57,7 +57,7 @@ func TestSaveProduct_WritesNothingWhenNothingChangedButStillAnchorsTheDay(t *tes
 	}
 
 	*at = start.Add(25 * time.Hour)
-	third, err := s.SaveProduct(ctx, p, "winter jacket")
+	third, err := s.SaveProduct(ctx, p, "winter jacket", 0)
 	if err != nil {
 		t.Fatalf("third SaveProduct: %v", err)
 	}
@@ -99,11 +99,11 @@ func TestSaveProduct_WritesTheAnchorOnTheBoundaryItself(t *testing.T) {
 	at := freezeClock(s, start)
 	p := sampleProduct()
 
-	if _, err := s.SaveProduct(ctx, p, "winter jacket"); err != nil {
+	if _, err := s.SaveProduct(ctx, p, "winter jacket", 0); err != nil {
 		t.Fatalf("first SaveProduct: %v", err)
 	}
 	*at = start.Add(24 * time.Hour)
-	got, err := s.SaveProduct(ctx, p, "winter jacket")
+	got, err := s.SaveProduct(ctx, p, "winter jacket", 0)
 	if err != nil {
 		t.Fatalf("second SaveProduct: %v", err)
 	}
@@ -122,13 +122,13 @@ func TestSaveProduct_DoesNotFlagARealChangeAsAnAnchor(t *testing.T) {
 	at := freezeClock(s, start)
 
 	p := sampleProduct()
-	if _, err := s.SaveProduct(ctx, p, "winter jacket"); err != nil {
+	if _, err := s.SaveProduct(ctx, p, "winter jacket", 0); err != nil {
 		t.Fatalf("first SaveProduct: %v", err)
 	}
 
 	*at = start.Add(30 * time.Hour)
 	p.Sizes[0].PriceProduct = ptrTo(int64(99900))
-	got, err := s.SaveProduct(ctx, p, "winter jacket")
+	got, err := s.SaveProduct(ctx, p, "winter jacket", 0)
 	if err != nil {
 		t.Fatalf("second SaveProduct: %v", err)
 	}
@@ -163,13 +163,13 @@ func TestSaveProduct_RecordsThePositionEvenWhenTheSnapshotWasSuppressed(t *testi
 	at := freezeClock(s, start)
 
 	p := sampleProduct()
-	if _, err := s.SaveProduct(ctx, p, "winter jacket"); err != nil {
+	if _, err := s.SaveProduct(ctx, p, "winter jacket", 0); err != nil {
 		t.Fatalf("first SaveProduct: %v", err)
 	}
 
 	*at = start.Add(time.Hour)
 	p.Rank = 4
-	got, err := s.SaveProduct(ctx, p, "winter jacket")
+	got, err := s.SaveProduct(ctx, p, "winter jacket", 0)
 	if err != nil {
 		t.Fatalf("second SaveProduct: %v", err)
 	}
@@ -209,10 +209,10 @@ func TestSaveProduct_ComparesOnlyWithinOneRegion(t *testing.T) {
 	kazan := sampleProduct()
 	kazan.Dest = "-2133463"
 
-	if _, err := s.SaveProduct(ctx, moscow, "winter jacket"); err != nil {
+	if _, err := s.SaveProduct(ctx, moscow, "winter jacket", 0); err != nil {
 		t.Fatalf("save Moscow: %v", err)
 	}
-	got, err := s.SaveProduct(ctx, kazan, "winter jacket")
+	got, err := s.SaveProduct(ctx, kazan, "winter jacket", 0)
 	if err != nil {
 		t.Fatalf("save Kazan: %v", err)
 	}
@@ -225,7 +225,7 @@ func TestSaveProduct_ComparesOnlyWithinOneRegion(t *testing.T) {
 
 	// And within one region the rule still holds.
 	*at = start.Add(time.Hour)
-	again, err := s.SaveProduct(ctx, moscow, "winter jacket")
+	again, err := s.SaveProduct(ctx, moscow, "winter jacket", 0)
 	if err != nil {
 		t.Fatalf("save Moscow again: %v", err)
 	}
@@ -247,19 +247,19 @@ func TestSaveProduct_ComparesAgainstTheMostRecentRowNotJustAnyMatchingOne(t *tes
 	at := freezeClock(s, start)
 
 	p := sampleProduct()
-	if _, err := s.SaveProduct(ctx, p, "winter jacket"); err != nil {
+	if _, err := s.SaveProduct(ctx, p, "winter jacket", 0); err != nil {
 		t.Fatalf("first SaveProduct: %v", err)
 	}
 
 	*at = start.Add(time.Hour)
 	p.Sizes[0].PriceProduct = ptrTo(int64(99900))
-	if _, err := s.SaveProduct(ctx, p, "winter jacket"); err != nil {
+	if _, err := s.SaveProduct(ctx, p, "winter jacket", 0); err != nil {
 		t.Fatalf("second SaveProduct (price moved): %v", err)
 	}
 
 	*at = start.Add(2 * time.Hour)
 	p.Sizes[0].PriceProduct = ptrTo(int64(120000)) // sampleProduct's original price
-	got, err := s.SaveProduct(ctx, p, "winter jacket")
+	got, err := s.SaveProduct(ctx, p, "winter jacket", 0)
 	if err != nil {
 		t.Fatalf("third SaveProduct (price reverted): %v", err)
 	}
@@ -291,11 +291,11 @@ func TestSetRetention_MovesWhenTheAnchorIsDue(t *testing.T) {
 		DailyAfter:  30 * 24 * time.Hour,
 		WeeklyAfter: 365 * 24 * time.Hour,
 	})
-	if _, err := tuned.SaveProduct(ctx, p, "winter jacket"); err != nil {
+	if _, err := tuned.SaveProduct(ctx, p, "winter jacket", 0); err != nil {
 		t.Fatalf("tuned first SaveProduct: %v", err)
 	}
 	*tunedAt = start.Add(2 * time.Hour)
-	got, err := tuned.SaveProduct(ctx, p, "winter jacket")
+	got, err := tuned.SaveProduct(ctx, p, "winter jacket", 0)
 	if err != nil {
 		t.Fatalf("tuned second SaveProduct: %v", err)
 	}
@@ -305,11 +305,11 @@ func TestSetRetention_MovesWhenTheAnchorIsDue(t *testing.T) {
 
 	plain := openTestStore(t)
 	plainAt := freezeClock(plain, start)
-	if _, err := plain.SaveProduct(ctx, p, "winter jacket"); err != nil {
+	if _, err := plain.SaveProduct(ctx, p, "winter jacket", 0); err != nil {
 		t.Fatalf("default first SaveProduct: %v", err)
 	}
 	*plainAt = start.Add(2 * time.Hour)
-	same, err := plain.SaveProduct(ctx, p, "winter jacket")
+	same, err := plain.SaveProduct(ctx, p, "winter jacket", 0)
 	if err != nil {
 		t.Fatalf("default second SaveProduct: %v", err)
 	}
@@ -337,13 +337,13 @@ func TestSaveProduct_AgesTheAnchorByWhenItWasFetchedNotByWhenItWasWritten(t *tes
 	fetchedFirst := time.Date(2026, 8, 16, 9, 0, 0, 0, time.UTC)
 	p1 := sampleProduct()
 	p1.FetchedAt = fetchedFirst
-	if _, err := s.SaveProduct(ctx, p1, "winter jacket"); err != nil {
+	if _, err := s.SaveProduct(ctx, p1, "winter jacket", 0); err != nil {
 		t.Fatalf("first SaveProduct: %v", err)
 	}
 
 	p2 := sampleProduct()
 	p2.FetchedAt = fetchedFirst.Add(time.Hour) // an hour later by the site's own clock
-	got, err := s.SaveProduct(ctx, p2, "winter jacket")
+	got, err := s.SaveProduct(ctx, p2, "winter jacket", 0)
 	if err != nil {
 		t.Fatalf("second SaveProduct: %v", err)
 	}
@@ -373,17 +373,17 @@ func TestSaveProduct_BreaksATiedTimestampByTheLaterRow(t *testing.T) {
 	freezeClock(s, time.Date(2026, 8, 16, 9, 0, 0, 0, time.UTC))
 
 	p := sampleProduct()
-	if _, err := s.SaveProduct(ctx, p, "winter jacket"); err != nil {
+	if _, err := s.SaveProduct(ctx, p, "winter jacket", 0); err != nil {
 		t.Fatalf("first SaveProduct: %v", err)
 	}
 
 	p.Sizes[0].PriceProduct = ptrTo(int64(99900))
-	if _, err := s.SaveProduct(ctx, p, "winter jacket"); err != nil {
+	if _, err := s.SaveProduct(ctx, p, "winter jacket", 0); err != nil {
 		t.Fatalf("second SaveProduct (price moved, same second): %v", err)
 	}
 
 	p.Sizes[0].PriceProduct = ptrTo(int64(120000)) // back to the first reading's price
-	got, err := s.SaveProduct(ctx, p, "winter jacket")
+	got, err := s.SaveProduct(ctx, p, "winter jacket", 0)
 	if err != nil {
 		t.Fatalf("third SaveProduct (price reverted, same second): %v", err)
 	}
@@ -416,13 +416,13 @@ func TestSaveProduct_KeepsDedupSeparateByAudience(t *testing.T) {
 	var webStats, androidStats SaveStats
 	for i := 0; i < 3; i++ {
 		*at = start.Add(time.Duration(i) * time.Hour)
-		ws, err := s.SaveProduct(ctx, web, "winter jacket")
+		ws, err := s.SaveProduct(ctx, web, "winter jacket", 0)
 		if err != nil {
 			t.Fatalf("web pass %d: %v", i, err)
 		}
 		webStats = webStats.Add(ws)
 
-		as, err := s.SaveProduct(ctx, android, "winter jacket")
+		as, err := s.SaveProduct(ctx, android, "winter jacket", 0)
 		if err != nil {
 			t.Fatalf("android pass %d: %v", i, err)
 		}

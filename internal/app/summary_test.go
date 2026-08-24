@@ -204,10 +204,10 @@ func TestDetectChanges_AnAggregatingRuleSendsOneMessage(t *testing.T) {
 	first := time.Now().Add(-2 * time.Hour)
 	atWatermark(t, a, first.Add(-time.Hour))
 	for nm := int64(100); nm < 103; nm++ {
-		if _, err := a.Store.SaveProduct(ctx, priced(nm, 129900, first), ""); err != nil {
+		if _, err := a.Store.SaveProduct(ctx, priced(nm, 129900, first), "", 0); err != nil {
 			t.Fatalf("SaveProduct: %v", err)
 		}
-		if _, err := a.Store.SaveProduct(ctx, priced(nm, 99900, first.Add(time.Hour)), ""); err != nil {
+		if _, err := a.Store.SaveProduct(ctx, priced(nm, 99900, first.Add(time.Hour)), "", 0); err != nil {
 			t.Fatalf("SaveProduct: %v", err)
 		}
 	}

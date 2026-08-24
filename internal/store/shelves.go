@@ -219,14 +219,14 @@ func (s *Store) SaveDuplicates(ctx context.Context, d wb.Duplicates) (int, error
 	// stored and no slice, which is honest — a product reading is a fact on
 	// its own, and the slice is re-fetched on the next pass.
 	for _, item := range d.Items {
-		if _, err := s.SaveProduct(ctx, s.inRegionOf(d, item), ""); err != nil {
+		if _, err := s.SaveProduct(ctx, s.inRegionOf(d, item), "", 0); err != nil {
 			return 0, fmt.Errorf("store: save duplicates %d: listing %d: %w", d.MatchID, item.ID, err)
 		}
 	}
 	var minPriceNmID any
 	if d.MinPriceItem != nil {
 		holder := s.inRegionOf(d, *d.MinPriceItem)
-		if _, err := s.SaveProduct(ctx, holder, ""); err != nil {
+		if _, err := s.SaveProduct(ctx, holder, "", 0); err != nil {
 			return 0, fmt.Errorf("store: save duplicates %d: the listing holding the minimum, %d: %w", d.MatchID, holder.ID, err)
 		}
 		minPriceNmID = holder.ID

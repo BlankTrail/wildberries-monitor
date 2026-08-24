@@ -54,7 +54,7 @@ func seedReadings(t *testing.T, s *store.Store, n int) {
 				Stocks:       []wb.Stock{{WarehouseID: 507, Qty: 7}},
 			}},
 		}
-		if _, err := s.SaveSearchPage(ctx, wb.Envelope{Products: []wb.Product{p}}, ""); err != nil {
+		if _, err := s.SaveSearchPage(ctx, wb.Envelope{Products: []wb.Product{p}}, "", 0); err != nil {
 			t.Fatalf("SaveSearchPage: %v", err)
 		}
 	}
@@ -701,7 +701,7 @@ func stockIn(t *testing.T, srv *Server, nmID int64, dest string, at time.Time, s
 	p.Dest = dest
 	p.Sizes = []wb.Size{{Name: "M", PriceProduct: ptrTo(int64(99900)), Stocks: stocks}}
 
-	if _, err := srv.Store.SaveProduct(t.Context(), p, ""); err != nil {
+	if _, err := srv.Store.SaveProduct(t.Context(), p, "", 0); err != nil {
 		t.Fatalf("SaveProduct: %v", err)
 	}
 }
@@ -715,7 +715,9 @@ func TestResults_TheStockCellOpensTheExplanation(t *testing.T) {
 	at := time.Date(2026, 8, 20, 9, 0, 0, 0, time.UTC)
 	stockIn(t, srv, 100, "-1257786", at, map[int64]int64{507: 40})
 
-	body := get(t, srv, "/results?cols=nm_id,total_quantity", "").Body.String()
+	// The stock column asked for by name: the table opens on the base group
+	// now, and «остаток» is not in it.
+	body := get(t, srv, "/results?fields=nm_id&fields=total_quantity", "").Body.String()
 	if !strings.Contains(body, `data-get="/results/stock?nm=100"`) {
 		t.Errorf("остаток в таблице не открывает разбор:\n%s", firstLines(body))
 	}
@@ -795,5 +797,172 @@ func TestResults_SearchingInsideAJobStaysInsideIt(t *testing.T) {
 	// from the same list.
 	if !strings.Contains(body, "job_id=7") {
 		t.Error("ссылки таблицы теряют фильтр по заданию")
+	}
+}
+
+func TestResults_TheTableOpensOnTheBaseColumnsAlone(t *testing.T) {
+	// The catalogue is forty columns, and the description alone is two hundred
+	// words on every row. Drawn together they made a table several screens
+	// wide, scrolled sideways to read a price — so the columns somebody came
+	// for went off the edge along with the one that pushed them there.
+	srv := newServer(t)
+	seedReadings(t, srv.Store, 1)
+
+	body := get(t, srv, "/results/table", "").Body.String()
+	// The heading row alone: the column picker below lists every field by
+	// name, so looking for a name anywhere on the page finds it whether the
+	// table draws that column or not.
+	head := tableHead(t, body)
+	if !strings.Contains(head, "Артикул") || !strings.Contains(head, "Бренд") {
+		t.Error("в таблице нет базовых колонок")
+	}
+	if strings.Contains(head, "Описание") {
+		t.Error("описание нарисовано по умолчанию — таблица уедет за край")
+	}
+	// And there is a way to turn the rest on.
+	if !strings.Contains(body, "<summary>Колонки</summary>") {
+		t.Error("выбора колонок нет — остальные тридцать недостижимы")
+	}
+}
+
+func TestResults_AColumnAskedForIsDrawn(t *testing.T) {
+	// The other half: what the picker sends comes back.
+	srv := newServer(t)
+	seedReadings(t, srv.Store, 1)
+
+	body := get(t, srv, "/results/table?fields=nm_id&fields=description", "").Body.String()
+	if !strings.Contains(tableHead(t, body), "Описание") {
+		t.Error("выбранная колонка не нарисована")
+	}
+	// And choosing columns keeps the rest of the qualification, or the picker
+	// would widen the view it was opened inside.
+	body = get(t, srv, "/results/table?job_id=7&fields=nm_id", "").Body.String()
+	if !strings.Contains(body, `name="job_id" value="7"`) {
+		t.Error("выбор колонок потеряет фильтр по заданию")
+	}
+}
+
+func TestResults_ALongValueGetsABoxRatherThanAWiderColumn(t *testing.T) {
+	// Two hundred words in a cell. Printed plainly the column is wider than
+	// the screen; cut with an ellipsis it is useless, because the text is what
+	// that column was opened to read.
+	srv := newServer(t)
+	ctx := t.Context()
+	long := strings.Repeat("облегающее однослойное изделие из эластичного материала, ", 6)
+	if _, err := srv.Store.SaveCard(ctx, wb.CardFetch{
+		Card: wb.Card{NmID: 100, Name: "Топ", Description: long},
+		Product: wb.Product{
+			ID: 100, Name: "Топ", Dest: "-1257786", AppType: 1,
+			FetchedAt: time.Date(2026, 8, 24, 9, 0, 0, 0, time.UTC),
+			Sizes:     []wb.Size{{Name: "M", PriceProduct: ptrTo(int64(43000))}},
+		},
+	}); err != nil {
+		t.Fatalf("SaveCard: %v", err)
+	}
+
+	body := get(t, srv, "/results/table?fields=nm_id&fields=description", "").Body.String()
+	if !strings.Contains(body, `<div class="bt-cell-long">`) {
+		t.Error("длинное значение нарисовано как есть — растянет колонку")
+	}
+	// Whole, not cut: the box scrolls, the text does not shorten.
+	if !strings.Contains(body, html.EscapeString(long)) {
+		t.Error("длинное значение обрезано — прочитать его целиком негде")
+	}
+}
+
+// tableHead is the results table's heading row, and nothing else on the page.
+func tableHead(t *testing.T, body string) string {
+	t.Helper()
+	at := strings.Index(body, "<thead>")
+	if at < 0 {
+		t.Fatalf("в ответе нет таблицы: %s", firstLines(body))
+	}
+	rest := body[at:]
+	end := strings.Index(rest, "</thead>")
+	if end < 0 {
+		t.Fatal("заголовок таблицы не закрыт")
+	}
+	return rest[:end]
+}
+
+// pickerForm is the «Колонки» form and nothing else on the page.
+func pickerForm(t *testing.T, body string) string {
+	t.Helper()
+	at := strings.Index(body, "<summary>Колонки</summary>")
+	if at < 0 {
+		t.Fatalf("на экране нет выбора колонок: %s", firstLines(body))
+	}
+	rest := body[at:]
+	end := strings.Index(rest, "</details>")
+	if end < 0 {
+		t.Fatal("выбор колонок не закрыт")
+	}
+	return rest[:end]
+}
+
+func TestResults_TheColumnPickerOpensOnWhatTheTableDraws(t *testing.T) {
+	// Ticks that match the table. Opened empty, the first press of «Показать»
+	// asks for no columns at all — and the answer is a table of nothing,
+	// arrived at by a person who only wanted to add one column.
+	srv := newServer(t)
+	seedReadings(t, srv.Store, 1)
+
+	form := pickerForm(t, get(t, srv, "/results/table", "").Body.String())
+	if !strings.Contains(form, `value="nm_id" checked`) {
+		t.Error("базовая колонка не отмечена в выборе — «показать» очистит таблицу")
+	}
+	if strings.Contains(form, `value="description" checked`) {
+		t.Error("отмечено то, чего в таблице нет")
+	}
+
+	// And what was asked for is what comes back ticked.
+	form = pickerForm(t, get(t, srv, "/results/table?fields=description", "").Body.String())
+	if !strings.Contains(form, `value="description" checked`) {
+		t.Error("выбранная колонка вернулась снятой")
+	}
+	if strings.Contains(form, `value="nm_id" checked`) {
+		t.Error("невыбранная колонка вернулась отмеченной")
+	}
+}
+
+func TestResults_ChoosingColumnsKeepsTheRestOfTheQualification(t *testing.T) {
+	// The picker changes which columns, not which rows. A key it failed to
+	// carry is a press that quietly widens the view it was opened inside —
+	// «нашлось 400 000» after ticking one box.
+	srv := newServer(t)
+	seedReadings(t, srv.Store, 1)
+
+	form := pickerForm(t, get(t, srv, "/results/table?job_id=7&q=платье&dest=-1257786", "").Body.String())
+	for _, want := range []string{
+		`name="job_id" value="7"`,
+		`name="q" value="платье"`,
+		`name="dest" value="-1257786"`,
+	} {
+		if !strings.Contains(form, want) {
+			t.Errorf("выбор колонок не унесёт с собой %s", want)
+		}
+	}
+	// fields is the one it must not carry: it is what this form sends.
+	if strings.Contains(form, `<input type="hidden" name="fields"`) {
+		t.Error("выбор колонок несёт старый набор колонок — новый к нему прибавится")
+	}
+}
+
+func TestResults_AShortValueIsNotPutInABox(t *testing.T) {
+	// The box exists for two hundred words. Around a brand name it is a
+	// scrollbar on every cell of every row, which is the same table problem
+	// from the other side.
+	srv := newServer(t)
+	seedReadings(t, srv.Store, 1)
+
+	// The name, not the brand: a brand cell is a narrowing button and never
+	// reaches the boxing rule at all, so a test on it would pass whatever the
+	// rule said.
+	body := get(t, srv, "/results/table", "").Body.String()
+	if !strings.Contains(body, "<td>Платье 0</td>") {
+		t.Errorf("короткое значение не нарисовано простой ячейкой: %s", firstLines(body))
+	}
+	if strings.Contains(body, `<div class="bt-cell-long">Платье 0</div>`) {
+		t.Error("короткое значение положено в бокс — полоса прокрутки в каждой ячейке")
 	}
 }

@@ -109,7 +109,7 @@ func TestSaveProduct_SplitsOneReadingAcrossTheThreeTables(t *testing.T) {
 	at := time.Date(2026, 8, 16, 9, 0, 0, 0, time.UTC)
 	freezeClock(s, at)
 
-	stats, err := s.SaveProduct(ctx, sampleProduct(), "winter jacket")
+	stats, err := s.SaveProduct(ctx, sampleProduct(), "winter jacket", 0)
 	if err != nil {
 		t.Fatalf("SaveProduct: %v", err)
 	}
@@ -222,13 +222,13 @@ func TestSaveProduct_KeepsPositionsOfDifferentAudiencesApart(t *testing.T) {
 
 	web := sampleProduct()
 	web.AppType, web.Rank = 1, 5
-	if _, err := s.SaveProduct(ctx, web, "winter jacket"); err != nil {
+	if _, err := s.SaveProduct(ctx, web, "winter jacket", 0); err != nil {
 		t.Fatalf("first SaveProduct: %v", err)
 	}
 
 	android := sampleProduct()
 	android.AppType, android.Rank = 32, 9
-	if _, err := s.SaveProduct(ctx, android, "winter jacket"); err != nil {
+	if _, err := s.SaveProduct(ctx, android, "winter jacket", 0); err != nil {
 		t.Fatalf("second SaveProduct: %v", err)
 	}
 
@@ -264,13 +264,13 @@ func TestSaveProduct_KeepsFirstSeenAndMovesLastSeen(t *testing.T) {
 	at := freezeClock(s, start)
 
 	p := sampleProduct()
-	if _, err := s.SaveProduct(ctx, p, "winter jacket"); err != nil {
+	if _, err := s.SaveProduct(ctx, p, "winter jacket", 0); err != nil {
 		t.Fatalf("first SaveProduct: %v", err)
 	}
 
 	*at = start.Add(48 * time.Hour)
 	p.Name = "Winter jacket, insulated"
-	if _, err := s.SaveProduct(ctx, p, "winter jacket"); err != nil {
+	if _, err := s.SaveProduct(ctx, p, "winter jacket", 0); err != nil {
 		t.Fatalf("second SaveProduct: %v", err)
 	}
 
@@ -310,7 +310,7 @@ func TestSaveProduct_TakesThePricesFromTheProductsOwnMethods(t *testing.T) {
 		{Name: "S", PriceBasic: ptrTo(int64(200000)), PriceProduct: ptrTo(int64(120000))},
 		{Name: "M", PriceBasic: ptrTo(int64(256000)), PriceProduct: ptrTo(int64(82400))},
 	}
-	if _, err := s.SaveProduct(ctx, p, "winter jacket"); err != nil {
+	if _, err := s.SaveProduct(ctx, p, "winter jacket", 0); err != nil {
 		t.Fatalf("SaveProduct: %v", err)
 	}
 
@@ -356,7 +356,7 @@ func TestSaveProduct_WritesEverySizeAndEveryWarehouse(t *testing.T) {
 			Stocks: []wb.Stock{{WarehouseID: 1, Qty: 7, Time1: ptrTo(int64(8))}},
 		},
 	}
-	if _, err := s.SaveProduct(ctx, p, "winter jacket"); err != nil {
+	if _, err := s.SaveProduct(ctx, p, "winter jacket", 0); err != nil {
 		t.Fatalf("SaveProduct: %v", err)
 	}
 
@@ -425,7 +425,7 @@ func TestSaveProduct_WritesEachSizePriceUnderItsOwnColumn(t *testing.T) {
 		PriceProduct: ptrTo(int64(120000)),
 		PriceTotal:   ptrTo(int64(240000)),
 	}}
-	if _, err := s.SaveProduct(ctx, p, "winter jacket"); err != nil {
+	if _, err := s.SaveProduct(ctx, p, "winter jacket", 0); err != nil {
 		t.Fatalf("SaveProduct: %v", err)
 	}
 
@@ -457,7 +457,7 @@ func TestSaveProduct_KeepsAnAbsentFieldApartFromAZeroOne(t *testing.T) {
 	p.Feedbacks = ptrTo(int64(0))
 	p.TotalQuantity = ptrTo(int64(0))
 	p.Root = nil
-	if _, err := s.SaveProduct(ctx, p, "winter jacket"); err != nil {
+	if _, err := s.SaveProduct(ctx, p, "winter jacket", 0); err != nil {
 		t.Fatalf("SaveProduct: %v", err)
 	}
 
@@ -509,7 +509,7 @@ func TestSaveProduct_ANoLongerReportedStockIsNotAZeroStock(t *testing.T) {
 	p := sampleProduct()
 	p.Sizes = nil
 	p.TotalQuantity = nil
-	if _, err := s.SaveProduct(ctx, p, "winter jacket"); err != nil {
+	if _, err := s.SaveProduct(ctx, p, "winter jacket", 0); err != nil {
 		t.Fatalf("SaveProduct: %v", err)
 	}
 
@@ -534,7 +534,7 @@ func TestSaveProduct_SkipsARankThatWasNeverComputed(t *testing.T) {
 
 	p := sampleProduct()
 	p.Rank = 0
-	stats, err := s.SaveProduct(ctx, p, "winter jacket")
+	stats, err := s.SaveProduct(ctx, p, "winter jacket", 0)
 	if err != nil {
 		t.Fatalf("SaveProduct: %v", err)
 	}
@@ -559,7 +559,7 @@ func TestSaveProduct_SkipsThePositionWhenThereIsNoQuery(t *testing.T) {
 	ctx := context.Background()
 	freezeClock(s, time.Date(2026, 8, 16, 9, 0, 0, 0, time.UTC))
 
-	stats, err := s.SaveProduct(ctx, sampleProduct(), "")
+	stats, err := s.SaveProduct(ctx, sampleProduct(), "", 0)
 	if err != nil {
 		t.Fatalf("SaveProduct: %v", err)
 	}
@@ -581,11 +581,11 @@ func TestSaveProduct_RewritesThePositionOfASecondReadingInTheSameSecond(t *testi
 	freezeClock(s, time.Date(2026, 8, 16, 9, 0, 0, 0, time.UTC))
 
 	p := sampleProduct()
-	if _, err := s.SaveProduct(ctx, p, "winter jacket"); err != nil {
+	if _, err := s.SaveProduct(ctx, p, "winter jacket", 0); err != nil {
 		t.Fatalf("first SaveProduct: %v", err)
 	}
 	p.Rank, p.Page = 3, 1
-	if _, err := s.SaveProduct(ctx, p, "winter jacket"); err != nil {
+	if _, err := s.SaveProduct(ctx, p, "winter jacket", 0); err != nil {
 		t.Fatalf("second SaveProduct: %v", err)
 	}
 
@@ -609,7 +609,7 @@ func TestSaveProduct_RefusesAReadingWithoutAnNmID(t *testing.T) {
 	p := sampleProduct()
 	p.ID = 0
 
-	if _, err := s.SaveProduct(context.Background(), p, "winter jacket"); err == nil {
+	if _, err := s.SaveProduct(context.Background(), p, "winter jacket", 0); err == nil {
 		t.Fatal("SaveProduct succeeded on a reading with no nmID; want an error")
 	}
 	if n := countRows(t, s, "products"); n != 0 {
@@ -637,7 +637,7 @@ func TestSaveSearchPage_WritesTheWholePageOrNoneOfIt(t *testing.T) {
 	first, second := sampleProduct(), sampleProduct()
 	first.ID, second.ID = 1, 2
 
-	if _, err := s.SaveSearchPage(ctx, wb.Envelope{Products: []wb.Product{first, second}}, "winter jacket"); err == nil {
+	if _, err := s.SaveSearchPage(ctx, wb.Envelope{Products: []wb.Product{first, second}}, "winter jacket", 0); err == nil {
 		t.Fatal("SaveSearchPage succeeded on a page whose second product could not be written; want the error")
 	}
 	if n := countRows(t, s, "products"); n != 0 {
@@ -672,7 +672,7 @@ func TestSaveSearchPage_StampsOneTimestampOnTheWholePage(t *testing.T) {
 		p.ID, p.Rank = i, int(i)
 		page = append(page, p)
 	}
-	if _, err := s.SaveSearchPage(ctx, wb.Envelope{Products: page}, "winter jacket"); err != nil {
+	if _, err := s.SaveSearchPage(ctx, wb.Envelope{Products: page}, "winter jacket", 0); err != nil {
 		t.Fatalf("SaveSearchPage: %v", err)
 	}
 
@@ -706,7 +706,7 @@ func TestSaveSearchPage_CountsWhatItWrote(t *testing.T) {
 	// snapshot but no position.
 	second.ID, second.Rank = 2, 0
 
-	stats, err := s.SaveSearchPage(ctx, wb.Envelope{Products: []wb.Product{first, second}}, "winter jacket")
+	stats, err := s.SaveSearchPage(ctx, wb.Envelope{Products: []wb.Product{first, second}}, "winter jacket", 0)
 	if err != nil {
 		t.Fatalf("SaveSearchPage: %v", err)
 	}
@@ -720,7 +720,7 @@ func TestSaveSearchPage_AcceptsAPageWithNoProducts(t *testing.T) {
 	// The last page of a result set is regularly empty. Refusing it would make
 	// paging report a failure at the exact moment it succeeded.
 	s := openTestStore(t)
-	stats, err := s.SaveSearchPage(context.Background(), wb.Envelope{}, "winter jacket")
+	stats, err := s.SaveSearchPage(context.Background(), wb.Envelope{}, "winter jacket", 0)
 	if err != nil {
 		t.Fatalf("SaveSearchPage on an empty page: %v", err)
 	}
@@ -950,7 +950,7 @@ func TestSaveProduct_DatesTheReadingByWhenItWasFetchedNotWhenItWasWritten(t *tes
 	fetchedAt := time.Date(2026, 8, 16, 9, 0, 0, 0, time.UTC)
 	p := sampleProduct()
 	p.FetchedAt = fetchedAt
-	if _, err := s.SaveProduct(ctx, p, "winter jacket"); err != nil {
+	if _, err := s.SaveProduct(ctx, p, "winter jacket", 0); err != nil {
 		t.Fatalf("SaveProduct: %v", err)
 	}
 
@@ -986,7 +986,7 @@ func TestSaveProduct_FallsBackToTheStoresClockWhenFetchedAtIsZero(t *testing.T) 
 	if !p.FetchedAt.IsZero() {
 		t.Fatalf("sampleProduct now sets FetchedAt; this test needs one that does not")
 	}
-	if _, err := s.SaveProduct(ctx, p, "winter jacket"); err != nil {
+	if _, err := s.SaveProduct(ctx, p, "winter jacket", 0); err != nil {
 		t.Fatalf("SaveProduct: %v", err)
 	}
 

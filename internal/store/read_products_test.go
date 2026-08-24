@@ -59,7 +59,7 @@ func readingAt(nmID int64, dest string, appType int, sale int64, at time.Time) w
 // position and these tests read snapshots only.
 func saveReading(t *testing.T, s *Store, p wb.Product) {
 	t.Helper()
-	if _, err := s.SaveProduct(context.Background(), p, ""); err != nil {
+	if _, err := s.SaveProduct(context.Background(), p, "", 0); err != nil {
 		t.Fatalf("SaveProduct %d in %s app %d: %v", p.ID, p.Dest, p.AppType, err)
 	}
 }
@@ -828,7 +828,7 @@ func TestCollection_CountsWhatIsThereAndWhenItLanded(t *testing.T) {
 				Name: "M", PriceProduct: ptrTo(int64(129900 + i)),
 			}},
 		}
-		if _, err := s.SaveProduct(ctx, p, ""); err != nil {
+		if _, err := s.SaveProduct(ctx, p, "", 0); err != nil {
 			t.Fatalf("SaveProduct: %v", err)
 		}
 	}
@@ -903,7 +903,7 @@ func TestProducts_SearchLooksInTheFourThingsAPersonRemembers(t *testing.T) {
 			Dest: "-1257786", AppType: 1, FetchedAt: at,
 			Sizes: []wb.Size{{Name: "M", PriceProduct: ptrTo(int64(500000))}}},
 	} {
-		if _, err := s.SaveProduct(ctx, p, ""); err != nil {
+		if _, err := s.SaveProduct(ctx, p, "", 0); err != nil {
 			t.Fatalf("SaveProduct: %v", err)
 		}
 	}
@@ -944,7 +944,7 @@ func TestProducts_SortOrdersAndKeepsTheEmptiesOutOfTheWay(t *testing.T) {
 		{ID: 300, Name: "без цены", Dest: "-1", AppType: 1, FetchedAt: at,
 			Sizes: []wb.Size{{Name: "M"}}},
 	} {
-		if _, err := s.SaveProduct(ctx, p, ""); err != nil {
+		if _, err := s.SaveProduct(ctx, p, "", 0); err != nil {
 			t.Fatalf("SaveProduct: %v", err)
 		}
 	}
@@ -978,7 +978,7 @@ func TestProducts_ThePageIsAWindowAndTheCountIsTheWhole(t *testing.T) {
 		if _, err := s.SaveProduct(ctx, wb.Product{
 			ID: i, Name: "товар", Dest: "-1", AppType: 1, FetchedAt: at,
 			Sizes: []wb.Size{{Name: "M", PriceProduct: ptrTo(i * 1000)}},
-		}, ""); err != nil {
+		}, "", 0); err != nil {
 			t.Fatalf("SaveProduct: %v", err)
 		}
 	}
@@ -1049,7 +1049,7 @@ func TestProducts_TiesKeepTheirOrderSoAPageDoesNotRepeatARow(t *testing.T) {
 			Dest:  "-1257786", AppType: 1,
 			FetchedAt: base.Add(time.Duration(i) * time.Hour),
 			Sizes:     []wb.Size{{Name: "M", PriceProduct: ptrTo(int64(100000 + i))}},
-		}, ""); err != nil {
+		}, "", 0); err != nil {
 			t.Fatalf("SaveProduct: %v", err)
 		}
 	}
@@ -1210,5 +1210,73 @@ func TestProducts_APhotographAddedIsWorthItsOwnReading(t *testing.T) {
 	}
 	if n != 2 {
 		t.Errorf("снимков %d — добавленные фотографии не записались как изменение", n)
+	}
+}
+
+func TestProducts_TheJobFilterIsExactForWhatAJobWrote(t *testing.T) {
+	// «Результаты этого задания» used to mean «every reading of the articles
+	// this job walked», which brings along readings another job took of the
+	// same article and readings taken months before this job existed. The run
+	// that asked for a reading is on the row now.
+	s := openTestStore(t)
+	ctx := context.Background()
+	at := time.Date(2026, 8, 24, 9, 0, 0, 0, time.UTC)
+
+	saveReading2(t, s, readingAt(100, "-1257786", 1, 43000, at), 7)
+	saveReading2(t, s, readingAt(101, "-1257786", 1, 43000, at), 9)
+
+	seven := int64(7)
+	got := collectSeq(t, "Products", s.Products(ctx, ProductFilter{JobID: &seven}))
+	if len(got) != 1 || got[0].NmID != 100 {
+		t.Fatalf("получено %d строк %v, ожидалась одна — та, что написало задание 7", len(got), got)
+	}
+}
+
+func TestProducts_AReadingNothingScheduledBelongsToNoJob(t *testing.T) {
+	// A profile resolution, a shelf's holder product, a directory refresh.
+	// None of them is a job's result, and a job's results screen must not show
+	// them — least of all under whichever job happened to run last.
+	s := openTestStore(t)
+	at := time.Date(2026, 8, 24, 9, 0, 0, 0, time.UTC)
+	saveReading(t, s, readingAt(100, "-1257786", 1, 43000, at)) // jobID 0
+
+	seven := int64(7)
+	got := collectSeq(t, "Products", s.Products(context.Background(), ProductFilter{JobID: &seven}))
+	if len(got) != 0 {
+		t.Errorf("получено %d строк, а их никто не заказывал", len(got))
+	}
+}
+
+func TestProducts_ReadingsOlderThanTheColumnStillAnswer(t *testing.T) {
+	// The rows an existing database is full of: written before migration 0032,
+	// so they carry no job. Dropped from the filter, «результаты» on a job
+	// somebody has been running for a month would come back empty — and the
+	// obvious reading of that is «ничего не собралось».
+	s := openTestStore(t)
+	ctx := context.Background()
+	at := time.Date(2026, 8, 24, 9, 0, 0, 0, time.UTC)
+	saveReading(t, s, readingAt(100, "-1257786", 1, 43000, at)) // no job on the row
+
+	// job_products points at a real job row, so there has to be one.
+	id, err := s.SaveJob(ctx, JobRow{Name: "витрина", Type: "articles", Threads: 1})
+	if err != nil {
+		t.Fatalf("SaveJob: %v", err)
+	}
+	if err := s.LinkJobProduct(ctx, id, 100); err != nil {
+		t.Fatalf("LinkJobProduct: %v", err)
+	}
+
+	seven := id
+	got := collectSeq(t, "Products", s.Products(ctx, ProductFilter{JobID: &seven}))
+	if len(got) != 1 || got[0].NmID != 100 {
+		t.Errorf("получено %d строк, а задание 7 этот товар обходило", len(got))
+	}
+}
+
+// saveReading2 is saveReading for a reading one job asked for.
+func saveReading2(t *testing.T, s *Store, p wb.Product, jobID int64) {
+	t.Helper()
+	if _, err := s.SaveProduct(context.Background(), p, "", jobID); err != nil {
+		t.Fatalf("SaveProduct %d for job %d: %v", p.ID, jobID, err)
 	}
 }

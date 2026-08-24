@@ -26,7 +26,7 @@ func inRegion(t *testing.T, s *Store, nmID int64, dest string, at time.Time, sto
 	p.ID, p.Dest = nmID, dest
 	p.Sizes = []wb.Size{{Name: "M", PriceProduct: ptrTo(int64(99900)), Stocks: stocks}}
 
-	if _, err := s.SaveProduct(context.Background(), p, ""); err != nil {
+	if _, err := s.SaveProduct(context.Background(), p, "", 0); err != nil {
 		t.Fatalf("SaveProduct: %v", err)
 	}
 }

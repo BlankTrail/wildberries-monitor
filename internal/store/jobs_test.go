@@ -658,7 +658,7 @@ func TestDeleteJob_TakesItsRunsAndLeavesWhatTheyCollected(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 
-	if _, err := s.SaveProduct(ctx, sampleProduct(), "winter jacket"); err != nil {
+	if _, err := s.SaveProduct(ctx, sampleProduct(), "winter jacket", 0); err != nil {
 		t.Fatalf("SaveProduct: %v", err)
 	}
 	id, err := s.SaveJob(ctx, sampleJobRow())

@@ -139,7 +139,7 @@ func TestRegionControl_OffersTheCodesThisInstallationUses(t *testing.T) {
 		ID: 141504099, Name: "Платье", Brand: "BrandCo",
 		Dest: "-2133463", AppType: 1, Rank: 1, Page: 1,
 		Sizes: []wb.Size{{Name: "M", PriceProduct: ptrTo(int64(100000))}},
-	}, ""); err != nil {
+	}, "", 0); err != nil {
 		t.Fatalf("SaveProduct: %v", err)
 	}
 

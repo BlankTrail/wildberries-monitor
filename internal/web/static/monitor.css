@@ -1554,3 +1554,21 @@ dialog.bt-modal > #settings-body {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* A long value inside a cell, in a box of its own.
+
+   A description is two hundred words on every row. Printed plainly it made one
+   column wider than the screen and put the thirty columns after it out of
+   reach — a table scrolled sideways to read a price. Cut with an ellipsis it
+   would fit and be useless, because the text is the thing that column was
+   opened to read.
+
+   So it scrolls inside itself: the column keeps its width, the whole value
+   stays in the page, and a selection dragged through the box copies all of it. */
+.bt-cell-long {
+  max-width: 26rem;
+  max-height: 4.5rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

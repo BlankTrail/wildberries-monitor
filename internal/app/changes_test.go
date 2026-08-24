@@ -74,10 +74,10 @@ func TestDetectChanges_APriceMoveReachesTheOutbox(t *testing.T) {
 	first := time.Now().Add(-2 * time.Hour)
 	atWatermark(t, a, first.Add(-time.Hour))
 
-	if _, err := a.Store.SaveProduct(ctx, priced(100, 129900, first), ""); err != nil {
+	if _, err := a.Store.SaveProduct(ctx, priced(100, 129900, first), "", 0); err != nil {
 		t.Fatalf("SaveProduct: %v", err)
 	}
-	if _, err := a.Store.SaveProduct(ctx, priced(100, 99900, first.Add(time.Hour)), ""); err != nil {
+	if _, err := a.Store.SaveProduct(ctx, priced(100, 99900, first.Add(time.Hour)), "", 0); err != nil {
 		t.Fatalf("SaveProduct: %v", err)
 	}
 
@@ -121,10 +121,10 @@ func TestDetectChanges_LooksOnlyAtWhatIsNewerThanTheMark(t *testing.T) {
 
 	first := time.Now().Add(-2 * time.Hour)
 	atWatermark(t, a, first.Add(-time.Hour))
-	if _, err := a.Store.SaveProduct(ctx, priced(100, 129900, first), ""); err != nil {
+	if _, err := a.Store.SaveProduct(ctx, priced(100, 129900, first), "", 0); err != nil {
 		t.Fatalf("SaveProduct: %v", err)
 	}
-	if _, err := a.Store.SaveProduct(ctx, priced(100, 99900, first.Add(time.Hour)), ""); err != nil {
+	if _, err := a.Store.SaveProduct(ctx, priced(100, 99900, first.Add(time.Hour)), "", 0); err != nil {
 		t.Fatalf("SaveProduct: %v", err)
 	}
 
@@ -160,7 +160,7 @@ func TestDetectChanges_AFirstReadingIsNotAChange(t *testing.T) {
 
 	at := time.Now().Add(-time.Hour)
 	atWatermark(t, a, at.Add(-time.Hour))
-	if _, err := a.Store.SaveProduct(ctx, priced(100, 129900, at), ""); err != nil {
+	if _, err := a.Store.SaveProduct(ctx, priced(100, 129900, at), "", 0); err != nil {
 		t.Fatalf("SaveProduct: %v", err)
 	}
 
@@ -178,7 +178,7 @@ func TestDetectChanges_WithNoRulesTheMarkStillMoves(t *testing.T) {
 
 	at := time.Now().Add(-time.Hour)
 	atWatermark(t, a, at.Add(-time.Hour))
-	if _, err := a.Store.SaveProduct(ctx, priced(100, 129900, at), ""); err != nil {
+	if _, err := a.Store.SaveProduct(ctx, priced(100, 129900, at), "", 0); err != nil {
 		t.Fatalf("SaveProduct: %v", err)
 	}
 
@@ -289,10 +289,10 @@ func TestTick_DetectsChanges(t *testing.T) {
 
 	first := time.Now().Add(-2 * time.Hour)
 	atWatermark(t, a, first.Add(-time.Hour))
-	if _, err := a.Store.SaveProduct(ctx, priced(100, 129900, first), ""); err != nil {
+	if _, err := a.Store.SaveProduct(ctx, priced(100, 129900, first), "", 0); err != nil {
 		t.Fatalf("SaveProduct: %v", err)
 	}
-	if _, err := a.Store.SaveProduct(ctx, priced(100, 99900, first.Add(time.Hour)), ""); err != nil {
+	if _, err := a.Store.SaveProduct(ctx, priced(100, 99900, first.Add(time.Hour)), "", 0); err != nil {
 		t.Fatalf("SaveProduct: %v", err)
 	}
 
@@ -362,10 +362,10 @@ func TestDetectChanges_ARuleScopedToAJobFires(t *testing.T) {
 
 	first := time.Now().Add(-2 * time.Hour)
 	atWatermark(t, a, first.Add(-time.Hour))
-	if _, err := a.Store.SaveProduct(ctx, priced(100, 129900, first), ""); err != nil {
+	if _, err := a.Store.SaveProduct(ctx, priced(100, 129900, first), "", 0); err != nil {
 		t.Fatalf("SaveProduct: %v", err)
 	}
-	if _, err := a.Store.SaveProduct(ctx, priced(100, 99900, first.Add(time.Hour)), ""); err != nil {
+	if _, err := a.Store.SaveProduct(ctx, priced(100, 99900, first.Add(time.Hour)), "", 0); err != nil {
 		t.Fatalf("SaveProduct: %v", err)
 	}
 
@@ -406,7 +406,7 @@ func inPromotion(t *testing.T, a *App, slug string, at time.Time, nmIDs ...int64
 		page = append(page, p)
 	}
 	if _, err := a.Store.SaveSearchPage(t.Context(),
-		wb.Envelope{Products: page}, store.PromoQueryPrefix+slug); err != nil {
+		wb.Envelope{Products: page}, store.PromoQueryPrefix+slug, 0); err != nil {
 		t.Fatalf("SaveSearchPage: %v", err)
 	}
 }
@@ -635,7 +635,7 @@ func storefrontWalk(t *testing.T, a *App, jobID int64, at time.Time, nmIDs ...in
 	}
 	a.Store.SetClock(func() time.Time { return at })
 	for _, nm := range nmIDs {
-		if _, err := a.Store.SaveProduct(ctx, priced(nm, 99900, at), ""); err != nil {
+		if _, err := a.Store.SaveProduct(ctx, priced(nm, 99900, at), "", 0); err != nil {
 			t.Fatalf("SaveProduct: %v", err)
 		}
 		if err := a.Store.LinkJobProduct(ctx, jobID, nm); err != nil {

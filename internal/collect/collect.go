@@ -162,7 +162,7 @@ func (f *Fetcher) page(ctx context.Context, key job.Key) (int, error) {
 	// The query is passed on, so the page earns organic positions. Left out,
 	// every rank this product exists to watch would be silently absent — and
 	// the rows would look complete.
-	if _, err := f.Store.SaveSearchPage(ctx, kept, key.Phrase); err != nil {
+	if _, err := f.Store.SaveSearchPage(ctx, kept, key.Phrase, f.Job.ID); err != nil {
 		return requests, fmt.Errorf("collect: saving search %q page %d: %w", key.Phrase, key.Page, err)
 	}
 	if err := f.link(ctx, kept.Products); err != nil {
@@ -206,7 +206,7 @@ func (f *Fetcher) listing(ctx context.Context, key job.Key) (int, error) {
 	}
 	requests := 1
 
-	if _, err := f.Store.SaveSearchPage(ctx, env, ""); err != nil {
+	if _, err := f.Store.SaveSearchPage(ctx, env, "", f.Job.ID); err != nil {
 		return requests, fmt.Errorf("collect: сохранение: %s %d, страница %d: %w", what, key.ID, key.Page, err)
 	}
 	if err := f.link(ctx, env.Products); err != nil {
@@ -269,7 +269,7 @@ func (f *Fetcher) catalog(ctx context.Context, key job.Key) (int, error) {
 	// node. A person who types exactly «cat:8126» into a phrase job would
 	// collide with it — vanishingly unlikely, and cheaper to say than to guard
 	// against with a column nothing else needs.
-	if _, err := f.Store.SaveSearchPage(ctx, env, catalogQueryKey(key.ID)); err != nil {
+	if _, err := f.Store.SaveSearchPage(ctx, env, catalogQueryKey(key.ID), f.Job.ID); err != nil {
 		return requests, fmt.Errorf("collect: saving catalogue node %d page %d: %w", key.ID, key.Page, err)
 	}
 	if err := f.link(ctx, env.Products); err != nil {
@@ -321,7 +321,7 @@ func (f *Fetcher) promo(ctx context.Context, key job.Key) (int, error) {
 	// promotion's own name rather than under the preset. The preset is a
 	// number the site can reissue; the slug is what the promotion is, and
 	// «третий в акции» has to keep meaning the same thing next season.
-	if _, err := f.Store.SaveSearchPage(ctx, env, promoQueryKey(p.Slug)); err != nil {
+	if _, err := f.Store.SaveSearchPage(ctx, env, promoQueryKey(p.Slug), f.Job.ID); err != nil {
 		return requests, fmt.Errorf("collect: сохранение акции %q страница %d: %w", p.Slug, key.Page, err)
 	}
 	if err := f.link(ctx, env.Products); err != nil {
@@ -391,7 +391,7 @@ func (f *Fetcher) mainFeed(ctx context.Context, key job.Key) (int, error) {
 	}
 	requests := 1
 
-	if _, err := f.Store.SaveSearchPage(ctx, env, store.MainFeedQuery); err != nil {
+	if _, err := f.Store.SaveSearchPage(ctx, env, store.MainFeedQuery, f.Job.ID); err != nil {
 		return requests, fmt.Errorf("collect: сохранение главной страницы %d: %w", key.Page, err)
 	}
 	if err := f.link(ctx, env.Products); err != nil {
@@ -618,7 +618,7 @@ func (f *Fetcher) profile(ctx context.Context, key job.Key) (int, error) {
 
 	// The card itself is worth keeping: it is a reading like any other, and
 	// the profile screen shows the product it resolved to.
-	if _, err := f.Store.SaveProduct(ctx, fetched.Product, ""); err != nil {
+	if _, err := f.Store.SaveProduct(ctx, fetched.Product, "", f.Job.ID); err != nil {
 		return requests, fmt.Errorf("collect: saving the resolved product: %w", err)
 	}
 	f.scraped(ctx, "профиль по товару %d — %s", key.NmID, name)

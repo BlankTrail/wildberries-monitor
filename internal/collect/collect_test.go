@@ -1342,3 +1342,41 @@ func TestFetch_NoReviewsIsNotAReasonToSkipTheQuestions(t *testing.T) {
 		t.Errorf("списков вопросов %d — счётчик отзывов не говорит о вопросах", len(site.questions))
 	}
 }
+
+func TestFetch_TheReadingsItWritesSayWhichJobAskedForThem(t *testing.T) {
+	// Migration 0032 put the run on the row so that «результаты этого задания»
+	// can be answered exactly rather than through the set of articles the job
+	// walked. The column is filled here or nowhere: the store is handed the
+	// number, and a collector that passed zero would leave every reading
+	// looking like one nothing scheduled.
+	site := &fakeSite{products: []wb.Product{product(101), product(102)}}
+	f, s := fetcherFor(t, site, "nm_id", "price_sale")
+
+	// A real row, because job_products points at one.
+	id, err := s.SaveJob(t.Context(), store.JobRow{Name: "платья", Type: "phrase", Threads: 1})
+	if err != nil {
+		t.Fatalf("SaveJob: %v", err)
+	}
+	f.Job.ID = id
+
+	if _, err := f.Fetch(t.Context(), job.Item{Key: job.Key{
+		Kind: job.ItemPage, Phrase: "платье", Dest: "-1257786", AppType: 1, Page: 1,
+	}.String()}); err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+
+	mine, err := s.CountForTest(t.Context(), `SELECT COUNT(*) FROM snapshots WHERE job_id = ?`, id)
+	if err != nil {
+		t.Fatalf("CountForTest: %v", err)
+	}
+	if mine != 2 {
+		t.Errorf("снимков с заданием %d: %d, ожидалось два", id, mine)
+	}
+	orphans, err := s.CountForTest(t.Context(), `SELECT COUNT(*) FROM snapshots WHERE job_id IS NULL`)
+	if err != nil {
+		t.Fatalf("CountForTest: %v", err)
+	}
+	if orphans != 0 {
+		t.Errorf("снимков без задания: %d, а их заказало задание %d", orphans, id)
+	}
+}

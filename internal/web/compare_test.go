@@ -15,7 +15,7 @@ import (
 // travels on each listing, which is where the store reads it from.
 func searchWith(t *testing.T, srv *Server, query string, listings ...wb.Product) {
 	t.Helper()
-	if _, err := srv.Store.SaveSearchPage(t.Context(), wb.Envelope{Products: listings}, query); err != nil {
+	if _, err := srv.Store.SaveSearchPage(t.Context(), wb.Envelope{Products: listings}, query, 0); err != nil {
 		t.Fatalf("SaveSearchPage: %v", err)
 	}
 }
