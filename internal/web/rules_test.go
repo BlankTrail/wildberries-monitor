@@ -4,6 +4,7 @@ package web
 
 import (
 	"fmt"
+	"github.com/BlankTrail/wildberries-monitor/wb"
 	"net/http"
 	"net/url"
 	"strings"
@@ -724,5 +725,51 @@ func TestRules_EveryScopeOnTheScreenCanActuallyFire(t *testing.T) {
 		if !strings.Contains(body, `value="`+string(kind)+`"`) {
 			t.Errorf("охвата %q нет на экране", kind)
 		}
+	}
+}
+
+func TestRules_AFilterCanNameACategory(t *testing.T) {
+	// Spec section 6.2 lets a rule cover «фильтр (бренд, категория, диапазон
+	// цены)». The category was stored and matched on and offered nowhere: the
+	// form asked for a brand and a price band, so a rule scoped to a category
+	// could only be written by editing the database.
+	srv, target := withTarget(t)
+	ctx := t.Context()
+	if _, err := srv.Store.SaveCard(ctx, wb.CardFetch{
+		Card: wb.Card{NmID: 100, Name: "Платье", SubjectName: "Платья"},
+		Product: wb.Product{
+			ID: 100, Name: "Платье", Dest: "-1257786", AppType: 1,
+			SubjectID: ptrTo(int64(104)),
+			FetchedAt: time.Date(2026, 8, 24, 9, 0, 0, 0, time.UTC),
+			Sizes:     []wb.Size{{Name: "M", PriceProduct: ptrTo(int64(43000))}},
+		},
+	}); err != nil {
+		t.Fatalf("SaveCard: %v", err)
+	}
+
+	body := get(t, srv, "/rules", "").Body.String()
+	if !strings.Contains(body, `name="filter_subject_id"`) {
+		t.Fatalf("в фильтре нет категории: %s", firstLines(body))
+	}
+	// By name, because a subject id is not something anybody knows.
+	if !strings.Contains(body, `<option value="104">Платья`) {
+		t.Error("категория предложена не по имени")
+	}
+
+	// And it reaches the saved rule, or the field is a control wired to nothing.
+	form := ruleFormValues(target)
+	form.Set("name", "платья подешевели")
+	form.Set("scope_kind", string(rules.ScopeFilter))
+	form.Set("filter_subject_id", "104")
+	form.Del("scope_id")
+	if w := postForm(t, srv, "/rules", form); w.Code != http.StatusOK {
+		t.Fatalf("сохранение = %d: %s", w.Code, firstLines(w.Body.String()))
+	}
+	all, err := rules.All(ctx, srv.Store)
+	if err != nil || len(all) != 1 {
+		t.Fatalf("rules.All: %v, %d правил", err, len(all))
+	}
+	if all[0].Scope.Filter.SubjectID != 104 {
+		t.Errorf("категория не дошла до правила: %+v", all[0].Scope.Filter)
 	}
 }

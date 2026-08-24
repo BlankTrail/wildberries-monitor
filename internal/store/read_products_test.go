@@ -1363,3 +1363,91 @@ func TestAnyRawKept_IsFalseUntilAJobKeepsOne(t *testing.T) {
 		t.Errorf("AnyRawKept = %v, %v — один ответ сохранён", kept, err)
 	}
 }
+
+func TestSubjects_ListsWhatHasBeenCollectedAndOrdersItByWeight(t *testing.T) {
+	// Spec section 6.2 lets a rule cover «фильтр (бренд, категория, диапазон
+	// цены)», and the category half of it is a subject id — a number nobody
+	// knows by heart. Offered as a list of what has actually been collected,
+	// the way the region filter is.
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	// Both halves of a product carry a piece of this: the id rides on the live
+	// reading and the name on the card the seller wrote.
+	for _, c := range []struct {
+		nm      int64
+		subject int64
+		name    string
+	}{
+		{100, 105, "Блузки"},
+		{101, 104, "Платья"},
+		{102, 104, "Платья"},
+	} {
+		cf := sampleCardFetch()
+		cf.Card.NmID, cf.Product.ID = c.nm, c.nm
+		cf.Card.SubjectName = c.name
+		cf.Product.SubjectID = ptrTo(c.subject)
+		if _, err := s.SaveCard(ctx, cf); err != nil {
+			t.Fatalf("SaveCard %d: %v", c.nm, err)
+		}
+	}
+
+	got, err := s.Subjects(ctx)
+	if err != nil {
+		t.Fatalf("Subjects: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("категорий %d, ожидалось две: %+v", len(got), got)
+	}
+	// The heavier one first: a category with two goods is one somebody is
+	// watching, and one with a single product often arrived by accident.
+	if got[0].ID != 104 || got[0].Name != "Платья" || got[0].Products != 2 {
+		t.Errorf("первая категория = %+v", got[0])
+	}
+	if got[1].ID != 105 || got[1].Products != 1 {
+		t.Errorf("вторая категория = %+v", got[1])
+	}
+}
+
+func TestSubjects_ACategoryWithNoNameIsLeftOut(t *testing.T) {
+	// A product whose card has not been read: the id is known and what to call
+	// it is not, and an unnamed number in a dropdown is a choice nobody can
+	// make.
+	s := openTestStore(t)
+	at := time.Date(2026, 8, 24, 9, 0, 0, 0, time.UTC)
+	saveReading(t, s, readingAt(100, "-1257786", 1, 120000, at)) // search reading, no card
+
+	got, err := s.Subjects(context.Background())
+	if err != nil {
+		t.Fatalf("Subjects: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("получено %+v, а имени категории никто не читал", got)
+	}
+}
+
+func TestSubjects_ACategoryWithNoIdIsLeftOutToo(t *testing.T) {
+	// A product met by an article list has a card and no search reading, so it
+	// carries what to call its category and not which one it is. Offered, it
+	// would be an option whose value is nought — and nought in this dropdown
+	// is «любая», so picking «Платья» would quietly save a rule covering
+	// everything.
+	s := openTestStore(t)
+	cf := sampleCardFetch()
+	cf.Card.NmID, cf.Product.ID = 100, 100
+	cf.Card.SubjectName = "Платья"
+	cf.Product.SubjectID = nil
+	if _, err := s.SaveCard(context.Background(), cf); err != nil {
+		t.Fatalf("SaveCard: %v", err)
+	}
+
+	got, err := s.Subjects(context.Background())
+	if err != nil {
+		t.Fatalf("Subjects: %v", err)
+	}
+	for _, u := range got {
+		if u.ID == 0 {
+			t.Errorf("предложена категория без номера: %+v", u)
+		}
+	}
+}

@@ -620,6 +620,54 @@ type DestUse struct {
 }
 
 // Dests lists the region codes this installation uses, the busiest first.
+// SubjectUse is one category something has been collected in.
+type SubjectUse struct {
+	ID   int64
+	Name string
+	// Products is how many goods of this category are on file. It is what
+	// orders the list: a category with four hundred products is one somebody
+	// is watching, and one with a single product usually arrived by accident.
+	Products int64
+}
+
+// Subjects lists the categories the collected goods belong to.
+//
+// Spec section 6.2 lets a rule cover «фильтр (бренд, категория, диапазон
+// цены)», and the category half of that filter is a subject id — a number
+// nobody knows by heart. Chosen from what has actually been collected, the way
+// the region filter is: a list of categories WB has and this database does not
+// would offer four thousand rows of which four are usable.
+//
+// A category with no name is left out. It is a product whose card has not been
+// read, so the id is known and what to call it is not — and an unnamed number
+// in a dropdown is a choice nobody can make.
+func (s *Store) Subjects(ctx context.Context) ([]SubjectUse, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT subject_id, MAX(subject_name), COUNT(*)
+		  FROM products
+		 WHERE subject_id IS NOT NULL AND subject_id <> 0
+		   AND subject_name IS NOT NULL AND subject_name <> ''
+		 GROUP BY subject_id
+		 ORDER BY COUNT(*) DESC, MAX(subject_name)`)
+	if err != nil {
+		return nil, fmt.Errorf("store: subjects: %w", err)
+	}
+	defer rows.Close()
+
+	var out []SubjectUse
+	for rows.Next() {
+		var u SubjectUse
+		if err := rows.Scan(&u.ID, &u.Name, &u.Products); err != nil {
+			return nil, fmt.Errorf("store: subjects: %w", err)
+		}
+		out = append(out, u)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: subjects: %w", err)
+	}
+	return out, nil
+}
+
 func (s *Store) Dests(ctx context.Context) ([]DestUse, error) {
 	byCode := map[string]*DestUse{}
 	use := func(code string) *DestUse {

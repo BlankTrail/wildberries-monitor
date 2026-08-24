@@ -97,7 +97,7 @@ var scopeWhat = map[rules.ScopeKind]string{
 	rules.ScopeProduct: "Один товар — по его артикулу.",
 	rules.ScopeSeller:  "Всё, что собрано по одному продавцу.",
 	rules.ScopeJob:     "Всё, что собирает одно задание.",
-	rules.ScopeFilter:  "Всё, что подходит под бренд и вилку цены.",
+	rules.ScopeFilter:  "Всё, что подходит под бренд, категорию и вилку цены.",
 }
 
 // scopeOrder is the order the scopes are offered in, narrowest first.
@@ -160,7 +160,7 @@ func (s *Server) rulesHTML(r *http.Request) (string, error) {
 	b.WriteString(`<section id="rules-body" class="bt-card"><h2>Уведомления</h2>`)
 	b.WriteString(s.ruleList(all))
 	b.WriteString(s.targetsSection(ctx, targets))
-	b.WriteString(ruleForm(targets, jobs))
+	b.WriteString(s.ruleForm(r, targets, jobs))
 	b.WriteString(`</section>`)
 	return b.String(), nil
 }
@@ -383,7 +383,7 @@ func jobChooser(jobs []store.JobStatus) string {
 	return b.String()
 }
 
-func ruleForm(targets []store.TargetRow, jobs []store.JobStatus) string {
+func (s *Server) ruleForm(r *http.Request, targets []store.TargetRow, jobs []store.JobStatus) string {
 	var b strings.Builder
 	b.WriteString(`<h3>Новое уведомление</h3>`)
 	// data-switch names the field the fields below follow — see whenAny.
@@ -425,6 +425,8 @@ func ruleForm(targets []store.TargetRow, jobs []store.JobStatus) string {
 	filter.WriteString(`<div class="bt-form-grid">`)
 	filter.WriteString(field("Бренд", `<input class="bt-input" name="filter_brand">`,
 		"Пусто — любой бренд."))
+	filter.WriteString(field("Категория", s.subjectChooser(r),
+		"Категории, в которых уже что-то собрано. Пусто — любая."))
 	filter.WriteString(field("Цена от, ₽", `<input class="bt-input" name="filter_price_min" type="number" min="0">`,
 		"Ноль — без нижней границы."))
 	filter.WriteString(field("Цена до, ₽", `<input class="bt-input" name="filter_price_max" type="number" min="0">`,
@@ -522,7 +524,8 @@ func scopeFromForm(f url.Values) rules.Scope {
 		sc.ID = atoi64(firstNonEmpty(f["scope_id"]))
 	case rules.ScopeFilter:
 		sc.Filter = rules.Filter{
-			Brand: strings.TrimSpace(f.Get("filter_brand")),
+			Brand:     strings.TrimSpace(f.Get("filter_brand")),
+			SubjectID: atoi64(f.Get("filter_subject_id")),
 			// Entered in roubles and stored in kopecks. The form asks for
 			// what a person says out loud; everything below the interface
 			// counts in minor units, and doing the conversion anywhere later
@@ -785,4 +788,31 @@ func (s *Server) deleteTarget(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.rulesFragment(w, r, `<div class="bt-alert bt-alert--success">Адресат удалён.</div>`)
+}
+
+// subjectChooser is the category half of a filter scope.
+//
+// A select over what has been collected rather than a box for a number: a
+// subject id is not something anybody knows, and a filter naming one nobody
+// has goods in is a rule that will never fire — silently, because a rule that
+// covers nothing looks exactly like a rule nothing has happened to.
+//
+// A box for the number where the list cannot be read, for the same reason the
+// region filter keeps one: a directory that will not load must not take the
+// filter with it.
+func (s *Server) subjectChooser(r *http.Request) string {
+	subjects, err := s.Store.Subjects(r.Context())
+	if err != nil {
+		return `<input class="bt-input" name="filter_subject_id" type="number" min="0">`
+	}
+	var b strings.Builder
+	b.WriteString(`<select class="bt-input" name="filter_subject_id">`)
+	b.WriteString(`<option value="0">— любая —</option>`)
+	for _, u := range subjects {
+		fmt.Fprintf(&b, `<option value="%d">%s — %s</option>`,
+			u.ID, html.EscapeString(u.Name),
+			html.EscapeString(countOf(u.Products, "товар", "товара", "товаров")))
+	}
+	b.WriteString(`</select>`)
+	return b.String()
 }
