@@ -175,6 +175,12 @@ func (s *Server) resultsChips(r *http.Request, q url.Values, total int64) string
 	if v := q.Get("job_id"); v != "" {
 		add("job_id", "задание", s.jobLabel(r, v))
 	}
+	// Named where the name is known. A promotion the panel has never listed —
+	// no «Состав акции» job has run — is still a number worth filtering by,
+	// and «акция №1050336» is true where a name would be invented.
+	if v := q.Get("promo_id"); v != "" {
+		add("promo_id", "акция", s.promoLabel(r, v))
+	}
 	add("from", "с", q.Get("from"))
 	add("to", "по", q.Get("to"))
 	if q.Get("latest") != "" {
@@ -358,7 +364,7 @@ func supplierLabel(r *http.Request, s *Server, value string) string {
 // silently widens the view it was supposed to narrow.
 var filterKeys = []string{
 	"q", "nm_ids", "brand", "supplier_id", "dest", "app_type",
-	"job_id", "from", "to", "latest", "fields", "sort", "desc",
+	"job_id", "promo_id", "from", "to", "latest", "fields", "sort", "desc",
 }
 
 // resultsURL is the table's own address for a set of parameters.
@@ -415,4 +421,18 @@ func (s *Server) jobLabel(r *http.Request, id string) string {
 		return "№" + id
 	}
 	return row.Name
+}
+
+// promoLabel is a promotion by its name, and by its number when no promotion
+// list has been fetched to name it.
+func (s *Server) promoLabel(r *http.Request, id string) string {
+	n, err := strconv.ParseInt(id, 10, 64)
+	if err != nil {
+		return id
+	}
+	name, err := s.Store.PromotionName(r.Context(), n)
+	if err != nil || name == "" {
+		return "№" + id
+	}
+	return name
 }

@@ -239,6 +239,10 @@ func resultsCell(q url.Values, names map[int64]string, row store.ProductRow, c w
 		}
 	case "supplier_id":
 		narrowed = withParam(q, "supplier_id", text)
+	case "promo_id":
+		// «Покажи всё, что было в этой акции» — the next thought after seeing
+		// one product in one, and the reason the mark is collected.
+		narrowed = withParam(q, "promo_id", text)
 	case "dest":
 		narrowed = withParam(q, "dest", value)
 	}
@@ -661,6 +665,11 @@ func filterFromQuery(q url.Values) store.ProductFilter {
 	if v := strings.TrimSpace(q.Get("job_id")); v != "" {
 		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
 			f.JobID = &n
+		}
+	}
+	if v := strings.TrimSpace(q.Get("promo_id")); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			f.PromoID = &n
 		}
 	}
 	f.From = dayStart(q.Get("from"))

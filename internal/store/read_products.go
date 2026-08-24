@@ -140,6 +140,16 @@ type ProductFilter struct {
 	// exactly; and the fallback fades as the old rows age out of retention.
 	JobID *int64
 
+	// PromoID keeps only the readings taken while the product was in one
+	// promotion. nil means every reading.
+	//
+	// The direction migration 0035's index exists for, and the question the
+	// mark is worth collecting to answer: «покажи всё, что сейчас в этой
+	// акции». On the reading rather than on the product, because membership is
+	// a fact about a moment — a product that left last week has readings on
+	// both sides of the line.
+	PromoID *int64
+
 	// Search is free text matched against the words on a product: its name,
 	// its brand, its seller, and its article number. Taken as given — the
 	// screen that collected it from a person is where typing is tidied up, and
@@ -307,6 +317,10 @@ func productsQuery(f ProductFilter) (string, []any) {
 		// already paid for that mistake once.
 		where = append(where, "s.app_type = ?")
 		args = append(args, *f.AppType)
+	}
+	if f.PromoID != nil {
+		where = append(where, "s.promo_id = ?")
+		args = append(args, *f.PromoID)
 	}
 	if f.JobID != nil {
 		where = append(where, "(s.job_id = ? OR (s.job_id IS NULL AND EXISTS ("+

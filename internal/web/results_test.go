@@ -1031,3 +1031,71 @@ func TestJobConstructor_OffersToKeepTheSitesResponses(t *testing.T) {
 		t.Error("галочка «хранить ответы» не дошла до задания")
 	}
 }
+
+func TestResults_ThePromotionFilterShowsOnlyWhatWasInIt(t *testing.T) {
+	// The question the mark is collected to answer, and the direction
+	// migration 0035's index exists for: «покажи всё, что было в этой акции».
+	// On the reading rather than on the product, because membership is a fact
+	// about a moment — a product that left last week has readings on both
+	// sides of the line.
+	srv := newServer(t)
+	ctx := t.Context()
+	at := time.Date(2026, 8, 24, 9, 0, 0, 0, time.UTC)
+
+	for _, c := range []struct {
+		nm    int64
+		promo *int64
+	}{
+		{100, ptrTo(int64(1050336))},
+		{101, nil},
+	} {
+		p := wb.Product{
+			ID: c.nm, Name: "Платье", Brand: "BrandCo",
+			SupplierID: ptrTo(int64(4242)), Dest: "-1257786", AppType: 1,
+			Rank: 1, Page: 1, FetchedAt: at, PromoID: c.promo,
+			Sizes: []wb.Size{{Name: "M", PriceProduct: ptrTo(int64(43000))}},
+		}
+		if _, err := srv.Store.SaveProduct(ctx, p, "", 0); err != nil {
+			t.Fatalf("SaveProduct %d: %v", c.nm, err)
+		}
+	}
+
+	body := get(t, srv, "/results/table?promo_id=1050336&fields=nm_id&fields=promo_id", "").Body.String()
+	if !strings.Contains(body, ">100<") {
+		t.Errorf("товара из акции нет в таблице: %s", firstLines(body))
+	}
+	if strings.Contains(body, ">101<") {
+		t.Error("в таблице есть товар, которого в акции не было")
+	}
+	// And the chip says which promotion, with the way back out of it. By its
+	// number, because no «Состав акции» job has run to give it a name.
+	if !strings.Contains(body, "№1050336") {
+		t.Error("фильтр по акции не назван — снять его негде")
+	}
+}
+
+func TestResults_APromotionCellNarrowsToIt(t *testing.T) {
+	// The next thought after seeing one product in a promotion, and the
+	// reason the mark is worth a column at all.
+	srv := newServer(t)
+	at := time.Date(2026, 8, 24, 9, 0, 0, 0, time.UTC)
+	if _, err := srv.Store.SaveProduct(t.Context(), wb.Product{
+		ID: 100, Name: "Платье", Brand: "BrandCo", Dest: "-1257786", AppType: 1,
+		Rank: 1, Page: 1, FetchedAt: at, PromoID: ptrTo(int64(1050336)),
+		Sizes: []wb.Size{{Name: "M", PriceProduct: ptrTo(int64(43000))}},
+	}, "", 0); err != nil {
+		t.Fatalf("SaveProduct: %v", err)
+	}
+
+	body := get(t, srv, "/results/table?fields=nm_id&fields=promo_id", "").Body.String()
+	if !strings.Contains(body, "promo_id=1050336") {
+		t.Errorf("по акции из ячейки не сузить: %s", firstLines(body))
+	}
+
+	// And once narrowed, every control carries it: a key missing from the
+	// list is a control that silently widens the view it was meant to narrow.
+	body = get(t, srv, "/results/table?promo_id=1050336", "").Body.String()
+	if !strings.Contains(body, `name="promo_id" value="1050336"`) {
+		t.Error("строка поиска не унесёт с собой фильтр по акции")
+	}
+}

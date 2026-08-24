@@ -127,3 +127,34 @@ func TestPromotions_ByName(t *testing.T) {
 		t.Errorf("последней идёт %q — список отсортирован не по названию", list[len(list)-1].Name)
 	}
 }
+
+func TestPromotionName_IsEmptyUntilAListHasBeenFetched(t *testing.T) {
+	// The mark rides on every listing for free; the names come from a «Состав
+	// акции» job somebody has to run. A screen needing a name where there is
+	// none says the number instead — inventing one would be a claim about a
+	// promotion this database has never seen.
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	got, err := s.PromotionName(ctx, 1050336)
+	if err != nil {
+		t.Fatalf("PromotionName: %v", err)
+	}
+	if got != "" {
+		t.Errorf("акция названа %q, а список акций никто не забирал", got)
+	}
+
+	if _, err := s.SavePromotions(ctx, []PromotionRow{{
+		Slug: "bolshaya-rasprodazha", Name: "Большая распродажа",
+		ID: 1050336, Shard: "promo/bucket_6", Query: "preset=1005032",
+	}}); err != nil {
+		t.Fatalf("SavePromotions: %v", err)
+	}
+	got, err = s.PromotionName(ctx, 1050336)
+	if err != nil {
+		t.Fatalf("PromotionName: %v", err)
+	}
+	if got != "Большая распродажа" {
+		t.Errorf("акция названа %q", got)
+	}
+}

@@ -35,6 +35,28 @@ type PromotionRow struct {
 }
 
 // SavePromotions replaces the list with what the site is running.
+// PromotionName is what a promotion is called, by the number a listing marks
+// its products with.
+//
+// Empty when no «Состав акции» job has fetched the list, which is the ordinary
+// state: the mark rides on every listing for free and the names come from a
+// job somebody has to run. A screen that needs a name where there is none says
+// the number instead — inventing one would be a claim about a promotion this
+// database has never seen.
+func (s *Store) PromotionName(ctx context.Context, promoID int64) (string, error) {
+	var name string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT name FROM promotions WHERE promo_id = ? ORDER BY fetched_at DESC LIMIT 1`,
+		promoID).Scan(&name)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("store: name of promotion %d: %w", promoID, err)
+	}
+	return name, nil
+}
+
 func (s *Store) SavePromotions(ctx context.Context, rows []PromotionRow) (int, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
