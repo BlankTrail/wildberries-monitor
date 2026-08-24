@@ -537,9 +537,11 @@ func (j Job) Estimate(items int) Estimate {
 		// the field catalogue prices FieldSourceCardDetail at zero precisely
 		// because everywhere else it does ride along.
 		//
-		// Left out, an article list collecting nothing but base fields was
-		// quoted at nought requests and made one per article per region.
-		e.Requests += len(j.Articles) * regions
+		// In batches, the way the plan asks for them: a hundred articles to a
+		// request. Quoted per article this would say a hundredfold what the
+		// run spends, which is the same lie as quoting nought — see the plan's
+		// own note on DetailBatch.
+		e.Requests += batches(len(j.Articles)) * regions
 	case KindPromotion, KindMainFeed:
 		// One request per page, the same as a search: both are listings in the
 		// same index, asked for a preset or for nothing at all.
@@ -563,6 +565,14 @@ func (j Job) Estimate(items int) Estimate {
 	perOne := perRequest + j.Delay
 	e.Duration = time.Duration(e.Requests) * perOne / time.Duration(threads)
 	return e
+}
+
+// batches is how many detail requests a list of articles takes.
+func batches(articles int) int {
+	if articles <= 0 {
+		return 0
+	}
+	return (articles + DetailBatch - 1) / DetailBatch
 }
 
 // ErrNoItems is returned by a plan that enumerated nothing.

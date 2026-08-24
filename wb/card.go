@@ -102,8 +102,27 @@ func decodeCard(raw []byte) (Card, error) {
 // away — because a raw ampersand in it would inject an extra parameter into
 // this query string exactly as it would there.
 func (e Endpoints) CardDetailURL(nm int64, dest string, app int) string {
+	return e.CardDetailsURL([]int64{nm}, dest, app)
+}
+
+// CardDetailsURL is the same address for many products at once.
+//
+// Spec section 4.2 calls this the key performance technique: «детали берутся
+// пачками — один запрос покрывает сотни артикулов вместо сотен отдельных
+// запросов». The site's own front end asks this way, with the article numbers
+// semicolon-separated in one nm parameter, and the response is the same
+// products array a single-product request returns with one item in it.
+//
+// One builder for both, so the eleven parameters beside nm cannot come to
+// differ between a request for one product and a request for a hundred — a
+// shape nobody has observed is a shape the far end is entitled to refuse.
+func (e Endpoints) CardDetailsURL(nms []int64, dest string, app int) string {
 	if app == 0 {
 		app = AppWeb
+	}
+	ids := make([]string, len(nms))
+	for i, nm := range nms {
+		ids[i] = strconv.FormatInt(nm, 10)
 	}
 	q := "appType=" + strconv.Itoa(app) +
 		"&curr=rub" +
@@ -114,7 +133,7 @@ func (e Endpoints) CardDetailURL(nm int64, dest string, app int) string {
 		"&mtype=257" +
 		"&lang=ru" +
 		"&ab_testing=false" +
-		"&nm=" + strconv.FormatInt(nm, 10)
+		"&nm=" + strings.Join(ids, ";")
 	return e.CardDetail + "?" + q
 }
 
@@ -253,6 +272,54 @@ func (c *Client) Detail(ctx context.Context, eps Endpoints, nm int64, dest strin
 	}
 	out.Product = live
 	return out, nil
+}
+
+// Details is the live half of many products in one request.
+//
+// The answer is keyed by article number rather than ordered, because the site
+// is under no obligation to return what was asked for in the order it was
+// asked, nor to return all of it: an article that has been taken down comes
+// back missing, and a caller that paired the response with its request by
+// position would attach one product's price to another's row.
+//
+// A partial answer is not an error. Ninety-nine products out of a hundred is
+// ninety-nine readings worth keeping, and the caller can see which one is
+// absent by looking for it.
+func (c *Client) Details(ctx context.Context, eps Endpoints, nms []int64, dest string, app int) (map[int64]Product, []Fetch, error) {
+	if len(nms) == 0 {
+		return map[int64]Product{}, nil, nil
+	}
+	if app == 0 {
+		app = AppWeb
+	}
+	// The referer of the first article. One of them has to be it, and a
+	// request for a hundred products is one the site's own pages make from a
+	// listing rather than from a card — see SearchURL's own note on why the
+	// header is sent at all.
+	referer := eps.CardPageURL(nms[0])
+
+	res, err := c.Get(ctx, eps.CardDetailsURL(nms, dest, app), KindAPI, referer)
+	if err != nil {
+		return nil, []Fetch{lostFetch(SourceCardDetail, err)}, err
+	}
+	spent := []Fetch{fetchOf(SourceCardDetail, res)}
+	if res.Class != ClassOK {
+		return nil, spent, fmt.Errorf("details of %d product(s): status %d (%s)", len(nms), res.Status, res.Class)
+	}
+	env, err := decodeEnvelope(res.Body)
+	if err != nil {
+		return nil, spent, err
+	}
+
+	now := c.now()
+	out := make(map[int64]Product, len(env.Products))
+	for _, p := range env.Products {
+		p.Dest = dest
+		p.AppType = app
+		p.FetchedAt = now
+		out[p.ID] = p
+	}
+	return out, spent, nil
 }
 
 // detail fetches and reads the live half, appending its provenance to out.

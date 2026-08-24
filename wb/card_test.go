@@ -853,3 +853,55 @@ func TestClient_CardReportsAStaticHalfThatNeverLanded(t *testing.T) {
 		t.Errorf("Cost=%+v, want %+v — a fetch that never landed still spent the budget it spent", f.Cost, want)
 	}
 }
+
+func TestCardDetailsURL_JoinsTheArticlesTheWayTheSiteDoes(t *testing.T) {
+	// Spec section 4.2's key performance technique needs the batch form of
+	// this address: the article numbers semicolon-separated in one nm
+	// parameter, which is how the site's own front end asks.
+	got := DefaultEndpoints().CardDetailsURL([]int64{101, 102, 103}, "-5892277", AppWeb)
+	if !strings.Contains(got, "nm=101;102;103") {
+		t.Errorf("адрес %q не несёт пачку артикулов", got)
+	}
+	// And one product goes through the same builder, so the eleven parameters
+	// beside nm cannot come to differ between a request for one and a request
+	// for a hundred — a shape nobody has observed is one the far end may
+	// refuse.
+	one := DefaultEndpoints().CardDetailURL(101, "-5892277", AppWeb)
+	many := strings.Replace(got, "nm=101;102;103", "nm=101", 1)
+	if one != many {
+		t.Errorf("адрес одного товара отличается от адреса пачки не только списком:\n one:  %s\n many: %s", one, many)
+	}
+}
+
+func TestClient_DetailsKeepsEachProductUnderItsOwnArticle(t *testing.T) {
+	// Keyed by article rather than ordered. The site is under no obligation to
+	// answer in the order it was asked, nor to answer at all for an article
+	// that has been taken down — and a caller pairing the response with its
+	// request by position would attach one product's price to another's row.
+	body := `{"data":{"products":[
+		{"id":102,"name":"второй","priceU":20000},
+		{"id":101,"name":"первый","priceU":10000}
+	]}}`
+	lease := &fakeLease{port: 1, replies: []*http.Response{reply(200, body)}}
+	c := NewClient(&fakeLeaser{leases: []*fakeLease{lease}}, NewSessions())
+
+	got, spent, err := c.Details(context.Background(), DefaultEndpoints(),
+		[]int64{101, 102, 103}, "-5892277", AppWeb)
+	if err != nil {
+		t.Fatalf("Details: %v", err)
+	}
+	if len(spent) != 1 {
+		t.Errorf("потрачено запросов %d, ожидался один на всю пачку", len(spent))
+	}
+	if got[101].Name != "первый" || got[102].Name != "второй" {
+		t.Errorf("товары перепутаны местами: %+v", got)
+	}
+	// The third was asked for and not returned. A partial answer is not an
+	// error: two readings are two readings worth keeping.
+	if _, ok := got[103]; ok {
+		t.Error("в ответе есть товар, которого сайт не присылал")
+	}
+	if got[101].Dest != "-5892277" || got[101].AppType != AppWeb {
+		t.Errorf("чтение не помечено регионом и аудиторией: %+v", got[101])
+	}
+}

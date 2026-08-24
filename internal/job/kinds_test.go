@@ -3,6 +3,7 @@
 package job
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
@@ -220,22 +221,61 @@ func TestPlan_AdsAreOnePerPhraseAndRegionWithNoPages(t *testing.T) {
 	}
 }
 
-func TestPlan_ArticlesAreOneItemPerArticlePerRegion(t *testing.T) {
+func TestPlan_ArticlesAreOneBatchPerRegion(t *testing.T) {
+	// Spec section 4.2's key performance technique: «детали берутся пачками —
+	// один запрос покрывает сотни артикулов». Planned one article at a time,
+	// a storefront of eight hundred was eight hundred requests a region.
 	j := Job{
 		Kind: KindArticles, Articles: []int64{11, 22},
 		Regions: []string{"x", "y", "z"}, AppType: wb.AppWeb,
 		Fields: wb.Selection{"nm_id"},
 	}
 	got := planOf(t, j)
-	if len(got) != 6 {
-		t.Fatalf("plan holds %d items, want 6 (2 articles x 3 regions)", len(got))
+	if len(got) != 3 {
+		t.Fatalf("plan holds %d items, want 3 — one batch per region", len(got))
 	}
 	k, err := ParseKey(got[0].Key)
 	if err != nil {
 		t.Fatalf("ParseKey: %v", err)
 	}
-	if k.NmID != 11 {
-		t.Errorf("product key carries article %d, want 11", k.NmID)
+	// The articles themselves, so that a stopped run resumes on the same ones.
+	if !reflect.DeepEqual(k.NmIDs, []int64{11, 22}) {
+		t.Errorf("batch carries %v, want [11 22]", k.NmIDs)
+	}
+}
+
+func TestPlan_ABatchIsBoundedAndCoversEverything(t *testing.T) {
+	// A ceiling the far end refuses costs one failed request per batch and
+	// then a fallback to one article at a time — but a plan that dropped
+	// articles past the first batch would lose them silently, which is the
+	// mistake worth a test.
+	var articles []int64
+	for i := range DetailBatch*2 + 7 {
+		articles = append(articles, int64(i+1))
+	}
+	got := planOf(t, Job{
+		Kind: KindArticles, Articles: articles,
+		Regions: []string{"x"}, AppType: wb.AppWeb, Fields: wb.Selection{"nm_id"},
+	})
+	if len(got) != 3 {
+		t.Fatalf("пачек %d, ожидалось три", len(got))
+	}
+
+	seen := map[int64]bool{}
+	for _, it := range got {
+		k, err := ParseKey(it.Key)
+		if err != nil {
+			t.Fatalf("ParseKey: %v", err)
+		}
+		if len(k.NmIDs) > DetailBatch {
+			t.Errorf("в пачке %d артикулов при пределе %d", len(k.NmIDs), DetailBatch)
+		}
+		for _, nm := range k.NmIDs {
+			seen[nm] = true
+		}
+	}
+	if len(seen) != len(articles) {
+		t.Errorf("в план попало %d артикулов из %d", len(seen), len(articles))
 	}
 }
 
@@ -272,13 +312,16 @@ func TestParseKey_RoundTripsEveryKind(t *testing.T) {
 		{Kind: ItemListing, ID: 118143, Dest: "-1257786", AppType: 32, Page: 2},
 		{Kind: ItemProduct, NmID: 432036774, Dest: "-1257786", AppType: 1},
 		{Kind: ItemAds, Phrase: "ботинки", Dest: "-1029256", AppType: 1},
+		// A batch carries its own article numbers, so that a stopped run
+		// resumes on the same ones whatever has happened to the job's list.
+		{Kind: ItemDetails, NmIDs: []int64{1, 2, 3}, Dest: "-1257786", AppType: 1},
 	} {
 		got, err := ParseKey(want.String())
 		if err != nil {
 			t.Errorf("ParseKey(%q): %v", want.String(), err)
 			continue
 		}
-		if got != want {
+		if !reflect.DeepEqual(got, want) {
 			t.Errorf("round trip of %q gave %+v, want %+v", want.String(), got, want)
 		}
 	}

@@ -41,6 +41,7 @@ type Site interface {
 	BrandCatalogPage(ctx context.Context, eps wb.Endpoints, id int64, q wb.SearchQuery) (wb.Envelope, error)
 	Card(ctx context.Context, b *wb.Basket, eps wb.Endpoints, nm int64, dest string, app int) (wb.CardFetch, error)
 	Detail(ctx context.Context, eps wb.Endpoints, nm int64, dest string, app int) (wb.CardFetch, error)
+	Details(ctx context.Context, eps wb.Endpoints, nms []int64, dest string, app int) (map[int64]wb.Product, []wb.Fetch, error)
 	Reviews(ctx context.Context, eps wb.Endpoints, imtID int64) (wb.Reviews, error)
 	Questions(ctx context.Context, eps wb.Endpoints, imtID int64, take, skip int) (wb.Questions, error)
 	Shelves(ctx context.Context, eps wb.Endpoints, q wb.SearchQuery) (wb.Shelves, error)
@@ -114,6 +115,8 @@ func (f *Fetcher) fetchKey(ctx context.Context, key job.Key) (int, error) {
 		return f.catalog(ctx, key)
 	case job.ItemProduct:
 		return f.product(ctx, key)
+	case job.ItemDetails:
+		return f.details(ctx, key)
 	case job.ItemProfile:
 		return f.profile(ctx, key)
 	case job.ItemAds:
@@ -503,6 +506,104 @@ func (f *Fetcher) product(ctx context.Context, key job.Key) (int, error) {
 		imtID = fetch.Product.MatchID
 	}
 	extra, err := f.signals(ctx, imtID, key.NmID, fetch.Product.Feedbacks)
+	return requests + extra, err
+}
+
+// details collects a batch of article numbers in one request.
+//
+// Spec section 4.2's key performance technique: «детали берутся пачками — один
+// запрос покрывает сотни артикулов вместо сотен отдельных запросов». For the
+// kind section 4.6 calls the main mode of regular monitoring, that is the
+// difference between eight hundred requests a pass and eight.
+//
+// The ceiling is a guess — section 4.2 leaves it to the live stand — so a
+// batch the far end refuses falls back to one article at a time. A wrong guess
+// then costs one wasted request per batch and behaves exactly as the
+// per-article path did before batching existed.
+func (f *Fetcher) details(ctx context.Context, key job.Key) (int, error) {
+	got, spent, err := f.Site.Details(ctx, f.Eps, key.NmIDs, key.Dest, key.AppType)
+	requests := len(spent)
+	if err != nil {
+		f.scraped(ctx, "пачка из %d артикулов не прошла (%v) — по одному", len(key.NmIDs), err)
+		extra, oneErr := f.oneByOne(ctx, key)
+		return requests + extra, oneErr
+	}
+
+	for _, nm := range key.NmIDs {
+		if err := ctx.Err(); err != nil {
+			return requests, err
+		}
+		live, ok := got[nm]
+		if !ok {
+			// Asked for and not returned. A product taken down comes back
+			// missing, and that is a fact about the article rather than a
+			// failure of the batch — the other ninety-nine are worth keeping.
+			continue
+		}
+		extra, err := f.oneOfBatch(ctx, key, live)
+		requests += extra
+		if err != nil {
+			return requests, err
+		}
+	}
+	f.scraped(ctx, "пачка артикулов — %d из %d", len(got), len(key.NmIDs))
+	return requests, nil
+}
+
+// oneByOne is the fallback for a batch the far end would not answer.
+func (f *Fetcher) oneByOne(ctx context.Context, key job.Key) (int, error) {
+	requests := 0
+	for _, nm := range key.NmIDs {
+		if err := ctx.Err(); err != nil {
+			return requests, err
+		}
+		one := key
+		one.Kind, one.NmID, one.NmIDs = job.ItemProduct, nm, nil
+		spent, err := f.product(ctx, one)
+		requests += spent
+		if err != nil {
+			// One article failing does not fail the batch, the same way one
+			// card failing does not fail a page: throwing away ninety-nine
+			// saved products because the hundredth timed out would make a
+			// run's cost depend on its unluckiest item.
+			f.scraped(ctx, "ошибка: артикул %d — %v", nm, err)
+		}
+	}
+	return requests, nil
+}
+
+// oneOfBatch saves one product of a batch and buys whatever else the selection
+// asks about it.
+func (f *Fetcher) oneOfBatch(ctx context.Context, key job.Key, live wb.Product) (int, error) {
+	fetch := wb.CardFetch{Product: live}
+	requests := 0
+
+	// The document only when something selected is read out of it — the same
+	// rule the single-article path follows, and the reason a batch is worth
+	// having at all: without it every article pays for a document nobody opens.
+	if f.sources()[wb.FieldSourceCardDocument] {
+		card, err := f.Site.Card(ctx, f.Basket, f.Eps, live.ID, key.Dest, key.AppType)
+		requests += 2
+		if err == nil {
+			// The document's own live half is a second reading of the same
+			// moment; the batch's is the one this item is about.
+			card.Product = live
+			fetch = card
+		}
+	}
+
+	if _, err := f.Store.SaveCard(ctx, fetch); err != nil {
+		return requests, fmt.Errorf("collect: saving card %d: %w", live.ID, err)
+	}
+	if err := f.link(ctx, []wb.Product{live}); err != nil {
+		return requests, err
+	}
+
+	imtID := fetch.Card.ImtID
+	if imtID == 0 {
+		imtID = live.MatchID
+	}
+	extra, err := f.signals(ctx, imtID, live.ID, live.Feedbacks)
 	return requests + extra, err
 }
 

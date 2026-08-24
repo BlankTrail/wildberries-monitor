@@ -31,7 +31,12 @@ type fakeSite struct {
 	cards         []int64
 	// details is the live-half-only fetches, kept apart from cards so a test
 	// can tell which half a collection asked for.
-	details   []int64
+	details []int64
+	// batches records what each batch request asked for, batchFail refuses
+	// every batch, and missing drops one article from a batch's answer.
+	batches   [][]int64
+	batchFail error
+	missing   map[int64]bool
 	reviews   []int64
 	questions []int64
 	shelves   []wb.SearchQuery
@@ -158,6 +163,33 @@ func (f *fakeSite) Detail(_ context.Context, _ wb.Endpoints, nm int64, dest stri
 			Feedbacks: f.cardFeedbacks,
 		},
 	}, nil
+}
+
+// Details is the batch half. batchFail refuses the batch so a test can watch
+// the fallback; missing drops one article from the answer, which is what a
+// product taken down looks like.
+func (f *fakeSite) Details(_ context.Context, _ wb.Endpoints, nms []int64, dest string, app int) (map[int64]wb.Product, []wb.Fetch, error) {
+	f.batches = append(f.batches, append([]int64(nil), nms...))
+	spent := []wb.Fetch{{Source: wb.SourceCardDetail, Port: 20009}}
+	if f.fail != nil {
+		return nil, spent, f.fail
+	}
+	if f.batchFail != nil {
+		return nil, spent, f.batchFail
+	}
+	out := map[int64]wb.Product{}
+	for _, nm := range nms {
+		if f.missing[nm] {
+			continue
+		}
+		out[nm] = wb.Product{
+			ID: nm, Name: "\u041f\u043b\u0430\u0442\u044c\u0435", Brand: "BrandCo", MatchID: f.cardImt,
+			SupplierID: ptrTo(int64(4242)), SupplierName: "\u041e\u041e\u041e \u0420\u043e\u043c\u0430\u0448\u043a\u0430",
+			Dest: dest, AppType: app, FetchedAt: time.Unix(1000, 0).UTC(),
+			Feedbacks: f.cardFeedbacks,
+		}
+	}
+	return out, spent, nil
 }
 
 func (f *fakeSite) Card(_ context.Context, _ *wb.Basket, _ wb.Endpoints, nm int64, dest string, app int) (wb.CardFetch, error) {
@@ -1494,5 +1526,111 @@ func TestFetch_TheReviewWindowIsReachableWithoutTheDocument(t *testing.T) {
 	}
 	if len(site.reviews) != 1 || site.reviews[0] != 900 {
 		t.Errorf("окно отзывов запрошено для %v, ожидалась группа 900", site.reviews)
+	}
+}
+
+func TestFetch_ABatchOfArticlesIsOneRequest(t *testing.T) {
+	// Spec section 4.2's key performance technique: «детали берутся пачками —
+	// один запрос покрывает сотни артикулов вместо сотен отдельных запросов».
+	// For section 4.6's main mode of regular monitoring that is the difference
+	// between eight hundred requests a pass and eight.
+	site := &fakeSite{cardImt: 900}
+	f, s := fetcherFor(t, site, "nm_id", "price_sale")
+
+	n, err := f.Fetch(t.Context(), job.Item{Key: job.Key{
+		Kind: job.ItemDetails, NmIDs: []int64{101, 102, 103},
+		Dest: "-1257786", AppType: 1,
+	}.String()})
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if len(site.batches) != 1 || len(site.batches[0]) != 3 {
+		t.Fatalf("пачек %v, ожидалась одна из трёх артикулов", site.batches)
+	}
+	if n != 1 {
+		t.Errorf("потрачено %d запросов на три артикула, ожидался один", n)
+	}
+	saved, err := s.CountForTest(t.Context(), `SELECT COUNT(*) FROM products`)
+	if err != nil {
+		t.Fatalf("CountForTest: %v", err)
+	}
+	if saved != 3 {
+		t.Errorf("сохранено товаров %d из трёх", saved)
+	}
+}
+
+func TestFetch_ABatchTheSiteRefusesFallsBackToOneAtATime(t *testing.T) {
+	// The ceiling is a guess — spec section 4.2 leaves it to the live stand —
+	// so a wrong one has to cost almost nothing. One wasted request per batch,
+	// and then exactly what every article cost before batching existed.
+	site := &fakeSite{cardImt: 900, batchFail: errors.New("414 URI too long")}
+	f, s := fetcherFor(t, site, "nm_id", "price_sale")
+
+	n, err := f.Fetch(t.Context(), job.Item{Key: job.Key{
+		Kind: job.ItemDetails, NmIDs: []int64{101, 102, 103},
+		Dest: "-1257786", AppType: 1,
+	}.String()})
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if len(site.details) != 3 {
+		t.Errorf("поштучно запрошено %v, ожидались все три", site.details)
+	}
+	// One refused batch plus three articles.
+	if n != 4 {
+		t.Errorf("потрачено %d запросов, ожидались отказавшая пачка и три поштучных", n)
+	}
+	saved, err := s.CountForTest(t.Context(), `SELECT COUNT(*) FROM products`)
+	if err != nil {
+		t.Fatalf("CountForTest: %v", err)
+	}
+	if saved != 3 {
+		t.Errorf("сохранено товаров %d из трёх — откат ничего не собрал", saved)
+	}
+}
+
+func TestFetch_AnArticleTheBatchDidNotReturnIsNotAFailure(t *testing.T) {
+	// A product taken down comes back missing. That is a fact about the
+	// article rather than a failure of the batch, and throwing away
+	// ninety-nine saved readings because the hundredth is gone would make a
+	// run's result depend on its unluckiest item.
+	site := &fakeSite{cardImt: 900, missing: map[int64]bool{102: true}}
+	f, s := fetcherFor(t, site, "nm_id", "price_sale")
+
+	if _, err := f.Fetch(t.Context(), job.Item{Key: job.Key{
+		Kind: job.ItemDetails, NmIDs: []int64{101, 102, 103},
+		Dest: "-1257786", AppType: 1,
+	}.String()}); err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	saved, err := s.CountForTest(t.Context(), `SELECT COUNT(*) FROM products`)
+	if err != nil {
+		t.Fatalf("CountForTest: %v", err)
+	}
+	if saved != 2 {
+		t.Errorf("сохранено товаров %d, ожидались два — третий сайт не вернул", saved)
+	}
+}
+
+func TestFetch_ABatchStillBuysTheDocumentWhenItIsAskedFor(t *testing.T) {
+	// The batch is the live half. A job that ticked «Описание и
+	// характеристики» is paying for the document on purpose, and the document
+	// is published per card on the CDN — there is nothing to batch about it.
+	site := &fakeSite{cardImt: 900}
+	f, _ := fetcherFor(t, site, "nm_id", "description")
+
+	n, err := f.Fetch(t.Context(), job.Item{Key: job.Key{
+		Kind: job.ItemDetails, NmIDs: []int64{101, 102},
+		Dest: "-1257786", AppType: 1,
+	}.String()})
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if len(site.cards) != 2 {
+		t.Errorf("документов запрошено %v, ожидались два", site.cards)
+	}
+	// One batch plus two cards of two halves each.
+	if n != 5 {
+		t.Errorf("потрачено %d запросов, ожидались пачка и два документа", n)
 	}
 }

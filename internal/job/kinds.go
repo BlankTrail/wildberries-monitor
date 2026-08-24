@@ -26,6 +26,16 @@ const (
 	ItemPage    = "page"
 	ItemListing = "listing"
 	ItemProduct = "product" // one product, fetched by article number
+	// ItemDetails is a batch of article numbers fetched in one request, which
+	// spec section 4.2 calls the key performance technique: «детали берутся
+	// пачками — один запрос покрывает сотни артикулов вместо сотен отдельных
+	// запросов».
+	//
+	// A kind of its own rather than a product key carrying a list, because a
+	// key is written into the database and read back by a later version of
+	// this program — see Key.String. An unfinished run planned as products
+	// goes on being products.
+	ItemDetails = "details"
 	ItemAds     = "ads"     // the paid placements for one phrase in one region
 	ItemProfile = "profile" // resolve what somebody pasted into who they are
 	ItemCatalog = "catalog" // one page of one catalogue node
@@ -44,6 +54,16 @@ const (
 // refuses one that holds it rather than producing an ambiguous key.
 const keySep = "|"
 
+// DetailBatch is how many article numbers go into one detail request.
+//
+// Spec section 4.2 leaves the exact ceiling to the live stand — «точный предел
+// размера пачки — на M1» — so this is the number the site's own front end
+// uses, and the collector is built so that a wrong guess costs almost nothing:
+// a batch the far end refuses is re-fetched one article at a time, which is
+// what every article cost before batching existed. One wasted request per
+// batch, once, against a tenfold saving when the guess is right.
+const DetailBatch = 100
+
 // Key is one item's identity, parsed back from its stored form.
 type Key struct {
 	Kind    string
@@ -53,6 +73,30 @@ type Key struct {
 	Page    int
 	NmID    int64
 	ID      int64 // supplier or brand, depending on Kind
+	// NmIDs is the batch an ItemDetails covers, semicolon-separated in the
+	// stored key. Empty for every other kind.
+	NmIDs []int64
+}
+
+// joinIDs renders a batch for a key, and splitIDs reads one back. Semicolons,
+// which is what the site's own detail request separates them with — one
+// spelling for the key and the address keeps the two from drifting.
+func joinIDs(nms []int64) string {
+	out := make([]string, len(nms))
+	for i, nm := range nms {
+		out[i] = strconv.FormatInt(nm, 10)
+	}
+	return strings.Join(out, ";")
+}
+
+func splitIDs(s string) []int64 {
+	var out []int64
+	for _, part := range strings.Split(s, ";") {
+		if n, err := strconv.ParseInt(strings.TrimSpace(part), 10, 64); err == nil && n > 0 {
+			out = append(out, n)
+		}
+	}
+	return out
 }
 
 // String renders a key for storage. The form is fixed rather than derived
@@ -86,6 +130,12 @@ func (k Key) String() string {
 		return strings.Join([]string{ItemMain, k.Dest, strconv.Itoa(k.AppType), strconv.Itoa(k.Page)}, keySep)
 	case ItemProduct:
 		return strings.Join([]string{ItemProduct, strconv.FormatInt(k.NmID, 10), k.Dest, strconv.Itoa(k.AppType)}, keySep)
+	case ItemDetails:
+		// The article numbers themselves, not «пачка номер три». The plan is
+		// what a stopped run resumes from, and a batch that named its position
+		// in a list would be a different batch the moment somebody edited the
+		// list — see spec section 10.
+		return strings.Join([]string{ItemDetails, joinIDs(k.NmIDs), k.Dest, strconv.Itoa(k.AppType)}, keySep)
 	case ItemProfile:
 		return strings.Join([]string{ItemProfile, strconv.FormatInt(k.NmID, 10)}, keySep)
 	case ItemShelf:
@@ -190,6 +240,22 @@ func ParseKey(s string) (Key, error) {
 			return Key{}, fmt.Errorf("job: product key %q: app type %q", s, parts[3])
 		}
 		k.AppType = app
+
+	case ItemDetails:
+		if len(parts) != 4 {
+			return Key{}, fmt.Errorf("job: details key %q has %d parts, want 4", s, len(parts))
+		}
+		k.NmIDs = splitIDs(parts[1])
+		if len(k.NmIDs) == 0 {
+			return Key{}, fmt.Errorf("job: details key %q names no article", s)
+		}
+		k.Dest = parts[2]
+		app, err := strconv.Atoi(parts[3])
+		if err != nil {
+			return Key{}, fmt.Errorf("job: details key %q: app type %q", s, parts[3])
+		}
+		k.AppType = app
+
 	case ItemAds:
 		if len(parts) != 4 {
 			return Key{}, fmt.Errorf("job: ads key %q has %d parts, want 4", s, len(parts))
@@ -322,9 +388,13 @@ func (StaticPlanner) Plan(j Job) ([]Item, error) {
 				}.String()})
 			}
 		case KindArticles:
-			for _, nm := range j.Articles {
-				out = append(out, Item{Kind: ItemProduct, Key: Key{
-					Kind: ItemProduct, NmID: nm, Dest: dest, AppType: j.AppType,
+			// In batches, which spec section 4.2 calls the key performance
+			// technique. Eight hundred articles in one region were eight
+			// hundred requests; at a hundred to a request they are eight.
+			for from := 0; from < len(j.Articles); from += DetailBatch {
+				batch := j.Articles[from:min(from+DetailBatch, len(j.Articles))]
+				out = append(out, Item{Kind: ItemDetails, Key: Key{
+					Kind: ItemDetails, NmIDs: batch, Dest: dest, AppType: j.AppType,
 				}.String()})
 			}
 		case KindPhraseAds:
