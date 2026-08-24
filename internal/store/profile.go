@@ -297,6 +297,28 @@ func (s *Store) SaveProfile(ctx context.Context, p ProfileRow) (int64, error) {
 }
 
 // Profiles lists every profile, oldest first.
+// Started reports whether this installation has been set up at all: a profile
+// saved, or a job saved.
+//
+// One question and one query, because it is one decision. Asked as two reads
+// it was two error branches saying the same thing, and the second of them
+// unreachable by any test that can break a database — breaking one breaks
+// both. Counted rather than listed, too: the caller wants a yes or a no, and
+// loading four hundred jobs to find out that there is one is a page of rows
+// read to answer a question about zero.
+//
+// Either one means somebody has started. A profile is the onboarding done; a
+// job is somebody who skipped it and went straight to collecting, and sending
+// them back to a wizard would be sending them over work they chose not to do.
+func (s *Store) Started(ctx context.Context) (bool, error) {
+	var n int64
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT (SELECT COUNT(*) FROM profiles) + (SELECT COUNT(*) FROM jobs)`).Scan(&n); err != nil {
+		return false, fmt.Errorf("store: has anything been started: %w", err)
+	}
+	return n > 0, nil
+}
+
 func (s *Store) Profiles(ctx context.Context) ([]ProfileRow, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, name, source_input, seller_id, created_at, updated_at,

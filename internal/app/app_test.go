@@ -4,6 +4,8 @@ package app
 
 import (
 	"context"
+	"github.com/BlankTrail/wildberries-monitor/internal/job"
+	"github.com/BlankTrail/wildberries-monitor/wb"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -466,5 +468,90 @@ func TestListenLAN_TheFlagOrTheTick(t *testing.T) {
 	a.Config.LAN = true
 	if !a.listenLAN(ctx) {
 		t.Error("флаг -lan перестал работать")
+	}
+}
+
+func TestFirstRun_TheProfileIsWhereTheProgramOpens(t *testing.T) {
+	// Spec section 7 makes «Мой профиль» the entry point for a new user and
+	// says the first run opens it. The front screen answers «ничего не идёт,
+	// ничего не собрано, ничего не сработало» — every sentence true, none of
+	// them what somebody who has just started the program needs.
+	a := newApp(t)
+	ctx := t.Context()
+
+	if !a.nothingStartedYet(ctx) {
+		t.Fatal("свежая база не считается первым запуском")
+	}
+
+	// A job is enough to stop it: somebody who skipped onboarding and went
+	// straight to collecting must not be sent back to it.
+	if _, err := job.Save(ctx, a.Store, job.Job{
+		Name: "первое", Kind: job.KindArticles, Articles: []int64{100},
+		Regions: []string{"-1257786"}, AppType: 1, Threads: 1,
+		Fields: wb.Selection{"nm_id"},
+	}); err != nil {
+		t.Fatalf("job.Save: %v", err)
+	}
+	if a.nothingStartedYet(ctx) {
+		t.Error("задание сохранено, а запуск всё ещё считается первым")
+	}
+}
+
+func TestFirstRun_AProfileAloneIsEnoughToHaveStarted(t *testing.T) {
+	// The other half. Onboarding done and nothing collected yet is the state a
+	// person is in for as long as their first collection runs, and sending
+	// them back to the wizard then would be sending them back over work they
+	// have finished.
+	a := newApp(t)
+	ctx := t.Context()
+	if _, err := a.Store.SaveProfile(ctx, store.ProfileRow{Name: "мой"}); err != nil {
+		t.Fatalf("SaveProfile: %v", err)
+	}
+	if a.nothingStartedYet(ctx) {
+		t.Error("профиль есть, а запуск считается первым")
+	}
+}
+
+func TestFirstRun_TheEntryIsWhatTheBrowserIsPointedAt(t *testing.T) {
+	// A source-level check, because everything past this line needs a listener,
+	// a browser and a machine with one — Run opens it before it serves.
+	//
+	// What is guarded is the wiring. nothingStartedYet can be right and Run can
+	// still hand OpenBrowser the root, and then the whole of this is a function
+	// with no caller: the answer computed, the log line printed, and the
+	// browser opening on the screen the section says not to open on.
+	src, err := os.ReadFile("app.go")
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	body := string(src)
+	at := strings.Index(body, "entry := url")
+	if at < 0 {
+		t.Fatal("вход в панель нигде не выбирается")
+	}
+	tail := body[at : at+600]
+	if !strings.Contains(tail, "a.nothingStartedYet(ctx)") {
+		t.Error("вход не зависит от того, пользовались ли программой")
+	}
+	if !strings.Contains(tail, `url + "profile"`) {
+		t.Error("первый запуск открывается не на профиле")
+	}
+	if !strings.Contains(body, "OpenBrowser(entry)") {
+		t.Error("браузеру отдан не выбранный вход, а корень")
+	}
+}
+
+func TestFirstRun_ADatabaseThatWillNotAnswerIsNotAFirstRun(t *testing.T) {
+	// The unreadable case has to fall somewhere, and it falls on «пользовались».
+	// A wizard is where somebody types their seller's link and the program
+	// saves it; landing there with a database that cannot save is landing on a
+	// form that swallows the answer. The front screen shows the error the
+	// database is actually giving, which is the thing to act on.
+	a := newApp(t)
+	if err := a.Store.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if a.nothingStartedYet(t.Context()) {
+		t.Error("закрытая база прочиталась как первый запуск")
 	}
 }

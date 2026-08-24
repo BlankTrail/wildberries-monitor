@@ -462,6 +462,23 @@ func (a *App) listenLAN(ctx context.Context) bool {
 	return a.Config.LAN || a.Store.SettingBool(ctx, store.SettingListenLAN, false)
 }
 
+// nothingStartedYet reports whether the program has been used at all.
+//
+// The question and what counts as an answer live in store.Started. What lives
+// here is what to do with an unreadable database: it is read as «пользовались»,
+// because a wizard is where somebody types their seller's link and the program
+// saves it, and landing there with a database that cannot save is landing on a
+// form that swallows the answer. The front screen shows the error the database
+// is actually giving, which is the thing to act on.
+//
+// Judging a first run by what has been collected, rather than by what has been
+// set up, would send a person whose first collection is still running back to
+// onboarding they have already finished.
+func (a *App) nothingStartedYet(ctx context.Context) bool {
+	started, err := a.Store.Started(ctx)
+	return err == nil && !started
+}
+
 // Run starts the background loops and serves until the context ends.
 func (a *App) Run(ctx context.Context) error {
 	// Before anything can serve a request: this is what a run started from the
@@ -480,6 +497,25 @@ func (a *App) Run(ctx context.Context) error {
 
 	url := fmt.Sprintf("http://127.0.0.1:%d/", listener.Addr().(*net.TCPAddr).Port)
 	a.Log.Printf("панель: %s", url)
+
+	// Spec section 7 makes «Мой профиль» the entry point for a new user and
+	// says the first run opens it. The front screen answers «ничего не идёт,
+	// ничего не собрано, ничего не сработало» — every sentence true, none of
+	// them what somebody who has just started the program needs, which is one
+	// line asking for a link to their own goods.
+	//
+	// Where the browser is pointed rather than what «/» serves: the address of
+	// the panel is the panel's address, and a root that redirects somewhere
+	// else on a Tuesday is a root nobody can rely on. Opening is what the
+	// section is about.
+	entry := url
+	if a.nothingStartedYet(ctx) {
+		entry = url + "profile"
+		// Said as well as opened, because the browser may not open at all —
+		// a server, a container, an ssh session — and then this line is the
+		// whole of the instruction.
+		a.Log.Printf("первый запуск: начните отсюда — %s", entry)
+	}
 	// What to say about getting in depends on whether there is anything to get
 	// past. Printing a password nobody will be asked for is how people come to
 	// believe they need one.
@@ -494,11 +530,11 @@ func (a *App) Run(ctx context.Context) error {
 			a.Password, filepath.Join(a.Config.DataDir, "first-run.txt"))
 	}
 	if a.Config.OpenBrowser {
-		if err := OpenBrowser(url); err != nil {
+		if err := OpenBrowser(entry); err != nil {
 			// Not fatal. A server, a container or an ssh session has nothing
 			// to open, and refusing to start there would make the headless
 			// case the broken one.
-			a.Log.Printf("браузер не открылся (%v) — откройте %s вручную", err, url)
+			a.Log.Printf("браузер не открылся (%v) — откройте %s вручную", err, entry)
 		}
 	}
 

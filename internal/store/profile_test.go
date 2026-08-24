@@ -94,3 +94,53 @@ func TestProfile_DeletingItLeavesWhatWasCollected(t *testing.T) {
 		t.Errorf("остались записи профиля: %v", items)
 	}
 }
+
+func TestStarted_IsFalseOnlyUntilSomethingIsSetUp(t *testing.T) {
+	// Spec section 7 makes «Мой профиль» the entry point for a new user and
+	// says the first run opens it, so something has to know what a first run
+	// is. Either a profile or a job counts: the first is the onboarding done,
+	// the second is somebody who skipped it and went straight to collecting.
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	got, err := s.Started(ctx)
+	if err != nil {
+		t.Fatalf("Started: %v", err)
+	}
+	if got {
+		t.Error("свежая база считается использованной")
+	}
+
+	if _, err := s.SaveProfile(ctx, ProfileRow{Name: "мой"}); err != nil {
+		t.Fatalf("SaveProfile: %v", err)
+	}
+	if got, err := s.Started(ctx); err != nil || !got {
+		t.Errorf("Started = %v, %v — профиль сохранён", got, err)
+	}
+}
+
+func TestStarted_AJobAloneCounts(t *testing.T) {
+	// The other half, and the one a person who never opened «Мой профиль»
+	// lives in: they came for «Все товары продавца» and the program must not
+	// keep sending them to onboarding.
+	s := openTestStore(t)
+	ctx := context.Background()
+	if _, err := s.SaveJob(ctx, JobRow{Name: "первое", Type: "articles", Threads: 1}); err != nil {
+		t.Fatalf("SaveJob: %v", err)
+	}
+	if got, err := s.Started(ctx); err != nil || !got {
+		t.Errorf("Started = %v, %v — задание сохранено", got, err)
+	}
+}
+
+func TestStarted_ADatabaseThatWillNotAnswerSaysSo(t *testing.T) {
+	// The answer to an unreadable database is the caller's to make, so this
+	// one has to hand the error over rather than guess a boolean.
+	s := openTestStore(t)
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if _, err := s.Started(context.Background()); err == nil {
+		t.Error("закрытая база ответила без ошибки")
+	}
+}
