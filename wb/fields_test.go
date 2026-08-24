@@ -400,8 +400,8 @@ func TestSelectionCost_PhraseAdsPriceIntoPerPhraseNotPerProduct(t *testing.T) {
 var notDeclaredKeys = map[string]string{
 	"promo_flag":      `promo_id says which promotion, and a flag would be the same fact spelled twice — «в акции» is «promo_id не пуст», and two columns that cannot disagree are one column and a way to make them`,
 	"promo_name":      `nothing this package decodes names a promotion: the name is on the promotion's own record, which only a «Состав акции» job fetches, so a column for it would be empty until an unrelated job had run`,
-	"photo_url":       `Card.Raw holds the full static card document already, unparsed — see the package comment's "has a producer" rule — but nothing extracts a photo URL out of it yet`,
-	"video_url":       `same gap as photo_url: the document is already fetched, but nothing decodes a video URL out of it`,
+	"photo_url":       `an address is arithmetic on the article number under a host from the CDN's media-basket route, and an export cannot fetch that route — see GroupMedia for why persisting it to serve one column is the wrong trade`,
+	"video_url":       `same as photo_url, and one gap further: nothing in this package decodes whether a card has a video at all`,
 	"similar_items":   `wb.Shelves answers "what is this phrase and region advertising", not "what does this product recommend"; no source in this package is keyed on a product for a recommendation`,
 	"bought_together": `same gap as similar_items: FieldSourceShelves is keyed on a phrase and a region, not on a product`,
 }

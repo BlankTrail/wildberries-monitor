@@ -115,12 +115,28 @@ const (
 	// GroupMedia is spec section 4.4's «фото и видео», and it sits in the free
 	// block because the count arrives on every product of every listing.
 	//
-	// Only the count. The section also names the links, and those are not here
-	// on purpose: an address is built from the CDN's media-basket route (see
-	// wb.Basket), which is one request per run — a price this catalogue cannot
-	// state, since every group it has is priced per product or per phrase.
-	// Declaring the links without a way to quote them would put a checkbox on
-	// the constructor whose cost the estimate cannot count.
+	// Only the count, and the links are left out by decision rather than by
+	// omission — the reasoning is here because the next person to read section
+	// 4.4 will ask.
+	//
+	// A photograph's address is arithmetic on the article number under a host
+	// chosen by the CDN's media-basket route (see Basket.CardURL, which builds
+	// the card document's address the same way). The arithmetic is free; the
+	// route is a global map this package fetches once per run and holds in
+	// memory.
+	//
+	// An export must not make requests — it is a stream over stored rows — so
+	// the route would have to be persisted. But this package must not know the
+	// database, so persisting it lands in the engine, and the export would then
+	// read a routing map out of settings to build one column. That is a CDN
+	// routing map stored, refreshed and versioned to serve a column of links.
+	// The alternative — keeping the resolved host on every product — writes a
+	// derivable global fact once per product.
+	//
+	// Both add the same failure: a route that has moved produces addresses that
+	// answer 404, and a column of dead links is worse than no column. So the
+	// count is here, the links are not, and a person who wants the picture has
+	// the article number, which is what every WB address is built from anyway.
 	GroupMedia      FieldGroup = "media"
 	GroupContent    FieldGroup = "content"
 	GroupReputation FieldGroup = "reputation"
