@@ -58,10 +58,26 @@ func sqlContains(_ *sqlite.FunctionContext, args []driver.Value) (driver.Value, 
 	if !ok || needle == "" {
 		return int64(1), nil
 	}
-	if strings.Contains(strings.ToLower(hay), strings.ToLower(needle)) {
+	if Contains(hay, needle) {
 		return int64(1), nil
 	}
 	return int64(0), nil
+}
+
+// Contains is «содержит», folded in every alphabet.
+//
+// Exported because the same question is asked outside SQL: the profile screen
+// narrows a list of twenty-six thousand phrases it already holds in memory,
+// and asking the database again for a filter over rows it just handed over
+// would be a second spelling of this rule — the one thing this file exists to
+// prevent. Go's ToLower folds Cyrillic; SQLite's lower() does not, which is
+// why this function is here at all.
+//
+// No guard for an empty needle: strings.Contains already answers true for one,
+// which is the right answer — «содержит пустоту» is every string — and a branch
+// that restated it would be a branch no test could tell from its absence.
+func Contains(hay, needle string) bool {
+	return strings.Contains(strings.ToLower(hay), strings.ToLower(needle))
 }
 
 // text reads a value as a string, whichever of SQLite's types it arrived as.

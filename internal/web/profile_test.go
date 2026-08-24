@@ -909,3 +909,136 @@ func TestStorefront_OneRowPerProductRatherThanOnePerRegion(t *testing.T) {
 		t.Error("согласные регионы показаны диапазоном из одного числа")
 	}
 }
+
+// phraseProfile is a profile with three phrases to edit.
+func phraseProfile(t *testing.T, srv *Server) (int64, []store.PhraseRow) {
+	t.Helper()
+	ctx := t.Context()
+	id, err := srv.Store.SaveProfile(ctx, store.ProfileRow{Name: "мой"})
+	if err != nil {
+		t.Fatalf("SaveProfile: %v", err)
+	}
+	for _, text := range []string{"женское плате", "боди утягивающее", "топ на бретелях"} {
+		if err := srv.Store.SavePhrase(ctx, store.PhraseRow{
+			ProfileID: id, Text: text, State: store.PhraseCandidate, Origin: store.PhraseGenerated,
+		}); err != nil {
+			t.Fatalf("SavePhrase %q: %v", text, err)
+		}
+	}
+	rows, err := srv.Store.ProfilePhrases(ctx, id, "")
+	if err != nil {
+		t.Fatalf("ProfilePhrases: %v", err)
+	}
+	return id, rows
+}
+
+func TestPhrases_AWordingCanBeFixedInPlace(t *testing.T) {
+	// A phrase is one line of text with a typo in it. Until this, the only
+	// thing the screen offered was «Убрать» — so fixing «женское плате» meant
+	// deleting it and hoping the generator produced the right one next time.
+	srv := newServer(t)
+	_, rows := phraseProfile(t, srv)
+	var target store.PhraseRow
+	for _, r := range rows {
+		if r.Text == "женское плате" {
+			target = r
+		}
+	}
+	if target.ID == 0 {
+		t.Fatal("фраза с опечаткой не сохранилась")
+	}
+
+	body := postForm(t, srv, "/profile/phrases/edit?id="+itoa(target.ID),
+		url.Values{"text": {"женское платье"}}).Body.String()
+	if !strings.Contains(body, "Фраза изменена") {
+		t.Errorf("правка не подтверждена: %s", firstLines(body))
+	}
+	if !strings.Contains(body, `value="женское платье"`) {
+		t.Error("в списке нет исправленной фразы")
+	}
+	if strings.Contains(body, `value="женское плате"`) {
+		t.Error("в списке осталась опечатка")
+	}
+}
+
+func TestPhrases_TypedOnesJoinTheGeneratedOnes(t *testing.T) {
+	// Section 4.7's third source, in the shape a seller with two phrases in
+	// mind actually needs: uploading a file for two of them is a ceremony.
+	srv := newServer(t)
+	id, _ := phraseProfile(t, srv)
+
+	// The way in, before what it does: a route with no control pointing at it
+	// is a feature only its own test can reach.
+	screen := get(t, srv, "/profile", "").Body.String()
+	if !strings.Contains(screen, "<summary>Добавить свои фразы</summary>") {
+		t.Fatal("на экране нет формы для своих фраз")
+	}
+	if !strings.Contains(screen, `data-post="/profile/phrases/add?id=`+itoa(id)+`"`) {
+		t.Error("форма своих фраз не знает, в какой профиль писать")
+	}
+
+	body := postForm(t, srv, "/profile/phrases/add?id="+itoa(id),
+		url.Values{"phrases": {"боди с открытой спиной\nмайка укороченная\n\nбоди с открытой спиной"}}).Body.String()
+	if !strings.Contains(body, "Добавлено фраз: 2") {
+		t.Errorf("повторы не отброшены или фразы не добавлены: %s", firstLines(body))
+	}
+
+	rows, err := srv.Store.ProfilePhrases(t.Context(), id, "")
+	if err != nil {
+		t.Fatalf("ProfilePhrases: %v", err)
+	}
+	have := map[string]string{}
+	for _, r := range rows {
+		have[r.Text] = r.Origin
+	}
+	if have["майка укороченная"] != store.PhraseUploaded {
+		t.Errorf("вписанная фраза записана как %q", have["майка укороченная"])
+	}
+	if len(rows) != 5 {
+		t.Errorf("фраз %d, ожидалось три собранных и две вписанных", len(rows))
+	}
+}
+
+func TestPhrases_TheListCanBeNarrowedToOne(t *testing.T) {
+	// The screen shows two hundred phrases of twenty-six thousand. Without a
+	// way to reach the rest, «изменить» and «убрать» apply to whichever
+	// happened to sort first — which is not editing a list, it is editing its
+	// top.
+	srv := newServer(t)
+	phraseProfile(t, srv)
+
+	body := postForm(t, srv, "/profile/phrases/find",
+		url.Values{"phrase_find": {"БОДИ"}}).Body.String()
+	if !strings.Contains(body, `value="боди утягивающее"`) {
+		t.Error("поиск не нашёл фразу — регистр кириллицы не свёрнут")
+	}
+	if strings.Contains(body, `value="топ на бретелях"`) {
+		t.Error("поиск оставил в списке то, что не искали")
+	}
+	// And the box keeps what was typed, or the next press starts from nothing.
+	if !strings.Contains(body, `name="phrase_find" value="БОДИ"`) {
+		t.Error("строка поиска не помнит, что в ней набрали")
+	}
+}
+
+func TestPhrases_ARewordingThatCollidesIsRefusedOnTheScreen(t *testing.T) {
+	// Two phrases of one profile cannot be the same words: the unique key
+	// refuses it, and merging two verdicts is not a thing this can decide. The
+	// refusal belongs on the screen — it is the user's to resolve.
+	srv := newServer(t)
+	_, rows := phraseProfile(t, srv)
+
+	body := postForm(t, srv, "/profile/phrases/edit?id="+itoa(rows[0].ID),
+		url.Values{"text": {rows[1].Text}}).Body.String()
+	if !strings.Contains(body, "Фраза не изменена") {
+		t.Errorf("столкновение не показано: %s", firstLines(body))
+	}
+	// And nothing was lost to it.
+	after, err := srv.Store.ProfilePhrases(t.Context(), rows[0].ProfileID, "")
+	if err != nil {
+		t.Fatalf("ProfilePhrases: %v", err)
+	}
+	if len(after) != len(rows) {
+		t.Errorf("фраз стало %d вместо %d", len(after), len(rows))
+	}
+}

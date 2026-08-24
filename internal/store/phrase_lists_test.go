@@ -241,3 +241,72 @@ func TestDeletePhraseList_TakesThePhrasesWithIt(t *testing.T) {
 		t.Errorf("%d phrases outlived their list", n)
 	}
 }
+
+func TestRenamePhrase_ChangesTheWordingAndKeepsTheVerdict(t *testing.T) {
+	// Rewording is mostly fixing a typo in a phrase that has already been
+	// checked. Resetting the verdict would throw away the one number that makes
+	// «рабочая» computable without a fresh check, and paying for that check
+	// again is the whole expense of onboarding.
+	s := openTestStore(t)
+	ctx := context.Background()
+	// phrases points at a real profile row, so there has to be one.
+	pid, err := s.SaveProfile(ctx, ProfileRow{Name: "мой"})
+	if err != nil {
+		t.Fatalf("SaveProfile: %v", err)
+	}
+	rank := int64(4)
+	if err := s.SavePhrase(ctx, PhraseRow{
+		ProfileID: pid, Text: "женское плате", State: PhraseWorking, Origin: PhraseGenerated,
+		NmID: 100, Dest: "-1257786", BestRank: &rank,
+	}); err != nil {
+		t.Fatalf("SavePhrase: %v", err)
+	}
+	before, err := s.ProfilePhrases(ctx, pid, "")
+	if err != nil || len(before) != 1 {
+		t.Fatalf("ProfilePhrases: %v, %d строк", err, len(before))
+	}
+
+	if err := s.RenamePhrase(ctx, before[0].ID, "  женское платье  "); err != nil {
+		t.Fatalf("RenamePhrase: %v", err)
+	}
+
+	after, err := s.ProfilePhrases(ctx, pid, "")
+	if err != nil || len(after) != 1 {
+		t.Fatalf("ProfilePhrases: %v, %d строк", err, len(after))
+	}
+	if after[0].Text != "женское платье" {
+		t.Errorf("фраза %q — не переписана или не обрезана по краям", after[0].Text)
+	}
+	if after[0].State != PhraseWorking || after[0].BestRank == nil || *after[0].BestRank != 4 {
+		t.Errorf("вердикт потерян: state %q, место %v", after[0].State, after[0].BestRank)
+	}
+	if after[0].NmID != 100 || after[0].Dest != "-1257786" {
+		t.Errorf("привязка к товару и региону потеряна: %+v", after[0])
+	}
+}
+
+func TestRenamePhrase_RefusesAnEmptyWordingAndAPhraseThatIsNotThere(t *testing.T) {
+	// An empty phrase is a row nothing can search for, and a row that is not
+	// there is a press on a list somebody else has since changed. Both are the
+	// user's to see rather than a silent no-op that looks like success.
+	s := openTestStore(t)
+	ctx := context.Background()
+	pid, err := s.SaveProfile(ctx, ProfileRow{Name: "мой"})
+	if err != nil {
+		t.Fatalf("SaveProfile: %v", err)
+	}
+	if err := s.SavePhrase(ctx, PhraseRow{ProfileID: pid, Text: "платье"}); err != nil {
+		t.Fatalf("SavePhrase: %v", err)
+	}
+	rows, err := s.ProfilePhrases(ctx, pid, "")
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("ProfilePhrases: %v", err)
+	}
+
+	if err := s.RenamePhrase(ctx, rows[0].ID, "   "); err == nil {
+		t.Error("пустая фраза принята")
+	}
+	if err := s.RenamePhrase(ctx, rows[0].ID+999, "платье"); err == nil {
+		t.Error("переписана фраза, которой нет")
+	}
+}

@@ -634,11 +634,26 @@ func (s *Server) phrasesHTML(r *http.Request, p store.ProfileRow) string {
 	if err != nil {
 		return `<div class="bt-alert bt-alert--error">` + html.EscapeString(err.Error()) + `</div>`
 	}
+	// Narrowed before it is bounded. The cap alone makes the first two hundred
+	// of twenty-six thousand reachable and the rest not, so a phrase somebody
+	// wants to fix is one they cannot get to — and «удобное редактирование» of
+	// a list you can only see the top of is not editing.
+	find := strings.TrimSpace(r.FormValue("phrase_find"))
+	matched := phrases
+	if find != "" {
+		matched = matched[:0:0]
+		for _, ph := range phrases {
+			if store.Contains(ph.Text, find) {
+				matched = append(matched, ph)
+			}
+		}
+	}
+
 	// The list is bounded and the counts are not. A seller with four hundred
 	// goods carries tens of thousands of phrases, and a table of all of them is
 	// a page nobody can open — while «рабочих 227 из 26 000» is the whole
 	// answer in one line.
-	shown := phrases
+	shown := matched
 	if len(shown) > phrasesShown {
 		shown = shown[:phrasesShown]
 	}
@@ -648,11 +663,19 @@ func (s *Server) phrasesHTML(r *http.Request, p store.ProfileRow) string {
 		info("Из слов, которые уже есть на карточках профиля. Пока фраза не проверена, это догадка: рабочей её делает место в выдаче.") +
 		`</h4>`)
 
-	if len(phrases) == 0 {
+	if len(phrases) > 0 {
+		b.WriteString(s.phraseFindHTML(find))
+	}
+
+	switch {
+	case len(phrases) == 0:
 		b.WriteString(`<div class="bt-alert bt-alert--neutral">Фраз пока нет. ` +
 			`Они собираются из карточек товаров и расширяются подсказками поиска Wildberries — ` +
-			`это часть общего сбора.</div>`)
-	} else {
+			`это часть общего сбора. Свои можно вписать ниже.</div>`)
+	case len(matched) == 0:
+		b.WriteString(`<div class="bt-alert bt-alert--neutral">По «` + html.EscapeString(find) +
+			`» ничего не нашлось.</div>`)
+	default:
 		// Capped and scrolling. A profile of eight hundred goods produces
 		// thousands of phrases, and a table of them pushed everything under it
 		// — the competitors, the settings, the buttons — a screen and a half
@@ -675,15 +698,27 @@ func (s *Server) phrasesHTML(r *http.Request, p store.ProfileRow) string {
 			if ph.NmID != 0 {
 				product = fmt.Sprint(ph.NmID)
 			}
+			// The wording itself is the field, and «Сохранить» is beside it.
+			// A phrase is one line of text somebody wants to fix a typo in;
+			// a separate edit screen for that is three presses where one
+			// would do.
+			edit := fmt.Sprintf(
+				`<form class="bt-inline" data-post="/profile/phrases/edit?id=%d" data-target="#profile-body">`+
+					`<input class="bt-input bt-input--sm" name="text" value="%s" required>`+
+					`<button class="bt-btn bt-btn--ghost bt-btn--sm" type="submit">Сохранить</button></form>`,
+				ph.ID, html.EscapeString(ph.Text))
+
 			fmt.Fprintf(&b, `<tr><td>%s</td><td class="bt-mono bt-num">%s</td><td>%s</td><td>%s</td>`+
 				`<td class="bt-num">%s</td><td class="bt-row-actions">%s</td></tr>`,
-				html.EscapeString(ph.Text), product, phraseStateHTML(ph.State),
+				edit, product, phraseStateHTML(ph.State),
 				html.EscapeString(phraseOriginText(ph.Origin)), rank,
 				action(fmt.Sprintf("/profile/phrases/delete?id=%d", ph.ID), "#profile-body", "Убрать"))
 		}
 		b.WriteString(`</tbody></table></div>`)
 		b.WriteString(`<span class="bt-form-hint">` + html.EscapeString(phraseTotalsText(totals, len(shown))) + `</span>`)
 	}
+
+	b.WriteString(s.phraseAddHTML(p.ID))
 
 	b.WriteString(`<div class="bt-form-actions bt-form-actions--tight">`)
 	b.WriteString(action(fmt.Sprintf("/profile/phrases?id=%d", p.ID), "#profile-body", "Подобрать фразы"))
@@ -693,6 +728,38 @@ func (s *Server) phrasesHTML(r *http.Request, p store.ProfileRow) string {
 	b.WriteString(`</div>`)
 	b.WriteString(s.topNField(ctx))
 	return b.String()
+}
+
+// phraseFindHTML narrows the list to what somebody is looking for.
+//
+// A profile of four hundred goods carries tens of thousands of phrases and the
+// table shows two hundred of them. Without this the other twenty-five thousand
+// eight hundred are visible in the counts and reachable nowhere — so «убрать»
+// and «сохранить» apply to whichever phrases happened to sort first.
+func (s *Server) phraseFindHTML(find string) string {
+	return `<form class="bt-searchbar" data-post="/profile/phrases/find" data-target="#profile-body">` +
+		`<input class="bt-input bt-searchbar__input" type="search" name="phrase_find" value="` +
+		html.EscapeString(find) + `" placeholder="Найти фразу в списке">` +
+		`<button class="bt-btn bt-btn--secondary" type="submit">Найти</button>` +
+		`</form>`
+}
+
+// phraseAddHTML is where phrases nobody generated come from.
+//
+// Spec section 4.7 lists three sources — the cards, the site's own suggestions,
+// and a list somebody uploads — and this is the fourth shape of the third: the
+// two or three a seller knows their goods are searched by and no card of theirs
+// says. Uploading a file for two phrases is a ceremony; typing them is not.
+func (s *Server) phraseAddHTML(profileID int64) string {
+	return `<details class="bt-more"><summary>Добавить свои фразы</summary>` +
+		fmt.Sprintf(`<form class="bt-form" data-post="/profile/phrases/add?id=%d" data-target="#profile-body">`, profileID) +
+		field("Фразы",
+			`<textarea class="bt-textarea" name="phrases" rows="4" placeholder="по одной в строке" required></textarea>`,
+			"По одной в строке. Они встают кандидатами рядом с собранными и проверяются вместе с ними. "+
+				"Повторы отбрасываются.") +
+		`<div class="bt-form-actions bt-form-actions--tight">` +
+		`<button class="bt-btn bt-btn--secondary bt-btn--sm" type="submit">Добавить</button></div>` +
+		`</form></details>`
 }
 
 // topNField is where the line between «рабочая» and «не подошла» is drawn.
@@ -907,6 +974,76 @@ func (s *Server) dropPhrase(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.profileFragment(w, r, alert("success", "Фраза убрана."))
+}
+
+// editPhrase changes one phrase's wording.
+func (s *Server) editPhrase(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.URL.Query().Get("id"), 10, 64)
+	if err != nil {
+		http.Error(w, "profile: which phrase?", http.StatusBadRequest)
+		return
+	}
+	if err := parseForm(r); err != nil {
+		http.Error(w, "profile: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := s.Store.RenamePhrase(r.Context(), id, r.Form.Get("text")); err != nil {
+		// Onto the screen and not out as a status: the commonest refusal is a
+		// wording the profile already has, which is the user's to resolve and
+		// not a fault of the server.
+		s.profileFragment(w, r, alert("error", "Фраза не изменена: "+err.Error()))
+		return
+	}
+	s.profileFragment(w, r, alert("success", "Фраза изменена."))
+}
+
+// addPhrases takes phrases somebody typed.
+func (s *Server) addPhrases(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.URL.Query().Get("id"), 10, 64)
+	if err != nil {
+		http.Error(w, "profile: which profile?", http.StatusBadRequest)
+		return
+	}
+	if err := parseForm(r); err != nil {
+		http.Error(w, "profile: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	added := 0
+	seen := map[string]bool{}
+	for _, line := range splitLines(r.Form.Get("phrases")) {
+		text := strings.TrimSpace(line)
+		if text == "" || seen[text] {
+			continue
+		}
+		seen[text] = true
+		// Uploaded, because that is what this is: a phrase the user brought.
+		// SavePhrase leaves an existing one alone, so typing a phrase the
+		// generator already found is not an error and not a duplicate.
+		if err := s.Store.SavePhrase(r.Context(), store.PhraseRow{
+			ProfileID: id, Text: text,
+			State: store.PhraseCandidate, Origin: store.PhraseUploaded,
+		}); err != nil {
+			s.profileFragment(w, r, alert("error", err.Error()))
+			return
+		}
+		added++
+	}
+	if added == 0 {
+		s.profileFragment(w, r, alert("neutral", "Ни одной фразы не разобрано."))
+		return
+	}
+	s.profileFragment(w, r, alert("success",
+		fmt.Sprintf("Добавлено фраз: %d. Они встали кандидатами — проверьте позиции, чтобы узнать, какие рабочие.", added)))
+}
+
+// findPhrases redraws the profile with the phrase list narrowed.
+//
+// A post rather than a get, because the answer is the whole profile body and
+// the narrowing is one field of it — the same shape every other press on this
+// screen has.
+func (s *Server) findPhrases(w http.ResponseWriter, r *http.Request) {
+	s.profileFragment(w, r, "")
 }
 
 // baseFields is the free half of the catalogue: what rides on the pages a

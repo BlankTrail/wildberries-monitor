@@ -5,6 +5,7 @@ package store
 import (
 	"context"
 	"fmt"
+	"strings"
 )
 
 // This file is spec section 4.7's phrases: the searches a profile's products
@@ -150,6 +151,43 @@ func (s *Store) ProfilePhrases(ctx context.Context, profileID int64, state strin
 }
 
 // DeletePhrase removes one.
+// RenamePhrase changes what a phrase says, keeping everything else about it.
+//
+// The state and the best place go with it, and that is the decision worth
+// stating: a reworded phrase is a different search, so the place recorded for
+// the old wording is not a fact about the new one. Reset, though, it would
+// throw away the one number that makes «рабочая» computable without a fresh
+// check — and rewording is mostly fixing a typo in a phrase that was already
+// checked, where resetting means paying for the check again.
+//
+// So the verdict stays and says what it says: «лучшее место» is the place this
+// row has been seen at, and the next check overwrites it. A rewording that
+// changes the search enough to matter is one somebody re-checks, and the
+// screen has the button for it.
+//
+// Nothing happens when the new wording collides with a phrase the profile
+// already has for the same product and region: the unique key refuses it, and
+// merging two phrases' verdicts is not a thing this can decide. The caller
+// gets the error and the screen says it.
+func (s *Store) RenamePhrase(ctx context.Context, id int64, text string) error {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return fmt.Errorf("store: rename phrase %d: the new wording is empty", id)
+	}
+	res, err := s.db.ExecContext(ctx, `UPDATE phrases SET text = ? WHERE id = ?`, text, id)
+	if err != nil {
+		return fmt.Errorf("store: rename phrase %d: %w", id, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("store: rename phrase %d: %w", id, err)
+	}
+	if n == 0 {
+		return fmt.Errorf("store: rename phrase %d: no such phrase", id)
+	}
+	return nil
+}
+
 func (s *Store) DeletePhrase(ctx context.Context, id int64) error {
 	if _, err := s.db.ExecContext(ctx, `DELETE FROM phrases WHERE id = ?`, id); err != nil {
 		return fmt.Errorf("store: delete phrase %d: %w", id, err)
