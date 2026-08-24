@@ -52,6 +52,11 @@ type ProductRow struct {
 	// half of spec section 4.7's card completeness that costs nothing.
 	Pics *int64
 
+	// PromoID is the promotion this product was in at this reading. Free with
+	// every listing — see migration 0035 — and nil where the payload named
+	// none, which is also what «не в акции» looks like.
+	PromoID *int64
+
 	// Raw is the untouched response this reading was parsed from, for the
 	// jobs that asked to keep it, and nil for every other reading. See
 	// migration 0034 and spec section 5.3's «опция сохранить сырой ответ WB
@@ -194,6 +199,7 @@ const productRowColumns = `
 	    s.feedbacks              AS feedbacks,
 	    s.pics                   AS pics,
 	    s.raw                    AS raw,
+	    s.promo_id               AS promo_id,
 	    s.total_quantity         AS total_quantity,
 	    s.price_base             AS price_base,
 	    s.price_sale             AS price_sale,
@@ -225,7 +231,7 @@ const productRowColumns = `
 // rather than subtle: Scan reports the column count and every test in the
 // file says so at once.
 const productRowOutput = `nm_id, imt_id, name, brand, supplier_id, supplier_name,
-	    dest, app_type, ts, rating, feedbacks, pics, raw, total_quantity,
+	    dest, app_type, ts, rating, feedbacks, pics, raw, promo_id, total_quantity,
 	    price_base, price_sale, discount_pct, currency,
 	    description, vendor_code, subject_name, card_created,
 	    options, compositions`
@@ -241,7 +247,7 @@ func scanProductRow(sc rowScanner) (ProductRow, error) {
 	var r ProductRow
 	err := sc.Scan(
 		&r.NmID, &r.ImtID, &r.Name, &r.Brand, &r.SupplierID, &r.SupplierName,
-		&r.Dest, &r.AppType, &r.TS, &r.Rating, &r.Feedbacks, &r.Pics, &r.Raw, &r.TotalQuantity,
+		&r.Dest, &r.AppType, &r.TS, &r.Rating, &r.Feedbacks, &r.Pics, &r.Raw, &r.PromoID, &r.TotalQuantity,
 		&r.PriceBase, &r.PriceSale, &r.DiscountPct, &r.Currency,
 		&r.Description, &r.VendorCode, &r.SubjectName, &r.CardCreated,
 		&r.Options, &r.Compositions)

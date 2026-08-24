@@ -271,12 +271,12 @@ func insertSnapshot(ctx context.Context, tx *sql.Tx, p wb.Product, fingerprint s
 		    nm_id, dest, app_type, ts, anchor, fingerprint,
 		    rating, rating_key, feedbacks, feedback_key, total_quantity,
 		    price_base, price_sale, discount_pct, currency,
-		    time1, time2, dist, warehouse_id, pics, job_id, raw
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		    time1, time2, dist, warehouse_id, pics, job_id, raw, promo_id
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		p.ID, p.Dest, p.AppType, ts, anchorFlag, fingerprint,
 		p.Rating, p.RatingKey, p.Feedbacks, p.FeedbackKey, snapshotStock(p),
 		base, sale, discount, currency,
-		p.Time1, p.Time2, p.Dist, p.WarehouseID, p.Pics, nullableID(jobID), nullableJSON(p.Raw))
+		p.Time1, p.Time2, p.Dist, p.WarehouseID, p.Pics, nullableID(jobID), nullableJSON(p.Raw), p.PromoID)
 	if err != nil {
 		return 0, fmt.Errorf("store: write the snapshot of %d in %s: %w", p.ID, p.Dest, err)
 	}
@@ -417,11 +417,14 @@ func snapshotStock(p wb.Product) *int64 {
 // the same question, and comparing them would compare a reading against a
 // rule it was never checked against.
 //
+// And to "4" with the promotion mark (migration 0035), for the same reason as
+// the photograph count before it.
+//
 // And to "3" when the photograph count joined the row (migration 0031). Same
 // rule: the digest covers exactly what the row carries, so a column added to
 // one is a column added to the other, and the prefix says which rule a stored
 // digest was computed under.
-const fingerprintVersion = "3"
+const fingerprintVersion = "4"
 
 // nullableID is an identifier as the column stores it: the number, or NULL for
 // zero.
@@ -514,6 +517,11 @@ func fingerprintOf(p wb.Product) string {
 	// section 4.7 says a seller can act on the same day, and a reading that
 	// recorded it while the digest ignored it would be thinned away.
 	fpOptInt(h, "pics", p.Pics)
+	// Joining a promotion and leaving one are exactly what spec section 6.1
+	// names PromoJoined and PromoLeft, so a reading that recorded one while
+	// the digest ignored it would be thinned away — the change suppressed and
+	// lost with no record that it happened.
+	fpOptInt(h, "promo_id", p.PromoID)
 
 	// The untouched payload is the one column of this row the digest does not
 	// cover, and the exception is deliberate rather than an oversight of the

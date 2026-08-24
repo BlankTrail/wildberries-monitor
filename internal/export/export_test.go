@@ -764,3 +764,16 @@ func TestExport_TheResponseTravelsToAWriterThatCanHoldIt(t *testing.T) {
 		t.Errorf("чтение без ответа записано не как null: %s", lines[1])
 	}
 }
+
+func TestRowOf_ThePromotionMarkIsExported(t *testing.T) {
+	// A group the catalogue declares and the switch has to answer, or ticking
+	// «Акция (номер)» produces an empty column.
+	cols := columnsFor(t, "promo_id")
+	got := RowOf(store.ProductRow{NmID: 100, PromoID: ptrInt64(1050336)}, cols)
+	if len(got) != 1 || got[0].Absent || got[0].Int != 1050336 {
+		t.Errorf("колонка = %+v, ожидалось 1050336", got[0])
+	}
+	if blank := RowOf(store.ProductRow{NmID: 100}, cols); !blank[0].Absent {
+		t.Errorf("колонка = %+v, а выдача об акции не сказала", blank[0])
+	}
+}

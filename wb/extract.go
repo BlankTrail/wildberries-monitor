@@ -43,6 +43,12 @@ type rawProduct struct {
 	// feedback count above.
 	Pics *int64 `json:"pics"`
 
+	// PanelPromoID is the promotion this product is in at this reading, which
+	// the site puts on the product beside everything else — no request of its
+	// own, exactly as spec section 4.4 prices the promo group: «метки
+	// бесплатно с деталями».
+	PanelPromoID *int64 `json:"panelPromoId"`
+
 	SalePriceU *int64 `json:"salePriceU"`
 	PriceU     *int64 `json:"priceU"`
 
@@ -117,6 +123,7 @@ func extractProduct(raw json.RawMessage) (Product, bool) {
 	}
 
 	p.Pics = r.Pics
+	p.PromoID = r.PanelPromoID
 
 	p.flatSale, p.flatBase = r.SalePriceU, r.PriceU
 	return p, true

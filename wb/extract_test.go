@@ -490,3 +490,30 @@ func TestExtractProduct_APayloadThatNamedNoCountSaysNothing(t *testing.T) {
 		t.Errorf("фотографий %d, а выдача о них не сказала", *p.Pics)
 	}
 }
+
+func TestExtractProduct_ReadsThePromotionMark(t *testing.T) {
+	// Spec section 4.3 lists «промо-метка» among what a snapshot carries and
+	// section 4.4 prices the whole promo group at «метки бесплатно с
+	// деталями»: it rides on the listing beside the rating and the stock, and
+	// it was being read past.
+	p, ok := extractProduct([]byte(`{"id":152540730,"panelPromoId":1050336}`))
+	if !ok {
+		t.Fatal("товар не разобран")
+	}
+	if p.PromoID == nil || *p.PromoID != 1050336 {
+		t.Errorf("акция %v, ожидалась 1050336", p.PromoID)
+	}
+}
+
+func TestExtractProduct_NoPromotionMarkIsNil(t *testing.T) {
+	// The site omits the key rather than sending a nought, so nil is both «не
+	// сказали» and «не в акции» — and a zero would be a promotion number no
+	// promotion has.
+	p, ok := extractProduct([]byte(`{"id":152540730}`))
+	if !ok {
+		t.Fatal("товар не разобран")
+	}
+	if p.PromoID != nil {
+		t.Errorf("акция %d, а выдача о ней не сказала", *p.PromoID)
+	}
+}

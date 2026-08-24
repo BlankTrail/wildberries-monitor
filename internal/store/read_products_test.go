@@ -1451,3 +1451,45 @@ func TestSubjects_ACategoryWithNoIdIsLeftOutToo(t *testing.T) {
 		}
 	}
 }
+
+func TestProducts_CarriesThePromotionMark(t *testing.T) {
+	// Free with every listing, and the half of spec section 4.4's promo group
+	// that costs nothing: «метки бесплатно с деталями».
+	s := openTestStore(t)
+	at := time.Date(2026, 8, 24, 9, 0, 0, 0, time.UTC)
+	p := readingAt(141504066, "-1257786", 1, 120000, at)
+	p.PromoID = ptrTo(int64(1050336))
+	saveReading(t, s, p)
+
+	got := collectSeq(t, "Products", s.Products(context.Background(), ProductFilter{}))
+	if len(got) != 1 {
+		t.Fatalf("строк %d", len(got))
+	}
+	if got[0].PromoID == nil || *got[0].PromoID != 1050336 {
+		t.Errorf("акция %v, ожидалась 1050336", got[0].PromoID)
+	}
+}
+
+func TestProducts_JoiningAPromotionIsWorthItsOwnReading(t *testing.T) {
+	// Joining and leaving are exactly what spec section 6.1 names PromoJoined
+	// and PromoLeft. A column the row carries and the digest ignores has its
+	// changes suppressed and lost with no record that they happened.
+	s := openTestStore(t)
+	at := time.Date(2026, 8, 24, 9, 0, 0, 0, time.UTC)
+
+	before := readingAt(141504066, "-1257786", 1, 120000, at)
+	saveReading(t, s, before)
+
+	after := readingAt(141504066, "-1257786", 1, 120000, at.Add(time.Hour))
+	after.PromoID = ptrTo(int64(1050336))
+	saveReading(t, s, after)
+
+	n, err := s.CountForTest(context.Background(),
+		`SELECT COUNT(*) FROM snapshots WHERE nm_id = 141504066`)
+	if err != nil {
+		t.Fatalf("CountForTest: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("снимков %d — вход в акцию не записался как изменение", n)
+	}
+}

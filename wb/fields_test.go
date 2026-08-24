@@ -398,8 +398,8 @@ func TestSelectionCost_PhraseAdsPriceIntoPerPhraseNotPerProduct(t *testing.T) {
 // guard even though nothing in this package decodes either value out of
 // either response today.
 var notDeclaredKeys = map[string]string{
-	"promo_flag":      `no field on Product, Size or Card carries promotion participation; Client.Card's live half does not expose one`,
-	"promo_name":      `same gap as promo_flag: nothing this package decodes names an active promotion`,
+	"promo_flag":      `promo_id says which promotion, and a flag would be the same fact spelled twice — «в акции» is «promo_id не пуст», and two columns that cannot disagree are one column and a way to make them`,
+	"promo_name":      `nothing this package decodes names a promotion: the name is on the promotion's own record, which only a «Состав акции» job fetches, so a column for it would be empty until an unrelated job had run`,
 	"photo_url":       `Card.Raw holds the full static card document already, unparsed — see the package comment's "has a producer" rule — but nothing extracts a photo URL out of it yet`,
 	"video_url":       `same gap as photo_url: the document is already fetched, but nothing decodes a video URL out of it`,
 	"similar_items":   `wb.Shelves answers "what is this phrase and region advertising", not "what does this product recommend"; no source in this package is keyed on a product for a recommendation`,
@@ -463,6 +463,8 @@ func TestFields_MatchTheGoldenList(t *testing.T) {
 		{"delivery_time1", GroupDelivery, FieldInt},
 		{"delivery_time2", GroupDelivery, FieldInt},
 		{"delivery_dist", GroupDelivery, FieldInt},
+
+		{"promo_id", GroupPromo, FieldInt},
 
 		{"photo_count", GroupMedia, FieldInt},
 

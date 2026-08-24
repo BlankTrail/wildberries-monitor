@@ -264,6 +264,11 @@ func valueOf(r store.ProductRow, f wb.Field) Value {
 	case "photo_count":
 		return optInt(r.Pics)
 
+	// And the promo group's free half — which promotion the listing said this
+	// product was in. See wb.GroupPromo for why the name is not beside it.
+	case "promo_id":
+		return optInt(r.PromoID)
+
 	// The card's half, which spec section 4.4 prices at a request per product
 	// and which this switch used to answer with Absent for every one of them.
 	// Ticking «Описание и характеристики» spent that request, stored what came

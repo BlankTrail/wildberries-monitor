@@ -104,6 +104,14 @@ const (
 	GroupBase     FieldGroup = "base"
 	GroupStock    FieldGroup = "stock"
 	GroupDelivery FieldGroup = "delivery"
+	// GroupPromo is spec section 4.4's «промо-метки и участие в акциях», and
+	// its half of that line is the free one: «метки бесплатно с деталями».
+	//
+	// The other half — «состав акции — +1 на акцию» — is not a field of a
+	// product at all but a job of its own (section 4.6's type 8), so it is not
+	// in this catalogue and cannot be: a group priced per promotion has
+	// nothing to multiply by in a cost that counts products and phrases.
+	GroupPromo FieldGroup = "promo"
 	// GroupMedia is spec section 4.4's «фото и видео», and it sits in the free
 	// block because the count arrives on every product of every listing.
 	//
@@ -274,6 +282,12 @@ var catalogue = []Field{
 
 	// Content: one request per product (Client.Card's static half, Card),
 	// and the first group that costs.
+	// The number and not the name. What the listing carries is an id; the name
+	// belongs to the promotion's own record, which only a «Состав акции» job
+	// fetches — declared here it would be a column empty until an unrelated
+	// job had run, which is the promise this catalogue exists to refuse.
+	{Key: "promo_id", Name: "Акция (номер)", Group: GroupPromo, Type: FieldInt, Source: FieldSourceSearchResult},
+
 	{Key: "photo_count", Name: "Фотографий", Group: GroupMedia, Type: FieldInt, Source: FieldSourceSearchResult},
 
 	{Key: "description", Name: "Описание", Group: GroupContent, Type: FieldText, Source: FieldSourceCardDocument},
@@ -327,7 +341,7 @@ var catalogue = []Field{
 // by what each additional one costs. A user ticking down the list spends
 // nothing until they reach GroupContent.
 var groupOrder = []FieldGroup{
-	GroupBase, GroupStock, GroupDelivery, GroupMedia,
+	GroupBase, GroupStock, GroupDelivery, GroupPromo, GroupMedia,
 	GroupContent, GroupReputation, GroupPhraseAds,
 }
 

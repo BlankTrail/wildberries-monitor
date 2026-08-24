@@ -116,6 +116,16 @@ type Product struct {
 	Feedbacks   *int64   `json:"-"`
 	FeedbackKey string   `json:"-"`
 
+	// PromoID is the promotion this product was in at this reading, or nil
+	// where the payload named none.
+	//
+	// Spec section 4.3 asks the snapshot to carry a promo mark, and section
+	// 4.4 prices the whole promo group at «метки бесплатно с деталями» — it
+	// rides on the listing like the rating and the stock. Nil is «выдача не
+	// сказала», which for this field is also what «не в акции» looks like: the
+	// site omits the key rather than sending a nought.
+	PromoID *int64 `json:"-"`
+
 	// Pics is how many photographs the card has, which the site puts on every
 	// product of every listing at no extra cost.
 	//
