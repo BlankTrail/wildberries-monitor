@@ -918,3 +918,26 @@ func TestTestChannel_ACheckTheTariffSkipsIsNotAFailure(t *testing.T) {
 		t.Errorf("пропущенная тарифом проверка засчитана отказом: %q", got)
 	}
 }
+
+func TestServicePool_RenewsItsIdentityToo(t *testing.T) {
+	// A source-level check, for the reason the file's other two give:
+	// everything past this line needs a live licensed service, because it
+	// opens a port.
+	//
+	// The service port outlives every run — it answers directory refreshes and
+	// the panel's own checks for as long as the program is up — so a pool
+	// built without spec section 3.4's triggers would spend days on one
+	// fingerprint and one address.
+	src, err := os.ReadFile("service.go")
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	body := string(src)
+	cfg := body[strings.Index(body, "blanktrail.NewPool(ctx, blanktrail.PoolConfig{"):]
+	cfg = cfg[:strings.Index(cfg, "})")]
+	for _, want := range []string{"RenewAfterRequests:", "RenewAfterInterval:"} {
+		if !strings.Contains(cfg, want) {
+			t.Errorf("служебный порт живёт без смены личности: в конфиге нет %s", want)
+		}
+	}
+}

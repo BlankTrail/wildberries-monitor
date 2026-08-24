@@ -126,6 +126,12 @@ func (e *Engine) Service(ctx context.Context) (*wb.Client, error) {
 		Spec:           wb.ModeOf(wb.AppWeb).Spec(blanktrail.DefaultPortSpec()),
 		CA:             report.CA,
 		RequestTimeout: requestTimeout,
+		// The same proactive contour a run's pool gets — see poolConfig. This
+		// port outlives every run: it answers directory refreshes and the
+		// panel's own checks for as long as the program is up, so left without
+		// triggers it would spend days on one fingerprint and one address.
+		RenewAfterRequests: renewAfterRequests,
+		RenewAfterInterval: renewAfterInterval,
 	})
 	if err != nil {
 		closeChannels()

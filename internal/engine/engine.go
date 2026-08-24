@@ -270,6 +270,27 @@ func preflightInput(eps wb.Endpoints, j job.Job) blanktrail.PreflightInput {
 	}
 }
 
+// How long one identity lives, as spec section 3.4's two proactive triggers.
+//
+// They add rather than choose: a fast run reaches the count first and a slow
+// one reaches the clock, and a port that has been sitting on one address for
+// twenty minutes is as worth renewing as one that has made forty requests
+// through it.
+//
+// Forty requests is about what one visit to a shop looks like — a search page
+// and the cards on it — and twenty minutes is short enough that a run left
+// going overnight does not spend the night on one address. Both are held here
+// rather than offered on the job form: section 7's constructor lists threads,
+// ports and the pause, and a knob nobody can judge the value of is a knob that
+// gets set wrong.
+//
+// Renewal is a reopen — see Pool.renewIfDue — so the cost is one control call
+// per identity, made against the local service.
+const (
+	renewAfterRequests = 40
+	renewAfterInterval = 20 * time.Minute
+)
+
 // poolConfig is the pool this job will drive.
 //
 // A named function rather than a literal inline, for the reason the reference
@@ -302,6 +323,14 @@ func poolConfig(client *blanktrail.Client, j job.Job, ca *x509.CertPool, channel
 		// with the request rather than with the address — so rotating on either
 		// throws away a solved challenge and buys nothing.
 		CountFailure: wb.CountFailure,
+		// Spec section 3.4's proactive contour, which the pool implements and
+		// nothing was switching on: both triggers were left at zero, so a port
+		// kept one fingerprint, one address and one cookie jar for the whole
+		// run. A collection of forty thousand requests over a hundred ports is
+		// four hundred requests on each identity, which is the thing the
+		// contour exists to prevent.
+		RenewAfterRequests: renewAfterRequests,
+		RenewAfterInterval: renewAfterInterval,
 	}
 }
 

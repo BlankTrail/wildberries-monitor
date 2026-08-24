@@ -377,3 +377,32 @@ func TestRunnerFor_APoolShortOfPortsSaysSoInTheLog(t *testing.T) {
 		t.Error("сказано, сколько портов не открылось, но не сказано почему")
 	}
 }
+
+func TestPoolConfig_SwitchesOnTheProactiveIdentityRenewal(t *testing.T) {
+	// Spec section 3.4's proactive contour: «после N запросов в сессии; по
+	// таймеру каждые M минут». The pool implements both and nothing was
+	// switching them on — left at zero they are off, and a port kept one
+	// fingerprint, one address and one cookie jar for the whole run. A
+	// collection of forty thousand requests over a hundred ports is four
+	// hundred requests on each identity, which is what the contour exists to
+	// prevent.
+	cfg := poolConfig(nil, job.Job{Threads: 3}, nil, nil)
+
+	if cfg.RenewAfterRequests <= 0 {
+		t.Error("смена личности по числу запросов выключена")
+	}
+	if cfg.RenewAfterInterval <= 0 {
+		t.Error("смена личности по таймеру выключена")
+	}
+	// Both, because they add: a fast run reaches the count first and a slow
+	// one reaches the clock, and either alone leaves the other case running on
+	// one identity for as long as it likes.
+	if cfg.RenewAfterRequests > 200 {
+		t.Errorf("порог в %d запросов на одну личность — это не смена личности",
+			cfg.RenewAfterRequests)
+	}
+	if cfg.RenewAfterInterval > time.Hour {
+		t.Errorf("таймер смены личности %v — прогон на ночь проведёт её на одном адресе",
+			cfg.RenewAfterInterval)
+	}
+}
