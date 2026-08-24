@@ -397,7 +397,12 @@ func TestDetectChanges_ARuleScopedToAJobFires(t *testing.T) {
 
 // inPromotion files one reading of a promotion's contents, the way the
 // promotion job files it: positions under the promotion's own name.
-func inPromotion(t *testing.T, a *App, slug string, at time.Time, nmIDs ...int64) {
+// promoWalk files one reading of a promotion's own listing, the way a «Состав
+// акции» job files it: positions under a «promo:» query.
+//
+// Membership is not read off these any more — see inPromotion — but they are
+// still written, and what they must not be read as is a search placement.
+func promoWalk(t *testing.T, a *App, slug string, at time.Time, nmIDs ...int64) {
 	t.Helper()
 	page := make([]wb.Product, 0, len(nmIDs))
 	for i, nm := range nmIDs {
@@ -408,6 +413,24 @@ func inPromotion(t *testing.T, a *App, slug string, at time.Time, nmIDs ...int64
 	if _, err := a.Store.SaveSearchPage(t.Context(),
 		wb.Envelope{Products: page}, store.PromoQueryPrefix+slug, 0); err != nil {
 		t.Fatalf("SaveSearchPage: %v", err)
+	}
+}
+
+// inPromotion files one reading of each product carrying a promotion's mark.
+//
+// The mark rather than a walk of the promotion's listing: membership is read
+// off snapshots.promo_id now — see store.PromotionsChangedSince for why one
+// source and why that one.
+func inPromotion(t *testing.T, a *App, promo int64, at time.Time, price int64, nmIDs ...int64) {
+	t.Helper()
+	for _, nm := range nmIDs {
+		p := priced(nm, price, at)
+		if promo != 0 {
+			p.PromoID = &promo
+		}
+		if _, err := a.Store.SaveProduct(t.Context(), p, "", 0); err != nil {
+			t.Fatalf("SaveProduct %d: %v", nm, err)
+		}
 	}
 }
 
@@ -425,8 +448,10 @@ func TestDetectChanges_LeavingAPromotionFiresItsOwnRuleAndNotTheSearchOne(t *tes
 	first := time.Now().Add(-2 * time.Hour)
 	atWatermark(t, a, first.Add(-time.Hour))
 
-	inPromotion(t, a, "letnie-skidki", first, 100, 200)
-	inPromotion(t, a, "letnie-skidki", first.Add(time.Hour), 100)
+	inPromotion(t, a, 1050336, first, 70000, 100, 200)
+	// The second reading: 100 stayed at a new price, 200 left.
+	inPromotion(t, a, 1050336, first.Add(time.Hour), 65000, 100)
+	inPromotion(t, a, 0, first.Add(time.Hour), 70000, 200)
 
 	a.detectChanges(ctx)
 
@@ -449,8 +474,8 @@ func TestDetectChanges_AFinishedSaleIsNotAProductVanishingFromSearch(t *testing.
 	first := time.Now().Add(-2 * time.Hour)
 	atWatermark(t, a, first.Add(-time.Hour))
 
-	inPromotion(t, a, "letnie-skidki", first, 100, 200)
-	inPromotion(t, a, "letnie-skidki", first.Add(time.Hour), 100)
+	promoWalk(t, a, "letnie-skidki", first, 100, 200)
+	promoWalk(t, a, "letnie-skidki", first.Add(time.Hour), 100)
 
 	a.detectChanges(ctx)
 

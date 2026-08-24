@@ -6,7 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"strings"
+	"strconv"
 )
 
 // This file is what the change detector reads: which series moved recently, and
@@ -79,27 +79,57 @@ type PromoPoint struct {
 	Price *int64
 }
 
-// PromotionsChangedSince lists the promotion memberships touched since a
-// moment: every product that was in a promotion read after it, plus every
-// product that was in one of those promotions the reading before.
+// This is where promotion membership is read, and it is read off the mark the
+// site puts on every product rather than off a walk of the promotion's own
+// listing.
 //
-// The second half is what makes «вышел из акции» findable at all. A product
-// that left is a product with no row in the newest reading, so a query over
-// new rows alone can never name it — which is the shape of every «изменение,
-// которого не заметили» in this file.
+// Both were possible and only one is right. A walk answers «в этой акции лежат
+// вот эти товары», so membership had to be inferred from presence in a listing
+// — which means it could only be noticed when somebody ran a «Состав акции»
+// job, and «вышел» could only be noticed if that job read the promotion again.
+// The mark (migration 0035) is a fact about the product at that reading, free
+// on every listing, so any job that touches the product notices both.
+//
+// One source rather than two, and that is the decision worth stating. Two
+// sources for one kind of change is two events for one fact, and the second of
+// them needs a slug-to-number join that is empty until an unrelated job has
+// run. The walk keeps what only it can answer — a promotion's composition and
+// each product's place in it, which is what its positions rows are — and stops
+// being asked a question the mark answers better.
+//
+// The site marks one promotion per product, so this models one. A product in
+// two at once is not something the response can express, and inventing a shape
+// the source does not have would be inventing the data to fill it.
+
+// PromotionsChangedSince lists the memberships touched since a moment: for
+// every product read after it, the promotion it is in now and the promotion it
+// was in at the reading before.
+//
+// The previous reading's promotion is what makes «вышел из акции» findable at
+// all. A product that left carries no mark now, so a query over current marks
+// alone could never name the promotion it left — which is the shape of every
+// «изменение, которого не заметили» in this file.
 func (s *Store) PromotionsChangedSince(ctx context.Context, since int64) ([]PromoKey, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		WITH touched AS (
-			SELECT DISTINCT query, dest, app_type
-			  FROM positions
-			 WHERE ts > ? AND query LIKE ?
+			SELECT DISTINCT nm_id, dest, app_type
+			  FROM snapshots
+			 WHERE ts > ?
+		),
+		ranked AS (
+			SELECT s.nm_id, s.dest, s.app_type, s.promo_id,
+			       ROW_NUMBER() OVER (
+			           PARTITION BY s.nm_id, s.dest, s.app_type
+			           ORDER BY s.ts DESC, s.id DESC
+			       ) AS recency
+			  FROM snapshots s
+			  JOIN touched t
+			    ON t.nm_id = s.nm_id AND t.dest = s.dest AND t.app_type = s.app_type
 		)
-		SELECT DISTINCT p.nm_id, p.query, p.dest, p.app_type
-		  FROM positions p
-		  JOIN touched t
-		    ON t.query = p.query AND t.dest = p.dest AND t.app_type = p.app_type
-		 ORDER BY p.nm_id, p.query, p.dest, p.app_type`,
-		since, PromoQueryPrefix+"%")
+		SELECT DISTINCT nm_id, promo_id, dest, app_type
+		  FROM ranked
+		 WHERE recency <= 2 AND promo_id IS NOT NULL
+		 ORDER BY nm_id, promo_id, dest, app_type`, since)
 	if err != nil {
 		return nil, fmt.Errorf("store: promotions changed since %d: %w", since, err)
 	}
@@ -108,11 +138,15 @@ func (s *Store) PromotionsChangedSince(ctx context.Context, since int64) ([]Prom
 	var out []PromoKey
 	for rows.Next() {
 		var k PromoKey
-		var query string
-		if err := rows.Scan(&k.NmID, &query, &k.Dest, &k.AppType); err != nil {
+		var promoID int64
+		if err := rows.Scan(&k.NmID, &promoID, &k.Dest, &k.AppType); err != nil {
 			return nil, fmt.Errorf("store: promotions changed since %d: %w", since, err)
 		}
-		k.Promo = strings.TrimPrefix(query, PromoQueryPrefix)
+		// The number, as text, because that is the promotion's identity here.
+		// Its name lives in a record only a «Состав акции» job fetches, and a
+		// key that waited for one would be a key that changed the day somebody
+		// ran that job — splitting one series in two.
+		k.Promo = strconv.FormatInt(promoID, 10)
 		out = append(out, k)
 	}
 	if err := rows.Err(); err != nil {
@@ -121,35 +155,28 @@ func (s *Store) PromotionsChangedSince(ctx context.Context, since int64) ([]Prom
 	return out, nil
 }
 
-// LastTwoMemberships reads the two most recent readings of one promotion, and
-// whether one product was in each.
+// LastTwoMemberships reads the two most recent readings of one product in one
+// region, and whether it carried this promotion's mark at each.
 //
-// The readings come first and the product second, which is the whole point:
-// asking for this product's rows would return one row for a product that has
-// just left and give nothing to compare it against.
+// The product's own readings, which is what the mark makes possible: the walk
+// this replaced had to anchor on readings of the promotion, because a product
+// absent from a listing has no row to date. A mark that is gone is visible on
+// the product's own next reading.
 func (s *Store) LastTwoMemberships(ctx context.Context, k PromoKey) ([]PromoPoint, error) {
-	query := PromoQueryPrefix + k.Promo
+	promoID, err := strconv.ParseInt(k.Promo, 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("store: last two memberships of %d: promotion %q is not a number", k.NmID, k.Promo)
+	}
 	rows, err := s.db.QueryContext(ctx, `
-		WITH reads AS (
-			SELECT DISTINCT ts FROM positions
-			 WHERE query = ? AND dest = ? AND app_type = ?
-			 ORDER BY ts DESC LIMIT 2
-		)
-		SELECT r.ts,
-		       EXISTS (
-		           SELECT 1 FROM positions p
-		            WHERE p.query = ? AND p.dest = ? AND p.app_type = ?
-		              AND p.nm_id = ? AND p.ts = r.ts
-		       ),
-		       (
-		           SELECT s.price_sale FROM snapshots s
-		            WHERE s.nm_id = ? AND s.dest = ? AND s.ts = r.ts
-		       )
-		  FROM reads r
-		 ORDER BY r.ts`,
-		query, k.Dest, k.AppType,
-		query, k.Dest, k.AppType, k.NmID,
-		k.NmID, k.Dest)
+		SELECT ts, promo_id IS NOT NULL AND promo_id = ?, price_sale
+		  FROM (
+		      SELECT ts, id, promo_id, price_sale
+		        FROM snapshots
+		       WHERE nm_id = ? AND dest = ? AND app_type = ?
+		       ORDER BY ts DESC, id DESC
+		       LIMIT 2
+		  )
+		 ORDER BY ts, id`, promoID, k.NmID, k.Dest, k.AppType)
 	if err != nil {
 		return nil, fmt.Errorf("store: last two memberships of %d: %w", k.NmID, err)
 	}

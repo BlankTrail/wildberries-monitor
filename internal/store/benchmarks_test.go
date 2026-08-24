@@ -684,30 +684,49 @@ func TestSaveBenchmarks_PromotionMembershipSurvivesBeingWrittenDown(t *testing.T
 	}
 }
 
+// markedReading files one reading of one product carrying a promotion mark,
+// or none when promo is zero.
+func markedReading(t *testing.T, s *Store, nmID int64, dest string, at time.Time, promo, price int64) {
+	t.Helper()
+	p := sampleProduct()
+	p.ID, p.Dest, p.AppType, p.FetchedAt = nmID, dest, wb.AppWeb, at
+	p.Sizes = []wb.Size{{Name: "M", PriceProduct: ptrTo(price)}}
+	if promo != 0 {
+		p.PromoID = ptrTo(promo)
+	}
+	if _, err := s.SaveProduct(context.Background(), p, "", 0); err != nil {
+		t.Fatalf("SaveProduct %d: %v", nmID, err)
+	}
+}
+
 func TestPromotions_LeavingAPromotionIsFindableAtAll(t *testing.T) {
-	// A product that left has no row in the newest reading, so a query over
-	// new rows alone can never name it — and «вышел из акции» is precisely the
-	// half worth telling somebody about.
+	// A product that left carries no mark now, so a query over current marks
+	// alone could never name the promotion it left — and «вышел из акции» is
+	// precisely the half worth telling somebody about. The previous reading's
+	// mark is what makes it findable.
 	s := openTestStore(t)
 	ctx := context.Background()
 	at := time.Date(2026, 8, 20, 9, 0, 0, 0, time.UTC)
+	first := at.Add(-time.Hour)
 
-	s.SetClock(func() time.Time { return at.Add(-time.Hour) })
-	promoReading(t, s, "letnie-skidki", "-1257786", 100, 200)
-	first := at.Add(-time.Hour).Unix()
+	markedReading(t, s, 100, "-1257786", first, 1050336, 43000)
+	markedReading(t, s, 200, "-1257786", first, 1050336, 43000)
+	// A third whose reading never changes, and which therefore has nothing to
+	// report — see the assertion below.
+	markedReading(t, s, 300, "-1257786", first, 1050336, 43000)
 
-	// The second reading: 100 stayed, 200 is gone.
-	s.SetClock(func() time.Time { return at })
-	promoReading(t, s, "letnie-skidki", "-1257786", 100)
+	// The second reading: 100 stayed at a new price, 200 left.
+	markedReading(t, s, 100, "-1257786", at, 1050336, 39000)
+	markedReading(t, s, 200, "-1257786", at, 0, 43000)
 
-	keys, err := s.PromotionsChangedSince(ctx, first)
+	keys, err := s.PromotionsChangedSince(ctx, first.Unix())
 	if err != nil {
 		t.Fatalf("PromotionsChangedSince: %v", err)
 	}
 	seen := map[int64]bool{}
 	for _, k := range keys {
-		if k.Promo != "letnie-skidki" {
-			t.Errorf("ключ несёт акцию %q — префикс не снят", k.Promo)
+		if k.Promo != "1050336" {
+			t.Errorf("ключ несёт акцию %q, ожидался её номер", k.Promo)
 		}
 		seen[k.NmID] = true
 	}
@@ -717,19 +736,31 @@ func TestPromotions_LeavingAPromotionIsFindableAtAll(t *testing.T) {
 	if !seen[100] {
 		t.Error("оставшийся в акции товар не попал в список изменившихся")
 	}
+	// And a product nothing new was read about is not in the list. Its last
+	// reading is unchanged, so the store wrote no row for it — and a diff of
+	// one reading against itself is what this list exists to avoid asking for.
+	if seen[300] {
+		t.Error("товар без нового чтения попал в список изменившихся")
+	}
 }
 
-func TestPromotions_TheTwoReadingsSayWhoWasInEachOne(t *testing.T) {
+func TestPromotions_TheTwoReadingsSayWhetherTheMarkWasThere(t *testing.T) {
+	// The product's own readings, which is what the mark makes possible: the
+	// walk this replaced had to anchor on readings of the promotion, because a
+	// product absent from a listing has no row to date.
 	s := openTestStore(t)
 	ctx := context.Background()
 	at := time.Date(2026, 8, 20, 9, 0, 0, 0, time.UTC)
 
-	s.SetClock(func() time.Time { return at.Add(-time.Hour) })
-	promoReading(t, s, "letnie-skidki", "-1257786", 100, 200)
-	s.SetClock(func() time.Time { return at })
-	promoReading(t, s, "letnie-skidki", "-1257786", 100)
+	// Three readings, so that «последние два» is a different pair from
+	// «первые два»: in, in, out. Taken from the wrong end this reads as «ничего
+	// не менялось» — a product that left an hour ago goes unnoticed for as
+	// long as its history is longer than two rows, which is always.
+	markedReading(t, s, 200, "-1257786", at.Add(-2*time.Hour), 1050336, 43000)
+	markedReading(t, s, 200, "-1257786", at.Add(-time.Hour), 1050336, 39000)
+	markedReading(t, s, 200, "-1257786", at, 0, 39000)
 
-	key := PromoKey{NmID: 200, Promo: "letnie-skidki", Dest: "-1257786", AppType: wb.AppWeb}
+	key := PromoKey{NmID: 200, Promo: "1050336", Dest: "-1257786", AppType: wb.AppWeb}
 	points, err := s.LastTwoMemberships(ctx, key)
 	if err != nil {
 		t.Fatalf("LastTwoMemberships: %v", err)
@@ -743,9 +774,30 @@ func TestPromotions_TheTwoReadingsSayWhoWasInEachOne(t *testing.T) {
 	if points[1].In {
 		t.Error("во втором замере товар всё ещё в акции — выход не виден")
 	}
-	// The price comes from the snapshot of the same moment and region.
+	// The price comes from the same reading, which is what makes
+	// PromoPriceChanged computable.
 	if points[0].Price == nil {
 		t.Error("цена первого замера не прочитана")
+	}
+}
+
+func TestPromotions_AnotherPromotionsMarkIsNotThisOne(t *testing.T) {
+	// The mark names one promotion. Read as a boolean «в какой-нибудь акции»,
+	// a product moving from one sale to another would look like it stayed put
+	// — and the two are different facts about a seller's week.
+	s := openTestStore(t)
+	at := time.Date(2026, 8, 20, 9, 0, 0, 0, time.UTC)
+
+	markedReading(t, s, 200, "-1257786", at.Add(-time.Hour), 1050336, 43000)
+	markedReading(t, s, 200, "-1257786", at, 777, 43000)
+
+	points, err := s.LastTwoMemberships(context.Background(),
+		PromoKey{NmID: 200, Promo: "1050336", Dest: "-1257786", AppType: wb.AppWeb})
+	if err != nil {
+		t.Fatalf("LastTwoMemberships: %v", err)
+	}
+	if len(points) != 2 || !points[0].In || points[1].In {
+		t.Errorf("замеры %+v — переход в другую акцию не прочитан как выход из этой", points)
 	}
 }
 
