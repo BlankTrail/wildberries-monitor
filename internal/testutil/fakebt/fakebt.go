@@ -63,12 +63,18 @@ type Server struct {
 	mu       sync.Mutex
 	license  License
 	gateways []Gateway
-	ca       []byte
-	ports    map[int]string // port -> upstream
-	rotates  map[int]int
-	fails    map[string][]failure
-	seen     []Recorded
-	nextPort int
+	// egressFails is the exits the egress check refuses, by proxy address or
+	// gateway name, with the reason each is refused for.
+	egressFails map[string]string
+	// egressSkips is the exits the check reports as skipped — what the service
+	// answers for a check a tariff does not include.
+	egressSkips map[string]bool
+	ca          []byte
+	ports       map[int]string // port -> upstream
+	rotates     map[int]int
+	fails       map[string][]failure
+	seen        []Recorded
+	nextPort    int
 }
 
 // New starts a fake control API and registers its shutdown with t.
@@ -105,6 +111,64 @@ func (s *Server) SetLicense(l License) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.license = l
+}
+
+// FailEgress makes the egress check refuse one exit — a proxy address or a
+// gateway name — with detail. Everything not named goes on passing.
+//
+// Named rather than a global switch, because what the caller reports is «первый
+// отказ: адрес — причина», and a test of that needs a list where some answer
+// and some do not.
+func (s *Server) FailEgress(exit, detail string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.egressFails == nil {
+		s.egressFails = map[string]string{}
+	}
+	s.egressFails[exit] = detail
+}
+
+// SkipEgress makes the egress check report one exit as skipped — what the
+// service answers for a check a tariff does not include.
+func (s *Server) SkipEgress(exit string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.egressSkips == nil {
+		s.egressSkips = map[string]bool{}
+	}
+	s.egressSkips[exit] = true
+}
+
+func (s *Server) serveEgressTest(w http.ResponseWriter, body []byte) {
+	var req struct {
+		Upstream string `json:"upstream"`
+		Gateway  string `json:"upstream_gateway"`
+	}
+	_ = json.Unmarshal(body, &req)
+
+	s.mu.Lock()
+	detail, failed := s.egressFails[req.Upstream]
+	if !failed {
+		detail, failed = s.egressFails[req.Gateway]
+	}
+	skipped := s.egressSkips[req.Upstream] || s.egressSkips[req.Gateway]
+	s.mu.Unlock()
+
+	if skipped {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"leak": map[string]any{"ok": false, "skipped": true, "detail": "not in this plan"},
+		})
+		return
+	}
+	if failed {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"http": map[string]any{"ok": false, "detail": detail},
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"http": map[string]any{"ok": true, "detail": "direct"},
+	})
 }
 
 // SetGateways replaces the gateway list.
@@ -216,9 +280,7 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 	case "/api/v1/ports/close":
 		s.serveClose(w, body)
 	case "/api/v1/upstream/test":
-		writeJSON(w, http.StatusOK, map[string]any{
-			"http": map[string]any{"ok": true, "detail": "direct"},
-		})
+		s.serveEgressTest(w, body)
 	default:
 		s.servePortScoped(w, r, body)
 	}

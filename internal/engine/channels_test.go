@@ -4,6 +4,7 @@ package engine
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -749,5 +750,171 @@ func TestTestChannel_NamesTheGatewaysBlankTrailDoesNotHave(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "WiseKeys.AE-OAE;") {
 		t.Errorf("ошибка %q называет отсутствующим шлюз, который есть", err)
+	}
+}
+
+func TestTestChannel_ProbesTheAddressesRatherThanOnlyParsingThem(t *testing.T) {
+	// Spec section 3.1's last row: «проверка прокси — кнопка "проверить
+	// список" до запуска, а не после часа работы». Parsing says the lines are
+	// well-formed, which is not what goes wrong: a provider's addresses stop
+	// answering, and the way that surfaced was fifteen attempts over twelve
+	// exits an hour into a collection.
+	e := openEngine(t)
+	fake := fakebt.New(t)
+	configure(t, e, fake.URL(), fake.Key())
+	fake.FailEgress("socks5://user:pass@10.0.0.1:1080", "connection refused")
+
+	id := saveChannel(t, e, store.ChannelRow{
+		Name: "список", Kind: store.ChannelList, Enabled: true, Source: listFile(t),
+	})
+
+	got, err := e.TestChannel(t.Context(), id)
+	if err != nil {
+		t.Fatalf("TestChannel: %v", err)
+	}
+	// What was sampled, said out loud: a silent sample of five reads as a
+	// verdict on all five hundred.
+	if !strings.Contains(got, "Проверено адресов: 4 из 4") {
+		t.Errorf("не сказано, сколько адресов проверено: %q", got)
+	}
+	if !strings.Contains(got, "ответили 3") {
+		t.Errorf("не сказано, сколько ответили: %q", got)
+	}
+	// And the failure is named rather than counted.
+	if !strings.Contains(got, "10.0.0.1") || !strings.Contains(got, "connection refused") {
+		t.Errorf("первый отказ не назван: %q", got)
+	}
+}
+
+func TestTestChannel_ProbesEveryGatewayOfASet(t *testing.T) {
+	// All of them rather than a sample: a set is a handful, and one broken
+	// configuration in it is what stops a run — the pool hands them out in
+	// turn, so it is offered to every port that renews.
+	e := openEngine(t)
+	fake := fakebt.New(t)
+	fake.SetGateways([]fakebt.Gateway{
+		{Name: "WiseKeys.AE-OAE", Kind: "xray", Running: true},
+		{Name: "WiseKeys.DE-Germaniya", Kind: "xray", Running: true},
+	})
+	fake.FailEgress("WiseKeys.DE-Germaniya", "exited during startup")
+	configure(t, e, fake.URL(), fake.Key())
+
+	id := saveChannel(t, e, store.ChannelRow{
+		Name: "vpn", Kind: store.ChannelGateway, Enabled: true,
+		Source: "WiseKeys.AE-OAE\nWiseKeys.DE-Germaniya",
+	})
+
+	got, err := e.TestChannel(t.Context(), id)
+	if err != nil {
+		t.Fatalf("TestChannel: %v", err)
+	}
+	if !strings.Contains(got, "Ответили шлюзов: 1 из 2") {
+		t.Errorf("шлюзы не проверены: %q", got)
+	}
+	if !strings.Contains(got, "WiseKeys.DE-Germaniya") || !strings.Contains(got, "exited during startup") {
+		t.Errorf("сломанный шлюз не назван: %q", got)
+	}
+}
+
+func TestTestChannel_DirectIsProbedToo(t *testing.T) {
+	// «Проверять нечего» was true about the configuration and not about the
+	// question people press this button with, which is «дойдёт ли отсюда
+	// запрос».
+	e := openEngine(t)
+	fake := fakebt.New(t)
+	configure(t, e, fake.URL(), fake.Key())
+	id := saveChannel(t, e, store.ChannelRow{
+		Name: "direct", Kind: store.ChannelDirect, Enabled: true,
+	})
+
+	got, err := e.TestChannel(t.Context(), id)
+	if err != nil {
+		t.Fatalf("TestChannel: %v", err)
+	}
+	if !strings.Contains(got, "проходит") {
+		t.Errorf("прямое соединение не проверено: %q", got)
+	}
+}
+
+// longListFile writes a list of eight addresses, so that the sample bound
+// bites: a list shorter than the bound proves nothing about it.
+func longListFile(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "many.txt")
+	var lines []string
+	for i := 1; i <= 8; i++ {
+		lines = append(lines, fmt.Sprintf("socks5://10.0.0.%d:1080", i))
+	}
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	return path
+}
+
+func TestTestChannel_ProbesASampleAndSaysHowBigItWas(t *testing.T) {
+	// A list of five hundred proxies takes five hundred requests to check
+	// whole, and somebody who pressed a button is not waiting for that. What
+	// was sampled is in the answer, because a silent sample reads as a verdict
+	// on the whole list.
+	e := openEngine(t)
+	fake := fakebt.New(t)
+	configure(t, e, fake.URL(), fake.Key())
+
+	id := saveChannel(t, e, store.ChannelRow{
+		Name: "много", Kind: store.ChannelList, Enabled: true, Source: longListFile(t),
+	})
+
+	got, err := e.TestChannel(t.Context(), id)
+	if err != nil {
+		t.Fatalf("TestChannel: %v", err)
+	}
+	if !strings.Contains(got, "Проверено адресов: 5 из 8") {
+		t.Errorf("выборка не ограничена или не названа: %q", got)
+	}
+}
+
+func TestTestChannel_ARotatingEntryPointIsProbed(t *testing.T) {
+	// One entry point and one probe. The rotate link is still left alone —
+	// the provider has a floor on how often it may be pulled — but the address
+	// it currently points at is exactly what a run will go through.
+	e := openEngine(t)
+	fake := fakebt.New(t)
+	configure(t, e, fake.URL(), fake.Key())
+	fake.FailEgress("socks5://10.0.0.9:1080", "connection refused")
+
+	id := saveChannel(t, e, store.ChannelRow{
+		Name: "ротация", Kind: store.ChannelRotating, Enabled: true,
+		Source: "socks5://10.0.0.9:1080", RotateURL: "https://provider.example/rotate",
+	})
+
+	got, err := e.TestChannel(t.Context(), id)
+	if err != nil {
+		t.Fatalf("TestChannel: %v", err)
+	}
+	if !strings.Contains(got, "не прошёл") || !strings.Contains(got, "connection refused") {
+		t.Errorf("точка входа не проверена: %q", got)
+	}
+}
+
+func TestTestChannel_ACheckTheTariffSkipsIsNotAFailure(t *testing.T) {
+	// The service skips what a plan does not include — the leak check on the
+	// cheaper tariffs. Counted as a failure, every list on such a plan would
+	// come back broken, and the button that exists to find real breakage would
+	// be the one nobody believes.
+	e := openEngine(t)
+	fake := fakebt.New(t)
+	configure(t, e, fake.URL(), fake.Key())
+	fake.SkipEgress("")
+
+	id := saveChannel(t, e, store.ChannelRow{
+		Name: "direct", Kind: store.ChannelDirect, Enabled: true,
+	})
+
+	got, err := e.TestChannel(t.Context(), id)
+	if err != nil {
+		t.Fatalf("TestChannel: %v", err)
+	}
+	if !strings.Contains(got, "проходит") {
+		t.Errorf("пропущенная тарифом проверка засчитана отказом: %q", got)
 	}
 }

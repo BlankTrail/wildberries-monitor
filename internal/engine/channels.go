@@ -89,6 +89,103 @@ func (e *Engine) Channels(ctx context.Context, want ...int64) ([]blanktrail.Chan
 	return built, closeAll, nil
 }
 
+// probed is how many exits one press of «Проверить» tries.
+//
+// Five. A list of five hundred proxies takes five hundred requests to check
+// whole, and somebody who pressed a button is not waiting for that — while
+// five says whether the list is alive, which is the question. What was sampled
+// is always in the answer: «проверено 5 из 500» is a number a person can act
+// on, and a silent sample reads as a verdict on the whole list.
+const probed = 5
+
+// probeList tries a few of a list's addresses through BlankTrail.
+//
+// Spec section 3.1's last row: «проверка прокси — кнопка "проверить список" до
+// запуска, а не после часа работы». Parsing a list says the lines are
+// well-formed, which is not the thing that goes wrong — a provider's addresses
+// stop answering, and the way that used to surface was fifteen attempts over
+// twelve exits an hour into a collection.
+func (e *Engine) probeList(ctx context.Context, ups []blanktrail.Upstream) string {
+	client, err := e.control(ctx)
+	if err != nil {
+		return "Проверить адреса не удалось: " + err.Error()
+	}
+	take := min(len(ups), probed)
+	ok, first := 0, ""
+	for _, up := range ups[:take] {
+		if why := probeOne(ctx, client, blanktrail.Egress{Upstream: up.URL()}); why == "" {
+			ok++
+		} else if first == "" {
+			first = fmt.Sprintf("%s — %s", up.Host, why)
+		}
+	}
+	out := fmt.Sprintf("Проверено адресов: %d из %d, ответили %d.", take, len(ups), ok)
+	if first != "" {
+		out += " Первый отказ: " + first + "."
+	}
+	return out
+}
+
+// probeGateways tries every configuration of a set.
+//
+// All of them rather than a sample, because a set is a handful and a broken one
+// in it is exactly what stops a run: the pool hands them out in turn, so one
+// gateway that will not start costs every port it is offered to.
+func (e *Engine) probeGateways(ctx context.Context, names []string) string {
+	client, err := e.control(ctx)
+	if err != nil {
+		return "Проверить шлюзы не удалось: " + err.Error()
+	}
+	ok, first := 0, ""
+	for _, name := range names {
+		if why := probeOne(ctx, client, blanktrail.Egress{Gateway: name}); why == "" {
+			ok++
+		} else if first == "" {
+			first = fmt.Sprintf("%s — %s", name, why)
+		}
+	}
+	out := fmt.Sprintf("Ответили шлюзов: %d из %d.", ok, len(names))
+	if first != "" {
+		out += " Первый отказ: " + first + "."
+	}
+	return out
+}
+
+// probeText is one exit as a sentence.
+func (e *Engine) probeText(ctx context.Context, eg blanktrail.Egress) string {
+	client, err := e.control(ctx)
+	if err != nil {
+		return "Проверить выход не удалось: " + err.Error()
+	}
+	if why := probeOne(ctx, client, eg); why != "" {
+		return "Запрос через него не прошёл: " + why + "."
+	}
+	return "Запрос через него проходит."
+}
+
+// probeOne asks BlankTrail to try one exit, and answers with why it failed or
+// with an empty string.
+//
+// A skipped check counts as passing. The service skips what a tariff does not
+// include, and reporting «пропущено» as a failure would fail every list on a
+// plan that has no leak check.
+func probeOne(ctx context.Context, client *blanktrail.Client, eg blanktrail.Egress) string {
+	got, err := client.TestEgress(ctx, eg)
+	if err != nil {
+		return err.Error()
+	}
+	for name, res := range got {
+		if res.OK || res.Skipped {
+			continue
+		}
+		if res.Detail != "" {
+			return res.Detail
+		}
+		return name + ": не прошло"
+	}
+	return ""
+}
+
 // gatewayState is what BlankTrail says about one configuration, kept by name
 // so a set of them can be checked in one pass rather than one scan of the list
 // per name.
@@ -234,7 +331,11 @@ func (e *Engine) TestChannel(ctx context.Context, id int64) (string, error) {
 
 	switch row.Kind {
 	case store.ChannelDirect:
-		return "Прямое соединение: проверять нечего, адрес — собственный адрес машины.", nil
+		// Probed, not waved through. «Проверять нечего» was true about the
+		// configuration and not about the question people press this button
+		// with, which is «дойдёт ли отсюда запрос».
+		return "Прямое соединение, адрес — собственный адрес машины. " +
+			e.probeText(ctx, blanktrail.Egress{}), nil
 
 	case store.ChannelList:
 		ups, bad, err := sourceOf(row).Load(ctx)
@@ -251,7 +352,7 @@ func (e *Engine) TestChannel(ctx context.Context, id int64) (string, error) {
 			// of them is what tells its owner which.
 			out += fmt.Sprintf(" Отброшено строк: %d, первая — %q.", len(bad), bad[0])
 		}
-		return out, nil
+		return out + " " + e.probeList(ctx, ups), nil
 
 	case store.ChannelRotating:
 		up, err := singleUpstream(row.Source, row.DefaultScheme)
@@ -261,9 +362,9 @@ func (e *Engine) TestChannel(ctx context.Context, id int64) (string, error) {
 		if strings.TrimSpace(row.RotateURL) == "" {
 			return "", fmt.Errorf("не указана ссылка смены адреса")
 		}
-		return fmt.Sprintf("Точка входа разобрана: %s://%s. Ссылка смены не дёргается при проверке — "+
+		return fmt.Sprintf("Точка входа разобрана: %s://%s. %s Ссылка смены не дёргается при проверке — "+
 			"у провайдера свой минимальный интервал, и лишний вызов стоит прокси.",
-			up.Scheme, up.Host), nil
+			up.Scheme, up.Host, e.probeText(ctx, blanktrail.Egress{Upstream: up.URL()})), nil
 
 	case store.ChannelGateway:
 		client, err := e.control(ctx)
@@ -322,12 +423,13 @@ func (e *Engine) TestChannel(ctx context.Context, id int64) (string, error) {
 			if g.running {
 				state = "запущен"
 			}
-			return fmt.Sprintf("Шлюз %s (%s): %s, портов на нём сейчас %d.",
-				want[0], g.kind, state, g.ports), nil
+			return fmt.Sprintf("Шлюз %s (%s): %s, портов на нём сейчас %d. %s",
+				want[0], g.kind, state, g.ports,
+				e.probeText(ctx, blanktrail.Egress{Gateway: want[0]})), nil
 		}
 		return fmt.Sprintf("Шлюзов в наборе %d, из них запущено %d, портов на них сейчас %d. "+
-			"Пул берёт их по очереди, так что смена личности порта переводит его на следующий.",
-			len(want), running, ports), nil
+			"Пул берёт их по очереди, так что смена личности порта переводит его на следующий. %s",
+			len(want), running, ports, e.probeGateways(ctx, want)), nil
 	}
 
 	return "", fmt.Errorf("вид %q этой сборке неизвестен", row.Kind)
