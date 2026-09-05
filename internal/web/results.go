@@ -236,6 +236,16 @@ func resultsCell(q url.Values, names map[int64]string, row store.ProductRow, c w
 		return stockCell(row.NmID, text)
 	}
 
+	// The review count opens the same way, and for the same kind of reason: the
+	// number is an aggregate and «что там пишут» is the question behind it. It
+	// is also the only door to what the review window and the question list
+	// collected — a card has a thousand reviews, so they are not a column of
+	// anything (see wb.Field.Many) and were, until this press existed, written
+	// and unreadable.
+	if c.Key == "feedbacks" || c.Key == "review_count" {
+		return reputationCell(row.NmID, text)
+	}
+
 	var narrowed url.Values
 	switch c.Key {
 	case "brand":

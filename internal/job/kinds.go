@@ -43,6 +43,7 @@ const (
 	ItemPromo   = "promo"   // one page of one promotion's goods
 	ItemMain    = "main"    // one page of the front page's feed
 	ItemSeller  = "seller"  // the seller's own record: who they are, not what they sell
+	ItemBrand   = "brand"   // the brand's own record, the same way and for the same reason
 )
 
 // keySep separates a key's parts.
@@ -124,6 +125,9 @@ func (k Key) String() string {
 		// No region and no page: a seller's own record is one document about a
 		// company, and it does not change with where the reader is standing.
 		return strings.Join([]string{ItemSeller, strconv.FormatInt(k.ID, 10)}, keySep)
+	case ItemBrand:
+		// The same shape and the same reasoning: one document about a brand.
+		return strings.Join([]string{ItemBrand, strconv.FormatInt(k.ID, 10)}, keySep)
 	case ItemMain:
 		// No id: there is one front page. The region and the audience are the
 		// whole of what distinguishes two readings of it.
@@ -189,6 +193,15 @@ func ParseKey(s string) (Key, error) {
 			return Key{}, fmt.Errorf("job: page key %q: page %q", s, parts[4])
 		}
 		k.Page = page
+	case ItemBrand:
+		if len(parts) != 2 {
+			return Key{}, fmt.Errorf("job: brand key %q has %d parts, want 2", s, len(parts))
+		}
+		id, err := strconv.ParseInt(parts[1], 10, 64)
+		if err != nil {
+			return Key{}, fmt.Errorf("job: brand key %q: id %q", s, parts[1])
+		}
+		k.ID = id
 	case ItemSeller:
 		if len(parts) != 2 {
 			return Key{}, fmt.Errorf("job: seller key %q has %d parts, want 2", s, len(parts))
@@ -343,6 +356,16 @@ func (StaticPlanner) Plan(j Job) ([]Item, error) {
 	if j.Kind == KindSeller && j.SupplierID > 0 {
 		out = append(out, Item{Kind: ItemSeller, Key: Key{
 			Kind: ItemSeller, ID: j.SupplierID,
+		}.String()})
+	}
+	// And the brand's, which is the same document about a different kind of
+	// party. The whole chain for it was built — the decoder, the address, the
+	// client call, the provenance source, the store's save and the table — and
+	// nothing anywhere called any of it, so the brands table was empty on every
+	// installation while a brand job walked that brand's goods.
+	if j.Kind == KindBrand && j.BrandID > 0 {
+		out = append(out, Item{Kind: ItemBrand, Key: Key{
+			Kind: ItemBrand, ID: j.BrandID,
 		}.String()})
 	}
 

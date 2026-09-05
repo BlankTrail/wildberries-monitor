@@ -358,6 +358,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /results", s.auth(http.HandlerFunc(s.resultsPage)))
 	mux.Handle("GET /results/table", s.auth(http.HandlerFunc(s.resultsFragment)))
 	mux.Handle("GET /results/stock", s.auth(http.HandlerFunc(s.stockPanel)))
+	mux.Handle("GET /results/reputation", s.auth(http.HandlerFunc(s.reputationPanel)))
 	mux.Handle("GET /results/export", s.auth(http.HandlerFunc(s.exportHandler)))
 	mux.Handle("GET /live", s.auth(http.HandlerFunc(s.live)))
 	mux.Handle("GET /track", s.auth(http.HandlerFunc(s.trackPage)))

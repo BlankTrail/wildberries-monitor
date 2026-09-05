@@ -23,6 +23,7 @@ type rawProduct struct {
 	Root            *int64 `json:"root"`
 	Name            string `json:"name"`
 	Brand           string `json:"brand"`
+	BrandID         *int64 `json:"brandId"`
 	Supplier        string `json:"supplier"`
 	SupplierID      *int64 `json:"supplierId"`
 	SubjectID       *int64 `json:"subjectId"`
@@ -92,6 +93,7 @@ func extractProduct(raw json.RawMessage) (Product, bool) {
 		Root:            r.Root,
 		Name:            strings.TrimSpace(r.Name),
 		Brand:           strings.TrimSpace(r.Brand),
+		BrandID:         r.BrandID,
 		SupplierName:    strings.TrimSpace(r.Supplier),
 		SupplierID:      r.SupplierID,
 		SubjectID:       r.SubjectID,

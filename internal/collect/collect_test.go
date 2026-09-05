@@ -56,10 +56,14 @@ type fakeSite struct {
 	// shelfOf answers for them. A nil shelfOf gives the answer the live site
 	// gives most of the time — a named shelf with nobody in it — which is the
 	// case the collector must not read as a failure.
-	promotions     []wb.Promotion
-	mainFeeds      []wb.SearchQuery
-	sellers        []int64
-	sellerFail     error
+	promotions []wb.Promotion
+	mainFeeds  []wb.SearchQuery
+	sellers    []int64
+	sellerFail error
+	// brands records which brands were asked for their own record, and
+	// brandPartial is the shape a record that arrived alongside a failure has.
+	brands         []int64
+	brandPartial   error
 	productShelves []int64
 	shelfOf        func(nm int64) (wb.ProductShelf, error)
 
@@ -258,6 +262,17 @@ func (f *fakeSite) Questions(_ context.Context, _ wb.Endpoints, imtID int64, tak
 		return wb.Questions{}, f.fail
 	}
 	return wb.Questions{ImtID: imtID}, nil
+}
+
+func (f *fakeSite) Brand(_ context.Context, _ wb.Endpoints, id int64) (wb.Brand, error) {
+	f.brands = append(f.brands, id)
+	if f.fail != nil {
+		return wb.Brand{}, f.fail
+	}
+	if f.brandPartial != nil {
+		return wb.Brand{ID: id, Name: "BrandCo"}, f.brandPartial
+	}
+	return wb.Brand{ID: id, Name: "BrandCo"}, nil
 }
 
 func (f *fakeSite) Shelves(_ context.Context, _ wb.Endpoints, q wb.SearchQuery) (wb.Shelves, error) {
@@ -1216,15 +1231,23 @@ func TestSeller_ReadsWhoTheSellerIsAndKeepsWhatItGot(t *testing.T) {
 func TestSeller_APartlyReadRecordIsKeptAndTheFailureReported(t *testing.T) {
 	// The client makes two fetches and hands back what it got alongside the
 	// error. A seller known by name is worth more than a seller not known at
-	// all — and the run still counts the failure, because half a record is not
-	// a success.
+	// all — so the half that arrived is kept, and the half that did not is
+	// counted as a loss rather than as a failure of the item.
+	//
+	// A failure was the earlier answer, and it was the wrong one for the case
+	// that actually occurs: a seller registered this year has no static file on
+	// the CDN yet, so that item failed on every run for ever while the profile
+	// half — which is what the rest of the program reads — arrived every time.
 	site := &fakeSite{sellerFail: errors.New("профиль не ответил")}
 	f, st := watching(t, site, job.KindSeller)
 
 	if _, err := f.Fetch(t.Context(), job.Item{Key: job.Key{
 		Kind: job.ItemSeller, ID: 4242,
-	}.String()}); err == nil {
-		t.Error("наполовину прочитанная запись выдана за успех")
+	}.String()}); err != nil {
+		t.Errorf("пункт объявлен отказавшим, хотя запись продавца сохранена: %v", err)
+	}
+	if f.Lost() != 1 {
+		t.Errorf("потерь насчитано %d, ожидалась одна — половина записи действительно не пришла", f.Lost())
 	}
 	got, err := st.Seller(t.Context(), 4242)
 	if err != nil {
@@ -1848,5 +1871,44 @@ func TestFetch_KeepRawGovernsTheCardPathToo(t *testing.T) {
 	}
 	if row := savedRow(t, st, 101); row.Raw != nil {
 		t.Errorf("сырой ответ сохранён (%q), а галка «хранить ответы сайта» снята", *row.Raw)
+	}
+}
+
+// TestBrand_TheRecordIsFetchedAndKept. The whole chain for a brand's own
+// record — decoder, address, client call, provenance source, the store's save
+// and the table — was built and had no caller anywhere, so brands was empty on
+// every installation while brand jobs walked those brands' goods.
+func TestBrand_TheRecordIsFetchedAndKept(t *testing.T) {
+	site := &fakeSite{}
+	f, _ := watching(t, site, job.KindBrand)
+
+	if _, err := f.Fetch(t.Context(), job.Item{Key: job.Key{
+		Kind: job.ItemBrand, ID: 263556,
+	}.String()}); err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if len(site.brands) != 1 || site.brands[0] != 263556 {
+		t.Errorf("запись бренда запрошена для %v, ожидался 263556", site.brands)
+	}
+}
+
+// TestBrand_APlanForABrandJobAsksForTheRecord is the other half: the chain is
+// only reachable if the plan names it.
+func TestBrand_APlanForABrandJobAsksForTheRecord(t *testing.T) {
+	plan, err := job.StaticPlanner{}.Plan(job.Job{
+		Name: "бренд", Kind: job.KindBrand, BrandID: 263556,
+		Regions: []string{"-1257786"}, Fields: wb.Selection{"nm_id"}, MaxPages: 1,
+	})
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	var asked bool
+	for _, it := range plan {
+		if it.Kind == job.ItemBrand {
+			asked = true
+		}
+	}
+	if !asked {
+		t.Errorf("план задания по бренду не спрашивает запись бренда: %+v", plan)
 	}
 }

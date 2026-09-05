@@ -230,20 +230,21 @@ func effectiveTS(p wb.Product, fallback int64) int64 {
 func upsertProductRow(ctx context.Context, tx *sql.Tx, p wb.Product, now int64) error {
 	_, err := tx.ExecContext(ctx, `
 		INSERT INTO products (
-		    nm_id, match_id, root_id, name, brand, supplier_id, supplier_name,
+		    nm_id, match_id, root_id, name, brand, brand_id, supplier_id, supplier_name,
 		    subject_id, subject_parent_id, first_seen_at, last_seen_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(nm_id) DO UPDATE SET
 		    match_id          = excluded.match_id,
 		    root_id           = COALESCE(excluded.root_id, products.root_id),
 		    name              = CASE WHEN excluded.name <> '' THEN excluded.name ELSE products.name END,
 		    brand             = CASE WHEN excluded.brand <> '' THEN excluded.brand ELSE products.brand END,
+		    brand_id          = COALESCE(excluded.brand_id, products.brand_id),
 		    supplier_id       = COALESCE(excluded.supplier_id, products.supplier_id),
 		    supplier_name     = CASE WHEN excluded.supplier_name <> '' THEN excluded.supplier_name ELSE products.supplier_name END,
 		    subject_id        = COALESCE(excluded.subject_id, products.subject_id),
 		    subject_parent_id = COALESCE(excluded.subject_parent_id, products.subject_parent_id),
 		    last_seen_at      = excluded.last_seen_at`,
-		p.ID, p.MatchID, p.Root, p.Name, p.Brand, p.SupplierID, p.SupplierName,
+		p.ID, p.MatchID, p.Root, p.Name, p.Brand, p.BrandID, p.SupplierID, p.SupplierName,
 		p.SubjectID, p.SubjectParentID, now, now)
 	if err != nil {
 		return fmt.Errorf("store: write the product row for %d: %w", p.ID, err)
@@ -637,4 +638,47 @@ func fpOptFloat(h hash.Hash, tag string, v *float64) {
 	var b [8]byte
 	binary.BigEndian.PutUint64(b[:], math.Float64bits(*v))
 	fpText(h, tag, hex.EncodeToString(b[:]))
+}
+
+// BrandRow is one brand as the job constructor offers it.
+type BrandRow struct {
+	ID   int64
+	Name string
+	// Products is how many of this brand's goods have been collected, so the
+	// list can lead with the ones somebody actually works with.
+	Products int64
+}
+
+// Brands lists the brands that have been met, most-collected first.
+//
+// It exists because the brand job's constructor asked for a number. The hint
+// under the box said «число из адреса страницы бренда», which is a real
+// instruction and a poor one: the number is in every listing this program has
+// ever read, it was decoded into nothing and written into a column that stayed
+// NULL, and the user was sent to the site to look up a fact their own database
+// had already been handed hundreds of times.
+func (s *Store) Brands(ctx context.Context) ([]BrandRow, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT brand_id, brand, COUNT(*) AS n
+		  FROM products
+		 WHERE brand_id IS NOT NULL AND brand <> ''
+		 GROUP BY brand_id
+		 ORDER BY n DESC, brand`)
+	if err != nil {
+		return nil, fmt.Errorf("store: brands: %w", err)
+	}
+	defer rows.Close()
+
+	var out []BrandRow
+	for rows.Next() {
+		var b BrandRow
+		if err := rows.Scan(&b.ID, &b.Name, &b.Products); err != nil {
+			return nil, fmt.Errorf("store: brands: %w", err)
+		}
+		out = append(out, b)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: brands: %w", err)
+	}
+	return out, nil
 }

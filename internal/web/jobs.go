@@ -649,9 +649,9 @@ func (s *Server) constructorHTML(r *http.Request, edit *job.Job) (string, error)
 		job.KindSeller))
 
 	b.WriteString(whenAny(
-		field("Идентификатор бренда", `<input class="bt-input" name="brand_id" type="number" min="1" data-estimate`+
-			d.id(d.BrandID)+`>`,
-			"Число из адреса страницы бренда."),
+		field("Бренд", s.brandField(r, d.BrandID),
+			"Из уже собранных. Номер бренда приходит с каждой выдачей — если нужного здесь нет, "+
+				"соберите что-нибудь этого бренда или впишите его номер из адреса страницы бренда."),
 		job.KindBrand))
 
 	b.WriteString(whenAny(
@@ -1842,4 +1842,51 @@ func runLiveDoneHTML(jobID int64, donePost, doneTarget string) string {
 		`<h4 class="bt-form-head">Живой лог</h4>`+
 		`<div id="run-log" class="bt-log"></div>`+
 		`</section>`, jobID, jobID)
+}
+
+// brandField is which brand a brand job walks.
+//
+// A list of what has been collected, with a box beside it for anything else.
+// It used to be the box alone, under a hint telling the user to find «число из
+// адреса страницы бренда» — a number every listing carries, which the decoder
+// dropped and the column meant to hold it never received. Collect anything of
+// a brand and its number is now here.
+func (s *Server) brandField(r *http.Request, chosen int64) string {
+	known, err := s.Store.Brands(r.Context())
+	if err != nil || len(known) == 0 {
+		// Nothing collected yet — the box on its own, which is what a fresh
+		// install has and what it always had.
+		return `<input class="bt-input" name="brand_id" type="number" min="1" placeholder="номер бренда" data-estimate` +
+			numAttr(chosen) + `>`
+	}
+
+	var b strings.Builder
+	b.WriteString(`<select class="bt-select" name="brand_id" data-estimate>`)
+	b.WriteString(`<option value="0">— выберите бренд —</option>`)
+	var listed bool
+	for _, one := range known {
+		selected := ""
+		if one.ID == chosen {
+			selected, listed = ` selected`, true
+		}
+		fmt.Fprintf(&b, `<option value="%d"%s>%s — %s</option>`,
+			one.ID, selected, html.EscapeString(one.Name),
+			countOf(one.Products, "товар", "товара", "товаров"))
+	}
+	if chosen != 0 && !listed {
+		// A saved job naming a brand nothing has been collected for keeps it,
+		// rather than silently moving to whichever brand sorts first.
+		fmt.Fprintf(&b, `<option value="%d" selected>№%d — ещё ничего не собрано</option>`, chosen, chosen)
+	}
+	b.WriteString(`</select>`)
+	return b.String()
+}
+
+// numAttr is a value attribute for a number box, left off entirely for zero so
+// that an empty field stays empty rather than reading «0».
+func numAttr(v int64) string {
+	if v == 0 {
+		return ""
+	}
+	return ` value="` + strconv.FormatInt(v, 10) + `"`
 }

@@ -4,6 +4,8 @@ package store
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"slices"
 	"strconv"
@@ -458,11 +460,18 @@ func (s *Store) LastTwoStandings(ctx context.Context, k StandingKey) ([]Benchmar
 // SearchStanding is one product as it stood in one search, with the numbers a
 // comparison is made of.
 type SearchStanding struct {
-	NmID           int64
-	Rank           int64
-	TS             int64
-	Price          *int64
-	DiscountPct    *int64
+	NmID        int64
+	Rank        int64
+	TS          int64
+	Price       *int64
+	DiscountPct *int64
+	// Currency is empty when this reading has no snapshot behind it — the
+	// snapshot is joined on an exact timestamp and the positions are written on
+	// every reading while snapshots are thinned, so about half of them have
+	// none. Every other column of that half is a pointer and survives a NULL;
+	// this one is a string, and scanning NULL into it failed the whole query
+	// rather than one row. Coalesced in the statement for that reason, the way
+	// read_products.go coalesces the same four columns for the same reason.
 	Currency       string
 	Rating         *float64
 	Feedbacks      *int64
@@ -509,9 +518,9 @@ func (s *Store) TopOfSearch(ctx context.Context, query, dest string, limit int) 
 			SELECT MAX(ts) AS ts FROM positions WHERE query = ? AND dest = ?
 		)
 		SELECT p.nm_id, p.rank, p.ts,
-		       s.price_sale, s.discount_pct, s.currency, s.rating, s.feedbacks,
+		       s.price_sale, s.discount_pct, COALESCE(s.currency, ''), s.rating, s.feedbacks,
 		       s.total_quantity, s.time2, s.pics,
-		       LENGTH(COALESCE(pr.description, '')),
+		       CASE WHEN pr.description IS NULL THEN NULL ELSE LENGTH(pr.description) END,
 		       `+wasAdvertised+`,
 		       `+reviewsPerDay+`,
 		       `+cardFullness+`,
@@ -570,9 +579,9 @@ func (s *Store) StandingOf(ctx context.Context, nmID int64, query, dest string) 
 			SELECT MAX(ts) AS ts FROM positions WHERE query = ? AND dest = ?
 		)
 		SELECT p.nm_id, p.rank, p.ts,
-		       s.price_sale, s.discount_pct, s.currency, s.rating, s.feedbacks,
+		       s.price_sale, s.discount_pct, COALESCE(s.currency, ''), s.rating, s.feedbacks,
 		       s.total_quantity, s.time2, s.pics,
-		       LENGTH(COALESCE(pr.description, '')),
+		       CASE WHEN pr.description IS NULL THEN NULL ELSE LENGTH(pr.description) END,
 		       `+wasAdvertised+`,
 		       `+reviewsPerDay+`,
 		       `+cardFullness+`,
@@ -587,8 +596,17 @@ func (s *Store) StandingOf(ctx context.Context, nmID int64, query, dest string) 
 			&st.Price, &st.DiscountPct, &st.Currency, &st.Rating, &st.Feedbacks,
 			&st.TotalQuantity, &st.DeliveryTime2, &st.PhotoCount, &st.DescriptionLen, &st.HasAd,
 			&st.FeedbacksPerDay, &st.OptionsFilledPct, &st.InPromo)
-	if err != nil {
+	if errors.Is(err, sql.ErrNoRows) {
+		// The legitimate «not in this listing», and the only failure that is an
+		// answer rather than a fault.
 		return SearchStanding{}, false, nil
+	}
+	if err != nil {
+		// Everything else — a scan that did not fit, a cancelled context, a
+		// busy database — used to come back as the same «нет в выдаче», so a
+		// comparison quietly dropped a product it could not read and reported
+		// it as absent from the search.
+		return SearchStanding{}, false, fmt.Errorf("store: standing of %d in %q: %w", nmID, query, err)
 	}
 	return st, true, nil
 }

@@ -49,6 +49,7 @@ type Site interface {
 	PromotionPage(ctx context.Context, eps wb.Endpoints, p wb.Promotion, q wb.SearchQuery) (wb.Envelope, error)
 	MainFeedPage(ctx context.Context, eps wb.Endpoints, q wb.SearchQuery) (wb.Envelope, error)
 	Seller(ctx context.Context, eps wb.Endpoints, id int64) (wb.Seller, error)
+	Brand(ctx context.Context, eps wb.Endpoints, id int64) (wb.Brand, error)
 }
 
 // Fetcher does one item of a job.
@@ -133,6 +134,8 @@ func (f *Fetcher) fetchKey(ctx context.Context, key job.Key) (int, error) {
 		return f.mainFeed(ctx, key)
 	case job.ItemSeller:
 		return f.seller(ctx, key)
+	case job.ItemBrand:
+		return f.brand(ctx, key)
 	}
 	// Not a default that quietly does nothing: an item kind this build cannot
 	// do would otherwise be marked done, and a run would report success having
@@ -366,12 +369,57 @@ func (f *Fetcher) seller(ctx context.Context, key job.Key) (int, error) {
 			return requests, fmt.Errorf("collect: продавец %d: %w", key.ID, saveErr)
 		}
 		f.scraped(ctx, "продавец %d — %s", sl.ID, sl.Name)
+		if err != nil {
+			// The profile half answered and the static record did not, which is
+			// what a seller registered this year looks like: no CDN file yet.
+			// The record is saved and the miss is counted as a loss rather than
+			// failing the item, because failing it reported a run as broken
+			// every single time for a seller who will never have that file —
+			// and the profile is what the rest of the program actually reads.
+			f.lost(ctx, "продавец %d: %v", key.ID, err)
+			return requests, nil
+		}
 	}
 	if err != nil {
 		return requests, fmt.Errorf("collect: продавец %d: %w", key.ID, err)
 	}
 	return requests, nil
 }
+
+// brand reads the brand's own record — who the brand is, not what it sells.
+//
+// The seller's twin, and written the same way: what came back is saved even
+// when the call also reports a failure, because a record that arrived is a
+// record, and the failure is reported beside it rather than instead of it.
+//
+// It had no caller at all until now. The decoder, the address, the client
+// method, the provenance source, the store's save and the table were all built
+// and none of them was ever reached, so brands was empty on every installation
+// while brand jobs walked those brands' goods.
+func (f *Fetcher) brand(ctx context.Context, key job.Key) (int, error) {
+	br, err := f.Site.Brand(ctx, f.Eps, key.ID)
+	requests := brandRecordRequests
+	if br.ID > 0 {
+		if saveErr := f.Store.SaveBrand(ctx, br); saveErr != nil {
+			return requests, fmt.Errorf("collect: бренд %d: %w", key.ID, saveErr)
+		}
+		f.scraped(ctx, "бренд %d — %s", br.ID, br.Name)
+		if err != nil {
+			// Half of it arrived and is kept. Counted as a loss rather than as
+			// a failure of the item: the record is in the database, and failing
+			// the item would report a run as broken over a document it has.
+			f.lost(ctx, "бренд %d: %v", key.ID, err)
+			return requests, nil
+		}
+	}
+	if err != nil {
+		return requests, fmt.Errorf("collect: бренд %d: %w", key.ID, err)
+	}
+	return requests, nil
+}
+
+// brandRecordRequests is what one brand's record costs: one static file.
+const brandRecordRequests = 1
 
 // sellerRecordRequests is what one seller's record costs: a static file and a
 // profile, both always attempted. Spelled here as well as in internal/job

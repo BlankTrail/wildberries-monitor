@@ -101,6 +101,14 @@ type Product struct {
 	Name  string `json:"-"`
 	Brand string `json:"-"`
 
+	// BrandID is the brand's own number, which every listing carries beside
+	// its name and which nothing read for as long as the column meant to hold
+	// it stayed NULL on every product ever collected. It is what a brand job
+	// is built around — and the constructor for one asked the user to go and
+	// find «число из адреса страницы бренда» by hand, a number the program had
+	// already been handed and thrown away hundreds of times over.
+	BrandID *int64 `json:"-"`
+
 	// SupplierID identifies the seller. The display name is renameable and
 	// cannot be joined across responses; the id is the only stable handle.
 	SupplierID   *int64 `json:"-"`
