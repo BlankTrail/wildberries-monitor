@@ -123,6 +123,19 @@ func Composable() []Kind {
 	return out
 }
 
+// PagedKinds are the kinds whose walk goes page by page and therefore needs a
+// bound.
+//
+// One list, because three places asked the same question and answered it
+// differently: the constructor showed the field to five kinds, Validate
+// demanded a value from two, and the planner counted up to it for seven. A
+// promotion or the front feed could then be saved with no bound, priced, put on
+// a schedule — and never produce a single item.
+func PagedKinds() []Kind {
+	return []Kind{KindPhrase, KindCatalog, KindSeller, KindBrand,
+		KindPositions, KindPromotion, KindMainFeed}
+}
+
 // Kinds lists every kind this build can run, in a stable order.
 func Kinds() []Kind {
 	return []Kind{KindPhrase, KindCatalog, KindSeller, KindBrand, KindArticles,
@@ -410,6 +423,10 @@ func (j Job) Validate() error {
 		// Search paging did not end during live measurement in M1a. A phrase
 		// job without a page bound is a job with no end, and the place to say
 		// so is before it starts spending requests.
+		//
+		// The other paged kinds are not refused here: their walks are finite,
+		// and a missing bound now reads as one page everywhere — the plan, the
+		// estimate and the screen agree. See pagesOf.
 		bad = append(bad, "no page limit: search paging has no end of its own")
 	}
 	if j.Threads < 0 {
@@ -490,9 +507,16 @@ func (j Job) Estimate(items int) Estimate {
 		// group whose cost does not multiply by the size of the result.
 		e.Items, e.Exact = 0, true
 	case KindPositions:
-		// Known before it starts, like an article list: the products are the
-		// ones named, however many pages have to be walked to find them.
-		e.Items, e.Exact = len(j.Articles), true
+		// The products are the ones named, however many pages have to be walked
+		// to find them — so the count is known. What is not known is how many
+		// times each of them is met: the walk goes phrase by phrase and buys a
+		// product's extras on every page it turns up on, so fifty articles over
+		// ten phrases can cost anything from fifty cards to five hundred.
+		//
+		// Hence not exact. Marked exact, as it was, the screen dropped the word
+		// «около» from a number the run could exceed sixfold, which is a worse
+		// answer than a rough one honestly labelled.
+		e.Items = len(j.Articles)
 	case KindProfile:
 		// One card, one answer.
 		e.Items, e.Exact = 1, true

@@ -245,17 +245,19 @@ func TestSelectionCost_CountsOneRequestPerSourceNotPerField(t *testing.T) {
 	if a, b := one.Cost().PerProduct, four.Cost().PerProduct; a != b {
 		t.Errorf("one field costs %d and four fields of the same document cost %d; they are one request", a, b)
 	}
-	if one.Cost().PerProduct != 1 {
-		t.Errorf("one card field costs %d requests per product, want 1", one.Cost().PerProduct)
+	// Two, because Client.Card makes two: the static half from the CDN and the
+	// live half. Priced at one, an article list quoted half what it spent.
+	if one.Cost().PerProduct != 2 {
+		t.Errorf("one card field costs %d requests per product, want 2", one.Cost().PerProduct)
 	}
 }
 
 func TestSelectionCost_AddsUpAcrossSources(t *testing.T) {
-	// Card, reviews and questions are three different responses, so three
-	// requests per product.
+	// Card, reviews and questions are three different responses — and the card
+	// is two requests of its own, so four.
 	s := Selection{"description", "review_text", "question_text"}
-	if got := s.Cost().PerProduct; got != 3 {
-		t.Errorf("PerProduct = %d, want 3 (card, reviews, questions)", got)
+	if got := s.Cost().PerProduct; got != 4 {
+		t.Errorf("PerProduct = %d, want 4 (карточка вдвоём, отзывы, вопросы)", got)
 	}
 }
 
@@ -268,8 +270,8 @@ func TestSelectionCost_NamesAKeyItDoesNotKnow(t *testing.T) {
 	if len(got.Unknown) != 1 || got.Unknown[0] != "colour_of_the_sky" {
 		t.Errorf("Unknown = %v, want [colour_of_the_sky]", got.Unknown)
 	}
-	if got.PerProduct != 1 {
-		t.Errorf("PerProduct = %d, want 1 — the known field still counts", got.PerProduct)
+	if got.PerProduct != 2 {
+		t.Errorf("PerProduct = %d, want 2 — the known field still counts, and a card is two requests", got.PerProduct)
 	}
 }
 

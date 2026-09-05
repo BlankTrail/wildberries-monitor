@@ -288,6 +288,27 @@ type StaticPlanner struct{}
 // finished the regions it started rather than leaving every region half
 // collected, and a half-collected region is a region whose numbers cannot be
 // compared with anything.
+// pagesOf is how many pages this job's walk covers, with the floor every paged
+// kind needs.
+//
+// One when no bound was named, and that is all it is. It used to say the run
+// extends the plan as the listing answers; nothing does — walk iterates a slice
+// fixed before it starts, and the store has no way to add an item to an open
+// run. A caller who wants a whole storefront names the pages; see
+// store.DefaultProfilePages, which is what a profile uses.
+//
+// The floor was on the storefront kinds and on nothing else, so a catalogue, a
+// promotion or the front feed saved with the page box left empty counted from
+// one to nought: a job that saved without a word, priced itself at one page,
+// and answered the first press of «Запустить» with «the plan enumerated no
+// items». Now the plan, the estimate and the screen say the same thing.
+func pagesOf(j Job) int {
+	if j.MaxPages <= 0 {
+		return 1
+	}
+	return j.MaxPages
+}
+
 func (StaticPlanner) Plan(j Job) ([]Item, error) {
 	if err := j.Validate(); err != nil {
 		return nil, err
@@ -349,19 +370,19 @@ func (StaticPlanner) Plan(j Job) ([]Item, error) {
 				}
 			}
 		case KindCatalog:
-			for page := 1; page <= j.MaxPages; page++ {
+			for page := 1; page <= pagesOf(j); page++ {
 				out = append(out, Item{Kind: ItemCatalog, Key: Key{
 					Kind: ItemCatalog, ID: j.CategoryID, Dest: dest, AppType: j.AppType, Page: page,
 				}.String()})
 			}
 		case KindPromotion:
-			for page := 1; page <= j.MaxPages; page++ {
+			for page := 1; page <= pagesOf(j); page++ {
 				out = append(out, Item{Kind: ItemPromo, Key: Key{
 					Kind: ItemPromo, ID: j.PromotionID, Dest: dest, AppType: j.AppType, Page: page,
 				}.String()})
 			}
 		case KindMainFeed:
-			for page := 1; page <= j.MaxPages; page++ {
+			for page := 1; page <= pagesOf(j); page++ {
 				out = append(out, Item{Kind: ItemMain, Key: Key{
 					Kind: ItemMain, Dest: dest, AppType: j.AppType, Page: page,
 				}.String()})
@@ -371,18 +392,7 @@ func (StaticPlanner) Plan(j Job) ([]Item, error) {
 			if j.Kind == KindBrand {
 				id = j.BrandID
 			}
-			pages := j.MaxPages
-			if pages <= 0 {
-				// One page, and that is all it is.
-				//
-				// This used to say the run extends the plan as the storefront
-				// answers. Nothing does: walk iterates a slice fixed before it
-				// starts, and the store has no way to add an item to an open
-				// run. A caller who wants a whole storefront names the pages —
-				// see store.DefaultProfilePages, which is what a profile uses.
-				pages = 1
-			}
-			for page := 1; page <= pages; page++ {
+			for page := 1; page <= pagesOf(j); page++ {
 				out = append(out, Item{Kind: ItemListing, Key: Key{
 					Kind: ItemListing, ID: id, Dest: dest, AppType: j.AppType, Page: page,
 				}.String()})

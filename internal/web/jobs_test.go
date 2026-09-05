@@ -103,16 +103,17 @@ func TestEstimate_CountsWhatTheRunWillSpend(t *testing.T) {
 	srv := newServer(t)
 	form := goodForm()
 	// One region, two phrases, five pages, and one paid field: the card
-	// document, one request per product.
+	// document, which costs two requests per product — the static half from
+	// the CDN and the live half beside it.
 	form["fields"] = []string{"nm_id", "description"}
 
 	body := postForm(t, srv, "/jobs/estimate", form).Body.String()
 	if !strings.Contains(body, "запросов") {
 		t.Fatalf("the estimate says nothing about requests: %q", firstLines(body))
 	}
-	// 2 phrases × 5 pages = 10 search requests, plus one card document per
-	// product for an assumed 100 per page: 1000 + 10.
-	if !strings.Contains(body, "1 010") {
+	// 2 phrases × 5 pages = 10 search requests, plus two per product for an
+	// assumed 100 per page: 2000 + 10.
+	if !strings.Contains(body, "2 010") {
 		t.Errorf("estimate = %q, want 1 010 requests", firstLines(body))
 	}
 	// An assumed number is never presented as a known one.
@@ -484,7 +485,14 @@ func TestConstructor_ShowsOnlyTheFieldsTheChosenKindUses(t *testing.T) {
 		// searches to look for them in.
 		{"articles", []job.Kind{job.KindArticles, job.KindPositions, job.KindShelves}},
 		{"category_id", []job.Kind{job.KindCatalog}},
-		{"max_pages", []job.Kind{job.KindPhrase, job.KindCatalog, job.KindSeller, job.KindBrand, job.KindPositions}},
+		// Every kind whose walk goes page by page — job.PagedKinds, which is
+		// the one list the constructor, the validator and the planner all read
+		// now. It used to be spelled three times and differently: the
+		// constructor showed the field to five kinds, the validator demanded a
+		// value from two and the planner counted up to it for seven, so a
+		// promotion or the front feed saved with no bound made a plan with no
+		// items in it.
+		{"max_pages", job.PagedKinds()},
 	} {
 		group := groupAround(body, `name="`+c.name+`"`)
 		if group == "" {
@@ -1021,5 +1029,52 @@ func TestEditJob_TheDirectoryPickersOpenOnWhatTheJobChose(t *testing.T) {
 	// mid-edit does the same damage a moment later.
 	if !strings.Contains(body, `data-with="#job-category"`) {
 		t.Error("обновление справочника не заберёт с собой выбранную категорию")
+	}
+}
+
+// TestSaveJob_SavingDoesNotSwitchTheScheduleBackOn is the live trap.
+//
+// The switch lives on the list, not in this form, so a save had to guess — and
+// guessed «включено» from the presence of a schedule. Somebody who switched a
+// nightly job off and later opened it to change the thread count switched it
+// back on by saving, and the job started running at night again.
+func TestSaveJob_SavingDoesNotSwitchTheScheduleBackOn(t *testing.T) {
+	srv := newServer(t)
+	form := goodForm()
+	form["schedule"] = []string{"every 24h"}
+	postForm(t, srv, "/jobs", form)
+
+	jobs, err := srv.Store.Jobs(t.Context())
+	if err != nil || len(jobs) != 1 {
+		t.Fatalf("Jobs: %v, %d штук", err, len(jobs))
+	}
+	id := jobs[0].ID
+
+	// Switched off from the list.
+	postForm(t, srv, fmt.Sprintf("/jobs/toggle?id=%d", id), url.Values{})
+	if row, err := srv.Store.Job(t.Context(), id); err != nil {
+		t.Fatalf("Job: %v", err)
+	} else if row.Enabled {
+		t.Fatal("переключатель не выключил расписание")
+	}
+
+	// Opened for editing and saved again, exactly as the form renders it.
+	body := get(t, srv, fmt.Sprintf("/jobs/edit?id=%d", id), "correct horse").Body.String()
+	if !strings.Contains(body, `name="enabled"`) {
+		t.Fatalf("форма не несёт состояние переключателя:\n%s", firstLines(body))
+	}
+	edit := goodForm()
+	edit["id"] = []string{fmt.Sprint(id)}
+	edit["schedule"] = []string{"every 24h"}
+	edit["enabled"] = []string{"0"}
+	edit["threads"] = []string{"9"}
+	postForm(t, srv, "/jobs", edit)
+
+	row, err := srv.Store.Job(t.Context(), id)
+	if err != nil {
+		t.Fatalf("Job: %v", err)
+	}
+	if row.Enabled {
+		t.Error("сохранение включило расписание, которое человек выключил кнопкой")
 	}
 }

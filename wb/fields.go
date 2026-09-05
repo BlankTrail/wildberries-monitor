@@ -464,7 +464,13 @@ type Cost struct {
 var requestsPerProduct = map[FieldSource]int{
 	FieldSourceSearchResult: 0,
 	FieldSourceCardDetail:   0,
-	FieldSourceCardDocument: 1,
+	// Two, and not one. The document is fetched by Client.Card, which makes two
+	// requests every time — the static half from the CDN and the live half —
+	// and the collector says so out loud at both of its call sites (requests +=
+	// 2). Priced at one, a hundred-article job with «Карточка» ticked quoted a
+	// hundred and one requests, without the word «около» because that kind's
+	// estimate is marked exact, and then made two hundred and one.
+	FieldSourceCardDocument: 2,
 	FieldSourceReviews:      1,
 	FieldSourceQuestions:    1,
 }

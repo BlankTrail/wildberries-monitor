@@ -69,10 +69,19 @@ var kindWhat = map[job.Kind]string{
 	job.KindShelves:   "Что продавец повесил под своей карточкой: чьи товары и на каком месте. По одному файлу на артикул, без прокси.",
 }
 
+// groupLabels is the heading each field group appears under.
+//
+// Every group the catalogue declares needs one. Two of them were missing, and
+// the fallback prints the group's own identifier — so the constructor and the
+// results filter showed «promo» and «media» in English among «Основное»,
+// «Остатки» and «Доставка», with nothing to say what was behind them or that
+// both are free.
 var groupLabels = map[wb.FieldGroup]string{
 	wb.GroupBase:       "Основное",
 	wb.GroupStock:      "Остатки",
 	wb.GroupDelivery:   "Доставка",
+	wb.GroupPromo:      "Акция",
+	wb.GroupMedia:      "Фото и видео",
 	wb.GroupContent:    "Карточка",
 	wb.GroupReputation: "Отзывы и вопросы",
 	wb.GroupPhraseAds:  "Реклама по фразе",
@@ -262,6 +271,54 @@ func (s *Server) newJobHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.writeHTML(w, body)
+}
+
+// boolField is how a bool travels in a hidden field.
+func boolField(on bool) string {
+	if on {
+		return "1"
+	}
+	return "0"
+}
+
+// enabledFrom is whether this job's schedule is switched on.
+//
+// The constructor carries the saved answer when it is changing a job, because
+// the switch is on the list rather than in this form. A new job has no answer
+// to carry, and there a schedule means «включено»: nobody types a schedule in
+// order to leave it off.
+func enabledFrom(f url.Values) bool {
+	if f.Has("enabled") {
+		return f.Get("enabled") == "1"
+	}
+	return strings.TrimSpace(f.Get("schedule")) != ""
+}
+
+// uploadPhrasesURL is where the phrase-file button posts.
+//
+// It carries the job because nothing else can: the request is multipart and is
+// read part by part, so by the time the answer is built the body is gone and
+// there is no form to read an id out of. Zero — a new job — is left off, so the
+// address stays the plain one it always was for the common case.
+func uploadPhrasesURL(jobID int64) string {
+	if jobID == 0 {
+		return "/jobs/phrases"
+	}
+	return "/jobs/phrases?id=" + strconv.FormatInt(jobID, 10)
+}
+
+// uploadingJob is the job an upload belongs to, read from the address rather
+// than the form for the reason uploadPhrasesURL gives.
+func (s *Server) uploadingJob(r *http.Request) *job.Job {
+	id := atoi64(r.URL.Query().Get("id"))
+	if id == 0 {
+		return nil
+	}
+	j, err := job.Load(r.Context(), s.Store, id)
+	if err != nil {
+		return nil
+	}
+	return &j
 }
 
 // editedJob is the saved job the open constructor is changing, or nil when it
@@ -559,6 +616,12 @@ func (s *Server) constructorHTML(r *http.Request, edit *job.Job) (string, error)
 	// quietly make a second job instead of changing the one on the screen.
 	if d.editing {
 		b.WriteString(hidden("id", strconv.FormatInt(d.ID, 10)))
+		// And whether its schedule is switched on, for the same reason: the
+		// switch lives in the list, not in this form, so a save that did not
+		// carry it had to guess — and guessed «включено» from the presence of a
+		// schedule. Somebody who switched a nightly job off and later opened it
+		// to change the thread count switched it back on by saving.
+		b.WriteString(hidden("enabled", boolField(d.Enabled)))
 	}
 
 	b.WriteString(field("Название", `<input class="bt-input" name="name" required placeholder="Весенние платья, Москва"`+
@@ -572,7 +635,7 @@ func (s *Server) constructorHTML(r *http.Request, edit *job.Job) (string, error)
 	// Typed or uploaded, and never both: the two are alternatives the job
 	// itself refuses together — «pick one» — and offering both at once was a
 	// form that let somebody fill in a refusal.
-	b.WriteString(whenAny(phraseSource(s.phraseListField(lists, d.PhraseListID), d),
+	b.WriteString(whenAny(phraseSource(s.phraseListField(lists, d.PhraseListID, d.ID), d),
 		job.KindPhrase, job.KindPhraseAds, job.KindPositions))
 
 	b.WriteString(whenAny(s.categoryBox(r, "", d.CategoryID), job.KindCatalog))
@@ -614,7 +677,7 @@ func (s *Server) constructorHTML(r *http.Request, edit *job.Job) (string, error)
 		field("Страниц выдачи", `<input class="bt-input" name="max_pages" type="number" min="1" data-estimate`+
 			d.num(d.MaxPages)+`>`,
 			"Постраничная выдача сама не кончается, поэтому предел обязателен."),
-		job.KindPhrase, job.KindCatalog, job.KindSeller, job.KindBrand, job.KindPositions))
+		job.PagedKinds()...))
 	b.WriteString(`</div>`)
 
 	// Which exits, beside the regions: both are «где смотреть», and a job that
@@ -829,7 +892,14 @@ func phraseSource(uploaded string, d draft) string {
 }
 
 // phraseListField is the uploaded-file half of the phrase question.
-func (s *Server) phraseListField(lists []store.PhraseListRow, chosen int64) string {
+// jobID is the job the open constructor is changing, or zero for a new one. It
+// travels in the upload's own address because the upload is a multipart request
+// and nothing else on the form reaches it: a reader that has already taken the
+// body apart cannot then parse it as a form, so the id was unreadable at the
+// far end and the answer came back as a fresh, empty constructor — the name,
+// the regions, the threads and the ticked fields all gone, and a save from
+// there making a second job instead of changing the one being edited.
+func (s *Server) phraseListField(lists []store.PhraseListRow, chosen, jobID int64) string {
 	var sel strings.Builder
 	sel.WriteString(`<select class="bt-select" name="phrase_list_id" data-estimate>`)
 	sel.WriteString(`<option value="0">— не использовать файл —</option>`)
@@ -851,7 +921,7 @@ func (s *Server) phraseListField(lists []store.PhraseListRow, chosen int64) stri
 	upload := `<div class="bt-upload">
 	  <input class="bt-input" id="phrase-file" name="file" type="file" accept=".txt,.csv">
 	  <button class="bt-btn bt-btn--secondary" type="button"
-	          data-upload="/jobs/phrases" data-file="#phrase-file" data-target="#main">Загрузить</button>
+	          data-upload="` + uploadPhrasesURL(jobID) + `" data-file="#phrase-file" data-target="#main">Загрузить</button>
 	</div>`
 
 	return field("Файл фраз", sel.String(), "Уже загруженные файлы. Выберите один вместо списка фраз выше.") +
@@ -1005,7 +1075,14 @@ func assumedItems(j job.Job) int {
 			phrases = j.PhraseListCount
 		}
 		return max(phrases, 1) * max(j.MaxPages, 1) * productsPerPage
-	case job.KindSeller, job.KindBrand:
+	case job.KindSeller, job.KindBrand, job.KindCatalog, job.KindPromotion, job.KindMainFeed:
+		// One listing walked page by page, whatever the listing is. The three
+		// added here used to fall through to nought, so the per-product half of
+		// the estimate — the card, the review window, the question list, each
+		// of which the screen's own badge prices at «+1 запр. на товар» —
+		// multiplied by nought: «около 5 запросов» over a run that would make
+		// fifteen hundred, under a footnote saying «исходя из 100 товаров на
+		// странице».
 		return max(j.MaxPages, 1) * productsPerPage
 	case job.KindPositions:
 		// The products are named, so the count is known — Estimate uses its
@@ -1020,7 +1097,14 @@ func assumedItems(j job.Job) int {
 func (s *Server) saveJobHandler(w http.ResponseWriter, r *http.Request) {
 	j, err := s.jobFromForm(r)
 	if err != nil {
-		http.Error(w, "jobs: "+err.Error(), http.StatusBadRequest)
+		// Onto the screen with the constructor still open, for the same reason
+		// the validation failure below arrives that way: everything this
+		// function can refuse — a promotion that is not in the directory, a
+		// category that is not — is the user's to fix, and fixing it means
+		// having the form they filled in still in front of them. As a status,
+		// it replaced the whole of #main — the job list, the run panel and
+		// every field they had typed — with one line of English.
+		s.jobsFragment(w, r, alert("error", err.Error()), true)
 		return
 	}
 	id, err := job.Save(r.Context(), s.Store, j)
@@ -1063,7 +1147,7 @@ func (s *Server) jobFromForm(r *http.Request) (job.Job, error) {
 		Attempts: int(atoi64(f.Get("attempts"))),
 		Delay:    time.Duration(atoi64(f.Get("delay_ms"))) * time.Millisecond,
 		Schedule: strings.TrimSpace(f.Get("schedule")),
-		Enabled:  f.Get("schedule") != "",
+		Enabled:  enabledFrom(f),
 		KeepRaw:  f.Get("keep_raw") != "",
 	}
 
@@ -1173,7 +1257,7 @@ func (s *Server) uploadPhrases(w http.ResponseWriter, r *http.Request) {
 			}
 			// The constructor is re-rendered so the file that was just
 			// streamed in is already in the dropdown.
-			body, err := s.constructorHTML(r, s.editedJob(r))
+			body, err := s.constructorHTML(r, s.uploadingJob(r))
 			if err != nil {
 				http.Error(w, "upload: "+err.Error(), http.StatusInternalServerError)
 				return
