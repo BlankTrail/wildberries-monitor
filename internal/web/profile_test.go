@@ -6,6 +6,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"slices"
 	"strings"
@@ -1040,5 +1042,37 @@ func TestPhrases_ARewordingThatCollidesIsRefusedOnTheScreen(t *testing.T) {
 	}
 	if len(after) != len(rows) {
 		t.Errorf("фраз стало %d вместо %d", len(after), len(rows))
+	}
+}
+
+func TestProfileNotice_AStopIsNotABreakdown(t *testing.T) {
+	// Measured on the stand: «Сбор остановился: остановлено вручную Исправьте
+	// и нажмите «Собрать всё» ещё раз» — two sentences run together, and the
+	// screen asking somebody to repair the thing they had just switched off.
+	srv := newServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/profile", nil)
+	notice := func(p store.ProfileRow) string { return srv.chainState(req, p) }
+
+	got := notice(store.ProfileRow{Stage: store.StageFailed, Failure: job.ErrStopped.Error()})
+	if strings.Contains(got, "Исправьте") {
+		t.Errorf("остановку просят исправить: %q", got)
+	}
+	if !strings.Contains(got, "остановлен вручную") {
+		t.Errorf("не сказано, что остановлено вручную: %q", got)
+	}
+	if strings.Contains(got, "bt-alert--error") {
+		t.Errorf("остановка нарисована как ошибка: %q", got)
+	}
+
+	// A real failure keeps its guidance — and gains the full stop it never had.
+	got = notice(store.ProfileRow{Stage: store.StageFailed, Failure: "продавец не найден"})
+	if !strings.Contains(got, "продавец не найден. Исправьте") {
+		t.Errorf("причина слиплась со следующим предложением: %q", got)
+	}
+
+	// One that already ends in a stop does not collect a second.
+	got = notice(store.ProfileRow{Stage: store.StageFailed, Failure: "лицензия истекла."})
+	if strings.Contains(got, "истекла..") {
+		t.Errorf("вторая точка: %q", got)
 	}
 }

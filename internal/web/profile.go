@@ -242,6 +242,23 @@ func profileScanLabel(p store.ProfileRow) string {
 //
 // Only the stages that run with no job of their own are named here. A stage
 // that waits on one is named for the job it is waiting on instead — see
+// sentence ends a reason so the words after it do not run into it. A failure
+// is whatever the run wrote — an error string, and error strings do not end in
+// a full stop by convention — and «остановлено вручную Исправьте» is two
+// sentences printed as one.
+func sentence(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return s
+	}
+	for _, end := range []string{".", "!", "?", "…", ":"} {
+		if strings.HasSuffix(s, end) {
+			return s
+		}
+	}
+	return s + "."
+}
+
 // stageLabel — because the stored stage is the step that runs *next*, so a
 // profile walking a storefront was stored as «phrases» and the screen said
 // «подбираем фразы» for the ten minutes it spent reading the storefront.
@@ -299,8 +316,14 @@ func (s *Server) chainState(r *http.Request, p store.ProfileRow) string {
 				fmt.Sprintf("/profile/step?id=%d", p.ID), "#profile-body")
 		}
 		return out
+	case p.Stage == store.StageFailed && p.Failure == job.ErrStopped.Error():
+		// Not a breakdown: somebody pressed «Остановить». Telling them to fix
+		// what they switched off themselves is the screen misreading its own
+		// state — the chain is exactly where they left it.
+		return alert("neutral", "Сбор остановлен вручную. Нажмите «Собрать всё», "+
+			"чтобы продолжить с того места — уже собранное останется.")
 	case p.Stage == store.StageFailed:
-		return alert("error", "Сбор остановился: "+p.Failure+
+		return alert("error", "Сбор остановился: "+sentence(p.Failure)+
 			" Исправьте и нажмите «Собрать всё» ещё раз — уже собранное останется.")
 	case p.Collected():
 		return `<div class="bt-alert bt-alert--success bt-alert--sm">` +
