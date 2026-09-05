@@ -153,9 +153,19 @@ func Columns(sel wb.Selection) (cols []wb.Field, unknown []string) {
 		want[key] = true
 	}
 	for _, f := range wb.Fields() {
-		if want[f.Key] {
-			cols = append(cols, f)
+		if !want[f.Key] {
+			continue
 		}
+		if f.Many {
+			// Several per reading, so not a column of one — see wb.Field.Many.
+			// Left in, it produced a column of empty cells in every file
+			// somebody had ticked it for and paid a request per product for.
+			// The selection is still honoured everywhere it means something:
+			// the run fetches what it names, and the reviews, questions and
+			// shelf placements it collects are in the database to be read.
+			continue
+		}
+		cols = append(cols, f)
 	}
 
 	// Unknown keys keep the selection's own order, and each is named once: a
@@ -285,6 +295,45 @@ func valueOf(r store.ProductRow, f wb.Field) Value {
 		return optText(r.Compositions)
 	case "card_created":
 		return optText(r.CardCreated)
+
+	// Spec section 4.4's delivery group. Free with every listing, written since
+	// the first migration, and answered here with Absent for as long as this
+	// switch had no case for it: on the stand, thirty‑eight thousand readings
+	// all carried a delivery window and all three columns came out empty.
+	case "delivery_time1":
+		return optInt(r.Time1)
+	case "delivery_time2":
+		return optInt(r.Time2)
+	case "delivery_dist":
+		return optInt(r.Dist)
+	case "warehouse_id":
+		return optInt(r.WarehouseID)
+
+	// The size breakdown, joined for one cell on the Options precedent above:
+	// a reading legitimately has several sizes, a column is one value, and the
+	// way a person reads them out is a list.
+	case "size_name":
+		return optText(r.Sizes)
+	case "size_quantity":
+		return optText(r.SizeStock)
+
+	// The card's review aggregate — one value per card and not per review,
+	// which is what makes these two columns while the review texts below are
+	// not. Ticking «Оценка карточки» spent a request per card and produced an
+	// empty column.
+	case "review_valuation":
+		return optFloat(r.ReviewValuation)
+	case "review_count":
+		return optInt(r.ReviewCount)
+
+	// Where the search put this product at this reading. A page fetch writes
+	// the reading and the places on it in one go, so the two belong to the
+	// same request rather than to two moments joined by a guess — see
+	// store.ProductRow.Rank.
+	case "rank":
+		return optInt(r.Rank)
+	case "page":
+		return optInt(r.Page)
 	}
 	return Value{Absent: true}
 }

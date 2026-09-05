@@ -506,6 +506,36 @@ func columnsFor(t *testing.T, keys ...string) []wb.Field {
 	return cols
 }
 
+// fieldsFor is columnsFor without the column filter: the fields exactly as the
+// catalogue declares them, whether or not an export would give each one a
+// column of its own.
+//
+// It exists for the writer tests. What those check is how a writer renders each
+// FieldType, and one of the six types — the boolean — belongs today only to a
+// field that is several per reading and so has no column (see wb.Field.Many).
+// Asking Columns for it gives nothing back, and a writer's handling of that
+// type would then be tested by nobody.
+func fieldsFor(t *testing.T, keys ...string) []wb.Field {
+	t.Helper()
+	want := make(map[string]bool, len(keys))
+	for _, key := range keys {
+		if _, ok := wb.FieldByKey(key); !ok {
+			t.Fatalf("fieldsFor: the catalogue does not declare %q", key)
+		}
+		want[key] = true
+	}
+	// Catalogue order, the same as Columns: these tests lay their values out
+	// in the order the columns come back, and an order that followed the
+	// argument list instead would pass or fail on how the call was typed.
+	var out []wb.Field
+	for _, f := range wb.Fields() {
+		if want[f.Key] {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
 // allTypeColumns is one column of every FieldType, in a fixed order, so a
 // writer can be tested against the whole type range rather than the two types
 // that happen to appear first.
@@ -523,7 +553,7 @@ func columnsFor(t *testing.T, keys ...string) []wb.Field {
 // are what will say so.
 func allTypeColumns(t *testing.T) []wb.Field {
 	t.Helper()
-	return columnsFor(t,
+	return fieldsFor(t,
 		"nm_id",             // int
 		"name",              // text
 		"price_sale",        // money
@@ -777,3 +807,52 @@ func TestRowOf_ThePromotionMarkIsExported(t *testing.T) {
 		t.Errorf("колонка = %+v, а выдача об акции не сказала", blank[0])
 	}
 }
+
+// TestValueOf_EveryColumnHasAValueToRead is the guard the live run needed.
+//
+// Seventeen of forty columns came out empty over thirty-eight thousand
+// readings, and for eight of them the data was in the database the whole time —
+// collected, paid for by a request the estimate quoted, written, and read by
+// nothing. A column that can never hold anything is worse than no column: it
+// reads as «этого у товара нет» rather than as «этого мы не показываем».
+//
+// So: hand valueOf a reading where every field of ProductRow is filled in, and
+// require every column the catalogue offers to answer with something. What is
+// several per reading is not a column at all and is excluded before this point
+// — see wb.Field.Many and Columns.
+func TestValueOf_EveryColumnHasAValueToRead(t *testing.T) {
+	full := store.ProductRow{
+		NmID: 101, ImtID: ptr(int64(900)),
+		Name: "Платье", Brand: "BrandCo",
+		SupplierID: ptr(int64(4242)), SupplierName: "ООО Ромашка",
+		Dest: "-1257786", AppType: 1, TS: 1755000000,
+		Rating: ptr(4.5), Feedbacks: ptr(int64(12)), TotalQuantity: ptr(int64(7)),
+		Pics: ptr(int64(9)), PromoID: ptr(int64(1005032)),
+		PriceBase: ptr(int64(199900)), PriceSale: ptr(int64(129900)),
+		DiscountPct: ptr(int64(35)), Currency: "RUB",
+		Description: ptr("описание"), VendorCode: ptr("АРТ-1"),
+		SubjectName: ptr("Платья"), CardCreated: ptr("2024-01-01"),
+		Options: ptr("Цвет: синий"), Compositions: ptr("хлопок"),
+		Time1: ptr(int64(4)), Time2: ptr(int64(28)), Dist: ptr(int64(120)),
+		WarehouseID: ptr(int64(507)),
+		Sizes:       ptr("M; L"), SizeStock: ptr("M: 3; L: 0"),
+		ReviewValuation: ptr(4.8), ReviewCount: ptr(int64(1026)),
+		Rank: ptr(int64(12)), Page: ptr(int64(1)),
+	}
+
+	var silent []string
+	for _, f := range wb.Fields() {
+		if f.Many {
+			continue
+		}
+		if valueOf(full, f).Absent {
+			silent = append(silent, f.Key+" ("+f.Name+")")
+		}
+	}
+	if len(silent) != 0 {
+		t.Errorf("колонки, которым нечего прочитать даже из полного чтения: %v", silent)
+	}
+}
+
+// ptr is the one-liner the fixture above would otherwise repeat thirty times.
+func ptr[T any](v T) *T { return &v }

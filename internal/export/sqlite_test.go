@@ -177,7 +177,7 @@ func TestSQLite_ColumnsAreNamedAndOrderedByTheCatalogue(t *testing.T) {
 	// on column names, and allTypeColumns picks whichever column of each type
 	// the catalogue happens to declare first — a choice that moves when the
 	// catalogue grows. One of each type, chosen here so the two stay in step.
-	cols := columnsFor(t, "nm_id", "name", "price_sale", "rating", "review_created", "question_answered")
+	cols := fieldsFor(t, "nm_id", "name", "price_sale", "rating", "review_created", "question_answered")
 
 	w, err := NewSQLite(path, Options{})
 	if err != nil {
@@ -329,7 +329,7 @@ func TestSQLite_AbsentIsNullAndZeroIsZero(t *testing.T) {
 	// Named explicitly rather than through allTypeColumns: this test asserts on
 	// column names, and allTypeColumns takes whichever column of each type the
 	// catalogue declares first — a choice that moves when the catalogue grows.
-	cols := columnsFor(t, "nm_id", "name", "price_sale", "rating", "review_created", "question_answered")
+	cols := fieldsFor(t, "nm_id", "name", "price_sale", "rating", "review_created", "question_answered")
 
 	w, err := NewSQLite(path, Options{})
 	if err != nil {
@@ -498,7 +498,7 @@ func TestSQLite_TimeIsWholeUnixSeconds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSQLite: %v", err)
 	}
-	if err := w.Begin(columnsFor(t, "review_created")); err != nil {
+	if err := w.Begin(fieldsFor(t, "review_created")); err != nil {
 		t.Fatalf("Begin: %v", err)
 	}
 	if err := w.Write([]Value{{Unix: 1755300000}}); err != nil {
@@ -525,7 +525,7 @@ func TestSQLite_BoolIsOneOrZero(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSQLite: %v", err)
 	}
-	if err := w.Begin(columnsFor(t, "question_answered")); err != nil {
+	if err := w.Begin(fieldsFor(t, "question_answered")); err != nil {
 		t.Fatalf("Begin: %v", err)
 	}
 	for _, b := range []bool{true, false} {

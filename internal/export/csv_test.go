@@ -39,13 +39,17 @@ func (s *countingSink) Close() error {
 func (s *countingSink) String() string { return s.buf.String() }
 
 // fieldsByKey builds a column set by key.
+// fieldsByKey is what the writer tests build their column set from: the
+// catalogue's fields as named, without the column filter Columns applies.
+//
+// The distinction matters here and only here. What a writer test checks is how
+// each FieldType is rendered, and one of the types belongs today only to a
+// field that is several per reading and so gets no column of its own — see
+// wb.Field.Many. Asked of Columns, that key comes back as nothing and the
+// writer's handling of the type would be tested by nobody.
 func fieldsByKey(t *testing.T, keys ...string) []wb.Field {
 	t.Helper()
-	cols, unknown := Columns(wb.Selection(keys))
-	if len(unknown) != 0 {
-		t.Fatalf("the test asked for keys the catalogue does not declare: %v", unknown)
-	}
-	return cols
+	return fieldsFor(t, keys...)
 }
 
 func newCSVForTest(t *testing.T, sink *countingSink, o Options, keys ...string) Writer {

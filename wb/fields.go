@@ -178,6 +178,25 @@ type Field struct {
 	Type FieldType
 	// Source is the response it comes out of, and therefore its price.
 	Source FieldSource
+
+	// Many marks a field that is several things per reading and therefore not
+	// a column of one.
+	//
+	// A row of an export is one reading of one product in one region at one
+	// moment. Most of what a reading carries is one value — a price, a rating,
+	// a delivery window — and some of it is a list. A list whose length is
+	// known and small is joined into one cell, which is what the size
+	// breakdown and the card's characteristics do. A list with no ceiling
+	// cannot be: a card has a thousand reviews, and a cell holding a thousand
+	// reviews is not a cell.
+	//
+	// These fields are collected, stored and readable — the reviews, the
+	// questions and the shelf placements all have their own tables — and what
+	// they do not have is a column. Left unmarked, they were offered in the
+	// constructor like any other, priced at a request apiece, and produced a
+	// column of empty cells in every file: a promise the export could not keep
+	// and did not say it could not keep.
+	Many bool
 }
 
 // catalogue is the declaration itself. Order matters: it is the order of
@@ -322,10 +341,10 @@ var catalogue = []Field{
 	// questions (Questions).
 	{Key: "review_valuation", Name: "Оценка карточки", Group: GroupReputation, Type: FieldFloat, Source: FieldSourceReviews},
 	{Key: "review_count", Name: "Отзывов всего", Group: GroupReputation, Type: FieldInt, Source: FieldSourceReviews},
-	{Key: "review_text", Name: "Текст отзыва", Group: GroupReputation, Type: FieldText, Source: FieldSourceReviews},
-	{Key: "review_created", Name: "Дата отзыва", Group: GroupReputation, Type: FieldTime, Source: FieldSourceReviews},
-	{Key: "question_text", Name: "Текст вопроса", Group: GroupReputation, Type: FieldText, Source: FieldSourceQuestions},
-	{Key: "question_answered", Name: "Вопрос отвечен", Group: GroupReputation, Type: FieldBool, Source: FieldSourceQuestions},
+	{Key: "review_text", Name: "Текст отзыва", Group: GroupReputation, Type: FieldText, Source: FieldSourceReviews, Many: true},
+	{Key: "review_created", Name: "Дата отзыва", Group: GroupReputation, Type: FieldTime, Source: FieldSourceReviews, Many: true},
+	{Key: "question_text", Name: "Текст вопроса", Group: GroupReputation, Type: FieldText, Source: FieldSourceQuestions, Many: true},
+	{Key: "question_answered", Name: "Вопрос отвечен", Group: GroupReputation, Type: FieldBool, Source: FieldSourceQuestions, Many: true},
 
 	// PhraseAds: one request per phrase × region (Client.Shelves takes a
 	// SearchQuery, not a product), priced into PerPhrase rather than
@@ -348,9 +367,9 @@ var catalogue = []Field{
 	// shelf.go), the store layer already persists it as shelf_items, and a
 	// saved job's column is not worth breaking to fix a naming mismatch that
 	// was really about the group, not the fields.
-	{Key: "shelf_title", Name: "Полка", Group: GroupPhraseAds, Type: FieldText, Source: FieldSourceShelves},
-	{Key: "shelf_position", Name: "Место на полке", Group: GroupPhraseAds, Type: FieldInt, Source: FieldSourceShelves},
-	{Key: "shelf_nm_id", Name: "Артикул на полке", Group: GroupPhraseAds, Type: FieldInt, Source: FieldSourceShelves},
+	{Key: "shelf_title", Name: "Полка", Group: GroupPhraseAds, Type: FieldText, Source: FieldSourceShelves, Many: true},
+	{Key: "shelf_position", Name: "Место на полке", Group: GroupPhraseAds, Type: FieldInt, Source: FieldSourceShelves, Many: true},
+	{Key: "shelf_nm_id", Name: "Артикул на полке", Group: GroupPhraseAds, Type: FieldInt, Source: FieldSourceShelves, Many: true},
 }
 
 // groupOrder is the order the constructor shows groups in: free first, then

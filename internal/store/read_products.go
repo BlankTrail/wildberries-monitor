@@ -87,6 +87,41 @@ type ProductRow struct {
 	// read them out rather than split across columns nobody selected.
 	Options      *string
 	Compositions *string
+
+	// The delivery window this reading was quoted, in hours, and how far the
+	// warehouse serving it is. Collected with every listing, written since
+	// 0001_core.sql — and read by nothing, so «Срок доставки» was a column of
+	// empty cells over thirty-eight thousand readings that all carried one.
+	Time1       *int64
+	Time2       *int64
+	Dist        *int64
+	WarehouseID *int64
+
+	// Sizes and SizeStock are this reading's size breakdown, joined for one
+	// cell on the Options precedent: a reading legitimately has several sizes,
+	// and a column is one value. «M; L; XL» beside «M: 3; L: 0; XL: 12».
+	Sizes     *string
+	SizeStock *string
+
+	// ReviewValuation and ReviewCount are the card's own aggregate as of the
+	// last time its review window was read — one value per card, not per
+	// review, which is what makes them columns at all. Nil for a product whose
+	// window was never fetched.
+	ReviewValuation *float64
+	ReviewCount     *int64
+
+	// Rank and Page are where this reading found the product in a search, and
+	// they come from the position recorded at the same moment — a page fetch
+	// writes the reading and the places on it together, so «at the same moment»
+	// is the same request rather than a guess.
+	//
+	// Nil for a reading that was not a search: an article list has no place in
+	// anything. Where a product was met by two phrases in one second — sixty‑
+	// five readings out of thirty‑eight thousand on the stand — the better
+	// place wins, so the column answers «сколько мы стоили в лучшем случае»
+	// rather than depending on which phrase sorted first.
+	Rank *int64
+	Page *int64
 }
 
 // ProductFilter narrows a stream of readings.
@@ -232,7 +267,48 @@ const productRowColumns = `
 	              SELECT name FROM product_compositions
 	               WHERE nm_id = p.nm_id ORDER BY position
 	          ) c
-	    )                        AS compositions`
+	    )                        AS compositions,
+	    s.time1                  AS time1,
+	    s.time2                  AS time2,
+	    s.dist                   AS dist,
+	    s.warehouse_id           AS warehouse_id,
+	    (
+	        SELECT GROUP_CONCAT(z.name, '; ')
+	          FROM (
+	              SELECT name FROM snapshot_sizes
+	               WHERE snapshot_id = s.id ORDER BY id
+	          ) z
+	    )                        AS sizes,
+	    (
+	        SELECT GROUP_CONCAT(z.name || ': ' || z.qty, '; ')
+	          FROM (
+	              SELECT sz.name AS name, SUM(st.qty) AS qty
+	                FROM snapshot_sizes sz
+	                JOIN snapshot_stocks st ON st.snapshot_size_id = sz.id
+	               WHERE sz.snapshot_id = s.id
+	               GROUP BY sz.id ORDER BY sz.id
+	          ) z
+	    )                        AS size_stock,
+	    (
+	        SELECT valuation FROM review_summaries
+	         WHERE imt_id = p.imt_id ORDER BY ts DESC, id DESC LIMIT 1
+	    )                        AS review_valuation,
+	    (
+	        SELECT count FROM review_summaries
+	         WHERE imt_id = p.imt_id ORDER BY ts DESC, id DESC LIMIT 1
+	    )                        AS review_count,
+	    (
+	        SELECT rank FROM positions
+	         WHERE nm_id = s.nm_id AND dest = s.dest
+	           AND app_type = s.app_type AND ts = s.ts
+	         ORDER BY rank, query LIMIT 1
+	    )                        AS rank,
+	    (
+	        SELECT page FROM positions
+	         WHERE nm_id = s.nm_id AND dest = s.dest
+	           AND app_type = s.app_type AND ts = s.ts
+	         ORDER BY rank, query LIMIT 1
+	    )                        AS page`
 
 // productRowOutput names the same columns for the outer half of the streaming
 // query. Three copies of one list live in this file — this one,
@@ -244,7 +320,9 @@ const productRowOutput = `nm_id, imt_id, name, brand, supplier_id, supplier_name
 	    dest, app_type, ts, rating, feedbacks, pics, raw, promo_id, total_quantity,
 	    price_base, price_sale, discount_pct, currency,
 	    description, vendor_code, subject_name, card_created,
-	    options, compositions`
+	    options, compositions,
+	    time1, time2, dist, warehouse_id, sizes, size_stock,
+	    review_valuation, review_count, rank, page`
 
 // scanProductRow reads one row in the order productRowColumns names.
 //
@@ -260,7 +338,9 @@ func scanProductRow(sc rowScanner) (ProductRow, error) {
 		&r.Dest, &r.AppType, &r.TS, &r.Rating, &r.Feedbacks, &r.Pics, &r.Raw, &r.PromoID, &r.TotalQuantity,
 		&r.PriceBase, &r.PriceSale, &r.DiscountPct, &r.Currency,
 		&r.Description, &r.VendorCode, &r.SubjectName, &r.CardCreated,
-		&r.Options, &r.Compositions)
+		&r.Options, &r.Compositions,
+		&r.Time1, &r.Time2, &r.Dist, &r.WarehouseID, &r.Sizes, &r.SizeStock,
+		&r.ReviewValuation, &r.ReviewCount, &r.Rank, &r.Page)
 	return r, err
 }
 
