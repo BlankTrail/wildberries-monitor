@@ -400,15 +400,29 @@ func seedStorefront(t *testing.T, a *App, seller int64) {
 }
 
 // seedProfileProductOf puts one product of one seller in the store.
+//
+// For a test body, where t.Fatalf is the right way to stop. A collector runs
+// on the run's own goroutines and must use saveProfileProductOf instead: a
+// t.Fatalf from a goroutine the test does not own is Goexit in the wrong
+// place, and once the test it belongs to has finished it is «Fail in goroutine
+// after ... has completed» — which is a panic, and took the whole package down
+// under -race for as long as a run outlived the test that started it.
 func seedProfileProductOf(t *testing.T, a *App, nm, seller int64, name string) {
 	t.Helper()
-	if _, err := a.Store.SaveProduct(t.Context(), wb.Product{
+	if err := saveProfileProductOf(t.Context(), a, nm, seller, name); err != nil {
+		t.Fatalf("SaveProduct: %v", err)
+	}
+}
+
+// saveProfileProductOf is the same thing for a caller that has to report
+// rather than stop: it carries its own context and hands the error back.
+func saveProfileProductOf(ctx context.Context, a *App, nm, seller int64, name string) error {
+	_, err := a.Store.SaveProduct(ctx, wb.Product{
 		ID: nm, Name: name, Brand: "BrandCo", Dest: "-1257786", AppType: 1,
 		SupplierID: ptrTo(seller), FetchedAt: time.Now(),
 		Sizes: []wb.Size{{Name: "M", PriceProduct: ptrTo(int64(100000))}},
-	}, "", 0); err != nil {
-		t.Fatalf("SaveProduct: %v", err)
-	}
+	}, "", 0)
+	return err
 }
 
 func TestProfilePhrases_TheTwoBoundsAreHonoured(t *testing.T) {
@@ -1008,7 +1022,11 @@ func resolving(t *testing.T, a *App, seller int64) {
 			case job.ItemProfile:
 				// What collect.Fetcher.profile does: fill the row this run was
 				// started for rather than inserting one of its own.
-				owner, ok, err := a.Store.ProfileOfResolveJob(ctx, jobOfRun(t, a, key))
+				resolveJob, err := jobOfRun(ctx, a, key)
+				if err != nil {
+					return 1, err
+				}
+				owner, ok, err := a.Store.ProfileOfResolveJob(ctx, resolveJob)
 				if err != nil {
 					return 1, err
 				}
@@ -1022,8 +1040,14 @@ func resolving(t *testing.T, a *App, seller int64) {
 				}
 				return 1, a.Store.AddProfileItem(ctx, owner.ID, store.ProfileProduct, key.NmID)
 			case job.ItemListing:
-				seedProfileProductOf(t, a, 900, seller, "Платье летнее длинное")
-				seedProfileProductOf(t, a, 901, seller, "ту да")
+				// Through the error-returning form: this runs on the run's
+				// own goroutine, where t.Fatalf is not ours to call.
+				if err := saveProfileProductOf(ctx, a, 900, seller, "Платье летнее длинное"); err != nil {
+					return 1, err
+				}
+				if err := saveProfileProductOf(ctx, a, 901, seller, "ту да"); err != nil {
+					return 1, err
+				}
 			}
 			return 1, nil
 		}),
@@ -1037,18 +1061,24 @@ func resolving(t *testing.T, a *App, seller int64) {
 // The fake fetcher is handed an item and not a job, the same as the real one;
 // what the real one reads off its Fetcher.Job, this reads back out of the only
 // profile that could have asked for this article.
-func jobOfRun(t *testing.T, a *App, key job.Key) int64 {
-	t.Helper()
-	profiles, err := a.Store.Profiles(t.Context())
+//
+// It reports rather than stops, and takes the run's own context rather than
+// the test's: both because the only caller is the collector, which runs on
+// goroutines the test does not own and outlives it by however long the last
+// fetch takes. The test's context is already cancelled by then — it is
+// cancelled before the cleanups that drain those goroutines — so reading
+// through it fails on a run that is otherwise fine.
+func jobOfRun(ctx context.Context, a *App, key job.Key) (int64, error) {
+	profiles, err := a.Store.Profiles(ctx)
 	if err != nil {
-		t.Fatalf("Profiles: %v", err)
+		return 0, err
 	}
 	for _, p := range profiles {
 		if nm, ok := wb.NmID(p.SourceInput); ok && nm == key.NmID {
-			return p.ResolveJob
+			return p.ResolveJob, nil
 		}
 	}
-	return 0
+	return 0, nil
 }
 
 func TestResolveProfile_OnePressCollectsTheWholeProfile(t *testing.T) {

@@ -60,6 +60,17 @@ type App struct {
 	Engine    *engine.Engine
 	Scheduler *job.Scheduler
 
+	// runs counts the job runs in flight, so Close can wait for them.
+	//
+	// A run writes its last row — the one that moves it out of «running» —
+	// through the store, and Close was closing the store underneath it. The
+	// bookkeeping then failed with «sql: database is closed», the row stayed
+	// open, and every later start resumed a run that had already finished.
+	// That is the exact state FinishRun's own detached context exists to
+	// prevent, defeated one layer further down: it survives the cancellation
+	// and then finds no database to write to.
+	runs sync.WaitGroup
+
 	// startedAt is when this process came up, in whole Unix seconds.
 	//
 	// What it tells apart: a run row that is open with nothing behind it and
@@ -708,6 +719,12 @@ func (a *App) Tick(ctx context.Context) {
 func (a *App) Close() error {
 	var err error
 	a.closeOnce.Do(func() {
+		// The runs first, and with a bound: a run still writing when the
+		// database goes is a run that never closes its books. The bound is
+		// what keeps a wedged fetch from making the program unstoppable —
+		// after it, the same loss happens, but at least it happens on a
+		// schedule somebody chose.
+		a.waitForRuns(closeDrain)
 		if a.Bus != nil {
 			// Before the store: the bus's synchronous subscribers write
 			// through it, and closing the database under them would turn the
@@ -721,6 +738,32 @@ func (a *App) Close() error {
 		}
 	})
 	return err
+}
+
+// closeDrain is how long Close waits for runs in flight.
+//
+// Ten seconds, the same budget FinishRun gives its own detached write: a run
+// that has stopped fetching needs one round trip to close its books, and one
+// that has not is not going to finish in any budget worth waiting out.
+const closeDrain = 10 * time.Second
+
+// waitForRuns blocks until every run in flight has finished, or until the
+// bound passes. It reports whether they all finished.
+func (a *App) waitForRuns(bound time.Duration) bool {
+	done := make(chan struct{})
+	go func() {
+		a.runs.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return true
+	case <-time.After(bound):
+		if a.Log != nil {
+			a.Log.Printf("выключение: прогон не закончился за %s, книги за ним закрыть некому", bound)
+		}
+		return false
+	}
 }
 
 // osAutostart hands the settings screen the operating system's own mechanism.

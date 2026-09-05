@@ -109,7 +109,7 @@ func waited(t *testing.T, budget time.Duration, what string, cond func() bool) {
 
 func settled(t *testing.T, what string, cond func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(waitBudget)
 	for time.Now().Before(deadline) {
 		if cond() {
 			return

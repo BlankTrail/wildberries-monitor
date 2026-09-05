@@ -45,7 +45,13 @@ func collected(t *testing.T, phrase string) Reader {
 	t.Cleanup(func() { s.Close() })
 
 	now := time.Now().UTC()
-	for day := 30; day >= 0; day-- {
+	// Thirty readings, the oldest a full day inside the thirty-day window
+	// rather than on its edge. A reading seeded at exactly now-30d sits on the
+	// boundary of DefaultWindow, and the boundary moves: window() takes its own
+	// time.Now on every call, so between two queries in one test the oldest
+	// point falls out and the counts stop agreeing. Under -race the gap between
+	// two queries is wide enough for that to happen on every run.
+	for day := 29; day >= 0; day-- {
 		// The rank improves to 3 in the middle of the month and falls back, so
 		// the best is not the last — a series where they coincide cannot tell
 		// "best" from "most recent".
@@ -78,7 +84,7 @@ func TestPrice_DrawsTheSeriesAndReportsWhatIsInIt(t *testing.T) {
 	if facts.Product.Name != "Winter jacket" || facts.Product.Dest != "-1257786" {
 		t.Errorf("товар пришёл как %+v", facts.Product)
 	}
-	// The price fell from 270 000 to 300 000 minor units over the month, so the
+	// The price fell from 271 000 to 300 000 minor units over the month, so the
 	// last reading is the highest and the first the lowest.
 	if facts.Last == nil || facts.Lo == nil || facts.Hi == nil {
 		t.Fatalf("цены не собраны: %v %v %v", facts.Last, facts.Lo, facts.Hi)

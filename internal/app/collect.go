@@ -122,7 +122,11 @@ func (a *App) StartJob(ctx context.Context, id int64) error {
 		return job.ErrAlreadyRunning
 	}
 
-	go a.runJob(a.lifetime(ctx), j)
+	a.runs.Add(1)
+	go func() {
+		defer a.runs.Done()
+		a.runJob(a.lifetime(ctx), j)
+	}()
 	return nil
 }
 
@@ -235,7 +239,11 @@ func (a *App) runDue(ctx context.Context) {
 
 	for _, j := range a.Scheduler.Due(jobs, schedules) {
 		a.Log.Printf("расписание: запускаю задание %d (%s)", j.ID, j.Name)
-		go a.runJob(ctx, j)
+		a.runs.Add(1)
+		go func() {
+			defer a.runs.Done()
+			a.runJob(ctx, j)
+		}()
 	}
 }
 

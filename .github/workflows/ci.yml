@@ -17,7 +17,13 @@ jobs:
           go-version: '1.26'
       - run: go build ./...
       - run: go vet ./...
-      - run: go test -race ./...
+      # -timeout, because the default is ten minutes per package and two of
+      # them do not fit: the detector instruments every memory access, and the
+      # store's suite alone takes forty seconds without it. On the timeout the
+      # runner reported one test running for four seconds — nothing was stuck,
+      # the package was simply still working when the clock ran out, and a
+      # green suite was reported as a failure.
+      - run: go test -race -timeout 30m ./...
       # v7 is the first release line that installs golangci-lint v2, which is
       # the schema .golangci.yml is written in. v6 installs v1.x and rejects the
       # config outright, before it ever looks at the code.

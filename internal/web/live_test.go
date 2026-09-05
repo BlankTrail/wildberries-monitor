@@ -85,7 +85,7 @@ func readMessage(t *testing.T, res *http.Response) string {
 	t.Helper()
 	buf := make([]byte, 1)
 	var got strings.Builder
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(waitBudget)
 	for time.Now().Before(deadline) {
 		n, err := res.Body.Read(buf)
 		if n > 0 {
