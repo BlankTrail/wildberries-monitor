@@ -379,3 +379,56 @@ func TestSaveJob_ARefusalLeavesTheConstructorOpen(t *testing.T) {
 		t.Errorf("после отказа список пропал с экрана:\n%s", firstLines(body))
 	}
 }
+
+// TestJobList_ARunThatLostHalfItsWorkDoesNotReadAsFinished is the sentence the
+// live stand produced: a job whose last run failed a hundred and two items of
+// two hundred and forty showed «завершено» and a timestamp, and nothing else.
+// The count was in the run's own record the whole time.
+func TestJobList_ARunThatLostHalfItsWorkDoesNotReadAsFinished(t *testing.T) {
+	srv := newServer(t)
+	ctx := t.Context()
+	id, err := srv.Store.SaveJob(ctx, store.JobRow{Name: "сбор", Type: "phrase", Params: "{}"})
+	if err != nil {
+		t.Fatalf("SaveJob: %v", err)
+	}
+	runID, err := srv.Store.StartRun(ctx, id, []store.ItemRow{{Position: 0, Kind: "page", Key: "k"}})
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+	if err := srv.Store.FinishRun(ctx, runID, store.RunOutcome{
+		State: store.RunDone, Requests: 240, Items: 138, Errors: 102,
+	}); err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+
+	body := get(t, srv, "/jobs", "correct horse").Body.String()
+	if !strings.Contains(body, "завершено с отказами") {
+		t.Errorf("список заданий не говорит, что прогон потерял 102 пункта из 240:\n%s", firstLines(body))
+	}
+}
+
+// TestJobList_ARunThatLostOnlyItsExtrasSaysSoToo. Nothing failed — every item
+// finished — and none of the review windows arrived. Reported as «завершено»,
+// that is a run whose reputation columns are empty for a reason nobody was told.
+func TestJobList_ARunThatLostOnlyItsExtrasSaysSoToo(t *testing.T) {
+	srv := newServer(t)
+	ctx := t.Context()
+	id, err := srv.Store.SaveJob(ctx, store.JobRow{Name: "сбор", Type: "phrase", Params: "{}"})
+	if err != nil {
+		t.Fatalf("SaveJob: %v", err)
+	}
+	runID, err := srv.Store.StartRun(ctx, id, []store.ItemRow{{Position: 0, Kind: "page", Key: "k"}})
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+	if err := srv.Store.FinishRun(ctx, runID, store.RunOutcome{
+		State: store.RunDone, Requests: 7, Items: 1, Lost: 6,
+	}); err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+
+	body := get(t, srv, "/jobs", "correct horse").Body.String()
+	if !strings.Contains(body, "без части данных") {
+		t.Errorf("список заданий не говорит, что часть довесков не пришла:\n%s", firstLines(body))
+	}
+}

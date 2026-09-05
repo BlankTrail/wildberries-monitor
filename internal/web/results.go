@@ -26,14 +26,6 @@ import (
 // not stop at all. Trying to serve both from one paged query is what makes
 // interfaces that either cannot show a million rows or fall over trying.
 
-// tableRows is how many readings the table shows.
-//
-// Not a page size — there is no second page. A person scanning readings wants
-// the newest few hundred and then a filter; a person who wants all of them
-// wants a file, and the export button is right there. Paging through a
-// million rows in a browser is a feature that reads well and is never used.
-const tableRows = 500
-
 // resultsPage renders the filter and the table.
 func (s *Server) resultsPage(w http.ResponseWriter, r *http.Request) {
 	body, err := s.resultsHTML(r)
@@ -49,8 +41,16 @@ func (s *Server) resultsPage(w http.ResponseWriter, r *http.Request) {
 
 // resultsFragment renders the same thing without the page, for a filter
 // change that must not reload the tab.
+//
+// The inside of the section and not the section itself, which is the whole
+// difference between this and resultsHTML. Every chip, every column heading,
+// both forms and the pager swap into #results-body, so answering with a second
+// section carrying that same id put a card inside a card — two borders, two
+// paddings and one id naming two elements — on the screen that is redrawn more
+// often than any other. Channels and the profile were both fixed this way
+// already; this one was missed.
 func (s *Server) resultsFragment(w http.ResponseWriter, r *http.Request) {
-	body, err := s.resultsHTML(r)
+	body, err := s.resultsBody(r)
 	if err != nil {
 		http.Error(w, "results: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -60,6 +60,16 @@ func (s *Server) resultsFragment(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) resultsHTML(r *http.Request) (string, error) {
+	body, err := s.resultsBody(r)
+	if err != nil {
+		return "", err
+	}
+	return `<section id="results-body" class="bt-card">` + body + `</section>`, nil
+}
+
+// resultsBody is everything the section holds, so that a swap replaces the
+// screen rather than nesting one copy of it inside another.
+func (s *Server) resultsBody(r *http.Request) (string, error) {
 	q := r.URL.Query()
 	filter := filterFromQuery(q)
 	sel := shownColumns(q)
@@ -78,7 +88,7 @@ func (s *Server) resultsHTML(r *http.Request) (string, error) {
 	page := pageFrom(q, total)
 
 	var b strings.Builder
-	b.WriteString(`<section id="results-body" class="bt-card"><h2>Результаты</h2>`)
+	b.WriteString(`<h2>Результаты</h2>`)
 	b.WriteString(s.resultsSearch(r, q, total))
 
 	filter.Limit = resultsPageSize
@@ -131,7 +141,6 @@ func (s *Server) resultsHTML(r *http.Request) (string, error) {
 	// section so that a redraw of the table clears an explanation of a row
 	// that may no longer be on it.
 	b.WriteString(`<div id="results-detail"></div>`)
-	b.WriteString(`</section>`)
 	return b.String(), nil
 }
 

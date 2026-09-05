@@ -260,7 +260,7 @@ func TestPhrases_CheckingIsAJobThatGetsPricedFirst(t *testing.T) {
 		t.Fatalf("AddProfileItem: %v", err)
 	}
 	for _, text := range []string{"платье летнее", "платье в горошек"} {
-		if err := srv.Store.SavePhrase(ctx, store.PhraseRow{ProfileID: id, Text: text}); err != nil {
+		if _, err := srv.Store.SavePhrase(ctx, store.PhraseRow{ProfileID: id, Text: text}); err != nil {
 			t.Fatalf("SavePhrase: %v", err)
 		}
 	}
@@ -567,7 +567,7 @@ func TestProfile_TheJobsThisScreenBuildsCarryTheProfilesAnswers(t *testing.T) {
 		{ProfileID: id, Text: "сарафан летний", NmID: 141504066,
 			State: store.PhraseCandidate, Origin: store.PhraseGenerated},
 	} {
-		if err := srv.Store.SavePhrase(ctx, ph); err != nil {
+		if _, err := srv.Store.SavePhrase(ctx, ph); err != nil {
 			t.Fatalf("SavePhrase: %v", err)
 		}
 	}
@@ -817,7 +817,7 @@ func TestProfileScreen_ThePhrasesTableNamesItsProduct(t *testing.T) {
 		rank int64
 	}{{100, 1}, {101, 4}} {
 		rank := c.rank
-		if err := srv.Store.SavePhrase(ctx, store.PhraseRow{
+		if _, err := srv.Store.SavePhrase(ctx, store.PhraseRow{
 			ProfileID: id, Text: "женское платье",
 			State: store.PhraseWorking, Origin: store.PhraseGenerated,
 			NmID: c.nm, Dest: "-1257786", BestRank: &rank,
@@ -919,7 +919,7 @@ func phraseProfile(t *testing.T, srv *Server) (int64, []store.PhraseRow) {
 		t.Fatalf("SaveProfile: %v", err)
 	}
 	for _, text := range []string{"женское плате", "боди утягивающее", "топ на бретелях"} {
-		if err := srv.Store.SavePhrase(ctx, store.PhraseRow{
+		if _, err := srv.Store.SavePhrase(ctx, store.PhraseRow{
 			ProfileID: id, Text: text, State: store.PhraseCandidate, Origin: store.PhraseGenerated,
 		}); err != nil {
 			t.Fatalf("SavePhrase %q: %v", text, err)

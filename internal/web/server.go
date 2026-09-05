@@ -17,6 +17,7 @@ package web
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
 	"embed"
 	"encoding/hex"
@@ -210,14 +211,28 @@ type Server struct {
 // Written to a file as well as shown on screen because the screen is seen
 // once: a person who closed the tab before reading it would otherwise have no
 // way back in short of deleting their database.
+// generated says whether the password is still the one this program invented,
+// and that answer is what decides whether the panel may listen beyond this
+// machine — see ErrWouldExposeUnprotectedPanel. It used to be true on every
+// path, the one that generates and the one that reads an existing file alike,
+// which made the answer a constant: «Открыть в локальную сеть» was disabled for
+// ever, under a hint telling the user to set a password of their own, and
+// nothing anywhere in the program could make that hint come true. The
+// command-line flag ended in the same refusal.
+//
+// Hence the fingerprint beside it. The generated password's digest is written
+// once, and a file whose contents no longer match it holds a password somebody
+// chose — which is exactly what replacing the file's contents means, and what
+// the hint now tells them to do.
 func FirstRunPassword(dataDir string) (password string, generated bool, err error) {
 	path := filepath.Join(dataDir, "first-run.txt")
+	stamp := filepath.Join(dataDir, firstRunStamp)
 	if b, err := os.ReadFile(path); err == nil {
 		if s := strings.TrimSpace(string(b)); s != "" {
-			// Already generated on an earlier start. Regenerating here would
+			// Already there from an earlier start. Regenerating here would
 			// lock the user out on every restart, which is the failure this
 			// branch exists to prevent.
-			return s, true, nil
+			return s, ourOwnPassword(stamp, s), nil
 		}
 	}
 
@@ -234,7 +249,34 @@ func FirstRunPassword(dataDir string) (password string, generated bool, err erro
 	if err := os.WriteFile(path, []byte(password+"\n"), 0o600); err != nil {
 		return "", false, fmt.Errorf("web: writing %s: %w", path, err)
 	}
+	// Not best effort: without the fingerprint the password reads as somebody's
+	// own, and that opens a door rather than closing one.
+	sum := sha256.Sum256([]byte(password))
+	if err := os.WriteFile(stamp, []byte(hex.EncodeToString(sum[:])+"\n"), 0o600); err != nil {
+		return "", false, fmt.Errorf("web: writing %s: %w", stamp, err)
+	}
 	return password, true, nil
+}
+
+// firstRunStamp names the file holding the digest of the password this program
+// generated. Beside the password rather than inside it, so that replacing the
+// password is what anybody would expect it to be: type over the file.
+const firstRunStamp = "first-run.sha256"
+
+// ourOwnPassword reports whether this is still the password the program
+// invented — which is what makes it unfit to face a network.
+//
+// A missing fingerprint reads as «ours». An installation from before this
+// existed has a generated password and no stamp, and reading that as the user's
+// own would put the panel on the network across an upgrade, which is the one
+// mistake this whole path exists to prevent.
+func ourOwnPassword(stamp, password string) bool {
+	b, err := os.ReadFile(stamp)
+	if err != nil {
+		return true
+	}
+	sum := sha256.Sum256([]byte(password))
+	return strings.EqualFold(strings.TrimSpace(string(b)), hex.EncodeToString(sum[:]))
 }
 
 // ErrWouldExposeUnprotectedPanel is returned when a panel that anyone could

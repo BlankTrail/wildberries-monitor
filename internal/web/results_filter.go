@@ -248,8 +248,25 @@ func (s *Server) resultsMore(r *http.Request, q url.Values) string {
 	var b strings.Builder
 	b.WriteString(`<details class="bt-more"` + open + `><summary>Ещё условия</summary>`)
 	b.WriteString(`<form class="bt-form" data-get-form="/results/table" data-target="#results-body">`)
-	if v := q.Get("q"); v != "" {
-		b.WriteString(hidden("q", v))
+	// Everything this form does not have a control of its own for travels
+	// hidden, the same way the search box and the column picker carry it.
+	//
+	// This form was the one that did not, and it carried the search string
+	// alone. So the path from «Задачи» to «Результаты» — which arrives as
+	// /results?job_id=7 — survived a search and survived choosing columns, and
+	// did not survive opening this panel and pressing «Показать»: the table
+	// silently widened from that job's readings to every reading ever taken,
+	// the chip naming the job vanished, and the columns and the sort went back
+	// to the defaults. filterKeys is declared for exactly this, and a form that
+	// spells its own list instead is a form that forgets a key the day one is
+	// added.
+	for _, key := range filterKeys {
+		if ownedByMore[key] {
+			continue
+		}
+		for _, v := range q[key] {
+			b.WriteString(hidden(key, v))
+		}
 	}
 	b.WriteString(`<div class="bt-form-grid">`)
 	b.WriteString(field("Артикулы", `<input class="bt-input bt-input--mono" name="nm_ids" value="`+
@@ -365,6 +382,22 @@ func supplierLabel(r *http.Request, s *Server, value string) string {
 var filterKeys = []string{
 	"q", "nm_ids", "brand", "supplier_id", "dest", "app_type",
 	"job_id", "promo_id", "from", "to", "latest", "fields", "sort", "desc",
+}
+
+// ownedByMore is which of those keys the «Ещё условия» panel has a visible
+// control for, and therefore must not also send hidden.
+//
+// A set rather than a condition written into the loop, so that adding a control
+// to that panel is one line here beside the control instead of a second place
+// to remember.
+//
+// supplier_id is deliberately not in it. The panel opens when a seller filter
+// is in force — a chip somebody clicked in the table — and shows no box for it,
+// so it has to travel hidden like the rest or pressing «Показать» widens the
+// view back to every seller.
+var ownedByMore = map[string]bool{
+	"nm_ids": true, "brand": true, "dest": true, "app_type": true,
+	"from": true, "to": true, "latest": true,
 }
 
 // resultsURL is the table's own address for a set of parameters.

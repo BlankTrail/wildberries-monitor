@@ -375,6 +375,23 @@ func jobStateHTML(j store.JobStatus) string {
 		badge = `<span class="bt-badge bt-badge--error bt-badge--sm">с ошибкой</span>`
 	case store.RunStopped:
 		badge = `<span class="bt-badge bt-badge--warning bt-badge--sm">остановлено</span>`
+	default:
+		// A run that finished every item it had and failed a hundred and two of
+		// two hundred and forty is «завершено» by the state machine and not by
+		// any other reading of the word. The run screen already said so; this
+		// one — the list somebody actually looks at — did not, so nearly half a
+		// collection could be missing with nothing on screen to hint at it.
+		if j.LastErrors > 0 {
+			badge = fmt.Sprintf(
+				`<span class="bt-badge bt-badge--warning bt-badge--sm">завершено с отказами</span> %d`,
+				j.LastErrors)
+		} else if j.LastLost > 0 {
+			// Nothing failed and something never arrived — a review window
+			// refused, a card lost. See job.Result.Lost.
+			badge = fmt.Sprintf(
+				`<span class="bt-badge bt-badge--warning bt-badge--sm">завершено, без части данных</span> %d`,
+				j.LastLost)
+		}
 	}
 	return badge + " " + html.EscapeString(time.Unix(j.LastFinish, 0).Local().Format("02.01.2006 15:04"))
 }

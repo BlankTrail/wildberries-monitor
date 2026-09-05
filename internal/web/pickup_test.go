@@ -161,6 +161,44 @@ func TestPickup_WalkingTheDirectoryKeepsTheFieldItFills(t *testing.T) {
 	}
 }
 
+// TestPickup_EveryPressOfThePickerCarriesTheField walks the presses as well as
+// the pages.
+//
+// The test below checks the two screens the picker is rendered on. That is half
+// the surface: a press answers with more of the picker, and every control in
+// that answer is built from the box the handler read back — so an address that
+// forgets the box produces a whole column belonging to no field, with «#» where
+// its selector should be. «Обновить справочник» was exactly that, and it was
+// the one route the earlier sweep did not walk, because it was the one built as
+// a plain press rather than out of a URL builder.
+func TestPickup_EveryPressOfThePickerCarriesTheField(t *testing.T) {
+	srv := newServer(t)
+	seedPickupPoints(t, srv)
+
+	const box = "job-regions"
+	body := get(t, srv, "/jobs/new", "").Body.String()
+	presses := regexp.MustCompile(`data-post="(/pickup/[^"]*)"`).FindAllStringSubmatch(body, -1)
+	if len(presses) == 0 {
+		t.Fatal("на конструкторе нет ни одного нажатия пикера — проверять нечего")
+	}
+	for _, m := range presses {
+		addr := html.UnescapeString(m[1])
+		if !strings.Contains(addr, "box="+box) {
+			t.Errorf("нажатие %q не говорит, в какое поле пишет", addr)
+			continue
+		}
+		answer := postForm(t, srv, addr, url.Values{"regions": {"-1257786"}}).Body.String()
+		for _, bad := range []string{`data-picklist="#"`, `data-target="#"`, `data-with="#"`} {
+			if strings.Contains(answer, bad) {
+				t.Errorf("ответ на %q содержит %s — селектор, на котором querySelector бросает", addr, bad)
+			}
+		}
+		if strings.Contains(answer, `id="" name="regions"`) {
+			t.Errorf("ответ на %q вернул второе поле регионов без имени", addr)
+		}
+	}
+}
+
 func TestPickup_TheTickListNeverPointsAtNothing(t *testing.T) {
 	// data-picklist is a selector this panel's script resolves as it wires the
 	// answer. An empty id makes «#», and querySelector throws on it — inside

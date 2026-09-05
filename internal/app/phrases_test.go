@@ -29,7 +29,7 @@ func profileWatching(t *testing.T, a *App, nm int64, text string) int64 {
 	if err := a.Store.AddProfileItem(t.Context(), id, store.ProfileProduct, nm); err != nil {
 		t.Fatalf("AddProfileItem: %v", err)
 	}
-	if err := a.Store.SavePhrase(t.Context(), store.PhraseRow{ProfileID: id, Text: text}); err != nil {
+	if _, err := a.Store.SavePhrase(t.Context(), store.PhraseRow{ProfileID: id, Text: text}); err != nil {
 		t.Fatalf("SavePhrase: %v", err)
 	}
 	return id

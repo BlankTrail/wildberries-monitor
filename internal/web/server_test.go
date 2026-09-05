@@ -743,3 +743,66 @@ func srvWithDelivery(t *testing.T) *Server {
 	srv.NotifyKinds = func() []string { return []string{"telegram"} }
 	return srv
 }
+
+// TestFirstRunPassword_APasswordSomebodyChoseIsNotOurs is the door that had no
+// key.
+//
+// Every path used to answer «generated», so the panel could never listen beyond
+// this machine: the checkbox was disabled for ever under a hint asking for
+// something no part of the program could produce, and the -lan flag refused to
+// start at all. What makes a password the user's own is that it is not the one
+// this program wrote down.
+func TestFirstRunPassword_APasswordSomebodyChoseIsNotOurs(t *testing.T) {
+	dir := t.TempDir()
+
+	first, generated, err := FirstRunPassword(dir)
+	if err != nil {
+		t.Fatalf("FirstRunPassword: %v", err)
+	}
+	if !generated {
+		t.Fatal("только что придуманный пароль объявлен своим")
+	}
+
+	// Read again: the same password, still ours.
+	again, generated, err := FirstRunPassword(dir)
+	if err != nil {
+		t.Fatalf("FirstRunPassword: %v", err)
+	}
+	if again != first {
+		t.Errorf("пароль сменился между запусками: %q, был %q", again, first)
+	}
+	if !generated {
+		t.Error("перечитанный сгенерированный пароль объявлен своим")
+	}
+
+	// Typed over, the way the hint on the settings screen now tells people to.
+	if err := os.WriteFile(filepath.Join(dir, "first-run.txt"), []byte("свой пароль\n"), 0o600); err != nil {
+		t.Fatalf("подменяем пароль: %v", err)
+	}
+	mine, generated, err := FirstRunPassword(dir)
+	if err != nil {
+		t.Fatalf("FirstRunPassword: %v", err)
+	}
+	if mine != "свой пароль" {
+		t.Errorf("прочитан %q, ожидался свой пароль", mine)
+	}
+	if generated {
+		t.Error("свой пароль всё ещё читается как сгенерированный — дверь заперта навсегда")
+	}
+}
+
+// TestFirstRunPassword_AnUpgradeWithoutTheStampStaysLocked. An installation
+// from before the fingerprint existed has a generated password and no file
+// beside it; reading that as the user's own would put the panel on the network
+// across an upgrade.
+func TestFirstRunPassword_AnUpgradeWithoutTheStampStaysLocked(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "first-run.txt"), []byte("deadbeef\n"), 0o600); err != nil {
+		t.Fatalf("готовим старую установку: %v", err)
+	}
+	if _, generated, err := FirstRunPassword(dir); err != nil {
+		t.Fatalf("FirstRunPassword: %v", err)
+	} else if !generated {
+		t.Error("пароль без отпечатка объявлен своим — обновление выпустило бы панель в сеть")
+	}
+}

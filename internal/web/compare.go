@@ -32,8 +32,12 @@ func (s *Server) comparePage(w http.ResponseWriter, r *http.Request) {
 	s.render(w, r, page{Title: "Сравнение", Body: rawHTML(body)})
 }
 
+// compareFragment answers a press with the inside of the section, not the
+// section: the script sets the target's innerHTML, so a fragment carrying its
+// own <section id="compare-body"> put a card inside a card and gave one id to
+// two elements.
 func (s *Server) compareFragment(w http.ResponseWriter, r *http.Request, notice string) {
-	body, err := s.compareHTML(r)
+	body, err := s.compareBody(r)
 	if err != nil {
 		http.Error(w, "compare: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -42,6 +46,16 @@ func (s *Server) compareFragment(w http.ResponseWriter, r *http.Request, notice 
 }
 
 func (s *Server) compareHTML(r *http.Request) (string, error) {
+	body, err := s.compareBody(r)
+	if err != nil {
+		return "", err
+	}
+	return `<section id="compare-body" class="bt-card">` + body + `</section>`, nil
+}
+
+// compareBody is everything the section holds, so that «Пересчитать срез»
+// swaps the screen rather than nesting one copy of it inside another.
+func (s *Server) compareBody(r *http.Request) (string, error) {
 	ctx := r.Context()
 	profiles, err := s.Store.Profiles(ctx)
 	if err != nil {
@@ -49,11 +63,11 @@ func (s *Server) compareHTML(r *http.Request) (string, error) {
 	}
 
 	var b strings.Builder
-	b.WriteString(`<section id="compare-body" class="bt-card"><h2>Сравнение</h2>`)
+	b.WriteString(`<h2>Сравнение</h2>`)
 
 	if len(profiles) == 0 {
 		b.WriteString(`<div class="bt-alert bt-alert--neutral">` +
-			`Сравнивать пока не с чем и некого: сначала разберите свою ссылку на вкладке «Мой профиль».</div></section>`)
+			`Сравнивать пока не с чем и некого: сначала разберите свою ссылку на вкладке «Мой профиль».</div>`)
 		return b.String(), nil
 	}
 
@@ -78,12 +92,17 @@ func (s *Server) compareHTML(r *http.Request) (string, error) {
 	// Said once, at the bottom, rather than as an empty column per row: two of
 	// section 4.7's comparisons have no source in this build, and a column of
 	// dashes reads like «у всех поровну».
+	//
+	// The photograph count came off this list the day the listing's own pics
+	// were read: it is free with every search answer, it is written on every
+	// snapshot, and the completeness table above compares it. Leaving it here
+	// meant the screen denied, in a paragraph, a column it was drawing four
+	// inches higher.
 	b.WriteString(`<div class="bt-alert bt-alert--neutral">` +
-		`Не сравнивается в этой сборке: число фото и наличие видео — их никто не снимает; ` +
+		`Не сравнивается в этой сборке: наличие видео — его никто не снимает; ` +
 		`место с учётом рекламы — из рекламной выдачи видно, кого продвигали, но не на ` +
 		`каком месте стояла врезка. Сказано здесь, а не пустой колонкой: пустая читалась ` +
 		`бы как «поровну».</div>`)
-	b.WriteString(`</section>`)
 	return b.String(), nil
 }
 

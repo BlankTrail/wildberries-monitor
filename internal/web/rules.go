@@ -127,7 +127,7 @@ func (s *Server) rulesPage(w http.ResponseWriter, r *http.Request) {
 // rulesFragment renders the same thing without the page around it, for a save
 // that must not reload the tab.
 func (s *Server) rulesFragment(w http.ResponseWriter, r *http.Request, notice string) {
-	body, err := s.rulesHTML(r)
+	body, err := s.rulesBody(r)
 	if err != nil {
 		http.Error(w, "rules: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -137,6 +137,18 @@ func (s *Server) rulesFragment(w http.ResponseWriter, r *http.Request, notice st
 }
 
 func (s *Server) rulesHTML(r *http.Request) (string, error) {
+	body, err := s.rulesBody(r)
+	if err != nil {
+		return "", err
+	}
+	return `<section id="rules-body" class="bt-card">` + body + `</section>`, nil
+}
+
+// rulesBody is everything the section holds, so that a save swaps the screen
+// rather than nesting one copy of it inside another: every form on it targets
+// #rules-body, and answering with a second section carrying that id put a card
+// inside a card and gave one id to two elements.
+func (s *Server) rulesBody(r *http.Request) (string, error) {
 	ctx := r.Context()
 	all, err := rules.All(ctx, s.Store)
 	if err != nil {
@@ -157,11 +169,10 @@ func (s *Server) rulesHTML(r *http.Request) (string, error) {
 	// Named for what it does rather than for what it is made of: every one of
 	// these ends in a message somebody gets, and «Правила» is the mechanism.
 	// The address stays /rules — a saved link keeps working.
-	b.WriteString(`<section id="rules-body" class="bt-card"><h2>Уведомления</h2>`)
+	b.WriteString(`<h2>Уведомления</h2>`)
 	b.WriteString(s.ruleList(all))
 	b.WriteString(s.targetsSection(ctx, targets))
 	b.WriteString(s.ruleForm(r, targets, jobs))
-	b.WriteString(`</section>`)
 	return b.String(), nil
 }
 

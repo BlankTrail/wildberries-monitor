@@ -25,7 +25,7 @@ func TestProfilePhrases_ACandidateIsWrittenOnceHoweverOftenItIsGenerated(t *test
 	profile := profileFor(t, s)
 
 	for range 3 {
-		if err := s.SavePhrase(ctx, PhraseRow{ProfileID: profile, Text: "платье летнее"}); err != nil {
+		if _, err := s.SavePhrase(ctx, PhraseRow{ProfileID: profile, Text: "платье летнее"}); err != nil {
 			t.Fatalf("SavePhrase: %v", err)
 		}
 	}

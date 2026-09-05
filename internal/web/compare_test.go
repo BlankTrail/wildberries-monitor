@@ -201,25 +201,28 @@ func TestCompare_APinnedRivalGetsItsOwnRow(t *testing.T) {
 }
 
 func TestCompare_SaysWhichComparisonsThisBuildCannotMake(t *testing.T) {
-	// What is left of section 4.7's deltas with no source here: photos and
-	// video, which no client in the wb package fetches, and the place with paid
-	// seats counted in, which an ads reading cannot reconstruct. An empty
-	// column would read as «у всех поровну», which is the wrong answer rather
-	// than no answer — so the screen says it out loud instead, once, at the
-	// bottom.
+	// What is left of section 4.7's deltas with no source here: video, which no
+	// client in the wb package fetches, and the place with paid seats counted
+	// in, which an ads reading cannot reconstruct. An empty column would read
+	// as «у всех поровну», which is the wrong answer rather than no answer — so
+	// the screen says it out loud instead, once, at the bottom.
 	srv := newServer(t)
 	if _, err := srv.Store.SaveProfile(t.Context(), store.ProfileRow{Name: "мой"}); err != nil {
 		t.Fatalf("SaveProfile: %v", err)
 	}
 
 	body := get(t, srv, "/compare", "correct horse").Body.String()
-	for _, want := range []string{"число фото", "наличие видео", "место с учётом рекламы"} {
+	for _, want := range []string{"наличие видео", "место с учётом рекламы"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("не сказано про %q:\n%s", want, firstLines(body))
 		}
 	}
-	// And it no longer apologises for the two that were given a source.
-	for _, gone := range []string{"участие в акции", "доля заполненных характеристик"} {
+	// And it no longer apologises for the three that were given a source. The
+	// photograph count is the newest of them: it arrives free with every
+	// listing, it is written on every snapshot, and the completeness table on
+	// this very screen compares it — so denying it in a paragraph underneath
+	// contradicted a column four inches higher.
+	for _, gone := range []string{"участие в акции", "доля заполненных характеристик", "число фото"} {
 		if strings.Contains(body, gone) {
 			t.Errorf("экран всё ещё пишет, что не умеет: %q", gone)
 		}

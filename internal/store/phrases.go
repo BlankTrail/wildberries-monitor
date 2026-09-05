@@ -57,22 +57,32 @@ type PhraseRow struct {
 //
 // Adding the same candidate twice is what generating from two products of the
 // same seller does, and it must be neither an error nor a duplicate.
-func (s *Store) SavePhrase(ctx context.Context, p PhraseRow) error {
+// added reports whether this call put a new row in, which is not the same as
+// whether it succeeded: the insert does nothing for a phrase already there, and
+// a caller counting calls rather than rows told the user it had picked out
+// three hundred phrases when the list had grown by forty. Two products sharing
+// a word produce the same candidate twice.
+func (s *Store) SavePhrase(ctx context.Context, p PhraseRow) (added bool, err error) {
 	if p.State == "" {
 		p.State = PhraseCandidate
 	}
 	if p.Origin == "" {
 		p.Origin = PhraseGenerated
 	}
-	if _, err := s.db.ExecContext(ctx, `
+	res, err := s.db.ExecContext(ctx, `
 		INSERT INTO phrases (profile_id, text, state, origin, nm_id, dest, best_rank, checked_at, created_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (profile_id, text, nm_id, dest) DO NOTHING`,
 		p.ProfileID, p.Text, p.State, p.Origin, p.NmID, p.Dest, p.BestRank, p.CheckedAt,
-		s.now().UTC().Unix()); err != nil {
-		return fmt.Errorf("store: save phrase %q: %w", p.Text, err)
+		s.now().UTC().Unix())
+	if err != nil {
+		return false, fmt.Errorf("store: save phrase %q: %w", p.Text, err)
 	}
-	return nil
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("store: save phrase %q: %w", p.Text, err)
+	}
+	return n > 0, nil
 }
 
 // CheckedPhrase records what taking the position found.

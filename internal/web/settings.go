@@ -104,9 +104,16 @@ func (s *Server) lanField(r *http.Request) string {
 		"Изменение вступит в силу после перезапуска."
 	if locked {
 		attrs += " disabled"
-		hint = "Сначала включите «требовать пароль» и задайте свой — " +
-			"сгенерированный не считается. Панель держит ключ прокси, токен бота " +
-			"и всё собранное, и в сеть её не выпускают без пароля."
+		// Named the step, because the previous wording asked for something and
+		// did not say where to do it — and for as long as every password read
+		// as generated, there was nowhere to do it at all. There is now: the
+		// password lives in first-run.txt beside the database, and a file whose
+		// contents somebody replaced holds a password somebody chose. See
+		// FirstRunPassword.
+		hint = "Сначала включите «требовать пароль» и задайте свой: впишите его " +
+			"в first-run.txt рядом с базой вместо сгенерированного и перезапустите " +
+			"программу. Панель держит ключ прокси, токен бота и всё собранное, " +
+			"и в сеть её не выпускают под паролем, который придумали за вас."
 	}
 	return `<div class="bt-field"><label class="bt-checkbox">` +
 		`<input type="checkbox" name="listen_lan" value="1"` + attrs + `> ` +

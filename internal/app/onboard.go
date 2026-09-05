@@ -532,7 +532,7 @@ func (a *App) profilePhrases(ctx context.Context, p store.ProfileRow) error {
 			// point of the list is that it is this product's: the search
 			// results collected under it are what a comparison for this
 			// product is later built out of.
-			if err := a.Store.SavePhrase(ctx, store.PhraseRow{
+			if _, err := a.Store.SavePhrase(ctx, store.PhraseRow{
 				ProfileID: p.ID, Text: text, NmID: nm,
 				State: store.PhraseCandidate, Origin: store.PhraseGenerated,
 			}); err != nil {
@@ -614,7 +614,7 @@ func (a *App) profileExpand(ctx context.Context, p store.ProfileRow) error {
 				// suggestion is a way of searching for that product, and a
 				// list that lost which product it was for could not be used
 				// to collect anything about one.
-				if err := a.Store.SavePhrase(ctx, store.PhraseRow{
+				if _, err := a.Store.SavePhrase(ctx, store.PhraseRow{
 					ProfileID: p.ID, Text: text, NmID: seed.NmID,
 					State: store.PhraseCandidate, Origin: store.PhraseSuggested,
 				}); err != nil {

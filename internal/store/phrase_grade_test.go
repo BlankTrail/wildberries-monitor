@@ -18,7 +18,7 @@ func gradeFixture(t *testing.T, s *Store) int64 {
 			t.Fatalf("AddProfileItem %d: %v", nm, err)
 		}
 	}
-	if err := s.SavePhrase(ctx, PhraseRow{ProfileID: profile, Text: "платье летнее"}); err != nil {
+	if _, err := s.SavePhrase(ctx, PhraseRow{ProfileID: profile, Text: "платье летнее"}); err != nil {
 		t.Fatalf("SavePhrase: %v", err)
 	}
 	return profile
@@ -233,7 +233,7 @@ func TestRegradePhrases_LeavesTheUncheckedAlone(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 	profile := profileFor(t, s)
-	if err := s.SavePhrase(ctx, PhraseRow{ProfileID: profile, Text: "платье летнее"}); err != nil {
+	if _, err := s.SavePhrase(ctx, PhraseRow{ProfileID: profile, Text: "платье летнее"}); err != nil {
 		t.Fatalf("SavePhrase: %v", err)
 	}
 
@@ -325,7 +325,7 @@ func TestPhraseChecks_ANeighbouringProfilesPhraseIsNotOurs(t *testing.T) {
 	ctx := context.Background()
 	mine := gradeFixture(t, s)
 	theirs := profileFor(t, s)
-	if err := s.SavePhrase(ctx, PhraseRow{ProfileID: theirs, Text: "чужой запрос"}); err != nil {
+	if _, err := s.SavePhrase(ctx, PhraseRow{ProfileID: theirs, Text: "чужой запрос"}); err != nil {
 		t.Fatalf("SavePhrase: %v", err)
 	}
 	putPosition(t, s, 100, "чужой запрос", "-1257786", 1, 1_700_000_000, 3, 1)
@@ -348,7 +348,7 @@ func TestPhraseChecks_AProductThatIsNotMineIsNotGraded(t *testing.T) {
 	ctx := context.Background()
 	profile := profileFor(t, s)
 	seedProduct(t, s, 100)
-	if err := s.SavePhrase(ctx, PhraseRow{ProfileID: profile, Text: "платье летнее"}); err != nil {
+	if _, err := s.SavePhrase(ctx, PhraseRow{ProfileID: profile, Text: "платье летнее"}); err != nil {
 		t.Fatalf("SavePhrase: %v", err)
 	}
 	putPosition(t, s, 100, "платье летнее", "-1257786", 1, 1_700_000_000, 3, 1)

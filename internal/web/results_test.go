@@ -1099,3 +1099,48 @@ func TestResults_APromotionCellNarrowsToIt(t *testing.T) {
 		t.Error("строка поиска не унесёт с собой фильтр по акции")
 	}
 }
+
+// TestSwaps_NoScreenNestsItselfInsideItself is the same guard the channels
+// screen already had, applied to the three that did not.
+//
+// Every one of these fragments is swapped into an element whose id it also
+// carries: the script sets the target's innerHTML, so a fragment holding its
+// own <section id="…-body"> put a card inside a card — two borders, two
+// paddings — and gave one id to two elements. On the results screen, which is
+// redrawn on every chip, every column heading and both filter forms, that
+// happened on every interaction.
+func TestSwaps_NoScreenNestsItselfInsideItself(t *testing.T) {
+	srv := newServer(t)
+	if _, err := srv.Store.SaveProfile(t.Context(), store.ProfileRow{Name: "мой"}); err != nil {
+		t.Fatalf("SaveProfile: %v", err)
+	}
+
+	for _, c := range []struct{ what, path, id, keep string }{
+		{"результаты", "/results/table", "results-body", "Результаты"},
+		{"сравнение", "/compare/recompute?id=1", "compare-body", "Сравнение"},
+	} {
+		var body string
+		if strings.HasPrefix(c.path, "/compare") {
+			body = postForm(t, srv, c.path, url.Values{}).Body.String()
+		} else {
+			body = get(t, srv, c.path, "correct horse").Body.String()
+		}
+		if strings.Contains(body, `id="`+c.id+`"`) {
+			t.Errorf("%s: фрагмент несёт свою же секцию", c.what)
+		}
+		if !strings.Contains(body, c.keep) {
+			t.Errorf("%s: после подмены заголовок исчез", c.what)
+		}
+	}
+
+	// The rules screen answers its fragment only through a save.
+	body := postForm(t, srv, "/rules/targets", url.Values{
+		"name": {"чат"}, "kind": {"telegram"}, "address": {"1"},
+	}).Body.String()
+	if strings.Contains(body, `id="rules-body"`) {
+		t.Error("уведомления: фрагмент несёт свою же секцию")
+	}
+	if !strings.Contains(body, "Уведомления") {
+		t.Error("уведомления: после сохранения заголовок исчез")
+	}
+}

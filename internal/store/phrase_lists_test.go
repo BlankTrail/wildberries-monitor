@@ -255,7 +255,7 @@ func TestRenamePhrase_ChangesTheWordingAndKeepsTheVerdict(t *testing.T) {
 		t.Fatalf("SaveProfile: %v", err)
 	}
 	rank := int64(4)
-	if err := s.SavePhrase(ctx, PhraseRow{
+	if _, err := s.SavePhrase(ctx, PhraseRow{
 		ProfileID: pid, Text: "женское плате", State: PhraseWorking, Origin: PhraseGenerated,
 		NmID: 100, Dest: "-1257786", BestRank: &rank,
 	}); err != nil {
@@ -295,7 +295,7 @@ func TestRenamePhrase_RefusesAnEmptyWordingAndAPhraseThatIsNotThere(t *testing.T
 	if err != nil {
 		t.Fatalf("SaveProfile: %v", err)
 	}
-	if err := s.SavePhrase(ctx, PhraseRow{ProfileID: pid, Text: "платье"}); err != nil {
+	if _, err := s.SavePhrase(ctx, PhraseRow{ProfileID: pid, Text: "платье"}); err != nil {
 		t.Fatalf("SavePhrase: %v", err)
 	}
 	rows, err := s.ProfilePhrases(ctx, pid, "")

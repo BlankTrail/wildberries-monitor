@@ -65,7 +65,8 @@ func (s *Server) pickupBody(r *http.Request, box regionBox) string {
 			`Справочник пунктов выдачи ещё не загружен. Один запрос — и появится вся страна: ` +
 			`регионы, населённые пункты и адреса пунктов в них.</div>`)
 		b.WriteString(`<div class="bt-form-actions bt-form-actions--tight">` +
-			press("/pickup/refresh", "#pickup-box", "Загрузить справочник", "bt-btn bt-btn--ghost bt-btn--sm") + `</div>`)
+			pressWith(pickupRefreshURL(box), "#pickup-box", box.ID,
+				"Загрузить справочник", "bt-btn bt-btn--ghost bt-btn--sm") + `</div>`)
 		return b.String()
 	}
 
@@ -83,7 +84,8 @@ func (s *Server) pickupBody(r *http.Request, box regionBox) string {
 	b.WriteString(`<span class="bt-form-hint">` + html.EscapeString(fmt.Sprintf(
 		"Пунктов %d в %d населённых пунктах, код региона известен у %d. Справочник прочитан %s.",
 		state.Points, state.Settlements, state.Resolved, fetched)) + ` ` +
-		press("/pickup/refresh", "#pickup-box", "Обновить справочник", "bt-btn bt-btn--ghost bt-btn--sm") + `</span>`)
+		pressWith(pickupRefreshURL(box), "#pickup-box", box.ID,
+			"Обновить справочник", "bt-btn bt-btn--ghost bt-btn--sm") + `</span>`)
 	return b.String()
 }
 
@@ -427,6 +429,24 @@ func regionHelpForms() string {
 // answers with a region field whose tick-list points at «#» — which is not a
 // selector, so wiring the answer throws and takes the form down with it. That
 // is what «выбрать населённый пункт» did.
+// pickupRefreshURL is the one address in this picker that used to carry no box.
+//
+// Both refresh buttons were plain presses with nothing but a path, so the
+// handler read an empty box and answered with a whole region field belonging to
+// no id: a second, blank «Регионы» input inside the picker, a tick-list whose
+// selector was «#», and every press below it built with the same «#». That is
+// not a selector — querySelector throws on it — so the tick boxes stopped
+// writing anywhere and the next choice went into a field that is not the one
+// being saved. It is the same failure the comment above describes and the same
+// one every other address here carries the box to avoid; this was the route
+// that got missed.
+//
+// The value travels too, through pressWith: a directory reloaded while somebody
+// has already ticked Moscow must come back with Moscow still in the box.
+func pickupRefreshURL(box regionBox) string {
+	return "/pickup/refresh?box=" + url.QueryEscape(box.ID)
+}
+
 func pickupSettlementsURL(box regionBox, code, search string) string {
 	u := "/pickup/settlements?region=" + url.QueryEscape(code) +
 		"&box=" + url.QueryEscape(box.ID)

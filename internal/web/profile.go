@@ -546,7 +546,7 @@ func (s *Server) saveProfilePlan(w http.ResponseWriter, r *http.Request) {
 		// regional, and a profile collected for a region nobody chose is one
 		// whose prices belong to somewhere the user never named.
 		s.profileFragment(w, r, alert("error",
-			"Не указан ни один регион. Соберите его на вкладке «Задачи» — там есть конструктор."))
+			"Не указан ни один регион. Выберите его в поле «Регионы» выше — справочник пунктов выдачи там же."))
 		return
 	}
 	runControlsFrom(r).Apply(&p)
@@ -715,7 +715,7 @@ func (s *Server) phrasesHTML(r *http.Request, p store.ProfileRow) string {
 				action(fmt.Sprintf("/profile/phrases/delete?id=%d", ph.ID), "#profile-body", "Убрать"))
 		}
 		b.WriteString(`</tbody></table></div>`)
-		b.WriteString(`<span class="bt-form-hint">` + html.EscapeString(phraseTotalsText(totals, len(shown))) + `</span>`)
+		b.WriteString(`<span class="bt-form-hint">` + html.EscapeString(phraseTotalsText(totals, len(shown), distinctTexts(shown))) + `</span>`)
 	}
 
 	b.WriteString(s.phraseAddHTML(p.ID))
@@ -848,11 +848,14 @@ func phraseOriginText(origin string) string {
 
 // makePhrases fills the candidate list from what the profile has collected.
 //
-// No requests: the words come from cards already in the database, which is
-// what makes this half free. What it cannot do yet is section 4.7's second
-// step — expanding a candidate through the site's own search suggestions —
-// because this build has no source for those, and a made-up suggestion would
-// be a phrase somebody pays a check for.
+// No requests: the words come from cards already in the database, which is what
+// makes this half free. Section 4.7's second step — expanding a candidate
+// through the site's own search suggestions — is the half that costs requests,
+// and it is not done here for that reason: it belongs to the profile's own
+// plan, where somebody sets how many rounds of it to buy (ProfileRow
+// SuggestRounds and SuggestLimit, spent in the onboarding chain). The note that
+// used to stand here said this build had no source for suggestions at all,
+// which stopped being true when that chain was built.
 func (s *Server) makePhrases(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(r.URL.Query().Get("id"), 10, 64)
 	if err != nil {
@@ -879,13 +882,20 @@ func (s *Server) makePhrases(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		for _, text := range phrase.Candidates(phrase.Source{Name: row.Name, Brand: row.Brand}) {
-			if err := s.Store.SavePhrase(ctx, store.PhraseRow{
+			// Counted by rows added, not by calls made. Two products sharing a
+			// word produce the same candidate twice and the second insert does
+			// nothing, so counting calls told somebody «подобрано фраз: 312»
+			// over a list that had grown by forty.
+			added, err := s.Store.SavePhrase(ctx, store.PhraseRow{
 				ProfileID: id, Text: text, State: store.PhraseCandidate, Origin: store.PhraseGenerated,
-			}); err != nil {
+			})
+			if err != nil {
 				http.Error(w, "profile: "+err.Error(), http.StatusInternalServerError)
 				return
 			}
-			made++
+			if added {
+				made++
+			}
 		}
 	}
 
@@ -1020,7 +1030,7 @@ func (s *Server) addPhrases(w http.ResponseWriter, r *http.Request) {
 		// Uploaded, because that is what this is: a phrase the user brought.
 		// SavePhrase leaves an existing one alone, so typing a phrase the
 		// generator already found is not an error and not a duplicate.
-		if err := s.Store.SavePhrase(r.Context(), store.PhraseRow{
+		if _, err := s.Store.SavePhrase(r.Context(), store.PhraseRow{
 			ProfileID: id, Text: text,
 			State: store.PhraseCandidate, Origin: store.PhraseUploaded,
 		}); err != nil {
@@ -1356,10 +1366,30 @@ func subjectIDs(values []string) []int64 {
 // Counted by text rather than by row, because a phrase made for forty products
 // is forty rows and one phrase — and «26 000 фраз» about a seller who has two
 // thousand would be a number nobody could act on.
-func phraseTotalsText(totals map[string]int, shown int) string {
+// distinctTexts is how many different phrases these rows are.
+//
+// The table lists a row per phrase per product per region, and the totals
+// beside it count phrases — so «Показаны 200. Всего фраз 12» was true twice
+// over in two different units, and read as an error in one of them.
+func distinctTexts(rows []store.PhraseRow) int {
+	seen := map[string]bool{}
+	for _, ph := range rows {
+		seen[ph.Text] = true
+	}
+	return len(seen)
+}
+
+func phraseTotalsText(totals map[string]int, rows, texts int) string {
 	all := totals[store.PhraseCandidate] + totals[store.PhraseWorking] + totals[store.PhraseIrrelevant]
-	out := fmt.Sprintf("Показаны %d. Всего фраз %d: рабочих %d, отложенных %d, ещё не проверено %d.",
-		shown, all, totals[store.PhraseWorking], totals[store.PhraseIrrelevant],
+	shownText := fmt.Sprintf("Показано строк %d", rows)
+	if rows != texts {
+		// Said only when the two differ, which is when the difference is worth
+		// explaining: one phrase checked for three products in two regions is
+		// six rows and one phrase.
+		shownText += fmt.Sprintf(" — это %d %s", texts, plural(int64(texts), "фраза", "фразы", "фраз"))
+	}
+	out := fmt.Sprintf("%s. Всего фраз %d: рабочих %d, отложенных %d, ещё не проверено %d.",
+		shownText, all, totals[store.PhraseWorking], totals[store.PhraseIrrelevant],
 		totals[store.PhraseCandidate])
 	if totals[store.PhraseWorking] == 0 && totals[store.PhraseIrrelevant] > 0 {
 		out += " Ни одна фраза не вывела товар в топ — проверьте порог ниже."

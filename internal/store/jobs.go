@@ -210,6 +210,15 @@ type JobStatus struct {
 	// LastState is what that run finished as — RunDone, RunFailed or
 	// RunStopped — and empty alongside a zero LastFinish.
 	LastState string
+	// LastErrors and LastLost are what that run did not get: units of work that
+	// failed, and extras that never arrived without failing one.
+	//
+	// Both carried here because the list is the screen people actually look at,
+	// and it was showing a plain «завершено» over a run where a hundred and two
+	// items of two hundred and forty had failed. The numbers were in the run's
+	// own record the whole time; nothing put them where anybody would see them.
+	LastErrors int64
+	LastLost   int64
 }
 
 // Jobs lists every saved job with the state of its runs, oldest first.
@@ -234,7 +243,8 @@ func (s *Store) Jobs(ctx context.Context) ([]JobStatus, error) {
 		SELECT j.id, j.name, j.type, j.schedule, j.enabled,
 		       live.job_id IS NOT NULL,
 		       COALESCE(live.done, 0), COALESCE(live.total, 0),
-		       COALESCE(fin.finished_at, 0), COALESCE(fin.state, '')
+		       COALESCE(fin.finished_at, 0), COALESCE(fin.state, ''),
+		       COALESCE(fin.errors, 0), COALESCE(fin.lost, 0)
 		FROM jobs j
 		LEFT JOIN (
 		    SELECT r.job_id,
@@ -246,7 +256,7 @@ func (s *Store) Jobs(ctx context.Context) ([]JobStatus, error) {
 		    GROUP BY r.job_id
 		) live ON live.job_id = j.id
 		LEFT JOIN (
-		    SELECT r.job_id, r.finished_at, r.state
+		    SELECT r.job_id, r.finished_at, r.state, r.errors, r.lost
 		    FROM job_runs r
 		    WHERE r.finished_at IS NOT NULL
 		      AND r.finished_at = (
@@ -266,7 +276,8 @@ func (s *Store) Jobs(ctx context.Context) ([]JobStatus, error) {
 		var j JobStatus
 		var enabled int
 		if err := rows.Scan(&j.ID, &j.Name, &j.Type, &j.Schedule, &enabled,
-			&j.Running, &j.Done, &j.Total, &j.LastFinish, &j.LastState); err != nil {
+			&j.Running, &j.Done, &j.Total, &j.LastFinish, &j.LastState,
+			&j.LastErrors, &j.LastLost); err != nil {
 			return nil, fmt.Errorf("store: jobs: %w", err)
 		}
 		j.Enabled = enabled != 0

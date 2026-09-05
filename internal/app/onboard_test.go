@@ -578,14 +578,14 @@ func TestProfileChain_ChecksAPhraseOnceHoweverManyVerdictsItHas(t *testing.T) {
 	p := aProfile(t, a, 4242)
 	seedProfileProductOf(t, a, 100, 4242, "Платье летнее")
 
-	if err := a.Store.SavePhrase(ctx, store.PhraseRow{ProfileID: p.ID, Text: "платье"}); err != nil {
+	if _, err := a.Store.SavePhrase(ctx, store.PhraseRow{ProfileID: p.ID, Text: "платье"}); err != nil {
 		t.Fatalf("SavePhrase: %v", err)
 	}
 	// Two more rows about that one phrase, in the state a candidate is in:
 	// what makes them different is the product and the region they name, and
 	// what makes them the same is the request they would produce.
 	for _, dest := range []string{"-1257786", "-5887751"} {
-		if err := a.Store.SavePhrase(ctx, store.PhraseRow{
+		if _, err := a.Store.SavePhrase(ctx, store.PhraseRow{
 			ProfileID: p.ID, Text: "платье", NmID: 100, Dest: dest,
 		}); err != nil {
 			t.Fatalf("SavePhrase: %v", err)
@@ -639,7 +639,7 @@ func TestProfileChain_TheNeighboursAreComputedAfterTheVerdictsAreRead(t *testing
 			t.Fatalf("SaveProduct: %v", err)
 		}
 	}
-	if err := a.Store.SavePhrase(ctx, store.PhraseRow{ProfileID: p.ID, Text: "платье"}); err != nil {
+	if _, err := a.Store.SavePhrase(ctx, store.PhraseRow{ProfileID: p.ID, Text: "платье"}); err != nil {
 		t.Fatalf("SavePhrase: %v", err)
 	}
 
@@ -1437,7 +1437,7 @@ func TestProfileChain_ItsJobsCarryTheProfilesOwnAnswers(t *testing.T) {
 	// And the stage after it, which is the one that makes the most requests:
 	// a phrase check is every phrase against every product, so a profile that
 	// asked for nine threads is asking for them here above anywhere else.
-	if err := a.Store.SavePhrase(ctx, store.PhraseRow{
+	if _, err := a.Store.SavePhrase(ctx, store.PhraseRow{
 		ProfileID: p.ID, Text: "платье", NmID: 100,
 	}); err != nil {
 		t.Fatalf("SavePhrase: %v", err)
