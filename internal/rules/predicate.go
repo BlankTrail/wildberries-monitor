@@ -88,16 +88,28 @@ func Fields() []Field {
 }
 
 // FieldLabel is what a field is called on screen.
+// fieldLabels is what each field is called on the rules screen.
+//
+// Every one of them names its unit, because the number a person types is
+// compared against the number this file produces and the two used to be in
+// different units without a word anywhere on the screen. «Цена со скидкой» over
+// a box where somebody types 2000, meaning two thousand roubles, was compared
+// against 149900 — the price in kopecks, as the reading stores it — so the rule
+// saved, sat in the list switched on, and could not fire on any product ever.
+// The rating did the same thing in hundredths of a point.
+//
+// The conversion itself is in Event.value: the units belong to the reading, and
+// the screen is where they stop being an implementation detail.
 var fieldLabels = map[Field]string{
 	FieldPercent:       "Изменение, %",
-	FieldDelta:         "Изменение, в единицах",
-	FieldWas:           "Было",
-	FieldNow:           "Стало",
-	FieldPriceSale:     "Цена со скидкой",
-	FieldPriceBase:     "Цена без скидки",
+	FieldDelta:         "Изменение, в единицах события",
+	FieldWas:           "Было, в единицах события",
+	FieldNow:           "Стало, в единицах события",
+	FieldPriceSale:     "Цена со скидкой, ₽",
+	FieldPriceBase:     "Цена без скидки, ₽",
 	FieldDiscountPct:   "Скидка, %",
-	FieldTotalQuantity: "Остаток",
-	FieldRating:        "Рейтинг",
+	FieldTotalQuantity: "Остаток, шт",
+	FieldRating:        "Рейтинг, баллов",
 	FieldFeedbacks:     "Отзывов",
 }
 
@@ -245,21 +257,29 @@ func (ev Event) value(f Field) (float64, bool) {
 		return pct, ok
 	case FieldDelta:
 		d, ok := ev.Change.Delta()
-		return float64(d), ok
+		// In the event's own unit, the same as «Было» and «Стало» beside it: a
+		// price event speaks roubles and a stock event speaks pieces, and the
+		// three have to agree or a condition mixing them is nonsense.
+		return float64(d) / unitScale(ev.Change.Unit), ok
 	case FieldWas:
-		return float64(ev.Change.Was), ev.Change.HadBefore
+		return float64(ev.Change.Was) / unitScale(ev.Change.Unit), ev.Change.HadBefore
 	case FieldNow:
-		return float64(ev.Change.Now), ev.Change.HasNow
+		return float64(ev.Change.Now) / unitScale(ev.Change.Unit), ev.Change.HasNow
 	case FieldPriceSale:
-		return optional(ev.Now.PriceSale)
+		// Roubles, because that is what the label promises and what a person
+		// types. The reading holds kopecks — see track.Reading — and comparing
+		// a typed 2000 against a stored 149900 is a rule that never fires.
+		return scaled(ev.Now.PriceSale, minorPerUnit)
 	case FieldPriceBase:
-		return optional(ev.Now.PriceBase)
+		return scaled(ev.Now.PriceBase, minorPerUnit)
 	case FieldDiscountPct:
 		return optional(ev.Now.DiscountPct)
 	case FieldTotalQuantity:
 		return optional(ev.Now.TotalQuantity)
 	case FieldRating:
-		return optional(ev.Now.Rating)
+		// Points, for the same reason: the reading holds hundredths, so 4.75 is
+		// stored as 475 and «рейтинг ниже 4.5» was a comparison against 4.5.
+		return scaled(ev.Now.Rating, hundredthsPerPoint)
 	case FieldFeedbacks:
 		return optional(ev.Now.Feedbacks)
 	}
@@ -271,6 +291,37 @@ func optional(v *int64) (float64, bool) {
 		return 0, false
 	}
 	return float64(*v), true
+}
+
+// minorPerUnit and hundredthsPerPoint are how the readings store money and a
+// rating — see track.Reading, which holds both as whole numbers so that a
+// threshold is an exact comparison rather than a float one.
+const (
+	minorPerUnit       = 100.0
+	hundredthsPerPoint = 100.0
+)
+
+// scaled is optional in the unit the screen names rather than the unit the
+// reading stores.
+func scaled(v *int64, by float64) (float64, bool) {
+	f, ok := optional(v)
+	if !ok {
+		return 0, false
+	}
+	return f / by, true
+}
+
+// unitScale turns one of the reading's units into what a person types.
+//
+// Money and a rating are stored multiplied by a hundred; everything else is
+// already in the unit it is spoken in. A condition on «Было» or «Стало» reads
+// the event's own unit, so this is where the two meet.
+func unitScale(u track.Unit) float64 {
+	switch u {
+	case track.UnitMinor, track.UnitRatingHundredths:
+		return 100
+	}
+	return 1
 }
 
 // Event is one change together with everything a rule may ask about it.

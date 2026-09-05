@@ -4,7 +4,9 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"strconv"
 	"strings"
 	"sync"
@@ -275,4 +277,40 @@ func (e *Engine) serviceChannels(ctx context.Context, id int64) ([]blanktrail.Ch
 		return nil, nil, fmt.Errorf("engine: служебный порт: %w", err)
 	}
 	return built, closeAll, nil
+}
+
+// LeaseHTTP borrows the standing port as a plain HTTP client, and returns the
+// function that gives it back.
+//
+// It exists for spec section 8.1's second rung: Telegram's Bot API through a
+// BlankTrail port, for the network where api.telegram.org is blocked and a
+// proxy is not. internal/telegram must not import the SDK — that is why its
+// LeasedRoute takes a closure rather than a pool — so this is the closure, and
+// the engine is the layer that has both halves.
+//
+// The rung was built with its own transport, its own release-on-body-close and
+// its own tests, and nothing anywhere called it: the ladder was assembled from
+// the direct route and MTProto alone, so on exactly the network the section is
+// written for the middle rung was never tried.
+//
+// The release must be safe to call twice — LeasedRoute closes bodies that
+// http.Client may already have closed — and blanktrail.Lease.Release is.
+func (e *Engine) LeaseHTTP(ctx context.Context) (*http.Client, func(), error) {
+	// Through Service rather than straight at the pool, so that a port closed,
+	// quarantined or opened on settings that have since changed is rebuilt the
+	// same way every other errand rebuilds it.
+	if _, err := e.Service(ctx); err != nil {
+		return nil, nil, err
+	}
+	e.svc.mu.Lock()
+	pool := e.svc.pool
+	e.svc.mu.Unlock()
+	if pool == nil {
+		return nil, nil, errors.New("engine: служебный порт не открыт")
+	}
+	lease, err := pool.Acquire(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	return lease.Client(), lease.Release, nil
 }

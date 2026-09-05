@@ -275,7 +275,19 @@ func (m *MTProto) resolve(ctx context.Context, api *tg.Client, chat string) (tg.
 		if err != nil {
 			return nil, err
 		}
+		// Under the name, and under the numeric id the same peer answers to.
+		//
+		// The cache is what this method's own doc says makes a channel
+		// addressable by id after the first resolve, and for as long as the
+		// name was the only key it did nothing of the sort: a target saved as
+		// «-1001234567890» — which is what the panel's own hint suggests and
+		// what the bot itself prints — missed the cache every time and fell
+		// through to the refusal below, however many times the same chat had
+		// already been resolved by name.
 		m.remember(chat, peer)
+		if id := chatIDOf(peer); id != "" {
+			m.remember(id, peer)
+		}
 		return peer, nil
 	}
 
@@ -314,6 +326,26 @@ func peerFromResolved(r *tg.ContactsResolvedPeer) (tg.InputPeerClass, error) {
 		}
 	}
 	return nil, errors.New("telegram: mtproto: the name resolved to nothing this can send to")
+}
+
+// chatIDOf is how the rest of the product spells this peer: the id a person
+// copies out of Telegram and types into an addressee.
+//
+// A channel or a supergroup is written with the -100 prefix, which is the form
+// the Bot API uses and therefore the form the panel's hint asks for; a basic
+// group is a plain negative number; a user is a plain positive one. Empty for
+// anything else, which remembers nothing rather than remembering a key nobody
+// will look up.
+func chatIDOf(peer tg.InputPeerClass) string {
+	switch p := peer.(type) {
+	case *tg.InputPeerChannel:
+		return "-100" + strconv.FormatInt(p.ChannelID, 10)
+	case *tg.InputPeerChat:
+		return strconv.FormatInt(-p.ChatID, 10)
+	case *tg.InputPeerUser:
+		return strconv.FormatInt(p.UserID, 10)
+	}
+	return ""
 }
 
 func (m *MTProto) cached(chat string) tg.InputPeerClass {

@@ -220,7 +220,18 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 	// Two share the Bot API and differ only in how they leave this machine;
 	// the third speaks Telegram's own protocol and depends on neither
 	// api.telegram.org nor a gateway.
-	a.Bot = &telegram.Bot{Route: telegram.DirectRoute{}}
+	//
+	// The Bot API's two rungs are one sender over a ladder of routes: straight
+	// out of this machine first, and through a BlankTrail port when that fails.
+	// The second was built — its own transport, its own release-on-body-close,
+	// its own tests — and assembled into nothing, so on the network the section
+	// is written for (api.telegram.org blocked, a working proxy) it was never
+	// tried and the ladder fell straight through to MTProto.
+	//
+	// The lease closure is filled in below, once the engine exists: telegram
+	// must not import the SDK, and the engine is the layer holding both halves.
+	botRoutes := &telegram.RouteLadder{Routes: []telegram.Route{telegram.DirectRoute{}}}
+	a.Bot = &telegram.Bot{Route: botRoutes}
 	a.MTProto = &telegram.MTProto{SessionDir: dir}
 	a.Ladder = &telegram.Ladder{Senders: []telegram.Sender{a.Bot, a.MTProto}}
 
@@ -371,6 +382,9 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 		Store: s, Bus: a.Bus, Endpoints: eps,
 		Log: func(format string, args ...any) { a.Log.Printf(format, args...) },
 	}
+	// Rung two, now that there is an engine to borrow a port from.
+	botRoutes.Routes = append(botRoutes.Routes, telegram.LeasedRoute{Lease: a.Engine.LeaseHTTP})
+
 	a.Scheduler = job.NewScheduler(a.Engine)
 	a.Hints = func(ctx context.Context, query string) ([]string, error) {
 		site, err := a.Engine.Service(ctx)

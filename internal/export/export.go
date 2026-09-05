@@ -445,9 +445,11 @@ func formatFloat(f float64, decimal rune) string {
 // it, usually with a defer; an Export that closed as well would make that
 // ordinary line a double close.
 //
-// It writes rows through Write, never WriteRaw, and that is not an oversight:
-// a ProductRow read back out of the store has no untouched response to carry.
-// See RawWriter.
+// Rows go through writeRow, which hands the untouched response to a writer that
+// has asked for one — see RawWriter and Options.IncludeRaw. This used to say
+// the opposite, and it was true when it was written: a ProductRow carried no
+// raw response at all until snapshots grew a column for it. It carries one now,
+// so the path is live for the two formats that can hold it.
 func Export(ctx context.Context, rows iter.Seq2[store.ProductRow, error], sel wb.Selection, w Writer) (int, error) {
 	cols, unknown := Columns(sel)
 	if len(unknown) > 0 {

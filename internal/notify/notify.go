@@ -82,8 +82,16 @@ func Backoff(attempts int) time.Duration {
 
 // MaxAttempts is when a message stops being retried.
 //
-// Ten attempts on the curve above is about a day and a half of trying, which
-// outlasts every outage a self-hosted monitor is likely to meet. Past that the
-// message is almost certainly undeliverable rather than delayed, and a queue
-// that keeps it forever delays everything behind it.
-const MaxAttempts = 10
+// A day and a half of trying, which outlasts every outage a self-hosted monitor
+// is likely to meet. Past that the message is almost certainly undeliverable
+// rather than delayed, and a queue that keeps it forever delays everything
+// behind it.
+//
+// Fifteen, and the number is the curve's rather than a round one. The worker
+// gives up at Attempts+1 >= MaxAttempts, so it waits Backoff(1) through
+// Backoff(MaxAttempts-1): 1+2+4+8+16+32+64+128+256 minutes to the ceiling, then
+// six hours apiece. Nine of them is eight and a half hours — which was what ten
+// bought while the comment here said a day and a half, so a night's outage
+// exhausted the queue by breakfast and every message in it was marked failed,
+// a state nothing takes back. Fourteen is thirty-eight and a half hours.
+const MaxAttempts = 15
