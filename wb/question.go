@@ -222,6 +222,11 @@ func decodeQuestions(raw []byte) ([]Question, int64, error) {
 // QuestionsURL is the address of one page of one card's questions: imtId,
 // take and skip as query parameters, all three observed directly against the
 // live site.
+// The site refuses a window larger than thirty with HTTP 400, measured against
+// the live endpoint: thirty answers, thirty-one does not. Not clamped here — a
+// caller asking for more has made a decision this package cannot second-guess,
+// and a silent clamp would make the count it gets back disagree with the count
+// it asked for. See collect.questionWindow for the number the collector uses.
 func (e Endpoints) QuestionsURL(imtID int64, take, skip int) string {
 	return e.Questions + "?imtId=" + strconv.FormatInt(imtID, 10) +
 		"&take=" + strconv.Itoa(take) +

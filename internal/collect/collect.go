@@ -969,10 +969,16 @@ func groupOf(p wb.Product) int64 {
 //
 // One window rather than a walk across skip, because the estimate prices this
 // at one request per product and a walk cannot be priced before the count is
-// known. A hundred covers a card's questions outright in the ordinary case,
-// and Questions.Count travels beside the window saying how many there were in
-// total — the same bargain Client.Reviews already strikes with its own window.
-const questionWindow = 100
+// known. Questions.Count travels beside the window saying how many there were
+// in total — the same bargain Client.Reviews already strikes with its own.
+//
+// Thirty, and the number is the site's rather than a preference. Measured
+// against the live endpoint for one card: take up to thirty answers, thirty-one
+// and above answers HTTP 400. The first fix here asked for a hundred, which is
+// how a request that had been asking for nothing became a request that was
+// refused — visible only because the refusal is now counted (see lost.go)
+// instead of swallowed.
+const questionWindow = 30
 
 // signals fetches reviews and questions when the selection asks for them.
 //
