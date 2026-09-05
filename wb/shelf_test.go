@@ -221,7 +221,7 @@ func TestShelvesURL_EscapesQueryAndDest(t *testing.T) {
 
 func TestShelvesURL_ReachesThroughTheConfiguredEndpoints(t *testing.T) {
 	eps := Endpoints{Shelves: "https://override.test/shelfs"}
-	want := "https://override.test/shelfs?query=x&dest=-1&apptype=1&displaytype=3&limit=26&minquantity=13&longitude=&latitude=&curr=rub"
+	want := "https://override.test/shelfs?query=x&dest=-1&apptype=1&displaytype=3&limit=26&minquantity=13&longitude=&latitude=&curr=rub&scale=1"
 	if got := eps.ShelvesURL(SearchQuery{Query: "x", Dest: "-1"}); got != want {
 		t.Errorf("ShelvesURL=%q, want %q — built from the overridden Shelves field, not a hardcoded host", got, want)
 	}
@@ -475,5 +475,19 @@ func TestDecodeShelves_NamesNoContextOfItsOwn(t *testing.T) {
 	}
 	if got.Dest != "" || got.AppType != 0 {
 		t.Errorf("Dest=%q AppType=%d, want both empty: only the caller's own arguments can name them", got.Dest, got.AppType)
+	}
+}
+
+// TestShelvesURL_CarriesTheScaleTheEndpointDemands.
+//
+// The site began refusing the request without it: «поле scale должно быть
+// задано и >0», HTTP 400, which stopped every advertising job dead. Measured
+// live, 1, 2 and 3 all answer 200 with the same body byte for byte, so the
+// value is a display parameter the endpoint validates and does not use — but
+// its presence is not optional.
+func TestShelvesURL_CarriesTheScaleTheEndpointDemands(t *testing.T) {
+	got := DefaultEndpoints().ShelvesURL(SearchQuery{Query: "кроссовки", Dest: "-1257786"})
+	if !strings.Contains(got, "scale=1") {
+		t.Errorf("в адресе полок нет scale — сайт ответит 400: %s", got)
 	}
 }

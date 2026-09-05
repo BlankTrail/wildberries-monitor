@@ -202,6 +202,15 @@ func decodeShelfEntries(raw []rawShelfEntry) ([]Shelf, error) {
 // set. Dropping any of them, or guessing a value for longitude/latitude
 // rather than reproducing the empty string the capture shows, is an
 // untested change.
+//
+// scale is newer than that capture, and it is required: without it the
+// endpoint answers HTTP 400 with «поле scale должно быть задано и >0», which
+// is what every advertising job started doing — the whole kind could not run.
+// Measured against the live endpoint: 1, 2 and 3 all answer 200, and all three
+// answer with the same body byte for byte, so it is a display parameter the
+// endpoint validates and does not use. One, then, because a device pixel ratio
+// of one is what a plain browser has and this package's job is to look like a
+// plain browser.
 func (e Endpoints) ShelvesURL(q SearchQuery) string {
 	app := q.AppType
 	if app == 0 {
@@ -211,7 +220,7 @@ func (e Endpoints) ShelvesURL(q SearchQuery) string {
 		"?query=" + url.QueryEscape(q.Query) +
 		"&dest=" + url.QueryEscape(q.Dest) +
 		"&apptype=" + strconv.Itoa(app) +
-		"&displaytype=3&limit=26&minquantity=13&longitude=&latitude=&curr=rub"
+		"&displaytype=3&limit=26&minquantity=13&longitude=&latitude=&curr=rub&scale=1"
 }
 
 // Shelves fetches the advertising placements mixed into one search's
