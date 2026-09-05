@@ -212,7 +212,12 @@ func (r *Runner) reporter(jobID, total int64,
 }
 
 // ErrStopped is returned when a run ended because it was asked to.
-var ErrStopped = errors.New("job: the run was stopped")
+// Its text reaches a screen: it is what FinishRun writes into the run's
+// error column, which the jobs list and the profile's own card print
+// verbatim. «Сбор остановился: job: the run was stopped. Исправьте…» was
+// the panel telling somebody to repair what they had just switched off,
+// in a language it does not otherwise speak.
+var ErrStopped = errors.New("остановлено вручную")
 
 // Run does one job, from either its beginning or where a previous attempt
 // left off.

@@ -175,7 +175,12 @@ type poolPort struct {
 	quarantined bool
 	gone        bool // the proxy no longer lists this port; it cannot come back
 	broken      bool // renewal closed it but could not reopen it
-	failures    int  // consecutive failed attempts; any success clears it
+	// renewDue is set when this port's exit has failed and cannot be replaced
+	// where it stands — a gateway, which the control API will not move on an
+	// open port. Reopening is the only way off it, so the next handout does
+	// that instead of waiting for the proactive schedule to come round.
+	renewDue bool
+	failures int // consecutive failed attempts; any success clears it
 	// requests is the trigger for RenewAfterRequests and is reset by every
 	// renewal; served is the port's whole life and is never reset. One field
 	// did both jobs, so the number on the ports table could never exceed the
@@ -994,6 +999,14 @@ func (p *Pool) rotateEgress(ctx context.Context, num int) error {
 	// caller already knows the remedy for it: everything else the target sees
 	// can still be replaced, which is Lease.RenewIdentity.
 	if cur.Gateway != "" {
+		// The exit cannot move, but the port can be rebuilt on another one.
+		// Asked to rotate is the pool being told this exit has failed, so the
+		// next handout reopens rather than serving through it again — see
+		// renewIfDue, which does nothing here if the channel has no second
+		// gateway to offer.
+		pt.mu.Lock()
+		pt.renewDue = true
+		pt.mu.Unlock()
 		return ErrRenewUnsupported
 	}
 
@@ -1092,20 +1105,36 @@ func (p *Pool) renewIfDue(ctx context.Context, pt *poolPort) error {
 
 	pt.mu.Lock()
 	broken := pt.broken
+	dead := pt.renewDue
 	byCount := p.cfg.RenewAfterRequests > 0 && pt.requests >= p.cfg.RenewAfterRequests
 	byTime := p.cfg.RenewAfterInterval > 0 && now.Sub(pt.renewedAt) >= p.cfg.RenewAfterInterval
 	pt.mu.Unlock()
 
 	// A broken port was closed by an earlier renewal that could not finish. It
 	// has to be repaired before it can serve anything, whatever the triggers say.
-	if !broken && !byCount && !byTime {
+	if !broken && !dead && !byCount && !byTime {
 		return nil
 	}
 
 	eg := pt.egress()
-	if next, err := pt.ch.Renew(ctx, eg); err == nil {
+	next, err := pt.ch.Renew(ctx, eg)
+	switch {
+	case err == nil:
 		eg = next
-	} else if !errors.Is(err, ErrRenewUnsupported) {
+	case errors.Is(err, ErrRenewUnsupported):
+		// Nowhere else to go. When that was the only reason to be here — an
+		// exit reported dead on a channel holding just the one — reopening
+		// would hand back the very exit that failed, at three control-API
+		// calls a time. Drop the flag and leave the port as it is; the
+		// proactive triggers still renew it on their own schedule, and a
+		// caller that keeps losing on it leaves it after its own budget.
+		if !broken && !byCount && !byTime {
+			pt.mu.Lock()
+			pt.renewDue = false
+			pt.mu.Unlock()
+			return nil
+		}
+	default:
 		return p.renewFailed(pt, fmt.Errorf("blanktrail: renew port %d: egress: %w", pt.num, err))
 	}
 
@@ -1141,6 +1170,7 @@ func (p *Pool) renewIfDue(ctx context.Context, pt *poolPort) error {
 	pt.failures = 0
 	pt.strikes = 0
 	pt.broken = false
+	pt.renewDue = false
 	pt.renewedAt = now
 	pt.session++
 	pt.mu.Unlock()

@@ -1827,3 +1827,102 @@ func TestPool_ThePortsRequestCountSurvivesARenewal(t *testing.T) {
 		t.Errorf("порт отчитался о %d запросах из пяти — счётчик обнулился обновлением личности", got)
 	}
 }
+
+func TestPool_ADeadGatewayIsLeftAtTheNextHandout(t *testing.T) {
+	// A port's gateway cannot be moved while the port is open — the control
+	// API takes a proxy address there and ignores a gateway name — so the only
+	// way off a gateway that has died is to reopen the port on another one.
+	// That happened on the proactive schedule alone: forty requests or twenty
+	// minutes. Until one of the two came round, every fetch that landed on
+	// this port spent attempts on an exit already known to be dead, and the
+	// channel had already stopped handing that gateway to anybody else.
+	//
+	// The refusal to rotate is the signal. It says «this exit is finished and
+	// I cannot replace it in place», which is precisely the port that should
+	// be reopened before it serves again.
+	fake := fakebt.New(t)
+	clock := newFakeClock()
+	cfg := testPoolConfig(t, fake, clock, 1, 1)
+	cfg.Channels = []Channel{NewGatewayChannel("вэпээн", "gw-a", "gw-b", "gw-c")}
+	cfg.RenewAfterRequests = 0
+	cfg.RenewAfterInterval = 0
+
+	p, err := NewPool(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	t.Cleanup(func() { _ = p.Close() })
+	ctx := context.Background()
+
+	num := p.PortReports()[0].Num
+	before := p.port(num).egress()
+	if before.Gateway == "" {
+		t.Fatalf("порт открыт не через шлюз: %+v", before)
+	}
+	if err := p.rotateEgress(ctx, num); !errors.Is(err, ErrRenewUnsupported) {
+		t.Fatalf("rotateEgress=%v, ожидалось ErrRenewUnsupported", err)
+	}
+	if now := p.port(num).egress(); now != before {
+		t.Fatalf("выход подменён на живом порту: %v вместо %v", now, before)
+	}
+
+	clock.Advance(p.Cooldown())
+	l, err := p.Acquire(ctx)
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	if after := p.port(num).egress(); after.Gateway == before.Gateway {
+		t.Errorf("порт снова выдан через тот же мёртвый шлюз %q", after.Gateway)
+	}
+	if p.Stats().Renewals != 1 {
+		t.Errorf("переоткрытий %d, ожидалось одно — порт остался с прежним шлюзом", p.Stats().Renewals)
+	}
+	l.Release()
+
+	// И ровно одно. Метка снимается вместе с обновлением: оставленная стоять,
+	// она переоткрывает порт на каждой выдаче — три вызова control API за
+	// запрос, на порту, который уже здоров.
+	clock.Advance(p.Cooldown())
+	l2, err := p.Acquire(ctx)
+	if err != nil {
+		t.Fatalf("вторая Acquire: %v", err)
+	}
+	defer l2.Release()
+	if n := p.Stats().Renewals; n != 1 {
+		t.Errorf("переоткрытий стало %d — метка «выход мёртв» не снялась после обновления", n)
+	}
+}
+
+func TestPool_AChannelWithOneGatewayIsNotReopenedForNothing(t *testing.T) {
+	// The other half. One gateway means the reopen would hand back the very
+	// exit that failed, at the price of three control-API calls — and with a
+	// caller that leaves a port after three lost attempts, that price is paid
+	// again every three attempts, for nothing.
+	fake := fakebt.New(t)
+	clock := newFakeClock()
+	cfg := testPoolConfig(t, fake, clock, 1, 1)
+	cfg.Channels = []Channel{NewGatewayChannel("один шлюз", "gw-only")}
+	cfg.RenewAfterRequests = 0
+	cfg.RenewAfterInterval = 0
+
+	p, err := NewPool(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	t.Cleanup(func() { _ = p.Close() })
+	ctx := context.Background()
+
+	num := p.PortReports()[0].Num
+	if err := p.rotateEgress(ctx, num); !errors.Is(err, ErrRenewUnsupported) {
+		t.Fatalf("rotateEgress=%v, ожидалось ErrRenewUnsupported", err)
+	}
+	clock.Advance(p.Cooldown())
+	l, err := p.Acquire(ctx)
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	defer l.Release()
+	if n := p.Stats().Renewals; n != 0 {
+		t.Errorf("переоткрытий %d, а менять было не на что", n)
+	}
+}

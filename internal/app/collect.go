@@ -152,9 +152,17 @@ func (a *App) runJob(ctx context.Context, j job.Job) {
 	started := time.Now()
 	res, err := a.Scheduler.Start(ctx, j)
 	switch {
-	case errors.Is(err, context.Canceled):
+	case errors.Is(err, context.Canceled), errors.Is(err, job.ErrStopped):
 		// The program is going down, or the job was stopped from the panel or
 		// the bot. Neither is a fault, and both already have their own record.
+		//
+		// job.ErrStopped belongs here beside the cancellation and was missing:
+		// a stop that came back as that sentinel fell through to the branch
+		// below, which writes a failed run of its own. Live, a profile's
+		// storefront walk was stopped by hand, closed itself as «остановлено»
+		// — and then the chain restarted it, the restart returned this, and a
+		// second row appeared with no items, no requests and «failed». The
+		// profile watching the job read that row and declared itself broken.
 		a.Log.Printf("задание %d (%s) остановлено", j.ID, j.Name)
 	case err != nil:
 		a.Log.Printf("задание %d (%s): %v", j.ID, j.Name, err)

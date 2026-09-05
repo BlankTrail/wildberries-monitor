@@ -788,3 +788,59 @@ func TestStartJob_ARefusedRunIsWrittenDownAndNotOnlyLogged(t *testing.T) {
 		t.Errorf("после отказа задание всё ещё «не запускалось»:\n%s", firstLines(w.Body.String()))
 	}
 }
+
+func TestStopJob_DoesNotLeaveAPhantomFailureBehind(t *testing.T) {
+	// Measured live. A chain's storefront walk was stopped from the panel; the
+	// run closed itself as «остановлено», correctly. Then the tick restarted
+	// it, the restart returned job.ErrStopped, and runJob — which knows a
+	// cancelled context is not a fault but had never been told the same about
+	// a stop — wrote a second run row: no items, no requests, state «failed»,
+	// and «job: the run was stopped» in the error column. The profile watching
+	// that job read the failure and put «Сбор остановился: job: the run was
+	// stopped. Исправьте и нажмите…» on the screen, telling somebody to repair
+	// the thing they had just switched off, in a language the panel does not
+	// otherwise speak.
+	a := newApp(t)
+	configured(t, a)
+	release := make(chan struct{})
+	defer close(release)
+	a.Scheduler = job.NewScheduler(&job.Runner{
+		Store: a.Store, Bus: a.Bus, Planner: job.StaticPlanner{},
+		Fetcher: job.FetcherFunc(func(ctx context.Context, _ job.Item) (int, error) {
+			select {
+			case <-release:
+			case <-ctx.Done():
+			}
+			return 1, ctx.Err()
+		}),
+	})
+	id := collectible(t, a, "")
+
+	if err := a.StartJob(t.Context(), id); err != nil {
+		t.Fatalf("StartJob: %v", err)
+	}
+	// Waited for the run row, not merely for the scheduler: a stop that lands
+	// while the plan is still being written leaves no row to judge, and the
+	// assertions below would then pass by having nothing to look at.
+	settled(t, "прогон не открылся", func() bool {
+		runs, err := a.Store.Runs(t.Context(), id, 10)
+		return err == nil && len(runs) > 0
+	})
+	if err := a.StopJob(id); err != nil {
+		t.Fatalf("StopJob: %v", err)
+	}
+	settled(t, "остановка не дошла до прогона", func() bool { return !a.Scheduler.Running(id) })
+
+	runs, err := a.Store.Runs(t.Context(), id, 10)
+	if err != nil {
+		t.Fatalf("Runs: %v", err)
+	}
+	for _, r := range runs {
+		if r.State == store.RunFailed {
+			t.Errorf("остановка записана как отказ: прогон %d, %q", r.ID, r.Error)
+		}
+		if strings.Contains(r.Error, "the run was stopped") {
+			t.Errorf("прогон %d несёт внутреннюю строку на экран: %q", r.ID, r.Error)
+		}
+	}
+}
