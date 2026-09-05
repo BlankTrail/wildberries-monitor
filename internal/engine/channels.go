@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/BlankTrail/wildberries-monitor/blanktrail"
 	"github.com/BlankTrail/wildberries-monitor/internal/store"
@@ -305,9 +304,6 @@ func buildChannel(ctx context.Context, row store.ChannelRow) (blanktrail.Channel
 	// and the run would collect through the others without saying so.
 	return nil, fmt.Errorf("вид %q этой сборке неизвестен", row.Kind)
 }
-
-// listRefresh is how often a proxy list is re-read while a run is going.
-const listRefresh = 15 * time.Minute
 
 // sourceOf says whether a list lives at a URL or on disk.
 //
