@@ -238,10 +238,15 @@ type FetchCost struct {
 	// Attempts counts the requests this fetch took, so a caller can see a retry.
 	Attempts int
 	// Rotations counts how many of those attempts first replaced the port's
-	// upstream proxy. Attempts alone cannot tell a request repeated through one
-	// address from one that searched several: with an egress pool the second is
-	// the whole point, and without one it is impossible, so a run that expected
-	// to search and did not shows up here.
+	// upstream proxy in place. Attempts alone cannot tell a request repeated
+	// through one address from one that searched several: with an egress pool
+	// the second is the whole point, and without one it is impossible.
+	//
+	// Read it beside PortChanges, never alone. A port carries its own address,
+	// so abandoning a port changes the address too, on any channel that holds
+	// more than one — which is why a fetch can report five ports and no
+	// rotations at all and still have gone out through five exits. Zero here
+	// means one address only when PortChanges is zero as well.
 	Rotations int
 	// TransportErrors counts the attempts that never got a response at all —
 	// the proxy refusing, dropping or forcibly closing the connection. Both that
