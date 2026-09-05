@@ -75,9 +75,14 @@ func TestRotatingChannel_HitsRotateURLAndRespectsMinInterval(t *testing.T) {
 	}
 
 	// A second renewal inside the minimum interval must not hit the URL again:
-	// providers rate-limit it and an over-eager caller burns the quota.
-	if _, err := ch.Renew(context.Background(), eg); err != nil {
-		t.Fatalf("second Renew: %v", err)
+	// providers rate-limit it and an over-eager caller burns the quota. And it
+	// must say that nothing happened: answered with a bare nil, as it was, the
+	// skip was indistinguishable from a rotation, so the caller counted one and
+	// spent the rest of its budget believing it had moved.
+	if _, err := ch.Renew(context.Background(), eg); !errors.Is(err, ErrRenewTooSoon) {
+		t.Fatalf("second Renew: %v, want ErrRenewTooSoon", err)
+	} else if !errors.Is(err, ErrRenewUnsupported) {
+		t.Error("ErrRenewTooSoon must read as ErrRenewUnsupported: the remedy is the same")
 	}
 	if got := hits.Load(); got != 1 {
 		t.Errorf("rotate URL hits=%d after an early second renew, want still 1", got)

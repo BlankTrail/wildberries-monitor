@@ -33,6 +33,19 @@ const (
 // port instead of retrying forever.
 var ErrRenewUnsupported = errors.New("blanktrail: this channel cannot change its egress IP")
 
+// ErrRenewTooSoon is returned by Renew when the provider's own minimum interval
+// between address changes has not elapsed. Nothing was changed and nothing was
+// asked of the provider.
+//
+// It wraps ErrRenewUnsupported deliberately: from the caller's side the two say
+// the same thing — this port's exit address is not going to move — and the
+// remedy for both is the same, which is to replace everything else the target
+// can see rather than the address. Returned as a plain nil, as it was, a skipped
+// rotation was indistinguishable from a real one: the caller counted it, the
+// port's session was bumped for an identity that had not changed, and the
+// failure text told an operator about «смен выхода» that never happened.
+var ErrRenewTooSoon = fmt.Errorf("%w: the provider's minimum interval has not elapsed", ErrRenewUnsupported)
+
 // Channel is a source of egress addresses for proxy ports.
 type Channel interface {
 	// Name is the user-facing label of this channel.
@@ -154,7 +167,10 @@ func (c *rotatingChannel) Renew(ctx context.Context, cur Egress) (Egress, error)
 	now := c.now()
 	if c.everHit && now.Sub(c.lastHit) < c.minInterval {
 		c.mu.Unlock()
-		return cur, nil // too soon; the provider would refuse or silently ignore it
+		// Skipped rather than queued — the provider would refuse or silently
+		// ignore it — and said out loud, because a skip that reads as a
+		// rotation is a rotation the caller then acts on.
+		return cur, ErrRenewTooSoon
 	}
 	c.lastHit, c.everHit = now, true
 	c.mu.Unlock()
@@ -265,6 +281,15 @@ func (c *gatewayChannel) Close() {}
 
 // directChannel egresses from the host's own IP.
 type directChannel struct{ name string }
+
+// DirectChannelName is what a pool calls the channel it makes for itself when
+// the caller configured none.
+//
+// Exported because the name reaches a screen: PortReport.Channel is never
+// empty, so a consumer that wants to render «прямое соединение» in its own
+// words has to be able to recognise this one — and a magic string copied into
+// another package is a string that drifts.
+const DirectChannelName = "direct"
 
 // NewDirectChannel egresses from the host's own IP.
 func NewDirectChannel(name string) Channel {

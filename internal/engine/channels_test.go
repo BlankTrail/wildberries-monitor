@@ -644,9 +644,9 @@ func TestServiceChannel_ChangingTheChoiceReopensTheStandingPort(t *testing.T) {
 
 	e.svc.site = &wb.Client{}
 	e.svc.pool = nil
-	// Size() is asked of the pool, so a nil one is not «current» whatever else
-	// matches — which is the other half of this rule and is why the check
-	// cannot be a plain comparison of three strings.
+	// The pool is asked whether it has anything to hand out, so a nil one is
+	// not «current» whatever else matches — which is the other half of this
+	// rule and is why the check cannot be a plain comparison of three strings.
 	if e.serviceIsCurrentLocked("http://x", "k", 0) {
 		t.Error("порт без пула объявлен живым")
 	}
@@ -666,10 +666,19 @@ func TestServiceChannel_EverySettingItWasOpenedWithIsCompared(t *testing.T) {
 		t.Fatal("правило «порт ещё тот» больше не названо отдельно — проверять нечего")
 	}
 	rule := body[start : start+strings.Index(body[start:], "\n}")]
-	for _, want := range []string{"e.svc.addr == addr", "e.svc.key == key", "e.svc.channel == channel", "e.svc.pool.Size()"} {
+	for _, want := range []string{"e.svc.addr == addr", "e.svc.key == key", "e.svc.channel == channel", "e.svc.pool.Stats().Available"} {
 		if !strings.Contains(rule, want) {
 			t.Errorf("порт не переоткроется при смене: в правиле нет %q", want)
 		}
+	}
+	// And specifically not Size(), which is the shape this rule had while it
+	// was broken. Size counts the ports the pool holds, quarantined ones
+	// included, and a quarantine is never lifted — so the standing port
+	// answered «жив» for the life of the program however dead it was. Every
+	// errand it serves then failed with «every port in the pool is
+	// quarantined» until somebody restarted the program.
+	if strings.Contains(rule, "pool.Size()") {
+		t.Error("правило снова спрашивает Size() — он считает и карантинные порты")
 	}
 }
 

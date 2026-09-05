@@ -134,9 +134,12 @@ func (e *Engine) RunnerFor(ctx context.Context, j job.Job) (*job.Runner, func(),
 	// configuration of eleven would not launch. But it is not something to
 	// find out by accident: the count goes to the log with the first reason
 	// beside it, and the ports table shows what actually came up.
-	if missing, why := pool.Shortfall(); missing > 0 {
-		e.logf("портов не открылось: %d из %d, первая причина: %s",
-			missing, missing+pool.Size(), why[0])
+	if missing, want, why := pool.Shortfall(); missing > 0 {
+		first := "причина не записана"
+		if len(why) > 0 {
+			first = why[0]
+		}
+		e.logf("портов не открылось: %d из %d, первая причина: %s", missing, want, first)
 	}
 
 	// Whether there is anywhere to move to decides how hard a challenge is
@@ -188,8 +191,18 @@ func portStats(pool *blanktrail.Pool) []job.PortStat {
 	reports := pool.PortReports()
 	out := make([]job.PortStat, 0, len(reports))
 	for _, r := range reports {
+		// The pool always names the channel a port exits through, including the
+		// one it makes for itself when nothing was configured. That name is the
+		// SDK's own English token, and the panel has no business knowing it —
+		// so it is turned back into «нет настроенного канала» here, which is
+		// what job.PortStat.Channel means by empty and what the table already
+		// renders as «прямое соединение».
+		channel := r.Channel
+		if channel == blanktrail.DirectChannelName {
+			channel = ""
+		}
 		out = append(out, job.PortStat{
-			Port: r.Num, Channel: r.Channel, Requests: r.Requests,
+			Port: r.Num, Channel: channel, Requests: r.Requests,
 			Quarantined: r.Quarantined, Gone: r.Gone,
 		})
 	}

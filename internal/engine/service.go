@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/BlankTrail/wildberries-monitor/blanktrail"
 	"github.com/BlankTrail/wildberries-monitor/internal/store"
@@ -37,6 +38,15 @@ import (
 // One. These are errands — a person pressed a button and is waiting — and they
 // do not overlap: a second port would sit idle on a licence that counts it.
 const servicePorts = 1
+
+// serviceDelay is the gap the standing port leaves between two errands.
+//
+// A quarter of a second. Errands are few and somebody is waiting on them, so
+// the collection pace — three seconds, which is what a pool with no delay named
+// falls back to — turns a directory refresh into a minute of staring at a
+// button. Not zero either: this is still one address talking to one site, and a
+// burst with no gap at all is the shape a rate limiter is looking for.
+const serviceDelay = 250 * time.Millisecond
 
 // service is the standing pool and what it was opened with.
 //
@@ -126,6 +136,22 @@ func (e *Engine) Service(ctx context.Context) (*wb.Client, error) {
 		Spec:           wb.ModeOf(wb.AppWeb).Spec(blanktrail.DefaultPortSpec()),
 		CA:             report.CA,
 		RequestTimeout: requestTimeout,
+		// The pace, named rather than left to the pool's default, and this is
+		// the one setting where a standing port differs from a run's.
+		//
+		// A pool left without one takes three seconds between two requests on
+		// the same port, which is the right pace for a collection: thousands of
+		// requests, nobody watching, and the site's patience is the budget. It
+		// is the wrong pace for an errand. There is one port here, so that
+		// interval is the gap between any two things the panel does — and the
+		// panel does them in handfuls. «Обновить список акций» is one request
+		// plus one per promotion; on the stand, twelve promotions took thirty‑
+		// nine seconds. «Все пункты региона» took two minutes and seventeen
+		// seconds for forty‑two, with nothing on the screen to explain the
+		// wait. The file's own opening paragraph says the standing port exists
+		// so that a button press stops costing seconds.
+		DelayMin: serviceDelay,
+		DelayMax: serviceDelay,
 		// The same proactive contour a run's pool gets — see poolConfig. This
 		// port outlives every run: it answers directory refreshes and the
 		// panel's own checks for as long as the program is up, so left without
@@ -161,12 +187,25 @@ func (e *Engine) Service(ctx context.Context) (*wb.Client, error) {
 // A pool that has lost its last port counts as not current: a caller cannot
 // tell «порт умер» from «нечего было отдавать» and would report the site as
 // unreachable.
+//
+// Available and not Size, and the difference is the whole of it. Size is how
+// many ports the pool holds; a quarantined port is still held, and a quarantine
+// is never lifted — the pool gives up on a port for the rest of its own life.
+// For a run's pool the two questions have the same answer because the pool dies
+// with the run. This pool outlives every run, so asking Size meant the standing
+// port answered «жив» for as long as the program was up, whatever had happened
+// to it: after one quarantine every errand this port serves — the region
+// directory, the category directory, the promotions list, resolving a delivery
+// point, a channel check — failed with «every port in the pool is quarantined»
+// until somebody restarted the program. Proven on the stand: nine attempts over
+// four and a half minutes, no recovery, and a restart fixed it at once.
 func (e *Engine) serviceIsCurrentLocked(addr, key string, channel int64) bool {
 	return e.svc.site != nil &&
 		e.svc.addr == addr &&
 		e.svc.key == key &&
 		e.svc.channel == channel &&
-		e.svc.pool.Size() > 0
+		e.svc.pool != nil &&
+		e.svc.pool.Stats().Available > 0
 }
 
 // Warm opens the standing port ahead of the first errand.

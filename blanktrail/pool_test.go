@@ -140,7 +140,7 @@ func TestNewPool_ARangeTooSmallGivesASmallerPoolThatSaysSo(t *testing.T) {
 	if p.Size() != 2 {
 		t.Errorf("портов %d, а в диапазон помещалось два", p.Size())
 	}
-	missing, why := p.Shortfall()
+	missing, _, why := p.Shortfall()
 	if missing != 1 {
 		t.Errorf("недостача %d, ожидалась одна", missing)
 	}
@@ -1655,7 +1655,7 @@ func TestNewPool_StepsOverPortsTheProxyAlreadyHolds(t *testing.T) {
 	if p.Size() != 2 {
 		t.Fatalf("портов %d, ожидалось два", p.Size())
 	}
-	if missing, why := p.Shortfall(); missing != 0 {
+	if missing, _, why := p.Shortfall(); missing != 0 {
 		t.Errorf("недостача %d: %v — оставленные порты должны просто пропускаться", missing, why)
 	}
 	// And the leftovers are still there: stepping over them is the point, and
@@ -1706,5 +1706,124 @@ func TestNewPool_APortTakenSinceTheListingIsLeftAlone(t *testing.T) {
 	if !slices.Contains(fake.OpenPorts(), 20000) {
 		t.Errorf("порт 20000 закрыт, а он принадлежит другому процессу: %v; "+
 			"409 — это ответ «порт занят», и закрывать его нельзя", fake.OpenPorts())
+	}
+}
+
+// TestNewPool_ASlotWhoseOpenFailedDoesNotEatEveryPortNumber is the live defect.
+//
+// The service suggests the lowest number it does not itself hold and suggests
+// the same one until somebody opens it. A slot whose open failed leaves that
+// number claimed inside the pool and free at the service, so asking again
+// returns it again — and the loop that only re-asked spent its whole budget on
+// one number, then reported that there were none free at all.
+func TestNewPool_ASlotWhoseOpenFailedDoesNotEatEveryPortNumber(t *testing.T) {
+	fake := fakebt.New(t)
+	clock := newFakeClock()
+	cfg := testPoolConfig(t, fake, clock, 1, 2)
+	// The first open refused, every later one allowed: exactly the shape of a
+	// gateway that will not start on one port and starts fine on the next.
+	fake.FailNext("/api/v1/ports/open", http.StatusInternalServerError, `{"error":"gateway would not start"}`)
+
+	p, err := NewPool(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	t.Cleanup(func() { _ = p.Close() })
+
+	if p.Size() != 2 {
+		t.Fatalf("портов открыто %d, ожидались оба: один отказ по шлюзу не отбирает номера у остальных", p.Size())
+	}
+	if missing, _, _ := p.Shortfall(); missing != 0 {
+		t.Errorf("недостача %d, а обе попытки в итоге открылись", missing)
+	}
+}
+
+// TestNewPool_TheShortfallIsCountedAgainstWhatWasAsked. A slot that runs out of
+// port numbers ends the whole loop, so every slot after it is never attempted
+// and never refused: counting the denominator as «отказы плюс открытые» made
+// forty-eight skipped slots vanish from the sentence.
+func TestNewPool_TheShortfallIsCountedAgainstWhatWasAsked(t *testing.T) {
+	fake := fakebt.New(t)
+	clock := newFakeClock()
+	cfg := testPoolConfig(t, fake, clock, 1, 5)
+	cfg.PortRange = [2]int{20000, 20001}
+
+	p, err := NewPool(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	t.Cleanup(func() { _ = p.Close() })
+
+	missing, want, _ := p.Shortfall()
+	if want != 5 {
+		t.Errorf("знаменатель %d, а просили пять портов", want)
+	}
+	if missing != 3 {
+		t.Errorf("недостача %d, а не открылись три из пяти", missing)
+	}
+}
+
+// TestPool_AGatewayPortSaysItsExitCannotMove is the live defect.
+//
+// The control API's upstream endpoint takes a proxy address and nothing else; a
+// request naming a gateway there is accepted and ignored, so a live port's
+// gateway cannot be swapped. rotateEgress used to ask the channel for the next
+// gateway, write it into the port and return success without calling the
+// service at all — the port went on leaving through the old gateway while the
+// caller counted a rotation, and markBadEgress then struck the new gateway for
+// the old one's failures.
+func TestPool_AGatewayPortSaysItsExitCannotMove(t *testing.T) {
+	fake := fakebt.New(t)
+	clock := newFakeClock()
+	cfg := testPoolConfig(t, fake, clock, 1, 1)
+	cfg.Channels = []Channel{NewGatewayChannel("вэпээн", "gw-a", "gw-b", "gw-c")}
+
+	p, err := NewPool(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	t.Cleanup(func() { _ = p.Close() })
+
+	num := p.PortReports()[0].Num
+	before := p.port(num).egress()
+	err = p.rotateEgress(context.Background(), num)
+	if !errors.Is(err, ErrRenewUnsupported) {
+		t.Fatalf("rotateEgress=%v, ожидалось ErrRenewUnsupported: живой шлюз порту не сменить", err)
+	}
+	if after := p.port(num).egress(); after != before {
+		t.Errorf("выход порта переписан на %v, хотя службе об этом не сказали (было %v)", after, before)
+	}
+	if p.Stats().EgressRotations != 0 {
+		t.Errorf("засчитано смен выхода %d, а ни одной не произошло", p.Stats().EgressRotations)
+	}
+}
+
+// TestPool_ThePortsRequestCountSurvivesARenewal. One field was both the trigger
+// for RenewAfterRequests and the number the ports table prints, and a renewal
+// resets the trigger: with a trigger of three, the column could never show more
+// than two and went back to nought on every port every three requests — so the
+// one question the table exists to answer, whether the load spread across the
+// ports or went out through one, became unanswerable.
+func TestPool_ThePortsRequestCountSurvivesARenewal(t *testing.T) {
+	fake := fakebt.New(t)
+	clock := newFakeClock()
+	cfg := testPoolConfig(t, fake, clock, 1, 1)
+	cfg.RenewAfterRequests = 2
+
+	p, err := NewPool(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	t.Cleanup(func() { _ = p.Close() })
+
+	for i := 0; i < 5; i++ {
+		lease, err := p.Acquire(context.Background())
+		if err != nil {
+			t.Fatalf("Acquire %d: %v", i, err)
+		}
+		lease.Release()
+	}
+	if got := p.PortReports()[0].Requests; got != 5 {
+		t.Errorf("порт отчитался о %d запросах из пяти — счётчик обнулился обновлением личности", got)
 	}
 }
