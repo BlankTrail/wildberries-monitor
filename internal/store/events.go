@@ -43,6 +43,25 @@ func effectiveObservedAt(at time.Time, fallback int64) int64 {
 // SaveObservation records one reading of one thing, together with the
 // context that reading is only true in, and returns the row it wrote.
 //
+// Nothing in the product calls it, and neither observations nor events has a
+// reader — this is recorded rather than left to be discovered, because a table
+// that is empty on every installation is otherwise indistinguishable from a
+// collection that failed.
+//
+// What happened is that change detection was built twice. This half is the
+// general one: a reading is flattened into fields, two readings are diffed
+// field by field, and what comes out is evidence with the payload behind it —
+// see wb.Observation and wb.Change. The half that ships is internal/track,
+// which knows the shape of a Wildberries reading and produces the twenty-odd
+// named kinds the rules screen offers; its events land in rule_events, and that
+// is what the panel and the bot read.
+//
+// Kept rather than deleted, and that is the decision. The general half answers
+// a question the shipped one cannot — «что именно поменялось в ответе сайта» —
+// and snapshots.raw, added later, is exactly the input it needs. Deleting it
+// would throw away a worked-out answer to a question the product still has;
+// leaving it unmarked was the actual fault.
+//
 // The row id is returned rather than nothing because an observation is the
 // evidence an event rests on: a caller that has just stored a reading and is
 // about to store what it concluded from it needs a way to say which reading

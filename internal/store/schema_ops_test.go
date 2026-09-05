@@ -5,6 +5,8 @@ package store
 import (
 	"context"
 	"database/sql"
+	"os"
+	"strings"
 	"testing"
 )
 
@@ -346,5 +348,34 @@ func TestNotifyOutbox_IsIndexedByWhatIsDue(t *testing.T) {
 	got := indexColumns(t, s, "idx_notify_outbox_due")
 	if len(got) != 2 || got[0] != "state" || got[1] != "due_at" {
 		t.Errorf("idx_notify_outbox_due covers %v, want [state due_at]", got)
+	}
+}
+
+// TestSchema_ATableWithNoProducerIsNamedAsSuch keeps the two empty tables
+// honest.
+//
+// observations and events are written by SaveObservation and SaveEvents, and
+// nothing in the product calls either: change detection was built twice and the
+// half that ships is internal/track, whose events land in rule_events. That is
+// a decision — see the comment on SaveObservation for why the general half is
+// kept — and this test is what stops it from quietly becoming a discovery.
+//
+// If a caller appears, this test fails and the comment beside it is the thing
+// to delete.
+func TestSchema_ATableWithNoProducerIsNamedAsSuch(t *testing.T) {
+	src, err := os.ReadFile("events.go")
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	body := string(src)
+	at := strings.Index(body, "func (s *Store) SaveObservation")
+	if at < 0 {
+		t.Skip("SaveObservation больше нет — значит, решение исполнено другим способом")
+	}
+	doc := body[:at]
+	for _, want := range []string{"Nothing in the product calls it", "internal/track"} {
+		if !strings.Contains(doc, want) {
+			t.Errorf("у пустой таблицы не записано, почему она пуста: нет %q", want)
+		}
 	}
 }
