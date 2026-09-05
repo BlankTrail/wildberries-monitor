@@ -698,8 +698,10 @@ func (s *Server) constructorHTML(r *http.Request, edit *job.Job) (string, error)
 		fmt.Sprintf(`<input class="bt-input" name="attempts" type="number" min="1" placeholder="%d"%s>`,
 			wb.DefaultAttemptsPooled, d.opt(d.Attempts)),
 		fmt.Sprintf("Сколько раз повторить один запрос, прежде чем считать его отказом. "+
-			"Пусто — %d с прокси и %d без них. Повтор идёт через другой порт, а если адрес "+
-			"один — порт меняет отпечаток и личность, оставаясь на том же адресе.",
+			"Пусто — %d с прокси и %d без них, и пустое здесь почти всегда лучше: "+
+			"первые попытки идут через тот же адрес, а дальше каждая берёт другой прокси, "+
+			"так что мёртвые адреса списка обходятся именно этим запасом. "+
+			"Если адрес один, порт вместо адреса меняет отпечаток и личность.",
 			wb.DefaultAttemptsPooled, wb.DefaultAttemptsDirect)))
 	b.WriteString(field("Пауза, мс", `<input class="bt-input" name="delay_ms" type="number" min="0" data-estimate`+
 		d.num(int(d.Delay/time.Millisecond))+`>`,

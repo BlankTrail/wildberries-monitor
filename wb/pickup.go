@@ -76,6 +76,24 @@ func (c *Client) PickupPoint(ctx context.Context, eps Endpoints, id int64) (Pick
 
 // decodePickupPoint reads what the endpoint returns.
 func decodePickupPoint(body []byte, id int64) (PickupPoint, error) {
+	// value is read as a raw message first, because the site has two ways of
+	// saying «нет такого пункта»: a result state with no value at all, and a
+	// value that is a string rather than an object. The second was not handled,
+	// so about a fifth of a directory walk answered with a Go decoder's dump of
+	// an anonymous struct type in the log instead of a sentence — and the
+	// point counted as closed either way, with nothing to tell the two apart.
+	var envelope struct {
+		ResultState *int            `json:"resultState"`
+		Value       json.RawMessage `json:"value"`
+	}
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return PickupPoint{}, fmt.Errorf("wb: pickup point %d: %w", id, err)
+	}
+	if len(envelope.Value) == 0 || string(envelope.Value) == "null" ||
+		(len(envelope.Value) > 0 && envelope.Value[0] == '"') {
+		return PickupPoint{}, fmt.Errorf("wb: pickup point %d: the site returned no point", id)
+	}
+
 	var raw struct {
 		ResultState *int `json:"resultState"`
 		Value       *struct {

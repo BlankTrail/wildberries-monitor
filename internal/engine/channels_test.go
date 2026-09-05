@@ -851,8 +851,10 @@ func longListFile(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "many.txt")
 	var lines []string
-	for i := 1; i <= 8; i++ {
-		lines = append(lines, fmt.Sprintf("socks5://10.0.0.%d:1080", i))
+	// Comfortably more than the sample, so that «проверено N из M» is a real
+	// narrowing rather than the whole list restated.
+	for i := 1; i <= 60; i++ {
+		lines = append(lines, fmt.Sprintf("socks5://10.0.%d.%d:1080", i/250, i%250))
 	}
 	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0o600); err != nil {
 		t.Fatalf("WriteFile: %v", err)
@@ -861,10 +863,10 @@ func longListFile(t *testing.T) string {
 }
 
 func TestTestChannel_ProbesASampleAndSaysHowBigItWas(t *testing.T) {
-	// A list of five hundred proxies takes five hundred requests to check
-	// whole, and somebody who pressed a button is not waiting for that. What
-	// was sampled is in the answer, because a silent sample reads as a verdict
-	// on the whole list.
+	// A list of fifteen thousand proxies takes fifteen thousand requests to
+	// check whole, and somebody who pressed a button is not waiting for that.
+	// What was sampled is in the answer, because a silent sample reads as a
+	// verdict on the whole list.
 	e := openEngine(t)
 	fake := fakebt.New(t)
 	configure(t, e, fake.URL(), fake.Key())
@@ -877,8 +879,33 @@ func TestTestChannel_ProbesASampleAndSaysHowBigItWas(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TestChannel: %v", err)
 	}
-	if !strings.Contains(got, "Проверено адресов: 5 из 8") {
+	if !strings.Contains(got, "Проверено адресов: 20 из 60") {
 		t.Errorf("выборка не ограничена или не названа: %q", got)
+	}
+}
+
+// TestTestChannel_TheSampleIsSpreadAcrossTheList. A provider's file is often
+// sorted and its dead entries cluster, so a sample off the front answers a
+// question about the front. Here the first twenty are refused and the rest
+// answer: taken off the head, the verdict would be «ответили 0» over a list
+// that is two thirds alive.
+func TestTestChannel_TheSampleIsSpreadAcrossTheList(t *testing.T) {
+	e := openEngine(t)
+	fake := fakebt.New(t)
+	configure(t, e, fake.URL(), fake.Key())
+	for i := 1; i <= 20; i++ {
+		fake.FailEgress(fmt.Sprintf("socks5://10.0.0.%d:1080", i%250), "мёртвый адрес")
+	}
+
+	id := saveChannel(t, e, store.ChannelRow{
+		Name: "много", Kind: store.ChannelList, Enabled: true, Source: longListFile(t),
+	})
+	got, err := e.TestChannel(t.Context(), id)
+	if err != nil {
+		t.Fatalf("TestChannel: %v", err)
+	}
+	if strings.Contains(got, "ответили 0") {
+		t.Errorf("проба взята с начала списка и объявила живой список мёртвым: %q", got)
 	}
 }
 

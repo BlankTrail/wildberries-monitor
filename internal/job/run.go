@@ -401,6 +401,13 @@ func (r *Runner) walk(ctx context.Context, j Job, runID int64, todo []store.Item
 					stopped.Store(true)
 					continue
 				}
+				// Marked as taken before the work starts. Without it every
+				// unfinished item read as «ожидает», so a slow run and a hung
+				// one looked identical on the one screen built to tell them
+				// apart. Best effort: a failure here leaves the row where it
+				// already was.
+				_ = r.Store.StartItem(ctx, runID, row.Position)
+
 				n, err := r.Fetcher.Fetch(ctx, Item{Kind: row.Kind, Key: row.Key})
 				requests.Add(int64(n))
 

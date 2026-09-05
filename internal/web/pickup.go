@@ -357,6 +357,14 @@ func (s *Server) addPickup(w http.ResponseWriter, r *http.Request) {
 
 	msg := fmt.Sprintf("Добавлено регионов: %d из %d (запросов к сайту %d).",
 		got.Resolved, len(groups), got.Asked)
+	if got.Shared > 0 {
+		// The third outcome, which used to be silent and made the two numbers
+		// above look wrong: several towns share one delivery zone, so the code
+		// is already in the box and adding it again would price the same
+		// reading twice.
+		msg += fmt.Sprintf(" У %s код совпал с уже добавленным — Wildberries считает их одной зоной доставки.",
+			countOf(int64(got.Shared), "места", "мест", "мест"))
+	}
 	if got.Failed > 0 {
 		// Said rather than swallowed: the published file lists points the site
 		// no longer serves, and a count that quietly shrank would look like a

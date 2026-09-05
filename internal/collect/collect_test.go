@@ -805,8 +805,11 @@ func TestProfile_ResolvesALinkIntoWhoTheUserIs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Fetch: %v", err)
 	}
-	if n != 1 {
-		t.Errorf("разрешение стоило %d запросов, ожидался один", n)
+	// Two: Client.Card fetches the static half from the CDN and the live half
+	// beside it, which is what every other path that calls it counts. This one
+	// counted one, so a profile told the run it had spent half what it had.
+	if n != 2 {
+		t.Errorf("разрешение стоило %d запросов, ожидалось два — статика и живая половина", n)
 	}
 
 	profiles, err := st.Profiles(t.Context())

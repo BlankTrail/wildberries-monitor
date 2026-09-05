@@ -779,3 +779,53 @@ func TestMigration0013_GivesAnOldProfileJobTheRegionItCannotRunWithout(t *testin
 		t.Errorf("миграция тронула задание другого вида: %s", regions)
 	}
 }
+
+// TestStartItem_AnItemBeingWorkedOnSaysSo. The state and the column both
+// existed and nothing wrote either, so every unfinished item read as «ожидает»:
+// a run grinding through a mostly-dead proxy list looked exactly like a run
+// that had hung, on the one screen built to tell them apart.
+func TestStartItem_AnItemBeingWorkedOnSaysSo(t *testing.T) {
+	s := openTestStore(t)
+	ctx := t.Context()
+	jobID, err := s.SaveJob(ctx, JobRow{Name: "сбор", Type: "phrase", Params: "{}"})
+	if err != nil {
+		t.Fatalf("SaveJob: %v", err)
+	}
+	runID, err := s.StartRun(ctx, jobID, []ItemRow{
+		{Position: 0, Kind: "page", Key: "a"},
+		{Position: 1, Kind: "page", Key: "b"},
+	})
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	if err := s.StartItem(ctx, runID, 0); err != nil {
+		t.Fatalf("StartItem: %v", err)
+	}
+	// PendingItems is what a resume reads, and its own comment says «running»
+	// counts as pending — a process that died mid-item left the row that way.
+	// So both are still there, and what changed is that one of them now says
+	// which it is.
+	left, err := s.PendingItems(ctx, runID)
+	if err != nil {
+		t.Fatalf("PendingItems: %v", err)
+	}
+	if len(left) != 2 {
+		t.Fatalf("к возобновлению осталось %d пунктов, ожидалось два", len(left))
+	}
+	var started, waiting int
+	for _, it := range left {
+		switch it.State {
+		case ItemRunning:
+			started++
+			if it.StartedAt == nil || *it.StartedAt == 0 {
+				t.Error("пункт объявлен идущим без времени начала")
+			}
+		case ItemPending:
+			waiting++
+		}
+	}
+	if started != 1 || waiting != 1 {
+		t.Errorf("идут %d, ждут %d — ожидалось по одному", started, waiting)
+	}
+}

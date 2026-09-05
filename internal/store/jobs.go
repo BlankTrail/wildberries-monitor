@@ -484,6 +484,28 @@ func (s *Store) FailedItems(ctx context.Context, runID int64, limit int) ([]Item
 	return out, total, nil
 }
 
+// StartItem records that an item has been taken and is being worked on.
+//
+// The state and the column both existed and nothing wrote either, so every item
+// that had not finished read as «ожидает» — a run grinding through fifteen
+// attempts per page against a mostly-dead proxy list looked exactly like a run
+// that had hung, and the only way to tell them apart was to watch the proxy's
+// own port activity. The resume path has always allowed for «running»: an item
+// left in that state by a process that died is picked up again.
+//
+// Guarded on the pending state so that a resumed run does not re-stamp an item
+// another process is already holding.
+func (s *Store) StartItem(ctx context.Context, runID int64, position int) error {
+	if _, err := s.db.ExecContext(ctx, `
+		UPDATE job_items
+		SET state = ?, started_at = ?
+		WHERE run_id = ? AND position = ? AND state = ?`,
+		ItemRunning, s.now().UTC().Unix(), runID, position, ItemPending); err != nil {
+		return fmt.Errorf("store: start item %d of run %d: %w", position, runID, err)
+	}
+	return nil
+}
+
 // FinishItem records how one item ended.
 //
 // state must be a terminal one; a caller that passed "running" would leave a

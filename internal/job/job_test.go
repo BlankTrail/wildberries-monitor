@@ -579,3 +579,36 @@ func TestPlan_TheFrontPageIsWalkedPageByPage(t *testing.T) {
 		}
 	}
 }
+
+// TestEstimate_ShelvesArePricedOnlyWhereTheyAreFetched.
+//
+// The shelf request lives on the ads item, and nothing but an ads job plans
+// one. Charged on every kind, a phrase job with the «Реклама по фразе» group
+// ticked was quoted a request per phrase per region for a fetch its run would
+// never make: money on the screen for work that cannot happen, and empty
+// columns where it was supposed to land.
+func TestEstimate_ShelvesArePricedOnlyWhereTheyAreFetched(t *testing.T) {
+	base := Job{
+		Name: "фразы", Regions: []string{"a"}, MaxPages: 1,
+		Phrases: []string{"платье", "сарафан"},
+		Fields:  wb.Selection{"nm_id", "shelf_title"},
+	}
+
+	phrase := base
+	phrase.Kind = KindPhrase
+	plain := base
+	plain.Kind = KindPhrase
+	plain.Fields = wb.Selection{"nm_id"}
+
+	if got, want := phrase.Estimate(0).Requests, plain.Estimate(0).Requests; got != want {
+		t.Errorf("поисковое задание с полками стоит %d, без них %d — а полок оно не запрашивает", got, want)
+	}
+
+	ads := base
+	ads.Kind = KindPhraseAds
+	adsPlain := ads
+	adsPlain.Fields = wb.Selection{"nm_id"}
+	if got, want := ads.Estimate(0).Requests, adsPlain.Estimate(0).Requests; got <= want {
+		t.Errorf("рекламное задание с полками стоит %d, без них %d — полки не посчитаны", got, want)
+	}
+}

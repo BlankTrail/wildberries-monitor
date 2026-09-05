@@ -178,6 +178,27 @@ func (p RetryPolicy) withDefaults() RetryPolicy {
 	if p.Attempts < 1 {
 		p.Attempts = DefaultAttemptsDirect
 	}
+	// A budget smaller than the threshold never reaches the threshold, and a
+	// ladder that never rotates is a ladder with one rung.
+	//
+	// This is what a person setting «Повторов запроса» to three did without
+	// being told: the address is replaced only once AttemptsPerEgress attempts
+	// have gone out through it, so three tries all went through the same dead
+	// proxy and the failure said «0 egress change(s)» while the field's own
+	// hint promised the retry went somewhere else. Measured on the stand
+	// against a list a quarter of which answers: forty-two per cent of items
+	// failed at three, two and a half per cent at the default.
+	//
+	// So the threshold gives way to the budget rather than the other way round:
+	// past the two attempts one address is worth on its own, the last of them
+	// goes somewhere else.
+	//
+	// Two is left alone deliberately. That is DefaultAttemptsDirect — the
+	// budget for a run with nowhere to go — and a policy of two is a caller
+	// saying «попробуй ещё раз и хватит» rather than «поищи рабочий выход».
+	if p.Attempts > DefaultAttemptsDirect && p.AttemptsPerEgress >= p.Attempts {
+		p.AttemptsPerEgress = p.Attempts - 1
+	}
 	return p
 }
 

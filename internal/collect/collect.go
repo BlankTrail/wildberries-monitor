@@ -421,6 +421,14 @@ func (f *Fetcher) brand(ctx context.Context, key job.Key) (int, error) {
 // brandRecordRequests is what one brand's record costs: one static file.
 const brandRecordRequests = 1
 
+// cardRequests is what one call to Client.Card costs: the static half from the
+// CDN and the live half beside it.
+//
+// Named once rather than written as a literal at each of the four call sites,
+// because one of the four had it as 1 and no test could tell — the number goes
+// into the run's own bill and nothing compares the four with each other.
+const cardRequests = 2
+
 // sellerRecordRequests is what one seller's record costs: a static file and a
 // profile, both always attempted. Spelled here as well as in internal/job
 // because the run counts what it spent and the estimate counts what it will —
@@ -534,7 +542,7 @@ func (f *Fetcher) product(ctx context.Context, key job.Key) (int, error) {
 	requests := 1
 	if wantsCard {
 		fetch, err = f.Site.Card(ctx, f.Basket, f.Eps, key.NmID, key.Dest, key.AppType)
-		requests = 2
+		requests = cardRequests
 	} else {
 		fetch, err = f.Site.Detail(ctx, f.Eps, key.NmID, key.Dest, key.AppType)
 	}
@@ -634,7 +642,7 @@ func (f *Fetcher) oneOfBatch(ctx context.Context, key job.Key, live wb.Product) 
 	// having at all: without it every article pays for a document nobody opens.
 	if f.sources()[wb.FieldSourceCardDocument] {
 		card, err := f.Site.Card(ctx, f.Basket, f.Eps, live.ID, key.Dest, key.AppType)
-		requests += 2
+		requests += cardRequests
 		if err != nil {
 			f.lost(ctx, "карточка товара %d: %v", live.ID, err)
 		}
@@ -760,10 +768,13 @@ func (f *Fetcher) profile(ctx context.Context, key job.Key) (int, error) {
 			"а карточка без него не читается — пересоздайте разбор ссылки", key.NmID)
 	}
 	fetched, err := f.Site.Card(ctx, f.Basket, f.Eps, key.NmID, dest, f.Job.AppType)
+	// Two, the same as everywhere else this call is made: Client.Card fetches
+	// the static half from the CDN and the live half beside it. Counted as one
+	// here alone, this path told the run it had spent half what it had.
 	if err != nil {
-		return 1, fmt.Errorf("collect: profile card %d: %w", key.NmID, err)
+		return cardRequests, fmt.Errorf("collect: profile card %d: %w", key.NmID, err)
 	}
-	requests := 1
+	requests := cardRequests
 
 	name := strings.TrimSpace(fetched.Product.SupplierName)
 	if name == "" {
@@ -888,7 +899,7 @@ func (f *Fetcher) enrich(ctx context.Context, products []wb.Product, key job.Key
 		imtID := groupOf(p)
 		if wants[wb.FieldSourceCardDocument] {
 			fetch, err := f.Site.Card(ctx, f.Basket, f.Eps, p.ID, key.Dest, key.AppType)
-			requests += 2
+			requests += cardRequests
 			// A partial answer is still an answer. Client.Card returns the
 			// static half it already fetched alongside a failure on the live
 			// half, and says so in its own doc; checking only err threw away a

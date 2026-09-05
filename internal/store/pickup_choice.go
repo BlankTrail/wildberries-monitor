@@ -238,4 +238,13 @@ type PickupResolution struct {
 	// answers is a success, and reporting it as four failures would be a
 	// number about the site's housekeeping rather than about the choice.
 	Failed int
+	// Shared is how many of the wanted groups answered with a code another
+	// group had already given.
+	//
+	// Neither resolved nor failed, and that is why it needs a name of its own:
+	// the code is in Dests once, which is right — two neighbouring towns
+	// legitimately share one delivery zone — but a sentence saying «добавлено
+	// 31 из 38, не удалось у 5» left two groups unaccounted for and read as
+	// arithmetic that does not close.
+	Shared int
 }

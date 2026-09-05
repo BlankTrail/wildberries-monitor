@@ -148,6 +148,10 @@ func mergeAnswers(answers []answer) (store.PickupResolution, error) {
 			continue
 		}
 		if seen[a.dest] {
+			// A code another group already gave. Counted rather than dropped in
+			// silence: it is neither a success to add nor a failure to report,
+			// and leaving it out of both made the sentence on screen not add up.
+			out.Shared++
 			continue
 		}
 		seen[a.dest] = true

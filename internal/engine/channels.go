@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/BlankTrail/wildberries-monitor/blanktrail"
@@ -91,12 +92,30 @@ func (e *Engine) Channels(ctx context.Context, want ...int64) ([]blanktrail.Chan
 
 // probed is how many exits one press of «Проверить» tries.
 //
-// Five. A list of five hundred proxies takes five hundred requests to check
-// whole, and somebody who pressed a button is not waiting for that — while
-// five says whether the list is alive, which is the question. What was sampled
-// is always in the answer: «проверено 5 из 500» is a number a person can act
-// on, and a silent sample reads as a verdict on the whole list.
-const probed = 5
+// A list of fifteen thousand proxies takes fifteen thousand requests to check
+// whole, and somebody who pressed a button is not waiting for that. So it is a
+// sample — and the size of the sample decides what the answer can mean.
+//
+// Five could not tell a dead list from a working one. A list measured on the
+// stand had a quarter of its addresses alive and served two hundred and
+// thirty-four items of two hundred and forty in a real run; the button reported
+// «проверено 5 из 15000, ответили 0», which reads as «список мёртв». At a
+// quarter alive that verdict comes up about once in four presses. Twenty brings
+// it to about three in a thousand, and twenty probes run at once cost about
+// what five cost one after another.
+//
+// What was sampled is always in the answer: «проверено 20 из 15000» is a number
+// a person can act on, and a silent sample reads as a verdict on the whole
+// list.
+const probed = 20
+
+// probeAtOnce is how many of those go out together.
+//
+// The exits are independent and each is a round trip to the proxy service, so
+// the wall clock is the slowest one rather than their sum. Bounded because the
+// service opens a port per check and a burst of twenty would ask for twenty at
+// once.
+const probeAtOnce = 5
 
 // probeList tries a few of a list's addresses through BlankTrail.
 //
@@ -110,20 +129,64 @@ func (e *Engine) probeList(ctx context.Context, ups []blanktrail.Upstream) strin
 	if err != nil {
 		return "Проверить адреса не удалось: " + err.Error()
 	}
+	// Spread across the list rather than taken off the front. A provider's
+	// file is often sorted, and its dead entries cluster: sampling the head
+	// answered a question about the head.
 	take := min(len(ups), probed)
+	if take == 0 {
+		return "Проверять нечего: в списке нет ни одного адреса."
+	}
+	stride := len(ups) / take
+	if stride < 1 {
+		stride = 1
+	}
+	chosen := make([]blanktrail.Upstream, 0, take)
+	for i := 0; i < len(ups) && len(chosen) < take; i += stride {
+		chosen = append(chosen, ups[i])
+	}
+
+	type verdict struct {
+		host string
+		why  string
+	}
+	out := make([]verdict, len(chosen))
+	var wg sync.WaitGroup
+	gate := make(chan struct{}, probeAtOnce)
+	for i, up := range chosen {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			gate <- struct{}{}
+			defer func() { <-gate }()
+			out[i] = verdict{host: up.Host, why: probeOne(ctx, client, blanktrail.Egress{Upstream: up.URL()})}
+		}()
+	}
+	wg.Wait()
+
 	ok, first := 0, ""
-	for _, up := range ups[:take] {
-		if why := probeOne(ctx, client, blanktrail.Egress{Upstream: up.URL()}); why == "" {
+	for _, v := range out {
+		if v.why == "" {
 			ok++
 		} else if first == "" {
-			first = fmt.Sprintf("%s — %s", up.Host, why)
+			first = fmt.Sprintf("%s — %s", v.host, v.why)
 		}
 	}
-	out := fmt.Sprintf("Проверено адресов: %d из %d, ответили %d.", take, len(ups), ok)
-	if first != "" {
-		out += " Первый отказ: " + first + "."
+
+	text := fmt.Sprintf("Проверено адресов: %d из %d, ответили %d.", len(chosen), len(ups), ok)
+	switch {
+	case ok == 0:
+		text += " Ни один из проверенных не ответил — похоже, список мёртв или закрыт для этой машины."
+	case ok < len(chosen):
+		// Said as a share, because that is the fact: a list where a quarter
+		// answer is a working list, and a run walks past the dead ones — see
+		// the retry ladder in wb.Client.Get.
+		text += fmt.Sprintf(" Живых в пробе примерно %d%% — этого хватает: прогон обходит мёртвые адреса.",
+			ok*100/len(chosen))
 	}
-	return out
+	if first != "" {
+		text += " Первый отказ: " + first + "."
+	}
+	return text
 }
 
 // probeGateways tries every configuration of a set.

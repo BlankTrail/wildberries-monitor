@@ -1365,3 +1365,35 @@ func (l liveLeaser) Acquire(context.Context) (Lease, error) { return liveLease{l
 
 // liveClient is a site client whose port is the given server.
 func liveClient(hc *http.Client) *Client { return NewClient(liveLeaser{hc}, NewSessions()) }
+
+// TestRetryPolicy_ASmallBudgetStillReachesASecondAddress is the live footgun.
+//
+// The address is replaced only once AttemptsPerEgress attempts have gone out
+// through it, and that threshold is three. A person setting «Повторов запроса»
+// to three therefore spent all three on one dead proxy and the failure text
+// said «0 egress change(s)», while the hint under the field promised the retry
+// went somewhere else. Measured against a list a quarter of which answers:
+// forty-two per cent of items failed at three, two and a half at the default.
+func TestRetryPolicy_ASmallBudgetStillReachesASecondAddress(t *testing.T) {
+	for _, budget := range []int{3, 4, 5} {
+		got := RetryPolicy{Attempts: budget}.withDefaults()
+		if got.AttemptsPerEgress >= got.Attempts {
+			t.Errorf("бюджет %d: порог смены выхода %d — до него не доживает ни одна попытка",
+				budget, got.AttemptsPerEgress)
+		}
+	}
+}
+
+// TestRetryPolicy_TheDefaultsAreLeftAlone. Two is the budget for a run with
+// nowhere to go, and the pooled default is already well past the threshold —
+// neither is the case the clamp above exists for.
+func TestRetryPolicy_TheDefaultsAreLeftAlone(t *testing.T) {
+	direct := DefaultRetryPolicy(false).withDefaults()
+	if direct.Attempts != DefaultAttemptsDirect || direct.AttemptsPerEgress != DefaultAttemptsPerEgress {
+		t.Errorf("прямой бюджет = %+v, ожидался нетронутым", direct)
+	}
+	pooled := DefaultRetryPolicy(true).withDefaults()
+	if pooled.Attempts != DefaultAttemptsPooled || pooled.AttemptsPerEgress != DefaultAttemptsPerEgress {
+		t.Errorf("бюджет с прокси = %+v, ожидался нетронутым", pooled)
+	}
+}

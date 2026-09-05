@@ -81,3 +81,41 @@ func TestPickupPointURL_PutsTheIdWhereTheTemplateSaysAndValidateChecksIt(t *test
 		t.Error("шаблон без {id} принят — все пункты выдачи стали бы одним")
 	}
 }
+
+// TestDecodePickupPoint_AValueThatIsAStringIsNoPoint is the site's second way
+// of saying «нет такого пункта».
+//
+// The decoder knew only the first — a result state with no value — so the
+// second came out as encoding/json's dump of an anonymous struct type, nine
+// times in one directory walk on the stand. The outcome was right either way
+// and the sentence in the log was a type declaration.
+func TestDecodePickupPoint_AValueThatIsAStringIsNoPoint(t *testing.T) {
+	for _, raw := range []string{
+		`{"resultState":1,"value":"not found"}`,
+		`{"resultState":0,"value":null}`,
+		`{"resultState":0}`,
+	} {
+		_, err := decodePickupPoint([]byte(raw), 173121)
+		if err == nil {
+			t.Errorf("decodePickupPoint(%s) succeeded, want «нет такого пункта»", raw)
+			continue
+		}
+		if strings.Contains(err.Error(), "cannot unmarshal") {
+			t.Errorf("decodePickupPoint(%s) отвечает дампом типа, а не фразой: %v", raw, err)
+		}
+	}
+}
+
+// TestDecodePickupPoint_ARealPointStillDecodes keeps the guard from swallowing
+// the answer it exists to read.
+func TestDecodePickupPoint_ARealPointStillDecodes(t *testing.T) {
+	raw := `{"resultState":0,"value":{"id":"171","address":"Москва, Ленина 1",` +
+		`"country":"RU","dest":-1257786,"coordinates":[55.7,37.6]}}`
+	got, err := decodePickupPoint([]byte(raw), 171)
+	if err != nil {
+		t.Fatalf("decodePickupPoint: %v", err)
+	}
+	if got.Dest != -1257786 || got.Address == "" {
+		t.Errorf("пункт разобран как %+v", got)
+	}
+}

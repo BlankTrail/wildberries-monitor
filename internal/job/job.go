@@ -580,7 +580,15 @@ func (j Job) Estimate(items int) Estimate {
 
 	// What the field selection adds on top, per product and per phrase.
 	e.Requests += e.Items * regions * cost.PerProduct
-	e.Requests += phrases * regions * cost.PerPhrase
+	// The per-phrase half is the advertising shelves, and only one kind fetches
+	// them: the shelf request lives on the ads item, which nothing but an ads
+	// job plans. Charged on every kind, as it was, a phrase job with the
+	// «Реклама по фразе» group ticked was quoted a request per phrase per
+	// region for a fetch its run would never make — money on the screen for
+	// work that cannot happen, and empty columns where it was supposed to land.
+	if j.Kind == KindPhraseAds {
+		e.Requests += phrases * regions * cost.PerPhrase
+	}
 
 	threads := j.Threads
 	if threads <= 0 {
