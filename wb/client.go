@@ -365,14 +365,24 @@ attempts:
 		// intermittently is never abandoned.
 		//
 		// A pool with no other port to give leaves everything as it was, and
-		// the ladder below runs exactly as it did before this existed.
+		// the ladder below runs exactly as it did before this existed — with
+		// the count cleared, so the remedy is tried again after another run of
+		// losses rather than on every remaining attempt. Asking a pool that
+		// has just answered «only this one» costs a cooldown wait each time,
+		// and twelve of those buy nothing on a pool that is still of one.
 		if lostOnPort >= c.retry.AttemptsPerEgress {
-			port := lease.Port()
+			port, lost := lease.Port(), lostOnPort
 			if _, err := swapPort(); err != nil {
 				last, lastErr = nil, fmt.Errorf("port %d answered %d attempt(s) with nothing, and no other port could be taken: %w",
-					port, lostOnPort, err)
+					port, lost, err)
 				break attempts
 			}
+			// Unconditionally, and the two cases mean the same thing by
+			// different routes: a swap that moved has already cleared this on
+			// the new port, and one that did not has just been told the pool
+			// holds nothing else — so the next ask waits for another run of
+			// losses instead of coming on every remaining attempt.
+			lostOnPort = 0
 		}
 
 		if onPort >= c.retry.AttemptsPerEgress {

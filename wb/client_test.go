@@ -1576,3 +1576,29 @@ func TestClient_LossesSpreadAmongAnswersDoNotCostThePort(t *testing.T) {
 		t.Errorf("Status=%d TransportErrors=%d, want 200/3", got.Status, got.TransportErrors)
 	}
 }
+
+func TestClient_AskingAPoolOfOneTwelveTimesBuysNothing(t *testing.T) {
+	// Every ask costs a cooldown: the port goes back, and the pool will not
+	// hand it out again until it has cooled. On a pool that has already said
+	// «this is the only one I have», asking on every remaining attempt spends
+	// twelve of those waits for twelve identical answers. The count clears
+	// instead, so the remedy comes round again after another run of losses.
+	only := &fakeLease{port: 1, err: lostAll()}
+	leaser := &fakeLeaser{leases: []*fakeLease{only}}
+	c := NewClientWithRetry(leaser, NewSessions(), RetryPolicy{Attempts: 15, AttemptsPerEgress: 3})
+
+	if _, err := c.Get(context.Background(), "https://www.wildberries.ru/x", KindSearch, ""); err == nil {
+		t.Fatal("fifteen lost attempts on the only port returned no error")
+	}
+	if len(only.sent) != 15 {
+		t.Errorf("sent %d requests, want the whole budget of 15", len(only.sent))
+	}
+	// One at the start, then one ask per run of three losses: attempts 4, 7,
+	// 10 and 13. Twelve would be one per attempt past the threshold.
+	if leaser.n != 5 {
+		t.Errorf("asked the pool %d times, want 5 — one to start and one per run of losses", leaser.n)
+	}
+	if only.released != leaser.n {
+		t.Errorf("took %d leases and released %d", leaser.n, only.released)
+	}
+}
