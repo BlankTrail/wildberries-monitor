@@ -97,15 +97,14 @@ func TestPreflight_ChallengeBreakerMissingIsFatal(t *testing.T) {
 }
 
 func TestPreflight_DoesNotWarnWhenPortsOutnumberSolverProcesses(t *testing.T) {
-	// This used to warn, on a model of one solve per solver process. A process
-	// carries several solves at once, and what overflows queues rather than
-	// fails, so ports outnumbering processes is an
-	// ordinary configuration and not a finding. A run that was fine collected a
-	// warning here, which teaches the reader to skip past this report.
+	// This used to warn, on a model of one port per solver process. The two are
+	// not one to one, so ports outnumbering processes is an ordinary
+	// configuration and not a finding. A run that was fine collected a warning
+	// here, which teaches the reader to skip past this report.
 	//
 	// It is not replaced by a warning with a bigger multiplier, because the
-	// control API reports no per-process capacity to compute
-	// one from — see challengeBreakerFinding's own comment.
+	// control API reports nothing to compute a ratio from — see
+	// challengeBreakerFinding's own comment.
 	c, fake := newTestClient(t)
 	fake.SetCA(genTestCA(t))
 	fake.SetLicense(fakebt.License{

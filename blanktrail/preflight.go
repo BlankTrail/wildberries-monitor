@@ -186,20 +186,19 @@ func Preflight(ctx context.Context, c *Client, in PreflightInput) Report {
 // data, whichever of the two caused it.
 //
 // It deliberately does not compare the port count against the process count. It
-// used to, and warned when ports exceeded processes; that warning rested on a
-// model of one solve per process which is not how the solver works. A process
-// carries several solves at once, and requests that arrive beyond that capacity
-// queue rather than fail, so ports may legitimately outnumber processes by a
-// wide margin. The warning fired on runs
-// that were fine, which is worse than no warning at all: it teaches whoever sees
-// it that findings from this report can be ignored.
+// used to, and warned when ports exceeded processes; that warning rested on the
+// two numbers being one to one, and they are not. Ports may legitimately
+// outnumber processes by a wide margin, so the warning fired on runs that were
+// fine — which is worse than no warning at all: it teaches whoever sees it that
+// findings from this report can be ignored.
 //
-// Nothing honest replaces it. A real threshold would need the number of
-// ports a process can carry, and the control API reports no such
-// figure — LicenseStatus carries the licensed process ceiling, the configured
-// process count and a live-process gauge, and no measure of per-process capacity
-// or queue depth anywhere. Picking a multiplier here would state as fact a number
-// this package has no way to know.
+// Nothing honest replaces it. A real threshold would need the ratio between the
+// two, and the control API reports nothing to compute one from: LicenseStatus
+// carries the licensed process ceiling, the configured process count and a
+// live-process gauge, and no fourth number. What a process does with the ports
+// pointed at it is BlankTrail's business, not this client's — see
+// LicenseStatus.JsSolverMaxProcs. Picking a multiplier here would state as fact
+// a number this package has no way to know.
 func challengeBreakerFinding(lic LicenseStatus) []Finding {
 	if !lic.ChallengeBreakerEntitled() {
 		return []Finding{{
