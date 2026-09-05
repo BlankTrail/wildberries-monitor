@@ -98,8 +98,8 @@ func TestPreflight_ChallengeBreakerMissingIsFatal(t *testing.T) {
 
 func TestPreflight_DoesNotWarnWhenPortsOutnumberSolverProcesses(t *testing.T) {
 	// This used to warn, on a model of one solve per solver process. A process
-	// takes more than one port at a time, and what
-	// overflows queues rather than fails, so ports outnumbering processes is an
+	// carries several solves at once, and what overflows queues rather than
+	// fails, so ports outnumbering processes is an
 	// ordinary configuration and not a finding. A run that was fine collected a
 	// warning here, which teaches the reader to skip past this report.
 	//
