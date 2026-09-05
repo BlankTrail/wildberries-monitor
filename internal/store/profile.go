@@ -197,18 +197,23 @@ func (p ProfileRow) Running() bool {
 // DefaultProfilePlan is what a profile collects before anybody changes it.
 //
 // One region, because a reading has to have one and «-1257786» is the same
-// first guess every other screen in this product starts from. The base, stock
-// and delivery groups, because those are what «мой ассортимент, остатки и
-// сроки» means and they ride on pages the walk pays for anyway — the content
-// and reputation groups are a request per product each, which is a decision
-// with a price and belongs to the person, not to a default.
+// first guess every other screen in this product starts from. Every field this
+// build knows, because a profile exists to be compared against competitors
+// later by criteria nobody has chosen yet, and the field that was not
+// collected in March is the one the comparison wants in June.
+//
+// That default has a price, and it is not small: the cheap groups ride on the
+// pages the walk pays for anyway, but the card and reputation groups are a
+// request per product. Measured on the stand, a storefront of four hundred
+// goods turned twenty-one paid pages into some six thousand requests. The
+// screen is where that is switched off, and the reason every group is drawn
+// there with its own tick.
+//
+// This paragraph said the opposite until the field list stopped matching it:
+// the default was the three cheap groups and became all of them, and only the
+// body was changed. A doc comment describing a behaviour the function no
+// longer has is worse than none — it is read instead of the code.
 func DefaultProfilePlan() ProfileRow {
-	// Every field this build knows how to collect. A profile exists to be
-	// compared against competitors later, by criteria nobody has chosen yet —
-	// and the field that was not collected in March is the one the comparison
-	// wants in June. The cheap groups ride on pages the walk pays for anyway;
-	// the card and the reputation groups are a request per product, which is
-	// real money and is why the screen lets them be switched off.
 	var fields []string
 	for _, f := range wb.Fields() {
 		fields = append(fields, f.Key)
