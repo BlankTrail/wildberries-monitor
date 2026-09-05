@@ -304,6 +304,7 @@ func (c *Client) Get(ctx context.Context, url string, kind Kind, referer string)
 		lastErr     error   // the last attempt that did not; only one of the two is ever set
 		spent       int     // attempts actually made, which is not the loop counter after an early exit
 		onPort      int     // attempts made on the port currently held
+		lostOnPort  int     // of those, the ones in a row that came back with nothing
 		rotations   int
 		identities  int
 		portChanges int
@@ -315,16 +316,31 @@ func (c *Client) Get(ctx context.Context, url string, kind Kind, referer string)
 	// to stay paired, and two copies of that pairing are two chances for one of
 	// them to leak a port. onPort restarts because the new port arrives with its
 	// own egress, which has earned its own attempts before being replaced.
-	swapPort := func() error {
+	//
+	// It reports whether the port actually changed. The pool hands out its
+	// coldest port and the one just given back is the warmest, so the same
+	// number coming straight back means the pool held nothing else — a pool of
+	// one, or one whose every other port is leased. That is not a failure and
+	// the lease is good; it only means the remedies that follow are the ones
+	// left to try, so the counters keep their place instead of restarting a
+	// budget on the port that has already spent it.
+	//
+	// Release before acquire, never the other way around: holding one port
+	// while waiting for a second is how a pool sized to its threads deadlocks.
+	swapPort := func() (bool, error) {
+		port := lease.Port()
 		lease.Release()
 		held = false
 		next, err := c.leaser.Acquire(ctx)
 		if err != nil {
-			return err
+			return false, err
 		}
 		lease, held = next, true
-		onPort, portChanges = 0, portChanges+1
-		return nil
+		if next.Port() == port {
+			return false, nil
+		}
+		onPort, lostOnPort, portChanges = 0, 0, portChanges+1
+		return true, nil
 	}
 
 attempts:
@@ -332,6 +348,33 @@ attempts:
 		if attempt > 1 && ctx.Err() != nil {
 			break
 		}
+		// A port that has come back with nothing at all is the thing to
+		// replace, and it has to be asked about before the egress is.
+		// Measured live: three items were lost to "15 attempt(s) over 1
+		// port(s), 12 egress change(s), 14 of them lost before a response"
+		// while sixty other ports carried the same search, and twenty-five
+		// more to the gateway shape of it, where the address cannot rotate at
+		// all and a fresh visitor behind a gateway that never came up is
+		// still nobody. Both spent a whole budget proving one port would not
+		// deliver, beside a pool that would have.
+		//
+		// Only attempts that came back with nothing count here. A challenge
+		// came back: the port carries traffic and the target refused the
+		// visitor, which is what rotating the egress below is for — so a
+		// response of any kind clears this counter, and a port that answers
+		// intermittently is never abandoned.
+		//
+		// A pool with no other port to give leaves everything as it was, and
+		// the ladder below runs exactly as it did before this existed.
+		if lostOnPort >= c.retry.AttemptsPerEgress {
+			port := lease.Port()
+			if _, err := swapPort(); err != nil {
+				last, lastErr = nil, fmt.Errorf("port %d answered %d attempt(s) with nothing, and no other port could be taken: %w",
+					port, lostOnPort, err)
+				break attempts
+			}
+		}
+
 		if onPort >= c.retry.AttemptsPerEgress {
 			port := lease.Port()
 			switch err := lease.RotateEgress(ctx); {
@@ -347,10 +390,17 @@ attempts:
 				// IP, and until it existed a budget of ten attempts was silently
 				// cut to the two or three one address had earned.
 				if idErr := lease.RenewIdentity(ctx); idErr != nil {
-					// Nothing left to change. Stop rather than spending the rest
-					// of the budget on a request that will be refused the same
-					// way, and report what the last attempt found.
-					break attempts
+					// Nothing about this port can change. Another port can: it
+					// arrives with its own address and its own visitor, both
+					// remedies in one move. Only when the pool has no other to
+					// give is there nothing left to try, and then stopping
+					// beats spending the rest of the budget on a request that
+					// will be refused the same way.
+					changed, swapErr := swapPort()
+					if swapErr != nil || !changed {
+						break attempts
+					}
+					break
 				}
 				identities++
 				onPort = 0
@@ -359,9 +409,15 @@ attempts:
 				// the egress: it is the port failing at the one thing asked of
 				// it, the same signal as a port that will not answer a request
 				// at all. Take another and spend the rest of the budget there.
-				if swapErr := swapPort(); swapErr != nil {
+				changed, swapErr := swapPort()
+				if swapErr != nil {
 					last, lastErr = nil, fmt.Errorf("port %d would not change its egress (%w), and no other port could be taken: %w",
 						port, err, swapErr)
+					break attempts
+				}
+				if !changed {
+					last, lastErr = nil, fmt.Errorf("port %d would not change its egress (%w), and no other port could be taken",
+						port, err)
 					break attempts
 				}
 			}
@@ -372,6 +428,7 @@ attempts:
 		onPort++
 		if err != nil {
 			faults++
+			lostOnPort++
 			last, lastErr = nil, err
 			// The request never reached the proxy: this port's own listener
 			// refused it, or it is gone. Rotating its egress would be
@@ -381,14 +438,24 @@ attempts:
 			// straight back can block on a busy pool for no gain.
 			if blanktrail.PortUnreachable(err) && attempt < c.retry.Attempts {
 				port := lease.Port()
-				if swapErr := swapPort(); swapErr != nil {
+				changed, swapErr := swapPort()
+				if swapErr != nil {
 					lastErr = fmt.Errorf("port %d could not be reached (%w), and no other port could be taken: %w",
 						port, err, swapErr)
+					break attempts
+				}
+				if !changed {
+					// The pool gave the same number back: this is the only port
+					// it has, and it is the one refusing the connection. There
+					// is nothing the rest of the budget could reach.
+					lastErr = fmt.Errorf("port %d could not be reached (%w), and no other port could be taken",
+						port, err)
 					break attempts
 				}
 			}
 			continue
 		}
+		lostOnPort = 0
 		res.Attempts, res.Rotations, res.TransportErrors = spent, rotations, faults
 		res.PortChanges = portChanges
 		last, lastErr = res, nil

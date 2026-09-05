@@ -257,11 +257,17 @@ type FetchCost struct {
 	// budget went into it.
 	TransportErrors int
 	// PortChanges counts how many times the fetch gave up on its port and took
-	// another, because that port could not be reached or would not accept a new
-	// egress. It is not a rotation: a rotation keeps the port and changes where
-	// it exits, this abandons the port itself, and the two say different things
-	// about where a run's trouble is — proxies that will not carry traffic, or
-	// worker ports that are not there.
+	// another: the port could not be reached, would not accept a new egress, or
+	// answered a run of attempts with nothing at all. It is not a rotation: a
+	// rotation keeps the port and changes where it exits, this abandons the
+	// port itself, and the two say different things about where a run's trouble
+	// is — proxies that will not carry traffic, or worker ports that are not
+	// carrying it.
+	//
+	// A fetch that failed with this at zero and Attempts at the ceiling spent
+	// its whole budget on one port. That was the shape of every lost item in
+	// the run this counter was read against, and it is the reading to look for
+	// first when a run loses pages beside a pool that is serving.
 	PortChanges int
 }
 
