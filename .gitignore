@@ -12,6 +12,14 @@
 
 # runtime data
 /data/
+# The generated panel password. It belongs in the data directory and is written
+# there by web.FirstRunPassword — but the program run once with a package
+# directory as its data directory leaves a copy beside the source, and one such
+# copy was committed and stayed in the repository for three weeks. Ignored by
+# name, in any directory, because the mistake is a working directory rather than
+# a place.
+first-run.txt
+first-run.sha256
 *.db
 *.db-wal
 *.db-shm
