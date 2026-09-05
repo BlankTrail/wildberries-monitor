@@ -45,7 +45,7 @@ func TestJobDetail_SaysWhatHappenedWhenItRan(t *testing.T) {
 	if err := srv.Store.FinishItem(ctx, runID, 1, store.ItemFailed, "429: слишком часто"); err != nil {
 		t.Fatalf("FinishItem: %v", err)
 	}
-	if err := srv.Store.FinishRun(ctx, runID, store.RunDone, 12, 100, 1, ""); err != nil {
+	if err := srv.Store.FinishRun(ctx, runID, store.RunOutcome{State: store.RunDone, Requests: 12, Items: 100, Errors: 1, Error: ""}); err != nil {
 		t.Fatalf("FinishRun: %v", err)
 	}
 

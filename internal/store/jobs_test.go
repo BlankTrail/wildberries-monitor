@@ -294,7 +294,7 @@ func TestUnfinishedRun_FindsWhatACrashLeftAndNothingElse(t *testing.T) {
 	}
 
 	done, _ := s.StartRun(ctx, jobID, []ItemRow{{Kind: "page", Key: "a"}})
-	if err := s.FinishRun(ctx, done, RunDone, 10, 5, 0, ""); err != nil {
+	if err := s.FinishRun(ctx, done, RunOutcome{State: RunDone, Requests: 10, Items: 5, Errors: 0, Error: ""}); err != nil {
 		t.Fatalf("FinishRun: %v", err)
 	}
 	if _, ok, _ := s.UnfinishedRun(ctx, jobID); ok {
@@ -337,7 +337,7 @@ func TestFinishRun_RefusesAStateThatIsNotAnEnding(t *testing.T) {
 	jobID, _ := s.SaveJob(ctx, sampleJobRow())
 	runID, _ := s.StartRun(ctx, jobID, []ItemRow{{Kind: "page", Key: "a"}})
 
-	if err := s.FinishRun(ctx, runID, RunRunning, 0, 0, 0, ""); err == nil {
+	if err := s.FinishRun(ctx, runID, RunOutcome{State: RunRunning, Requests: 0, Items: 0, Errors: 0, Error: ""}); err == nil {
 		t.Error("FinishRun accepted running as an ending")
 	}
 }
@@ -348,7 +348,7 @@ func TestFinishRun_KeepsTheCountsAndTheReason(t *testing.T) {
 	jobID, _ := s.SaveJob(ctx, sampleJobRow())
 	runID, _ := s.StartRun(ctx, jobID, []ItemRow{{Kind: "page", Key: "a"}})
 
-	if err := s.FinishRun(ctx, runID, RunFailed, 137, 42, 3, "the edge stopped answering"); err != nil {
+	if err := s.FinishRun(ctx, runID, RunOutcome{State: RunFailed, Requests: 137, Items: 42, Errors: 3, Error: "the edge stopped answering"}); err != nil {
 		t.Fatalf("FinishRun: %v", err)
 	}
 
@@ -477,7 +477,7 @@ func TestJobs_AFinishedRunLeavesProgressBehindAndATime(t *testing.T) {
 	if err := s.FinishItem(ctx, runID, 0, ItemDone, ""); err != nil {
 		t.Fatalf("FinishItem: %v", err)
 	}
-	if err := s.FinishRun(ctx, runID, RunDone, 12, 1, 0, ""); err != nil {
+	if err := s.FinishRun(ctx, runID, RunOutcome{State: RunDone, Requests: 12, Items: 1, Errors: 0, Error: ""}); err != nil {
 		t.Fatalf("FinishRun: %v", err)
 	}
 
@@ -516,7 +516,7 @@ func TestJobs_LastFinishIsTheLatestFinishWhateverItFinishedAs(t *testing.T) {
 		if err != nil {
 			t.Fatalf("StartRun: %v", err)
 		}
-		if err := s.FinishRun(ctx, runID, c.state, 1, 1, 0, ""); err != nil {
+		if err := s.FinishRun(ctx, runID, RunOutcome{State: c.state, Requests: 1, Items: 1, Errors: 0, Error: ""}); err != nil {
 			t.Fatalf("FinishRun: %v", err)
 		}
 	}
@@ -546,7 +546,7 @@ func TestJobs_ARunInFlightDoesNotHideTheLastFinishedOne(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
-	if err := s.FinishRun(ctx, done, RunDone, 1, 1, 0, ""); err != nil {
+	if err := s.FinishRun(ctx, done, RunOutcome{State: RunDone, Requests: 1, Items: 1, Errors: 0, Error: ""}); err != nil {
 		t.Fatalf("FinishRun: %v", err)
 	}
 
@@ -669,7 +669,7 @@ func TestDeleteJob_TakesItsRunsAndLeavesWhatTheyCollected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
-	if err := s.FinishRun(ctx, runID, RunDone, 1, 1, 0, ""); err != nil {
+	if err := s.FinishRun(ctx, runID, RunOutcome{State: RunDone, Requests: 1, Items: 1, Errors: 0, Error: ""}); err != nil {
 		t.Fatalf("FinishRun: %v", err)
 	}
 

@@ -48,8 +48,7 @@ func broke(t *testing.T, a *App, jobID int64) {
 	if err != nil {
 		t.Fatalf("Runs: %v", err)
 	}
-	if err := a.Store.FinishRun(t.Context(), runs[0].ID, store.RunFailed, 1, 0, 1,
-		"сайт не ответил"); err != nil {
+	if err := a.Store.FinishRun(t.Context(), runs[0].ID, store.RunOutcome{State: store.RunFailed, Requests: 1, Items: 0, Errors: 1, Error: "сайт не ответил"}); err != nil {
 		t.Fatalf("FinishRun: %v", err)
 	}
 }

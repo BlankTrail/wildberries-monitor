@@ -5,6 +5,7 @@ package wb
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -24,7 +25,10 @@ import (
 // the cheap fact being forced to also hold the expensive one.
 type ReviewSummary struct {
 	// Valuation is the card's star rating, e.g. 4.8. The payload sends it as a
-	// JSON string, not a number.
+	// JSON string, not a number — and sends an empty one for a card nobody has
+	// rated yet, which reads here as zero. Zero is the honest answer for it:
+	// a card with no reviews has no star rating, and Count beside it says so
+	// in the one way that cannot be confused with «4.8 звезды, но ноль».
 	Valuation float64
 	// Count is WB's own count of every review the card has ever received —
 	// feedbackCount in the payload. It is deliberately not len(Items): the
@@ -180,7 +184,7 @@ type Reviews struct {
 
 // rawReviewsDocument mirrors the top level of a reviews.json-shaped payload.
 type rawReviewsDocument struct {
-	Valuation               string           `json:"valuation"`
+	Valuation               *string          `json:"valuation"`
 	ValuationDistribution   map[string]int64 `json:"valuationDistribution"`
 	MatchingSizePercentages json.RawMessage  `json:"matchingSizePercentages"`
 	FeedbackCount           int64            `json:"feedbackCount"`
@@ -282,9 +286,27 @@ func decodeReviews(raw []byte) (Reviews, error) {
 		return Reviews{}, fmt.Errorf("wb: decode reviews: %w", err)
 	}
 
-	valuation, err := strconv.ParseFloat(strings.TrimSpace(doc.Valuation), 64)
-	if err != nil {
-		return Reviews{}, fmt.Errorf("wb: decode reviews: valuation %q: %w", doc.Valuation, err)
+	// The key has to be there. A pointer rather than a string, because this is
+	// the one field that tells a real answer from no answer: {} and JSON null
+	// decode into exactly the same zero values a card with no reviews does, and
+	// the guard that used to catch them was the parse of an empty rating.
+	if doc.Valuation == nil {
+		return Reviews{}, errors.New("wb: decode reviews: no valuation — not a reviews document")
+	}
+
+	// An empty rating, though, is not a malformed document — it is the shape
+	// the site answers with for a card nobody has reviewed, alongside
+	// feedbackCount 0 and an empty feedbacks array. Read as a parse failure, as
+	// it was, the commonest answer on a seller's storefront became an error:
+	// every unreviewed product cost a request and reported a broken payload —
+	// and the caller swallowed that error, so the run reported success.
+	valuation := 0.0
+	if text := strings.TrimSpace(*doc.Valuation); text != "" {
+		parsed, err := strconv.ParseFloat(text, 64)
+		if err != nil {
+			return Reviews{}, fmt.Errorf("wb: decode reviews: valuation %q: %w", *doc.Valuation, err)
+		}
+		valuation = parsed
 	}
 
 	dist := make(map[int]int64, len(doc.ValuationDistribution))

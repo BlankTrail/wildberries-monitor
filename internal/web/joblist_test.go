@@ -155,7 +155,7 @@ func TestJobsScreen_HowARunEndedIsAsVisibleAsWhen(t *testing.T) {
 			if err != nil {
 				t.Fatalf("StartRun: %v", err)
 			}
-			if err := srv.Store.FinishRun(context.Background(), runID, c.state, 1, 1, 0, ""); err != nil {
+			if err := srv.Store.FinishRun(context.Background(), runID, store.RunOutcome{State: c.state, Requests: 1, Items: 1, Errors: 0, Error: ""}); err != nil {
 				t.Fatalf("FinishRun: %v", err)
 			}
 

@@ -763,3 +763,40 @@ func TestEndpoints_ValidateCatchesAReviewsTemplateMissingThePlaceholder(t *testi
 		t.Errorf("error %q does not name the missing placeholder", err)
 	}
 }
+
+// TestDecodeReviews_ACardNobodyHasReviewedIsNotAnError is the shape the live
+// site answers with for an unreviewed product: an empty rating string beside a
+// count of nought and an empty window.
+//
+// Read as a parse failure, as it was, this made the commonest answer on a
+// seller's storefront into an error — and the collector swallowed that error,
+// so a run reported success having collected nothing.
+func TestDecodeReviews_ACardNobodyHasReviewedIsNotAnError(t *testing.T) {
+	raw := `{"valuation":"","valuationDistribution":null,"matchingSizePercentages":null,` +
+		`"feedbackCount":0,"feedbackCountWithPhoto":0,"feedbackCountWithText":0,` +
+		`"feedbackCountWithVideo":0,"feedbacks":[]}`
+
+	got, err := decodeReviews([]byte(raw))
+	if err != nil {
+		t.Fatalf("decodeReviews: %v — товар без отзывов это не сломанный документ", err)
+	}
+	if got.Summary.Valuation != 0 {
+		t.Errorf("Valuation=%v, want 0", got.Summary.Valuation)
+	}
+	if got.Summary.Count != 0 {
+		t.Errorf("Count=%d, want 0", got.Summary.Count)
+	}
+	if len(got.Items) != 0 {
+		t.Errorf("len(Items)=%d, want 0", len(got.Items))
+	}
+}
+
+// TestDecodeReviews_ARatingThatIsNotANumberIsStillAnError keeps the guard the
+// one above loosened: an empty rating is the site's own word for «никто не
+// оценивал», and rubbish in that field is still a document to refuse.
+func TestDecodeReviews_ARatingThatIsNotANumberIsStillAnError(t *testing.T) {
+	raw := `{"valuation":"очень хорошо","feedbackCount":3,"feedbacks":[]}`
+	if _, err := decodeReviews([]byte(raw)); err == nil {
+		t.Error("decodeReviews succeeded on a non-numeric rating, want an error")
+	}
+}

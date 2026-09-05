@@ -165,8 +165,17 @@ func (a *App) runJob(ctx context.Context, j job.Job) {
 			a.Log.Printf("задание %d: отказ не записан: %v", j.ID, err)
 		}
 	default:
-		a.Log.Printf("задание %d (%s): %d позиций, %d запросов, %d отказов, за %s",
-			j.ID, j.Name, res.Items, res.Requests, res.Failed,
+		// The losses are named only when there are any, and named separately
+		// from the failures, because they are a different fact: a run whose
+		// every review window was refused finished every item it had and
+		// reported «0 отказов» — true, and the wrong thing to leave a person
+		// with. See job.Result.Lost.
+		lost := ""
+		if res.Lost > 0 {
+			lost = fmt.Sprintf(", не получено довесков: %d", res.Lost)
+		}
+		a.Log.Printf("задание %d (%s): %d позиций, %d запросов, %d отказов%s, за %s",
+			j.ID, j.Name, res.Items, res.Requests, res.Failed, lost,
 			time.Since(started).Round(time.Second))
 	}
 }

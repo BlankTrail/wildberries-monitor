@@ -68,7 +68,12 @@ type RunRow struct {
 	Requests   int64
 	Items      int64
 	Errors     int64
-	Error      string
+	// Lost is what the run asked for and did not get without a unit of work
+	// failing — a card, a review window, a question list. Beside Errors and
+	// not folded into it: Errors is «сколько работы не сделано», Lost is
+	// «сколько из сделанной вернулось неполной».
+	Lost  int64
+	Error string
 }
 
 // ItemRow is one unit of work inside a run.
@@ -384,7 +389,7 @@ func (s *Store) Runs(ctx context.Context, jobID int64, limit int) ([]RunRow, err
 		limit = 20
 	}
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, job_id, started_at, finished_at, state, requests, items, errors, error
+		SELECT id, job_id, started_at, finished_at, state, requests, items, errors, lost, error
 		FROM job_runs WHERE job_id = ? ORDER BY started_at DESC, id DESC LIMIT ?`, jobID, limit)
 	if err != nil {
 		return nil, fmt.Errorf("store: runs of job %d: %w", jobID, err)
@@ -395,7 +400,7 @@ func (s *Store) Runs(ctx context.Context, jobID int64, limit int) ([]RunRow, err
 	for rows.Next() {
 		var r RunRow
 		if err := rows.Scan(&r.ID, &r.JobID, &r.StartedAt, &r.FinishedAt, &r.State,
-			&r.Requests, &r.Items, &r.Errors, &r.Error); err != nil {
+			&r.Requests, &r.Items, &r.Errors, &r.Lost, &r.Error); err != nil {
 			return nil, fmt.Errorf("store: runs of job %d: %w", jobID, err)
 		}
 		out = append(out, r)
@@ -496,8 +501,30 @@ func (s *Store) FinishItem(ctx context.Context, runID int64, position int, state
 	return nil
 }
 
-// FinishRun closes a run.
-func (s *Store) FinishRun(ctx context.Context, runID int64, state string, requests, items, errCount int64, failure string) error {
+// RunOutcome is what a run ended with, in one value.
+//
+// Named fields rather than a row of positional numbers: the call used to take
+// four adjacent int64s — requests, items, errors and now losses — where any
+// two could be swapped and still compile, and the one thing a run's record
+// must not do is quietly attribute one count to another.
+type RunOutcome struct {
+	// State is one of RunDone, RunFailed or RunStopped.
+	State string
+	// Requests is what the run actually spent, Items what it collected.
+	Requests int64
+	Items    int64
+	// Errors is how many units of work failed; Lost is how much of what the
+	// successful ones fetched never arrived — see job.Result.Lost.
+	Errors int64
+	Lost   int64
+	// Error is the sentence a person reads when the run did not finish.
+	Error string
+}
+
+// FinishRun closes a run with what it did.
+func (s *Store) FinishRun(ctx context.Context, runID int64, out RunOutcome) error {
+	state, requests, items := out.State, out.Requests, out.Items
+	errCount, lost, failure := out.Errors, out.Lost, out.Error
 	switch state {
 	case RunDone, RunFailed, RunStopped:
 	default:
@@ -506,9 +533,9 @@ func (s *Store) FinishRun(ctx context.Context, runID int64, state string, reques
 	now := s.now().UTC().Unix()
 	res, err := s.db.ExecContext(ctx, `
 		UPDATE job_runs
-		SET state = ?, finished_at = ?, requests = ?, items = ?, errors = ?, error = ?
+		SET state = ?, finished_at = ?, requests = ?, items = ?, errors = ?, lost = ?, error = ?
 		WHERE id = ?`,
-		state, now, requests, items, errCount, failure, runID)
+		state, now, requests, items, errCount, lost, failure, runID)
 	if err != nil {
 		return fmt.Errorf("store: finish run %d: %w", runID, err)
 	}
@@ -532,13 +559,13 @@ func (s *Store) UnfinishedRun(ctx context.Context, jobID int64) (RunRow, bool, e
 	var r RunRow
 	var finished sql.NullInt64
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, job_id, started_at, finished_at, state, requests, items, errors, error
+		SELECT id, job_id, started_at, finished_at, state, requests, items, errors, lost, error
 		FROM job_runs
 		WHERE job_id = ? AND state = ?
 		ORDER BY started_at DESC, id DESC
 		LIMIT 1`, jobID, RunRunning).
 		Scan(&r.ID, &r.JobID, &r.StartedAt, &finished, &r.State,
-			&r.Requests, &r.Items, &r.Errors, &r.Error)
+			&r.Requests, &r.Items, &r.Errors, &r.Lost, &r.Error)
 	if errors.Is(err, sql.ErrNoRows) {
 		return RunRow{}, false, nil
 	}

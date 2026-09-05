@@ -655,7 +655,7 @@ func storefrontWalk(t *testing.T, a *App, jobID int64, at time.Time, nmIDs ...in
 		t.Fatalf("StartRun: %v", err)
 	}
 	a.Store.SetClock(func() time.Time { return at.Add(time.Minute) })
-	if err := a.Store.FinishRun(ctx, run, store.RunDone, 1, int64(len(nmIDs)), 0, ""); err != nil {
+	if err := a.Store.FinishRun(ctx, run, store.RunOutcome{State: store.RunDone, Requests: 1, Items: int64(len(nmIDs)), Errors: 0, Error: ""}); err != nil {
 		t.Fatalf("FinishRun: %v", err)
 	}
 	a.Store.SetClock(func() time.Time { return at })

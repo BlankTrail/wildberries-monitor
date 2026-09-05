@@ -468,7 +468,7 @@ func TestLive_ARunThatEndedBeforeTheScreenOpenedIsSaidToBeOver(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
-	if err := srv.Store.FinishRun(ctx, runID, store.RunDone, 12, 34, 0, ""); err != nil {
+	if err := srv.Store.FinishRun(ctx, runID, store.RunOutcome{State: store.RunDone, Requests: 12, Items: 34, Errors: 0, Error: ""}); err != nil {
 		t.Fatalf("FinishRun: %v", err)
 	}
 

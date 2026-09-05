@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -39,7 +40,18 @@ type fakeSite struct {
 	missing   map[int64]bool
 	reviews   []int64
 	questions []int64
-	shelves   []wb.SearchQuery
+	// questionTakes records the page size each question fetch asked for. The
+	// parameter is what the collector got wrong for as long as it passed
+	// zero, and a fake that dropped it could not have said so.
+	questionTakes []int
+	// reviewsFailAlways refuses every window, for the case where nothing is
+	// collected and the run has to say so.
+	reviewsFailAlways error
+	// cardPartial is the shape Client.Card documents and every caller here
+	// used to ignore: the static half fetched and decoded, the live half
+	// failed, both returned together.
+	cardPartial error
+	shelves     []wb.SearchQuery
 	// productShelves records which products were asked for their own row, and
 	// shelfOf answers for them. A nil shelfOf gives the answer the live site
 	// gives most of the time — a named shelf with nobody in it — which is the
@@ -157,7 +169,8 @@ func (f *fakeSite) Detail(_ context.Context, _ wb.Endpoints, nm int64, dest stri
 	}
 	return wb.CardFetch{
 		Product: wb.Product{
-			ID: nm, Name: "Платье", Brand: "BrandCo", MatchID: f.cardImt,
+			ID: nm, Name: "Платье", Brand: "BrandCo",
+			Root: ptrTo(f.cardImt), MatchID: f.cardImt + notTheGroup,
 			SupplierID: ptrTo(int64(4242)), SupplierName: "ООО Ромашка",
 			Dest: dest, AppType: app, FetchedAt: time.Unix(1000, 0).UTC(),
 			Feedbacks: f.cardFeedbacks,
@@ -201,6 +214,11 @@ func (f *fakeSite) Card(_ context.Context, _ *wb.Basket, _ wb.Endpoints, nm int6
 	if f.cardFail != nil {
 		return wb.CardFetch{}, f.cardFail
 	}
+	if f.cardPartial != nil {
+		return wb.CardFetch{
+			Card: wb.Card{NmID: nm, ImtID: f.cardImt, Name: "Платье"},
+		}, f.cardPartial
+	}
 	return wb.CardFetch{
 		Card: wb.Card{NmID: nm, ImtID: f.cardImt, Name: "Платье"},
 		// The seller travels on the live half, because that is where the site
@@ -210,6 +228,11 @@ func (f *fakeSite) Card(_ context.Context, _ *wb.Basket, _ wb.Endpoints, nm int6
 			SupplierID: ptrTo(int64(4242)), SupplierName: "ООО Ромашка",
 			Dest: dest, AppType: app, FetchedAt: time.Unix(1000, 0).UTC(),
 			Feedbacks: f.cardFeedbacks,
+			// The untouched payload the decoder attaches to every product.
+			// Present here so that «хранить ответы сайта» has something to
+			// govern on this path — without it the test that checks the box
+			// is obeyed passes whether it is obeyed or not.
+			Raw: []byte(`{"id":` + strconv.FormatInt(nm, 10) + `}`),
 		},
 	}, nil
 }
@@ -219,14 +242,18 @@ func (f *fakeSite) Reviews(_ context.Context, _ wb.Endpoints, imtID int64) (wb.R
 	if f.fail != nil {
 		return wb.Reviews{}, f.fail
 	}
+	if f.reviewsFailAlways != nil {
+		return wb.Reviews{}, f.reviewsFailAlways
+	}
 	if f.reviewsFailOnce && len(f.reviews) == 1 {
 		return wb.Reviews{}, errors.New("окно отзывов не ответило")
 	}
 	return wb.Reviews{ImtID: imtID}, nil
 }
 
-func (f *fakeSite) Questions(_ context.Context, _ wb.Endpoints, imtID int64, _, _ int) (wb.Questions, error) {
+func (f *fakeSite) Questions(_ context.Context, _ wb.Endpoints, imtID int64, take, _ int) (wb.Questions, error) {
 	f.questions = append(f.questions, imtID)
+	f.questionTakes = append(f.questionTakes, take)
 	if f.fail != nil {
 		return wb.Questions{}, f.fail
 	}
@@ -399,7 +426,11 @@ func TestFetch_BuysTheCardWhenAFieldNamesIt(t *testing.T) {
 
 func TestFetch_BuysReviewsAndQuestionsOnlyWhenAsked(t *testing.T) {
 	grouped := product(101)
-	grouped.MatchID = 900 // the search row carried a grouping id of its own
+	// The search row carried a grouping id of its own — root, which is the
+	// key the review window answers to; matchId beside it groups something
+	// else entirely (see notTheGroup).
+	grouped.Root = ptrTo(int64(900))
+	grouped.MatchID = 900 + notTheGroup
 	site := &fakeSite{products: []wb.Product{grouped}, cardImt: 900}
 
 	f, _ := fetcherFor(t, site, "nm_id", "review_text")
@@ -1210,7 +1241,8 @@ func TestFetch_SkipsTheReviewWindowThePageAlreadySaidIsEmpty(t *testing.T) {
 	// a round trip whose whole answer is a number the page already gave.
 	none := int64(0)
 	quiet := product(101)
-	quiet.MatchID, quiet.Feedbacks = 900, &none
+	quiet.Root, quiet.MatchID = ptrTo(int64(900)), 900+notTheGroup
+	quiet.Feedbacks = &none
 
 	site := &fakeSite{products: []wb.Product{quiet}, cardImt: 900}
 	f, _ := fetcherFor(t, site, "nm_id", "review_text")
@@ -1234,7 +1266,8 @@ func TestFetch_StillAsksWhenThePageNamedNoReviewCount(t *testing.T) {
 	// key — wb.Product records which one supplied it — would otherwise lose
 	// every review it has.
 	loud := product(101)
-	loud.MatchID, loud.Feedbacks = 900, nil
+	loud.Root, loud.MatchID = ptrTo(int64(900)), 900+notTheGroup
+	loud.Feedbacks = nil
 
 	site := &fakeSite{products: []wb.Product{loud}, cardImt: 900}
 	f, _ := fetcherFor(t, site, "nm_id", "review_text")
@@ -1254,7 +1287,8 @@ func TestFetch_AProductWithReviewsIsStillAsked(t *testing.T) {
 	// reason to save a request.
 	some := int64(3)
 	busy := product(101)
-	busy.MatchID, busy.Feedbacks = 900, &some
+	busy.Root, busy.MatchID = ptrTo(int64(900)), 900+notTheGroup
+	busy.Feedbacks = &some
 
 	site := &fakeSite{products: []wb.Product{busy}, cardImt: 900}
 	f, _ := fetcherFor(t, site, "nm_id", "review_text")
@@ -1269,10 +1303,20 @@ func TestFetch_AProductWithReviewsIsStillAsked(t *testing.T) {
 	}
 }
 
+// notTheGroup is added to every fixture's matchId so that it is never the
+// grouping id.
+//
+// The two numbers used to be the same in these fixtures, which is precisely
+// how the collector reading matchId as the group went unnoticed here while
+// failing against the live site on every product. Kept apart, a reader that
+// takes matchId asks for a window nobody has and the test says so.
+const notTheGroup = 500000
+
 // grouped is one article of a model, all of whose colours share imtID.
 func grouped(nmID, imtID int64) wb.Product {
 	p := product(nmID)
-	p.MatchID = imtID
+	p.Root = ptrTo(imtID)
+	p.MatchID = imtID + notTheGroup
 	return p
 }
 
@@ -1389,7 +1433,8 @@ func TestFetch_NoReviewsIsNotAReasonToSkipTheQuestions(t *testing.T) {
 	// pays for carries a question count at all.
 	none := int64(0)
 	quiet := product(101)
-	quiet.MatchID, quiet.Feedbacks = 900, &none
+	quiet.Root, quiet.MatchID = ptrTo(int64(900)), 900+notTheGroup
+	quiet.Feedbacks = &none
 
 	site := &fakeSite{products: []wb.Product{quiet}, cardImt: 900}
 	f, _ := fetcherFor(t, site, "nm_id", "review_text", "question_text")
@@ -1632,5 +1677,176 @@ func TestFetch_ABatchStillBuysTheDocumentWhenItIsAskedFor(t *testing.T) {
 	// One batch plus two cards of two halves each.
 	if n != 5 {
 		t.Errorf("потрачено %d запросов, ожидались пачка и два документа", n)
+	}
+}
+
+// TestFetch_TheQuestionListIsAskedForWithARealWindow pins the page size.
+//
+// take is the number of questions the request asks for and the endpoint takes
+// it literally. The one production call passed zero for as long as this test
+// did not exist, so every request was a polite way of asking for no questions
+// at all: the site answered with an empty list and no error, the group was
+// marked as read, and no other article of it ever asked.
+func TestFetch_TheQuestionListIsAskedForWithARealWindow(t *testing.T) {
+	site := &fakeSite{products: []wb.Product{grouped(101, 900)}}
+
+	f, _ := fetcherFor(t, site, "nm_id", "question_text")
+	if _, err := f.Fetch(t.Context(), job.Item{Key: job.Key{
+		Kind: job.ItemPage, Phrase: "платье", Dest: "-1257786", AppType: 1, Page: 1,
+	}.String()}); err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if len(site.questionTakes) != 1 {
+		t.Fatalf("списков вопросов запрошено %d, ожидался один", len(site.questionTakes))
+	}
+	if site.questionTakes[0] <= 0 {
+		t.Errorf("окно вопросов запрошено размером %d — это просьба не присылать ничего",
+			site.questionTakes[0])
+	}
+}
+
+// TestFetch_AGroupIsAskedForByRootAndNotByMatchID is the live defect, pinned.
+//
+// Both numbers group something and the fixtures used to carry one number for
+// both, which is exactly how the wrong one survived. Here they are different,
+// and only root reaches the review window.
+func TestFetch_AGroupIsAskedForByRootAndNotByMatchID(t *testing.T) {
+	site := &fakeSite{products: []wb.Product{grouped(101, 900)}}
+
+	f, _ := fetcherFor(t, site, "nm_id", "review_text")
+	if _, err := f.Fetch(t.Context(), job.Item{Key: job.Key{
+		Kind: job.ItemPage, Phrase: "платье", Dest: "-1257786", AppType: 1, Page: 1,
+	}.String()}); err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if len(site.reviews) != 1 || site.reviews[0] != 900 {
+		t.Fatalf("окно отзывов запрошено для %v, ожидалась группа 900 (root), а не %d (matchId)",
+			site.reviews, 900+notTheGroup)
+	}
+}
+
+// TestFetch_AProductWithNoGroupIsNotAskedUnderMatchID guards the other half:
+// a listing row that names no root has no grouping id at all, and matchId
+// standing in for one would fetch a window that belongs to somebody else.
+func TestFetch_AProductWithNoGroupIsNotAskedUnderMatchID(t *testing.T) {
+	orphan := product(101)
+	orphan.Root = nil
+	orphan.MatchID = 777
+	site := &fakeSite{products: []wb.Product{orphan}}
+
+	f, _ := fetcherFor(t, site, "nm_id", "review_text")
+	if _, err := f.Fetch(t.Context(), job.Item{Key: job.Key{
+		Kind: job.ItemPage, Phrase: "платье", Dest: "-1257786", AppType: 1, Page: 1,
+	}.String()}); err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if len(site.reviews) != 0 {
+		t.Errorf("окно отзывов запрошено для %v — у товара нет группы, спрашивать не по чему", site.reviews)
+	}
+}
+
+// TestFetch_AWindowThatWasLostIsCounted is the defect that hid the two above.
+//
+// A refused review window does not fail the item — the page it belongs to is
+// saved and the other products still have their windows to fetch — but it used
+// to be swallowed whole: no error, no log, no counter. A run that collected no
+// reviews at all reported «выполнено, 0 отказов».
+func TestFetch_AWindowThatWasLostIsCounted(t *testing.T) {
+	site := &fakeSite{
+		products:          []wb.Product{grouped(101, 900), grouped(102, 901)},
+		reviewsFailAlways: errors.New("окно отзывов не ответило"),
+	}
+
+	f, _ := fetcherFor(t, site, "nm_id", "review_text")
+	if _, err := f.Fetch(t.Context(), job.Item{Key: job.Key{
+		Kind: job.ItemPage, Phrase: "платье", Dest: "-1257786", AppType: 1, Page: 1,
+	}.String()}); err != nil {
+		t.Fatalf("Fetch: %v — потерянное окно не должно валить пункт", err)
+	}
+	if got := f.Lost(); got != 2 {
+		t.Errorf("потерь насчитано %d, ожидалось 2 — по одной на каждое отказавшее окно", got)
+	}
+}
+
+// TestFetch_NothingLostIsNothingCounted is the other side of it: a run where
+// everything answered must not report losses it did not have.
+func TestFetch_NothingLostIsNothingCounted(t *testing.T) {
+	site := &fakeSite{products: []wb.Product{grouped(101, 900)}}
+
+	f, _ := fetcherFor(t, site, "nm_id", "review_text")
+	if _, err := f.Fetch(t.Context(), job.Item{Key: job.Key{
+		Kind: job.ItemPage, Phrase: "платье", Dest: "-1257786", AppType: 1, Page: 1,
+	}.String()}); err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if got := f.Lost(); got != 0 {
+		t.Errorf("потерь насчитано %d при полностью успешном прогоне", got)
+	}
+}
+
+// savedRow is one product as the store has it, for the tests that check what
+// was written rather than only that something was.
+func savedRow(t *testing.T, s *store.Store, nmID int64) store.ProductRow {
+	t.Helper()
+	for row, err := range s.Products(t.Context(), store.ProductFilter{
+		Latest: true, NmIDs: []int64{nmID},
+	}) {
+		if err != nil {
+			t.Fatalf("Products: %v", err)
+		}
+		return row
+	}
+	t.Fatalf("товар %d не сохранён", nmID)
+	return store.ProductRow{}
+}
+
+// TestFetch_TheDocumentSurvivesTheLiveHalfFailing is Client.Card's own warning,
+// obeyed.
+//
+// Card returns the static half it already fetched alongside a failure on the
+// live half, and says in so many words that a caller checking only err will
+// silently drop it. Every caller here did: a downloaded, decoded card document
+// went in the bin because a second request had timed out, and two requests
+// bought nothing.
+func TestFetch_TheDocumentSurvivesTheLiveHalfFailing(t *testing.T) {
+	site := &fakeSite{
+		products:    []wb.Product{product(101)},
+		cardImt:     900,
+		cardPartial: errors.New("живая половина не ответила"),
+	}
+
+	f, st := fetcherFor(t, site, "nm_id", "description")
+	if _, err := f.Fetch(t.Context(), job.Item{Key: job.Key{
+		Kind: job.ItemPage, Phrase: "платье", Dest: "-1257786", AppType: 1, Page: 1,
+	}.String()}); err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	row := savedRow(t, st, 101)
+	if row.ImtID == nil || *row.ImtID != 900 {
+		t.Error("документ карточки не сохранён, хотя пришёл целым — оплачен и выброшен")
+	}
+	if got := f.Lost(); got != 1 {
+		t.Errorf("потерь насчитано %d, ожидалась одна — половина запроса действительно не пришла", got)
+	}
+}
+
+// TestFetch_KeepRawGovernsTheCardPathToo. The box is one decision and it has to
+// hold on every path that writes a reading; the card path went straight to the
+// store with the untouched payload whether it was ticked or not, so a job that
+// declined to keep them kept them anyway.
+func TestFetch_KeepRawGovernsTheCardPathToo(t *testing.T) {
+	live := product(101)
+	live.Raw = []byte(`{"id":101}`)
+	site := &fakeSite{products: []wb.Product{live}, cardImt: 900}
+
+	f, st := fetcherFor(t, site, "nm_id", "description")
+	f.Job.KeepRaw = false
+	if _, err := f.Fetch(t.Context(), job.Item{Key: job.Key{
+		Kind: job.ItemProduct, NmID: 101, Dest: "-1257786", AppType: 1,
+	}.String()}); err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if row := savedRow(t, st, 101); row.Raw != nil {
+		t.Errorf("сырой ответ сохранён (%q), а галка «хранить ответы сайта» снята", *row.Raw)
 	}
 }

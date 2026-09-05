@@ -79,6 +79,10 @@ type Fetcher struct {
 	// article, so a model in six colours has one window and six articles that
 	// would each have asked for it.
 	asked asked
+
+	// losses is what this run asked for and did not get without the item
+	// failing — see lost.go.
+	losses losses
 }
 
 // Fetch does one item and reports how many requests it cost.
@@ -490,7 +494,7 @@ func (f *Fetcher) product(ctx context.Context, key job.Key) (int, error) {
 		return requests, fmt.Errorf("collect: card %d: %w", key.NmID, err)
 	}
 
-	if _, err := f.Store.SaveCard(ctx, fetch); err != nil {
+	if _, err := f.Store.SaveCard(ctx, f.storedCard(fetch)); err != nil {
 		return requests, fmt.Errorf("collect: saving card %d: %w", key.NmID, err)
 	}
 	if err := f.link(ctx, []wb.Product{fetch.Product}); err != nil {
@@ -498,12 +502,11 @@ func (f *Fetcher) product(ctx context.Context, key job.Key) (int, error) {
 	}
 	f.scraped(ctx, "карточка %d — %s", key.NmID, productName(fetch))
 
-	// The grouping id, from whichever half was read. The detail response
-	// carries it as matchId, which is what makes the review window reachable
-	// without the document beside it.
+	// The grouping id, from whichever half was read — see groupOf for why the
+	// listing's own answer to that is root and not matchId.
 	imtID := fetch.Card.ImtID
 	if imtID == 0 {
-		imtID = fetch.Product.MatchID
+		imtID = groupOf(fetch.Product)
 	}
 	extra, err := f.signals(ctx, imtID, key.NmID, fetch.Product.Feedbacks)
 	return requests + extra, err
@@ -584,7 +587,16 @@ func (f *Fetcher) oneOfBatch(ctx context.Context, key job.Key, live wb.Product) 
 	if f.sources()[wb.FieldSourceCardDocument] {
 		card, err := f.Site.Card(ctx, f.Basket, f.Eps, live.ID, key.Dest, key.AppType)
 		requests += 2
-		if err == nil {
+		if err != nil {
+			f.lost(ctx, "карточка товара %d: %v", live.ID, err)
+		}
+		// Whatever document came back, error or not. This path is the sharpest
+		// case Client.Card's «check the returned Card itself» warns about: the
+		// live half is already in hand from the batch, so the only thing this
+		// call was for is the document — and when the document arrived and the
+		// live half timed out, checking only err threw the document away and
+		// billed two requests for nothing.
+		if card.Card.ImtID != 0 {
 			// The document's own live half is a second reading of the same
 			// moment; the batch's is the one this item is about.
 			card.Product = live
@@ -592,7 +604,7 @@ func (f *Fetcher) oneOfBatch(ctx context.Context, key job.Key, live wb.Product) 
 		}
 	}
 
-	if _, err := f.Store.SaveCard(ctx, fetch); err != nil {
+	if _, err := f.Store.SaveCard(ctx, f.storedCard(fetch)); err != nil {
 		return requests, fmt.Errorf("collect: saving card %d: %w", live.ID, err)
 	}
 	if err := f.link(ctx, []wb.Product{live}); err != nil {
@@ -601,7 +613,7 @@ func (f *Fetcher) oneOfBatch(ctx context.Context, key job.Key, live wb.Product) 
 
 	imtID := fetch.Card.ImtID
 	if imtID == 0 {
-		imtID = live.MatchID
+		imtID = groupOf(live)
 	}
 	extra, err := f.signals(ctx, imtID, live.ID, live.Feedbacks)
 	return requests + extra, err
@@ -767,6 +779,19 @@ func (f *Fetcher) storedOne(p wb.Product) wb.Product {
 	return p
 }
 
+// storedCard is stored for the live half of a card fetch.
+//
+// Every path that saves a card went straight to the store with what the site
+// sent, so «хранить ответы сайта» governed the listing walks and nothing else:
+// an article-list job wrote the untouched payload of every product whether the
+// box was ticked or not. The box is the one place that decision is made, and
+// it has to be made on every path that writes a reading — which is what this
+// is for.
+func (f *Fetcher) storedCard(cf wb.CardFetch) wb.CardFetch {
+	cf.Product = f.storedOne(cf.Product)
+	return cf
+}
+
 // stored is one page as it is to be written.
 //
 // The untouched payload the decoder attached to each of them is dropped unless
@@ -812,24 +837,32 @@ func (f *Fetcher) enrich(ctx context.Context, products []wb.Product, key job.Key
 			return requests, err
 		}
 
-		imtID := p.MatchID
+		imtID := groupOf(p)
 		if wants[wb.FieldSourceCardDocument] {
 			fetch, err := f.Site.Card(ctx, f.Basket, f.Eps, p.ID, key.Dest, key.AppType)
 			requests += 2
+			// A partial answer is still an answer. Client.Card returns the
+			// static half it already fetched alongside a failure on the live
+			// half, and says so in its own doc; checking only err threw away a
+			// downloaded, decoded card document because a second request this
+			// caller did not need had timed out. The document is the whole
+			// reason for the call — the live half is already in hand from the
+			// page — so what came back is saved and only what is missing is
+			// reported.
 			if err != nil {
-				// One product's card failing does not fail the page. The page
-				// is the unit of work, and throwing away ninety-nine saved
-				// products because the hundredth card timed out would make a
-				// run's cost depend on its unluckiest item.
-				continue
+				f.lost(ctx, "карточка товара %d: %v", p.ID, err)
+				if fetch.Card.ImtID == 0 {
+					// Nothing usable came back: the static half is what failed,
+					// and there is no document to save.
+					continue
+				}
 			}
-			if _, err := f.Store.SaveCard(ctx, fetch); err != nil {
+			if _, err := f.Store.SaveCard(ctx, f.storedCard(fetch)); err != nil {
 				return requests, fmt.Errorf("collect: saving card %d: %w", p.ID, err)
 			}
 			if fetch.Card.ImtID != 0 {
-				// The card knows the real grouping id; a search row's MatchID
-				// is the same number when the payload carried one and zero
-				// when it did not.
+				// The card states the grouping id outright, so it wins over
+				// whatever the listing row implied.
 				imtID = fetch.Card.ImtID
 			}
 		}
@@ -842,6 +875,45 @@ func (f *Fetcher) enrich(ctx context.Context, products []wb.Product, key job.Key
 	}
 	return requests, nil
 }
+
+// groupOf is the id under which this product's reviews and questions live.
+//
+// Root, and not MatchID. Both are numbers a listing row carries and both group
+// something, which is exactly why the wrong one went unnoticed: MatchID groups
+// every seller's listing of the same physical product — it is the key
+// Client.Duplicates is built around, and its own doc says so — while root is
+// the imt id, the parent of one seller's colours and sizes, and the only key
+// the review window and the question list answer to.
+//
+// Live data settles it: of the products collected in one run where the card
+// was also fetched, and so where the true imt id was known, MatchID matched it
+// in none of them and root matched it in all. Asked under MatchID, the review
+// window came back empty or refused for every product — and the refusal was
+// swallowed, so a run collected no reviews at all and reported success.
+//
+// Zero when the row named neither, which signals reads as «группа неизвестна»
+// and skips rather than guessing.
+func groupOf(p wb.Product) int64 {
+	if p.Root != nil && *p.Root != 0 {
+		return *p.Root
+	}
+	return 0
+}
+
+// questionWindow is how many questions one request asks for.
+//
+// The parameter is the page size and the endpoint takes it literally: the one
+// production call passed zero, so every request was a polite way of asking for
+// no questions at all, and the site obliged. Nothing came back, no error was
+// raised, and the group was marked as read — so no other article of it asked
+// either.
+//
+// One window rather than a walk across skip, because the estimate prices this
+// at one request per product and a walk cannot be priced before the count is
+// known. A hundred covers a card's questions outright in the ordinary case,
+// and Questions.Count travels beside the window saying how many there were in
+// total — the same bargain Client.Reviews already strikes with its own window.
+const questionWindow = 100
 
 // signals fetches reviews and questions when the selection asks for them.
 //
@@ -868,7 +940,14 @@ func (f *Fetcher) signals(ctx context.Context, imtID, nmID int64, feedbacks *int
 		if !f.asked.already(wb.FieldSourceReviews, imtID) {
 			reviews, err := f.Site.Reviews(ctx, f.Eps, imtID)
 			requests++
-			if err == nil {
+			if err != nil {
+				// Not the item's failure — the page it belongs to is saved and
+				// the other products on it still have their windows to fetch —
+				// but not nothing, either. Left as a bare «if err == nil», this
+				// branch is what hid a run collecting no reviews whatsoever
+				// behind «0 отказов».
+				f.lost(ctx, "отзывы товара %d: %v", nmID, err)
+			} else {
 				if _, err := f.Store.SaveReviews(ctx, reviews); err != nil {
 					return requests, fmt.Errorf("collect: saving reviews for %d: %w", nmID, err)
 				}
@@ -883,9 +962,11 @@ func (f *Fetcher) signals(ctx context.Context, imtID, nmID int64, feedbacks *int
 			return requests, nil
 		}
 		if !f.asked.already(wb.FieldSourceQuestions, imtID) {
-			questions, err := f.Site.Questions(ctx, f.Eps, imtID, 0, 0)
+			questions, err := f.Site.Questions(ctx, f.Eps, imtID, questionWindow, 0)
 			requests++
-			if err == nil {
+			if err != nil {
+				f.lost(ctx, "вопросы товара %d: %v", nmID, err)
+			} else {
 				if _, err := f.Store.SaveQuestions(ctx, questions); err != nil {
 					return requests, fmt.Errorf("collect: saving questions for %d: %w", nmID, err)
 				}

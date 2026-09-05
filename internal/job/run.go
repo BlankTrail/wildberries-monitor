@@ -38,6 +38,22 @@ type Fetcher interface {
 	Fetch(ctx context.Context, it Item) (requests int, err error)
 }
 
+// Loser is a fetcher that also keeps count of what it asked for and did not
+// get without failing the item.
+//
+// Optional, and asked for rather than required: some of what an item fetches
+// is not the item. A page is a hundred products; one product's review window
+// refusing must not throw away the ninety-nine already saved, so the item
+// still finishes — and the run would otherwise report «выполнено, 0 отказов»
+// over a collection that got none of what it was asked for.
+//
+// A separate interface rather than a second return value on Fetch, because
+// the number is about the run and not about the item: it accumulates across
+// every item and is read once, at the end.
+type Loser interface {
+	Lost() int64
+}
+
 // FetcherFunc adapts a function to Fetcher.
 type FetcherFunc func(context.Context, Item) (int, error)
 
@@ -62,6 +78,15 @@ type Result struct {
 	// with. Carried out of the bus and into the run's own record, because it
 	// is a fact about this run's data and not about the bus.
 	Dropped int64
+	// Lost is what the run asked for and did not get without an item failing —
+	// a card, a review window, a question list. Zero from a fetcher that does
+	// not count them; see Loser.
+	//
+	// Beside Failed rather than added to it, because they answer different
+	// questions. Failed is «сколько работы не сделано»; this is «сколько из
+	// сделанной вернулось неполной», and a run can legitimately have a great
+	// deal of the second and none of the first.
+	Lost int64
 }
 
 // Runner executes jobs.
@@ -216,6 +241,9 @@ func (r *Runner) Run(ctx context.Context, j Job) (Result, error) {
 
 	res.Items, res.Failed, res.Requests = items.Load(), failed.Load(), requests.Load()
 	res.Dropped = r.Bus.Stats().Dropped
+	if counter, ok := r.Fetcher.(Loser); ok {
+		res.Lost = counter.Lost()
+	}
 
 	state, runErr := store.RunDone, error(nil)
 	failure := ""
@@ -239,7 +267,14 @@ func (r *Runner) Run(ctx context.Context, j Job) (Result, error) {
 	// stop.
 	closing, cancelClosing := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancelClosing()
-	if err := r.Store.FinishRun(closing, res.RunID, state, res.Requests, res.Items, res.Failed, failure); err != nil {
+	if err := r.Store.FinishRun(closing, res.RunID, store.RunOutcome{
+		State:    state,
+		Requests: res.Requests,
+		Items:    res.Items,
+		Errors:   res.Failed,
+		Lost:     res.Lost,
+		Error:    failure,
+	}); err != nil {
 		return res, fmt.Errorf("job: closing run %d: %w", res.RunID, err)
 	}
 	_ = r.Bus.Publish(closing, events.Event{Kind: events.RunFinished, JobID: j.ID, Payload: res})
