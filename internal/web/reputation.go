@@ -72,6 +72,37 @@ func (s *Server) reputationPanel(w http.ResponseWriter, r *http.Request) {
 		b.WriteString(html.EscapeString(strings.Join(stars, ", ")) + `</p>`)
 	}
 
+	// How the aggregate has moved, when there is more than one reading of it.
+	//
+	// The reader for this was built, covered by six tests and called by nothing:
+	// the summaries were written on every collection and the only thing that
+	// could read them back had no caller. It belongs here — «упал ли рейтинг и
+	// когда» is the question the number above raises, and it is the one thing
+	// this panel can answer that a single reading cannot.
+	if imt := s.groupOf(r, nm); imt != 0 {
+		var points []store.ReviewSummaryPoint
+		for point, err := range s.Store.ReviewSummaryHistory(r.Context(), imt, 0, 0) {
+			if err != nil {
+				break
+			}
+			points = append(points, point)
+		}
+		if len(points) > 1 {
+			b.WriteString(`<h5 class="bt-form-head">Как менялось</h5>`)
+			b.WriteString(`<div class="bt-table-wrap"><table class="bt-table"><thead><tr>` +
+				`<th>Когда</th><th class="bt-num">Оценка</th><th class="bt-num">Отзывов</th>` +
+				`<th class="bt-num">С фото</th>` +
+				`</tr></thead><tbody>`)
+			for _, point := range points {
+				fmt.Fprintf(&b, `<tr><td class="bt-mono">%s</td>`+
+					`<td class="bt-num">%.2f</td><td class="bt-num">%d</td><td class="bt-num">%d</td></tr>`,
+					html.EscapeString(time.Unix(point.TS, 0).Local().Format("02.01.2006 15:04")),
+					point.Valuation, point.Count, point.WithPhoto)
+			}
+			b.WriteString(`</tbody></table></div>`)
+		}
+	}
+
 	// The window, and what it is a window on. The aggregate above counts every
 	// review the card ever had; these are the ones this program has fetched,
 	// and saying so is the difference between «двадцать отзывов» and «двадцать
@@ -167,4 +198,22 @@ func reputationCell(nmID int64, text string) string {
 	return `<td class="bt-num"><button class="bt-narrow" type="button" data-get="/results/reputation?nm=` +
 		strconv.FormatInt(nmID, 10) + `" data-target="#results-detail" ` +
 		`title="Что пишут в отзывах и вопросах">` + html.EscapeString(text) + `</button></td>`
+}
+
+// groupOf is the card id this article belongs to, or zero when no card has been
+// read for it. The reputation history is keyed on the group, because that is
+// what Wildberries publishes a rating for.
+func (s *Server) groupOf(r *http.Request, nmID int64) int64 {
+	for row, err := range s.Store.Products(r.Context(), store.ProductFilter{
+		Latest: true, NmIDs: []int64{nmID},
+	}) {
+		if err != nil {
+			return 0
+		}
+		if row.ImtID != nil {
+			return *row.ImtID
+		}
+		return 0
+	}
+	return 0
 }
