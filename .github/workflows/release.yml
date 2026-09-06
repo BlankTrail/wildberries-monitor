@@ -73,6 +73,12 @@ jobs:
             fi
 
             cp LICENSE NOTICE README.md "$out/"
+            # The pictures the README points at, at the path it points to.
+            # Without them the copy in the archive has two dead links — the one
+            # on GitHub renders because the repository is around it, and the
+            # one somebody unpacked has nothing around it at all.
+            mkdir -p "$out/docs"
+            cp -r docs/img "$out/docs/"
             if [ "$goos" = windows ]; then
               cp docs/packaging/start.bat "$out/"
               (cd dist && zip -qr "$(basename "$out").zip" "$(basename "$out")")
