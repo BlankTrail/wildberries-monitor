@@ -1,319 +1,323 @@
-# wildberries-monitor
+# Парсер Wildberries: мониторинг цен, позиций и остатков
 
-Open-source Wildberries parser and monitor written in Go: a web panel, a
-collection engine, change tracking with rules, Telegram notifications, and
-exports to spreadsheets and databases.
+**wildberries-monitor** — программа для сбора и анализа данных с Wildberries.
+Она сама, по расписанию, обходит поисковую выдачу, категории, витрины продавцов
+и карточки товаров, складывает всё в базу на вашем компьютере и показывает в
+веб-панели: как менялась цена, где товар стоит в поиске по ключевым словам, что
+с остатками и рейтингом, что делают конкуренты.
 
-**This program only works through [BlankTrail Proxy](https://github.com/BlankTrail).**
-Wildberries is behind a JS challenge, so a BlankTrail licence that includes
-Challenge Breaker is required. Without it, requests will not go through — this
-is a hard requirement, not a degraded mode.
+Это не облачный сервис и не подписка. Один файл, который вы запускаете у себя.
+Данные никуда не уходят.
 
-## Install and run
+![Панель: собранные данные](docs/img/panel-results.png)
 
-Download the archive for your platform from the releases page, unpack it, and
-run `start.bat` (Windows) or `./start.sh` (macOS, Linux). Or build it yourself:
+---
 
-```
-go build ./cmd/wbmon
-```
+## Оглавление
 
-On Windows the archive also carries `wbmon-tray.exe`: the same program with no
-console window and an icon in the notification area, whose menu opens the
-panel, pauses collection and quits. Double-clicked, it opens the panel straight
-away — with nothing on screen but an icon, a program that started and showed
-nothing is one you cannot tell from a program that failed; started at login it
-does not, because a browser window appearing by itself every morning is the
-fastest way to make somebody turn the tray off, and the autostart entry passes
-`-open=false` for exactly that. Both binaries carry the program's own icon, in
-the tray and on the file, drawn in Go rather than shipped as a picture: the
-object file that puts it on the executable is written by `internal/winres` and
-committed, so a release still needs nothing but the go tool, and a test refuses
-a committed file that has drifted from the drawing. It is the one to put in
-autostart. There is
-no tray on macOS or Linux — the packages that draw one need CGO there, and CGO
-would end the single-machine cross-compile this project is built around; those
-platforms get the same panel, started by a launchd or systemd unit.
+- [Что нужно знать до установки](#что-нужно-знать-до-установки)
+- [Быстрый старт](#быстрый-старт)
+- [Что программа собирает](#что-программа-собирает)
+- [Экраны панели](#экраны-панели)
+- [Выгрузка данных](#выгрузка-данных)
+- [Уведомления и Telegram](#уведомления-и-telegram)
+- [Автозапуск](#автозапуск)
+- [Сборка из исходников](#сборка-из-исходников)
+- [Лицензия](#лицензия)
+- [Правовая оговорка](#правовая-оговорка)
 
-Two ways to have it start on its own, and they are for different machines. The
-**Автозапуск** tick in the settings writes the entry for the account it is
-ticked from — a registry `Run` value, a LaunchAgent, a systemd user unit — and
-is what a laptop wants. The archive also carries `wbmon.service` and
-`com.blanktrail.wbmon.plist`, installed by hand, for a machine nobody logs into:
-they say where the log goes and, with `loginctl enable-linger`, keep the monitor
-running across a reboot with no session open. Each file explains its own
-installation at the top.
+---
 
-The panel asks for no password by default, and that is a decision rather than
-an oversight: it listens on `127.0.0.1` only, so what a password keeps out is
-another account or another program on the same machine. On a shared machine
-that is worth having — tick **требовать пароль** in the settings, and the login
-is `monitor` with the password in `first-run.txt` beside the database. Opening
-the port beyond this machine is refused until that tick is on and the password
-is one you chose rather than the one generated on the first start.
+## Что нужно знать до установки
 
-The panel is
-on `http://127.0.0.1:8760/` by default, and it is closed to the rest of the
-network until you set a password of your own — a generated one anybody can read
-out of a file is not a password once the port is reachable.
+Читайте этот раздел до того, как что-то скачаете.
 
-Data lives in the platform's own place rather than beside the binary
-(`%LOCALAPPDATA%\BlankTrail\wbmon`, `~/Library/Application Support/BlankTrail/wbmon`,
-`~/.local/share/wbmon`), and `WBMON_DATA` or `-data` moves it.
+**Программа работает только через [BlankTrail Proxy](https://github.com/BlankTrail).**
+Wildberries закрыт JS-проверкой: обычный HTTP-запрос до данных не доходит.
+Нужна лицензия BlankTrail с модулем Challenge Breaker. Без неё запросы не
+пройдут вообще — это не «работает хуже», а «не работает».
 
-```
-wbmon -port 8760          panel port
-wbmon -data /some/where   where the database lives
-wbmon -open=false         do not open a browser (for a service)
-wbmon -lan                serve beyond this machine (needs your own password)
-```
+**Что ещё понадобится:**
 
-Then, in the panel: open **Настройки**, enter the BlankTrail address and API
-key and press **Проверить соединение**. Nothing collects anything until that
-check passes.
+- Компьютер, который будет включён в моменты сбора. Ноутбук в спящем режиме
+  ничего не соберёт.
+- Прокси или VPN-шлюзы, если собираете помногу. Для десятка товаров хватит
+  прямого соединения, для тысяч — нет.
+- Немного терпения на первую настройку: сбор не начнётся, пока не пройдёт
+  проверка соединения с BlankTrail.
 
-## What it does
+**Чего программа не делает:** не заходит в ваш личный кабинет продавца, не
+знает ваших продаж и себестоимости, ничего не меняет на Wildberries. Она только
+читает то, что и так видно любому покупателю.
 
-* **Задачи** — what is saved and what it is doing: progress of a run in flight,
-  how the last one ended and when, and buttons to start, stop, switch the
-  schedule off and delete. Deleting takes the job and its runs and leaves what
-  they collected — that is data about the site, not about the job. Below it,
-  build a collection job: what to enumerate — a phrase, a catalogue node, a
-  seller, a brand, a list of article numbers, the places those articles hold on
-  a list of phrases, the paid placements for a phrase, the goods in a promotion,
-  the front page's own feed, or the row a seller hangs under their own card —
-  which of 38 fields to collect, over which regions and for which audience. The
-  screen prices the job in requests before you start it, and says which of its
-  numbers is a guess.
-* **Регионы** — every price, stock figure and rank on this site is regional, and
-  the region travels as a bare code Wildberries publishes no directory of. So
-  the directory is built out of the site's own delivery points: pick a region,
-  a settlement in it, and a point in that — or take every point in a town, one
-  in the middle of it, or all eighty-five regional capitals at once. The code is
-  asked for once per point and kept, and every row says how much of a choice is
-  already paid for before it is made.
-* **Отслеживание** — what has been collected, and the two charts of it: the
-  discounted price and the search position for every phrase the product has
-  been ranked for. Drawn on request and never written to disk, without a
-  plotting dependency, over a window of a week to a year. A reading with no
-  price breaks the line rather than being drawn as a zero, and so does a
-  stretch nobody collected — the limit for that comes from the store's own
-  promise to write a row at least every so often.
-* **Правила** — say what is worth being told about: price and stock moves,
-  places in the results, sizes and warehouses disappearing, ratings and review
-  counts. Conditions combine the change and the state it ended at ("fell more
-  than 5% while stock is under ten"). Thresholds, quiet hours, per-product rate
-  limits and deduplication are all there, and every match is logged — including
-  the ones that were suppressed, with the reason.
-* **Прокси** — how the collection reaches the site: a proxy list from a file or
-  a URL, a rotating address with its change link, a BlankTrail gateway, and the
-  host's own address, in any mix. Ports are spread over whatever is ticked, and
-  an entry that starts producing blocks loses weight on its own. Each one has
-  a test that costs nothing: a list is read and counted with the first bad line
-  quoted, a gateway name is checked against the ones BlankTrail actually has,
-  and a rotating channel's change link is deliberately **not** pulled — the
-  provider limits how often it may be, and a test that broke what it was
-  testing would be worse than none.
-* **Результаты** — a table of what was collected, and the same data somewhere
-  else: CSV, XLSX, JSON, JSONL, a SQLite database, a PostgreSQL or MySQL dump
-  with a batched upsert, or a Google spreadsheet. One selection of fields gives
-  identical columns in every one of them. Everything streams except SQLite,
-  which cannot: the file is finished by seeking back to its header.
+---
 
-  The spreadsheet needs an OAuth client, and it is yours rather than this
-  program's — nothing in this repository carries anyone's credentials. Make a
-  «Desktop app» client in your own Google Cloud project, put this panel's
-  address with `/google/callback` on the end into its redirect URIs, and paste
-  the id and secret into the settings beside the Telegram token.
-* **Telegram** — notifications, and a bot: `/jobs` lists what is saved with the
-  progress of anything in flight, `/run` and `/stop` control it, `/track`, `/untrack` and
-  `/tracked` put a product or a phrase under a job's watch from a link or an
-  article number — into a job that exists, because a job needs a region and an
-  audience and choosing those for somebody decides which facts they collect.
-  `/card` sends a product's card —
-  what it costs, what it cost before the discount, its rating, what is left in
-  stock, and when the site was last read for it, ending in the product link so
-  that Telegram's own preview supplies the picture. `/export` sends
-  the results as a file in any of the five formats, and `/chart` sends a price
-  or search-position chart as a photo, drawn without a plotting dependency and
-  captioned rather than labelled, so every word stays selectable text. It
-  reaches Telegram directly where that works and through your BlankTrail port
-  where it does not, and the settings screen shows which.
+## Быстрый старт
 
-## What it does not do
+### 1. Скачайте свою версию
 
-Stated plainly, because the alternative is a checkbox that collects nothing:
+| Система | Файл |
+|---|---|
+| **Windows 10/11** (обычный компьютер) | [wbmon_windows_amd64.zip](https://github.com/BlankTrail/wildberries-monitor/releases/latest/download/wbmon_windows_amd64.zip) |
+| Windows на ARM | [wbmon_windows_arm64.zip](https://github.com/BlankTrail/wildberries-monitor/releases/latest/download/wbmon_windows_arm64.zip) |
+| macOS, Apple Silicon (M1–M4) | [wbmon_darwin_arm64.tar.gz](https://github.com/BlankTrail/wildberries-monitor/releases/latest/download/wbmon_darwin_arm64.tar.gz) |
+| macOS, Intel | [wbmon_darwin_amd64.tar.gz](https://github.com/BlankTrail/wildberries-monitor/releases/latest/download/wbmon_darwin_amd64.tar.gz) |
+| Linux, x86-64 | [wbmon_linux_amd64.tar.gz](https://github.com/BlankTrail/wildberries-monitor/releases/latest/download/wbmon_linux_amd64.tar.gz) |
+| Linux, ARM64 | [wbmon_linux_arm64.tar.gz](https://github.com/BlankTrail/wildberries-monitor/releases/latest/download/wbmon_linux_arm64.tar.gz) |
 
-* **Promotions.** This build has no source for them, so no promotion fields and
-  no promotion rules exist.
-* **Comparison against competitors.** Every rule of that kind is phrased
-  relative to "my" product, which comes from a seller profile this build does
-  not have yet.
-* **MTProto.** Telegram is reached over the Bot API. If `api.telegram.org` is
-  blocked for you *and* your BlankTrail tariff does not allow it either, there
-  is no path yet — that is the next milestone.
+Ссылки всегда ведут на самую свежую версию. Проверить, что файл скачался
+целиком, можно по [SHA256SUMS](https://github.com/BlankTrail/wildberries-monitor/releases/latest/download/SHA256SUMS).
 
-## Using the SDK
+### 2. Распакуйте и запустите
 
-```go
-client, _ := blanktrail.NewClient("http://127.0.0.1:8891", apiKey)
+Распакуйте архив в любую папку — например, `C:\wbmon`. Не запускайте прямо из
+архива: программе нужно место для базы данных.
 
-report := blanktrail.Preflight(ctx, client, blanktrail.PreflightInput{
-    Domains: []string{"example.com"},
-    Ports:   6,
-})
-if !report.OK() {
-    for _, f := range report.Blocking() {
-        log.Printf("%s: %s → %s", f.Title, f.Detail, f.Action)
-    }
-    return
-}
+- **Windows:** двойной клик по `start.bat`. Откроется браузер с панелью.
+  Рядом лежит `wbmon-tray.exe` — то же самое, но без чёрного окна консоли и со
+  значком в трее; его удобнее ставить в автозапуск.
+- **macOS и Linux:** `./start.sh` в терминале.
 
-pool, _ := blanktrail.NewPool(ctx, blanktrail.PoolConfig{
-    Client:         client,
-    Threads:        2,
-    PortsPerThread: 3,
-    Spec:           blanktrail.DefaultPortSpec(),
-    Channels:       []blanktrail.Channel{blanktrail.NewDirectChannel("direct")},
-    CA:             report.CA,
-})
-defer pool.Close()
+Панель открывается на `http://127.0.0.1:8760/` и доступна только с этого
+компьютера.
 
-lease, _ := pool.Acquire(ctx)
-defer lease.Release()
-resp, _ := lease.Do(req)
-```
+### 3. Подключите BlankTrail
 
-A runnable version is in `examples/pool`.
+В панели откройте **Настройки**, впишите адрес BlankTrail (обычно
+`http://127.0.0.1:8891`) и API-ключ, нажмите **Проверить соединение**. Пока
+проверка не прошла, сбор не запустится — и это специально, чтобы вы не ждали
+результатов от задания, которое всё равно ничего не соберёт.
 
-### How a port behaves
+### 4. Выберите регион
 
-A port is a session: one fingerprint, one cookie jar, one egress IP. Requests on
-a port are serialised by the pool, through the lease and the cooldown, rather
-than by a limit set on the port itself — the port's own concurrency governs
-everything flowing through it, not only the requests we issue, so a low limit can
-starve the port's own challenge handling. The pool never hands a port back before
-its cooldown has elapsed — by default `ports-per-thread × the midpoint of the
-delay range`, which is the same guarantee a rigid per-thread ring gives, with
-less idling.
+Все цены, остатки и позиции на Wildberries **разные в разных городах**. Регион
+передаётся кодом, справочника этих кодов сайт не публикует, поэтому программа
+собирает его сама из пунктов выдачи.
 
-On a failure the leased client reacts on its own. A port that fails several
-times in a row gets a fresh egress IP, and one that keeps failing after that is
-quarantined. `blanktrail` does not try to tell a challenge from a block from a
-rate limit — by default any non-2xx or transport error counts the same — but it
-does not have to guess either: `PoolConfig.CountFailure` lets whoever knows the
-target say which statuses should count. `wb.CountFailure` is that answer for
-Wildberries, and `examples/wbsearch` wires it in; without it a challenge (498)
-or a request of ours the edge rejected (403) would rotate the egress, which
-cannot fix either and throws away a solved challenge on the way.
-Independently of all that, a port's whole identity is renewed after N requests
-or after a time interval.
+Откройте **Задачи → Добавить задание**, в поле регионов выберите область,
+город и пункт выдачи — или возьмите сразу все 85 региональных центров. Один раз
+выбранный код сохраняется.
 
-The leased client's own repeating is budgeted twice, because the two failures
-call for different remedies. `MaxRetriesPerReq` (default 4) repeats a request
-that met a rate limit or a server error, honouring `Retry-After` — the origin
-asking to be asked again, where repeating through the same egress is exactly
-right. `MaxTransportRetries` (default 1) repeats a request whose connection died,
-where it mostly is not: that is evidence about the egress, and a caller who can
-replace the egress between attempts does the job far better. One immediate
-re-dial is kept because a connection can die between the idle-pool check and the
-write, which nothing above this layer can tell apart from a bad proxy.
+### 5. Создайте первое задание
 
-A lease holder can also ask for a new egress itself, with `Lease.RotateEgress`.
-The pool judges an egress by what it can see — connection failures and non-2xx
-statuses — and a caller that knows the target may recognise a failure it cannot:
-a response that is technically fine and still means this exit address is not
-getting through. Releasing the lease and taking a fresh one is not the same
-thing, because that is a different port, not a different proxy. The change
-clears the port's consecutive-failure count, so the pool's own schedule measures
-the new address instead of carrying the old one's history into it.
+Самое простое, с чего начать, — посмотреть выдачу по своей ключевой фразе:
 
-## Reading Wildberries data (the `wb` package)
+1. **Задачи → Добавить задание**
+2. Тип: **Поисковая выдача по фразе**
+3. Фразы: впишите по одной в строке, например `колготки женские`
+4. Страниц: 3 (примерно 300 товаров)
+5. Поля: галочка **Основное** уже стоит — этого достаточно для первого раза
+6. **Сохранить**, затем **Запустить**
 
-`wb` reads Wildberries search results and product cards through a leased
-BlankTrail port. Routing, fingerprints and challenge solving are `blanktrail`'s
-job, not this package's; what `wb` does decide is what a response means and what
-is worth doing about it — how many times a request the edge challenged, or the
-proxy killed before it ever answered, is worth repeating; when the port's
-proxy has had enough tries and should be replaced; and when the port itself is
-unreachable, so the fetch should move to another one and take the rest of its
-budget with it
-(`wb.RetryPolicy`, and `wb.DefaultRetryPolicy` for the two sensible starting
-points). It takes a `Leaser` (`wb.FromPool` adapts a `*blanktrail.Pool`) and
-a `*wb.Sessions`, and hands back a `*wb.Client` that every request goes
-through.
+Экран сразу покажет, сколько запросов задание потратит, ещё до запуска.
+Результаты появятся на вкладке **Результаты**.
 
-```go
-eps := wb.DefaultEndpoints()
+---
 
-// A pool with proxy channels can search for one that gets through, so a
-// challenge is worth retrying further than it is on direct egress; pass
-// DefaultRetryPolicy(false), or use NewClient, when there is nothing to search.
-client := wb.NewClientWithRetry(wb.FromPool(pool), wb.NewSessions(),
-    wb.DefaultRetryPolicy(true))
+## Что программа собирает
 
-env, err := client.SearchPage(ctx, eps, wb.SearchQuery{
-    Query: "кроссовки женские",
-    Dest:  "1259570991",
-    Page:  1,
-})
-for _, p := range env.Products {
-    sale, _ := p.SalePrice()
-    fmt.Println(p.Rank, p.Name, sale)
-}
+### Виды заданий
 
-basket := wb.NewBasket(client)
-nm := env.Products[0].ID
-card, product, err := client.Card(ctx, basket, eps, nm, "1259570991", wb.AppWeb)
-```
+Задание — это «что обойти». Их одиннадцать, и они закрывают разные вопросы.
 
-A page shorter than the site's own page size is the end of the result set —
-there is no other reliable signal, and a caller walking multiple pages should
-stop on that, not on arithmetic against the total the payload reports.
-`env.Dropped` counts items the page named but that failed extraction; that is
-a partial drop, not a failed page, and rank is computed from each product's
-position on the page it came from, so a drop never shifts another row's rank.
+![Панель: список заданий](docs/img/panel-jobs.png)
 
-Prices are `Money`: an integer number of minor units with a currency, never a
-float, so a payload's kopecks are never silently rounded away.
+| Тип задания | Отвечает на вопрос |
+|---|---|
+| Поисковая выдача по фразе | Кто стоит в топе по моему запросу и на каком месте |
+| Товары в категории | Что вообще есть в этой категории каталога |
+| Витрина продавца | Весь ассортимент конкурента — по его артикулу |
+| Товары бренда | Все товары бренда |
+| Список артикулов | Мои товары (или чужие) — цены, остатки, рейтинг |
+| Позиции товаров по фразам | Где именно мои артикулы стоят по списку ключевых слов |
+| Реклама в выдаче по фразе | Кто выкупает рекламные места по запросу |
+| Состав акции | Какие товары попали в акцию |
+| Лента главной страницы | Что Wildberries показывает на главной |
+| Полка «Продавец рекомендует» | Что продавец подвешивает под свою карточку |
+| Профиль: разбор ссылки | Служебное — цепочка «мой профиль» заводит его сама |
 
-A runnable version — preflight, open a pool, walk a search or fetch a card,
-write JSONL, print a summary of what happened — is in `examples/wbsearch`:
+### Какие данные снимаются
 
-```bash
-go run ./examples/wbsearch -query "кроссовки женские" -dest 1259570991 -pages 3
-go run ./examples/wbsearch -card 1309449623 -dest -5892277
-```
+Сорок полей, разбитых на группы. Группы важны, потому что от них зависит цена
+сбора в запросах:
 
-## Building from source
+| Группа | Что внутри | Стоимость |
+|---|---|---|
+| **Основное** | Название, бренд, продавец, цена со скидкой и без, скидка, рейтинг, число отзывов, место в выдаче, страница | бесплатно — едет вместе со страницей |
+| **Остатки** | Общий остаток, размеры, остаток по размеру, склад | бесплатно |
+| **Доставка** | Сроки доставки, удалённость склада | бесплатно |
+| **Акция** | Промо-метка, участие в акции | бесплатно |
+| **Фото и видео** | Число фотографий | бесплатно |
+| **Карточка** | Описание, артикул продавца, категория, состав, дата создания карточки | +1 запрос на товар |
+| **Отзывы и вопросы** | Оценка, число отзывов, тексты отзывов и вопросов, ответы продавца | +2 запроса на товар |
+| **Реклама по фразе** | Позиция и артикул рекламной выдачи | +1 запрос на фразу |
+
+Отметили дорогую группу — экран честно пересчитает стоимость задания до
+запуска. Тысяча товаров с отзывами — это три тысячи запросов, и лучше узнать
+об этом заранее.
+
+---
+
+## Экраны панели
+
+**Обзор** — что собрано и что происходит прямо сейчас.
+
+**Мой профиль** — вставьте ссылку на свою карточку, и программа сама пройдёт
+цепочку: определит продавца, соберёт весь ваш ассортимент, подберёт ключевые
+фразы под каждый товар, проверит по ним позиции и найдёт, кто стоит рядом.
+Одна кнопка вместо пяти заданий.
+
+**Задачи** — список заданий: что идёт, чем закончилось прошлое, кнопки
+«Запустить», «Остановить», «Изменить». Расписание — от «по запросу» до
+ежечасного.
+
+**Сравнение** — ваши товары рядом с конкурентами по одним и тем же фразам:
+цена, полнота карточки, число фотографий, рейтинг.
+
+**Отслеживание** — два графика на товар: цена со скидкой и место в выдаче по
+каждой фразе. За неделю, месяц или год. Если в какой-то день никто ничего не
+собирал, линия рвётся, а не рисует ровную полку — вы видите, где данных нет.
+
+**Уведомления** — правила: о чём вас предупредить. Цена упала больше чем на
+5%, остаток ниже десяти, товар вылетел из топ-10, пропал размер, изменился
+рейтинг. Условия складываются: «упала больше 5% и при этом остаток меньше
+десяти». Есть тихие часы и защита от повторов.
+
+**Прокси** — через что ходить: список прокси из файла или по ссылке,
+ротируемый адрес, VPN-шлюзы BlankTrail, прямое соединение — в любом сочетании.
+Каждый канал можно проверить, не потратив ни одного платного запроса.
+
+**Результаты** — таблица собранного с поиском, сортировкой по колонкам,
+фильтрами и выбором колонок. Отсюда же выгрузка.
+
+---
+
+## Выгрузка данных
+
+Одна и та же выборка полей даёт одинаковые колонки в любом формате:
+
+| Формат | Для чего |
+|---|---|
+| **CSV** | Открыть в Excel или Google Таблицах |
+| **XLSX** | Готовый файл Excel |
+| **JSON**, **JSONL** | Отдать программисту или скрипту |
+| **SQLite** | Один файл базы, который можно открыть чем угодно |
+| **SQL** | Дамп для PostgreSQL или MySQL |
+| **Google Таблицы** | Прямо в таблицу, по вашему OAuth-клиенту |
+
+Выгрузка потоковая: миллион строк не съест память. Проверено на 58 тысячах
+строк в 33 колонки — 15 МБ за три секунды.
+
+Для Google Таблиц нужен ваш собственный OAuth-клиент: в репозитории нет ничьих
+учётных данных и не будет.
+
+---
+
+## Уведомления и Telegram
+
+Правила шлют уведомления в Telegram. Бот умеет не только принимать их:
+
+| Команда | Что делает |
+|---|---|
+| `/jobs` | Список заданий и что сейчас идёт |
+| `/run`, `/stop` | Запустить или остановить задание |
+| `/track`, `/untrack`, `/tracked` | Поставить товар или фразу под наблюдение |
+| `/card` | Карточка товара: цена, скидка, рейтинг, остаток |
+| `/chart` | График цены или позиции картинкой |
+| `/export` | Выгрузка файлом в любом формате |
+| `/status` | Что с программой прямо сейчас |
+
+Если `api.telegram.org` у вас заблокирован, программа пойдёт через ваш порт
+BlankTrail, а если и это не выйдет — через MTProto. Экран настроек показывает,
+какой путь сейчас рабочий.
+
+---
+
+## Автозапуск
+
+Два способа, для разных случаев.
+
+**Галочка «Автозапуск» в настройках** — для обычного компьютера или ноутбука.
+Программа сама пропишется в автозагрузку того пользователя, под которым вы её
+отметили.
+
+**Служба** — для компьютера, в который никто не логинится. В архиве лежат
+`wbmon.service` (Linux) и `com.blanktrail.wbmon.plist` (macOS); внутри каждого
+файла написано, куда его класть. С `loginctl enable-linger` сбор переживёт
+перезагрузку без открытой сессии.
+
+Полезные ключи запуска:
 
 ```
-go build ./...     # the library and the binaries
-go test ./...      # the suite
+wbmon -port 8760          порт панели
+wbmon -data D:\wbmon      где держать базу
+wbmon -open=false         не открывать браузер (для службы)
+wbmon -lan                открыть панель в локальную сеть
+wbmon -version            какая это версия
 ```
 
-The tray binary needs one flag of its own, and it is not decoration: without
-`-H windowsgui` a console window opens behind the icon, which is the one thing
-a tray program is for not having.
+База по умолчанию лежит в системной папке приложения
+(`%LOCALAPPDATA%\BlankTrail\wbmon` на Windows), а не рядом с программой —
+чтобы обновление не затирало данные.
+
+**Про пароль.** По умолчанию его нет, и это не забывчивость: панель слушает
+только `127.0.0.1`, снаружи к ней не подключиться. Если компьютером пользуется
+кто-то ещё — включите в настройках галочку «требовать пароль». Открыть панель в
+сеть (`-lan`) программа не даст, пока пароль не включён и не заменён на свой.
+
+---
+
+## Сборка из исходников
+
+Нужен Go 1.26. CGO не используется, поэтому собирается под все системы с одной
+машины.
+
+```
+go build ./cmd/wbmon      программа
+go test ./...             тесты
+```
+
+Для значка в трее без окна консоли:
 
 ```
 go build -ldflags "-H windowsgui" -o wbmon-tray.exe ./cmd/wbmon-tray
 ```
 
-No CGO, on any platform: `modernc.org/sqlite` was chosen so that one machine
-can cross-compile every release. There are two direct dependencies in total.
+В репозитории две библиотеки, которые можно использовать отдельно:
+`blanktrail` — клиент прокси-службы, `wb` — чтение данных Wildberries.
+Примеры запуска лежат в [docs/examples](docs/examples).
 
-## Licence
+---
 
-AGPL-3.0-or-later. See `LICENSE` and `NOTICE`.
+## Лицензия
 
-If you run this program for others over a network, section 13 of the AGPL
-requires you to offer them the source code. The built-in web UI carries a link
-to this repository for exactly that reason — do not remove it.
+AGPL-3.0-or-later. Полный текст — в [LICENSE](LICENSE), сведения об
+использованных библиотеках — в [NOTICE](NOTICE).
 
-## Legal note
+Если вы запускаете эту программу для других людей по сети, статья 13 AGPL
+обязывает вас предоставить им исходный код. В панели для этого есть ссылка на
+репозиторий — не убирайте её.
 
-This tool reads publicly available data. You are responsible for complying with
-the Wildberries terms of service and with applicable data-protection law.
-Product reviews contain personal data of real people; treat exported data
-accordingly.
+---
+
+## Правовая оговорка
+
+Программа создана в образовательных и демонстрационных целях.
+
+Автор не несёт никакой ответственности за её работоспособность, за последствия
+её использования и за любые прямые или косвенные убытки, возникшие в связи с
+ней. Программа поставляется «как есть», без каких-либо гарантий — явных или
+подразумеваемых, включая гарантии пригодности для конкретной цели.
+
+Претензии по работоспособности не принимаются. Wildberries может в любой момент
+изменить свой сайт, и часть возможностей перестанет работать; это ожидаемое
+поведение, а не дефект, за исправление которого кто-либо отвечает.
+
+Вы используете программу на свой страх и риск и самостоятельно отвечаете за
+соблюдение условий использования Wildberries и законодательства о персональных
+данных. Отзывы покупателей содержат персональные данные реальных людей —
+обращайтесь с выгруженными данными соответственно.
+
+Проект не связан с ООО «Вайлдберриз», не аффилирован с ним и не одобрен им.
+«Wildberries» — товарный знак правообладателя, используется здесь только для
+указания на совместимость.

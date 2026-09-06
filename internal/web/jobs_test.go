@@ -1078,3 +1078,16 @@ func TestSaveJob_SavingDoesNotSwitchTheScheduleBackOn(t *testing.T) {
 		t.Error("сохранение включило расписание, которое человек выключил кнопкой")
 	}
 }
+
+func TestKindLabels_NameEveryKindTheListCanShow(t *testing.T) {
+	// The list prints whatever a job's type says, and a kind with no line in
+	// kindLabels prints as its own identifier: «profile» in Latin among ten
+	// Russian names. Composable() is the picker's list and is deliberately
+	// shorter — a chain's own job is not something to compose — but every kind
+	// that can be saved can be listed.
+	for _, k := range job.Kinds() {
+		if kindLabels[k] == "" {
+			t.Errorf("вид %q не назван по-русски — в списке заданий он выйдет латиницей", k)
+		}
+	}
+}

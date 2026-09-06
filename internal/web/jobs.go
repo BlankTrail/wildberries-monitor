@@ -48,6 +48,12 @@ var kindLabels = map[job.Kind]string{
 	job.KindPromotion: "Состав акции",
 	job.KindMainFeed:  "Лента главной страницы",
 	job.KindShelves:   "Полка «Продавец рекомендует»",
+	// Not composable — Composable() leaves it out of the picker — but it is
+	// saved as a job, so it appears in the list like any other, and the list
+	// is what this map is for. Without a line here the tab printed «profile»
+	// in Latin among ten Russian names, which is the exact ugliness the
+	// comment above promises would be fixed in a minute.
+	job.KindProfile: "Профиль: разбор ссылки",
 }
 
 // kindWhat says what picking a kind will make the job walk.

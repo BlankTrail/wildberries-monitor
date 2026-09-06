@@ -40,7 +40,13 @@ jobs:
           for target in windows/amd64 windows/arm64 linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
             goos="${target%/*}"
             goarch="${target#*/}"
-            out="dist/wbmon_${version}_${goos}_${goarch}"
+            # Without the version in the name, so that
+            # releases/latest/download/wbmon_windows_amd64.zip is a link that
+            # keeps working across releases — which is what the README hands a
+            # person who wants the program and not a release page. The version
+            # is not lost: it is stamped into the binary below and `wbmon
+            # -version` prints it.
+            out="dist/wbmon_${goos}_${goarch}"
             mkdir -p "$out"
 
             ext=""
@@ -68,18 +74,18 @@ jobs:
 
             cp LICENSE NOTICE README.md "$out/"
             if [ "$goos" = windows ]; then
-              cp packaging/start.bat "$out/"
+              cp docs/packaging/start.bat "$out/"
               (cd dist && zip -qr "$(basename "$out").zip" "$(basename "$out")")
             else
-              cp packaging/start.sh "$out/"
+              cp docs/packaging/start.sh "$out/"
               chmod +x "${out}/start.sh"
               # The service file for the platform, and only that one: a Linux
               # archive carrying a launchd plist is two files somebody has to
               # work out they do not need.
               if [ "$goos" = darwin ]; then
-                cp packaging/com.blanktrail.wbmon.plist "$out/"
+                cp docs/packaging/com.blanktrail.wbmon.plist "$out/"
               else
-                cp packaging/wbmon.service "$out/"
+                cp docs/packaging/wbmon.service "$out/"
               fi
               (cd dist && tar -czf "$(basename "$out").tar.gz" "$(basename "$out")")
             fi
