@@ -107,10 +107,29 @@ func (a *App) StartJob(ctx context.Context, id int64) error {
 	if a.Scheduler == nil || a.Engine == nil {
 		return errors.New("сбор не собран в этой сборке")
 	}
+	// The place in the count is taken first, before anything is read or
+	// spent. Two reasons, and the second is the one that matters: a start that
+	// checks the gate and then takes its place has a window between the two,
+	// and a place taken in that window is a WaitGroup going off zero under a
+	// Wait already in flight — the race this whole gate exists to close. Taken
+	// first, there is no window. And the settings read that used to come first
+	// goes through a database Close is about to shut, so the refusal a person
+	// got said «sql: database is closed» instead of why.
+	if !a.beginRun() {
+		return ErrClosing
+	}
+	// Given back on every path that does not reach the goroutine. The
+	// goroutine gives back its own.
+	started := false
+	defer func() {
+		if !started {
+			a.runs.Done()
+		}
+	}()
+
 	if err := a.Engine.Check(ctx); err != nil {
 		return err
 	}
-
 	j, err := job.Load(ctx, a.Store, id)
 	if err != nil {
 		return err
@@ -122,7 +141,7 @@ func (a *App) StartJob(ctx context.Context, id int64) error {
 		return job.ErrAlreadyRunning
 	}
 
-	a.runs.Add(1)
+	started = true
 	go func() {
 		defer a.runs.Done()
 		a.runJob(a.lifetime(ctx), j)
@@ -239,7 +258,9 @@ func (a *App) runDue(ctx context.Context) {
 
 	for _, j := range a.Scheduler.Due(jobs, schedules) {
 		a.Log.Printf("расписание: запускаю задание %d (%s)", j.ID, j.Name)
-		a.runs.Add(1)
+		if !a.beginRun() {
+			return
+		}
 		go func() {
 			defer a.runs.Done()
 			a.runJob(ctx, j)

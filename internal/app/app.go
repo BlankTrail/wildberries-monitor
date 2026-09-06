@@ -60,7 +60,8 @@ type App struct {
 	Engine    *engine.Engine
 	Scheduler *job.Scheduler
 
-	// runs counts the job runs in flight, so Close can wait for them.
+	// runs counts the job runs in flight and closing says no more may start.
+	// Both live under runsMu, and that is the whole point of the mutex.
 	//
 	// A run writes its last row — the one that moves it out of «running» —
 	// through the store, and Close was closing the store underneath it. The
@@ -69,7 +70,17 @@ type App struct {
 	// That is the exact state FinishRun's own detached context exists to
 	// prevent, defeated one layer further down: it survives the cancellation
 	// and then finds no database to write to.
-	runs sync.WaitGroup
+	//
+	// Waiting on the counter alone was not enough, and the race detector said
+	// so: sync.WaitGroup forbids a counter going from zero to one while a Wait
+	// is already in flight, and this program does exactly that — the profile
+	// chain starts the next stage's job from the bus's own goroutine, which
+	// does not stop because Close began. So the gate closes first, under the
+	// mutex, and only then is the counter waited on: every Add either happened
+	// before closing was set or never happened at all.
+	runsMu  sync.Mutex
+	runs    sync.WaitGroup
+	closing bool
 
 	// startedAt is when this process came up, in whole Unix seconds.
 	//
@@ -724,6 +735,7 @@ func (a *App) Close() error {
 		// what keeps a wedged fetch from making the program unstoppable —
 		// after it, the same loss happens, but at least it happens on a
 		// schedule somebody chose.
+		a.stopStartingRuns()
 		a.waitForRuns(closeDrain)
 		if a.Bus != nil {
 			// Before the store: the bus's synchronous subscribers write
@@ -746,6 +758,42 @@ func (a *App) Close() error {
 // that has stopped fetching needs one round trip to close its books, and one
 // that has not is not going to finish in any budget worth waiting out.
 const closeDrain = 10 * time.Second
+
+// beginRun takes a place in the count for a run about to start, and reports
+// whether it may. It answers no once Close has begun: a run started then would
+// write through a store that is about to go, and — worse — would move the
+// counter off zero under a Wait that has already started.
+func (a *App) beginRun() bool {
+	a.runsMu.Lock()
+	defer a.runsMu.Unlock()
+	if a.closing {
+		return false
+	}
+	a.runs.Add(1)
+	return true
+}
+
+// isClosing reports whether the gate is already shut, without taking a place
+// in the count. Asked at the top of a start, before anything is spent: once
+// Close has begun, the settings read that a start begins with goes through a
+// database that is on its way out, and its error says «sql: database is
+// closed» — which is true and tells the reader nothing about why.
+func (a *App) isClosing() bool {
+	a.runsMu.Lock()
+	defer a.runsMu.Unlock()
+	return a.closing
+}
+
+// stopStartingRuns closes the gate. Everything that got through is in the
+// count, and nothing else will be.
+func (a *App) stopStartingRuns() {
+	a.runsMu.Lock()
+	a.closing = true
+	a.runsMu.Unlock()
+}
+
+// ErrClosing is what starting a run answers once the program is going down.
+var ErrClosing = errors.New("программа выключается")
 
 // waitForRuns blocks until every run in flight has finished, or until the
 // bound passes. It reports whether they all finished.

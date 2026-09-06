@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -842,5 +843,83 @@ func TestStopJob_DoesNotLeaveAPhantomFailureBehind(t *testing.T) {
 		if strings.Contains(r.Error, "the run was stopped") {
 			t.Errorf("прогон %d несёт внутреннюю строку на экран: %q", r.ID, r.Error)
 		}
+	}
+}
+
+func TestClose_RefusesToStartRunsOnceItHasBegun(t *testing.T) {
+	// Counting the runs was not enough on its own, and the race detector said
+	// so: sync.WaitGroup forbids a counter going from zero to one while a Wait
+	// is already in flight, and this program does exactly that — the profile
+	// chain starts the next stage's job from the bus's own goroutine, which
+	// carries on after Close begins. The gate has to shut first; the count is
+	// only meaningful behind it.
+	a := newApp(t)
+	configured(t, a)
+	a.Scheduler = job.NewScheduler(&job.Runner{
+		Store: a.Store, Bus: a.Bus, Planner: job.StaticPlanner{},
+		Fetcher: job.FetcherFunc(func(context.Context, job.Item) (int, error) { return 1, nil }),
+	})
+	id := collectible(t, a, "")
+
+	if err := a.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := a.StartJob(context.Background(), id); !errors.Is(err, ErrClosing) {
+		t.Errorf("после Close запуск вернул %v, ожидалось ErrClosing", err)
+	}
+	if !a.closing {
+		t.Error("ворота не закрыты, а Close уже прошёл")
+	}
+}
+
+func TestStartJob_GivesBackItsPlaceWhenItDoesNotStart(t *testing.T) {
+	// The place in the count is taken before the checks, so every path that
+	// turns back has to give it back. Left taken, the counter never reaches
+	// zero again and Close spends its whole drain — ten seconds of waiting for
+	// a run that was never started.
+	a := newApp(t)
+	configured(t, a)
+	release := make(chan struct{})
+	// Once, because the test lets the run go before the deferred cleanup does.
+	letGo := sync.OnceFunc(func() { close(release) })
+	defer letGo()
+	a.Scheduler = job.NewScheduler(&job.Runner{
+		Store: a.Store, Bus: a.Bus, Planner: job.StaticPlanner{},
+		Fetcher: job.FetcherFunc(func(ctx context.Context, _ job.Item) (int, error) {
+			select {
+			case <-release:
+			case <-ctx.Done():
+			}
+			return 1, ctx.Err()
+		}),
+	})
+
+	// A job number nothing saved: the load fails and the start turns back.
+	if err := a.StartJob(t.Context(), 9999); err == nil {
+		t.Fatal("запуск несуществующего задания не вернул ошибку")
+	}
+	if !a.waitForRuns(time.Second) {
+		t.Error("после несостоявшегося запуска счёт прогонов не вернулся к нулю")
+	}
+
+	// And the same for the refusal that has its own error. The collector is
+	// held open, so the run is observably going when the second start asks.
+	id := collectible(t, a, "")
+	if err := a.StartJob(t.Context(), id); err != nil {
+		t.Fatalf("StartJob: %v", err)
+	}
+	settled(t, "запуск не начался", func() bool { return a.Scheduler.Running(id) })
+	if err := a.StartJob(t.Context(), id); !errors.Is(err, job.ErrAlreadyRunning) {
+		t.Fatalf("второй запуск = %v, ожидался ErrAlreadyRunning", err)
+	}
+	// The refusal gave its place back even though the first run still holds
+	// one: the drain is short and the count is one, not two.
+	if a.waitForRuns(200 * time.Millisecond) {
+		t.Error("счёт пуст, хотя один прогон ещё идёт")
+	}
+	letGo()
+	settled(t, "прогон не закончился", func() bool { return !a.Scheduler.Running(id) })
+	if !a.waitForRuns(time.Second) {
+		t.Error("после отказа «уже идёт» счёт прогонов не вернулся к нулю")
 	}
 }

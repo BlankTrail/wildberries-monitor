@@ -31,11 +31,21 @@ func aProfile(t *testing.T, a *App, seller int64) store.ProfileRow {
 }
 
 // landed waits for a job's newest run to end, the way the chain does.
+// landed waits until a job's run has both closed its books and let the job go.
+//
+// Both, because they are not the same moment: FinishRun writes the finish time
+// and the goroutine returns some time after that, and the scheduler calls the
+// job running until it does. A test that waited on the row alone and then
+// asked for the job again got «job: this job is already running» — reliably,
+// under the race detector, where the gap between the two is wide.
 func landed(t *testing.T, a *App, jobID int64) {
 	t.Helper()
 	settled(t, "прогон не завершился", func() bool {
 		runs, err := a.Store.Runs(t.Context(), jobID, 1)
-		return err == nil && len(runs) == 1 && runs[0].FinishedAt != nil
+		if err != nil || len(runs) != 1 || runs[0].FinishedAt == nil {
+			return false
+		}
+		return a.Scheduler == nil || !a.Scheduler.Running(jobID)
 	})
 }
 
