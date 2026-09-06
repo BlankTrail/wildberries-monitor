@@ -1279,6 +1279,7 @@ func TestProfileChain_PicksUpARunTheProgramWasStoppedIn(t *testing.T) {
 	configured(t, a)
 	collecting(t, a)
 	p := aProfile(t, a, 4242)
+	seedStorefront(t, a, 4242)
 
 	if err := a.StartProfileChain(ctx, p.ID); err != nil {
 		t.Fatalf("StartProfileChain: %v", err)
@@ -1309,7 +1310,6 @@ func TestProfileChain_PicksUpARunTheProgramWasStoppedIn(t *testing.T) {
 	}
 
 	// The chain picks it up rather than waiting on it forever.
-	seedStorefront(t, a, 4242)
 
 	// Asked once, and then waited on. Asking on every poll was the shape this
 	// had for a while, and it made the failure it was meant to prevent: each
@@ -1449,6 +1449,7 @@ func TestProfileChain_ItsJobsCarryTheProfilesOwnAnswers(t *testing.T) {
 	configured(t, a)
 	collecting(t, a)
 	p := aProfile(t, a, 4242)
+	seedStorefront(t, a, 4242)
 
 	p.Threads, p.Attempts, p.Channels = 9, 10, []int64{3, 5}
 	if err := a.Store.SaveProfilePlan(ctx, p); err != nil {
@@ -1481,7 +1482,6 @@ func TestProfileChain_ItsJobsCarryTheProfilesOwnAnswers(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("SavePhrase: %v", err)
 	}
-	seedStorefront(t, a, 4242)
 	landed(t, a, got.CatalogJob)
 	a.advanceProfiles(ctx)
 
