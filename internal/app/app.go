@@ -773,17 +773,6 @@ func (a *App) beginRun() bool {
 	return true
 }
 
-// isClosing reports whether the gate is already shut, without taking a place
-// in the count. Asked at the top of a start, before anything is spent: once
-// Close has begun, the settings read that a start begins with goes through a
-// database that is on its way out, and its error says «sql: database is
-// closed» — which is true and tells the reader nothing about why.
-func (a *App) isClosing() bool {
-	a.runsMu.Lock()
-	defer a.runsMu.Unlock()
-	return a.closing
-}
-
 // stopStartingRuns closes the gate. Everything that got through is in the
 // count, and nothing else will be.
 func (a *App) stopStartingRuns() {
