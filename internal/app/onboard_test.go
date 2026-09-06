@@ -1297,6 +1297,19 @@ func TestProfileChain_PicksUpARunTheProgramWasStoppedIn(t *testing.T) {
 	got, _ := a.Store.Profile(ctx, p.ID)
 	landed(t, a, got.CatalogJob)
 
+	// And then until the chain has stopped walking. It advances itself when a
+	// run lands — that is a wire this package tests elsewhere — and it walks
+	// several stages per pass. A stage planted underneath one still walking is
+	// overwritten by it a moment later: the profile went back to «done» with
+	// its stage job cleared, advanceProfiles stopped looking at a profile that
+	// is not running, and the orphan below was never picked up. Every stage
+	// here is instant with a collector that collects nothing, so this is a
+	// wait of milliseconds, not a slowing of the test.
+	settled(t, "цепочка не остановилась", func() bool {
+		cur, err := a.Store.Profile(ctx, p.ID)
+		return err == nil && !cur.Running()
+	})
+
 	// What a stop leaves behind: the run open, nothing running it, and the
 	// profile still waiting on it. Built rather than caused, because the runner
 	// always closes what it opened — the case worth testing is the one where it
