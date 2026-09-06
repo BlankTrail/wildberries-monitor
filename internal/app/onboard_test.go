@@ -97,6 +97,11 @@ func TestProfileChain_WalksTheStagesInOrder(t *testing.T) {
 	configured(t, a)
 	collecting(t, a)
 	p := aProfile(t, a, 4242)
+	// What the storefront walk will find, put there before it starts. Seeded
+	// after, it races the stage that adopts it — see the note beside the other
+	// seedStorefront calls.
+	seedProfileProduct(t, a, p.ID, 100, "Платье летнее длинное")
+	seedStorefront(t, a, 4242)
 
 	if err := a.StartProfileChain(ctx, p.ID); err != nil {
 		t.Fatalf("StartProfileChain: %v", err)
@@ -120,9 +125,7 @@ func TestProfileChain_WalksTheStagesInOrder(t *testing.T) {
 		t.Errorf("создано задание %+v", made)
 	}
 
-	// The catalogue lands with a product in it, and the phrase stage runs.
-	seedProfileProduct(t, a, p.ID, 100, "Платье летнее длинное")
-	seedStorefront(t, a, 4242)
+	// The catalogue lands, and the phrase stage runs.
 	landed(t, a, got.CatalogJob)
 	a.advanceProfiles(ctx)
 
@@ -454,11 +457,17 @@ func TestProfilePhrases_TheTwoBoundsAreHonoured(t *testing.T) {
 		t.Fatalf("SaveProfilePlan: %v", err)
 	}
 
+	// Перед стартом, а не после: цепочка двигается сама, как только заканчивается
+	// прогон — это и проверяет TestProfileChain_AdvancesWhenARunFinishes. Витрина,
+	// засеянная следом за стартом, гонится с этапом, который её усыновляет. На
+	// машине помедленнее этап фраз успевал раньше: усыновлял два товара вместо
+	// трёх, не находил ни одного кандидата и проскакивал проверку, которую тест
+	// потом искал.
+	seedStorefront(t, a, 4242)
 	if err := a.StartProfileChain(ctx, p.ID); err != nil {
 		t.Fatalf("StartProfileChain: %v", err)
 	}
 	got, _ := a.Store.Profile(ctx, p.ID)
-	seedStorefront(t, a, 4242)
 	landed(t, a, got.CatalogJob)
 	a.advanceProfiles(ctx)
 
@@ -489,11 +498,11 @@ func TestProfilePhrases_WithNoCandidatesTheChainStillFinishes(t *testing.T) {
 	p := aProfile(t, a, 4242)
 
 	seedProfileProductOf(t, a, 100, 4242, "—")
+	seedStorefront(t, a, 4242)
 	if err := a.StartProfileChain(ctx, p.ID); err != nil {
 		t.Fatalf("StartProfileChain: %v", err)
 	}
 	got, _ := a.Store.Profile(ctx, p.ID)
-	seedStorefront(t, a, 4242)
 	landed(t, a, got.CatalogJob)
 	a.advanceProfiles(ctx)
 
@@ -606,11 +615,11 @@ func TestProfileChain_ChecksAPhraseOnceHoweverManyVerdictsItHas(t *testing.T) {
 		}
 	}
 
+	seedStorefront(t, a, 4242)
 	if err := a.StartProfileChain(ctx, p.ID); err != nil {
 		t.Fatalf("StartProfileChain: %v", err)
 	}
 	got, _ := a.Store.Profile(ctx, p.ID)
-	seedStorefront(t, a, 4242)
 	landed(t, a, got.CatalogJob)
 	a.advanceProfiles(ctx)
 
@@ -710,11 +719,11 @@ func TestProfilePhrases_AreKeptAgainstTheProductTheyWereMadeFrom(t *testing.T) {
 	seedProfileProductOf(t, a, 100, 4242, "Платье летнее длинное")
 	seedProfileProductOf(t, a, 200, 4242, "Куртка зимняя мужская")
 
+	seedStorefront(t, a, 4242)
 	if err := a.StartProfileChain(ctx, p.ID); err != nil {
 		t.Fatalf("StartProfileChain: %v", err)
 	}
 	got, _ := a.Store.Profile(ctx, p.ID)
-	seedStorefront(t, a, 4242)
 	landed(t, a, got.CatalogJob)
 	a.advanceProfiles(ctx)
 
@@ -769,11 +778,11 @@ func TestProfileSubjects_NarrowTheExpensiveHalf(t *testing.T) {
 	if err := a.Store.SaveProfilePlan(ctx, p); err != nil {
 		t.Fatalf("SaveProfilePlan: %v", err)
 	}
+	seedStorefront(t, a, 4242)
 	if err := a.StartProfileChain(ctx, p.ID); err != nil {
 		t.Fatalf("StartProfileChain: %v", err)
 	}
 	got, _ := a.Store.Profile(ctx, p.ID)
-	seedStorefront(t, a, 4242)
 	landed(t, a, got.CatalogJob)
 	a.advanceProfiles(ctx)
 
@@ -801,11 +810,11 @@ func TestProfileCheck_KeepsTheWholePageSoThereAreCompetitors(t *testing.T) {
 	p := aProfile(t, a, 4242)
 	seedProfileProductOf(t, a, 100, 4242, "Платье летнее")
 
+	seedStorefront(t, a, 4242)
 	if err := a.StartProfileChain(ctx, p.ID); err != nil {
 		t.Fatalf("StartProfileChain: %v", err)
 	}
 	got, _ := a.Store.Profile(ctx, p.ID)
-	seedStorefront(t, a, 4242)
 	landed(t, a, got.CatalogJob)
 	a.advanceProfiles(ctx)
 
@@ -857,11 +866,11 @@ func TestProfileExpand_AsksTheSiteAndKeepsWhatItOffers(t *testing.T) {
 		t.Fatalf("SaveProfilePlan: %v", err)
 	}
 
+	seedStorefront(t, a, 4242)
 	if err := a.StartProfileChain(ctx, p.ID); err != nil {
 		t.Fatalf("StartProfileChain: %v", err)
 	}
 	got, _ := a.Store.Profile(ctx, p.ID)
-	seedStorefront(t, a, 4242)
 	landed(t, a, got.CatalogJob)
 	a.advanceProfiles(ctx)
 
@@ -910,11 +919,11 @@ func TestProfileExpand_AsksAboutOnePhraseOnce(t *testing.T) {
 	if err := a.Store.SaveProfilePlan(ctx, p); err != nil {
 		t.Fatalf("SaveProfilePlan: %v", err)
 	}
+	seedStorefront(t, a, 4242)
 	if err := a.StartProfileChain(ctx, p.ID); err != nil {
 		t.Fatalf("StartProfileChain: %v", err)
 	}
 	got, _ := a.Store.Profile(ctx, p.ID)
-	seedStorefront(t, a, 4242)
 	landed(t, a, got.CatalogJob)
 	a.advanceProfiles(ctx)
 
@@ -954,11 +963,11 @@ func TestProfileExpand_TheLimitIsHonoured(t *testing.T) {
 	if err := a.Store.SaveProfilePlan(ctx, p); err != nil {
 		t.Fatalf("SaveProfilePlan: %v", err)
 	}
+	seedStorefront(t, a, 4242)
 	if err := a.StartProfileChain(ctx, p.ID); err != nil {
 		t.Fatalf("StartProfileChain: %v", err)
 	}
 	got, _ := a.Store.Profile(ctx, p.ID)
-	seedStorefront(t, a, 4242)
 	landed(t, a, got.CatalogJob)
 	a.advanceProfiles(ctx)
 
@@ -987,11 +996,11 @@ func TestProfileExpand_ZeroRoundsSwitchesItOff(t *testing.T) {
 	if err := a.Store.SaveProfilePlan(ctx, p); err != nil {
 		t.Fatalf("SaveProfilePlan: %v", err)
 	}
+	seedStorefront(t, a, 4242)
 	if err := a.StartProfileChain(ctx, p.ID); err != nil {
 		t.Fatalf("StartProfileChain: %v", err)
 	}
 	got, _ := a.Store.Profile(ctx, p.ID)
-	seedStorefront(t, a, 4242)
 	landed(t, a, got.CatalogJob)
 	a.advanceProfiles(ctx)
 
@@ -1228,11 +1237,11 @@ func TestProfileChain_DoesNotMistakeTheLastPassesRunForThisOne(t *testing.T) {
 	p := aProfile(t, a, 4242)
 
 	// A first pass, walked to the storefront stage and landed.
+	seedStorefront(t, a, 4242)
 	if err := a.StartProfileChain(ctx, p.ID); err != nil {
 		t.Fatalf("StartProfileChain: %v", err)
 	}
 	first, _ := a.Store.Profile(ctx, p.ID)
-	seedStorefront(t, a, 4242)
 	landed(t, a, first.CatalogJob)
 
 	// A second pass over the same job. Its stage must wait for its own run,
