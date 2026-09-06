@@ -495,7 +495,7 @@ func TestValidate_APromotionJobNeedsBothTheNameAndTheAddress(t *testing.T) {
 		{"без акции", func(j *Job) { j.PromotionShard, j.PromotionQuery = "promo/bucket_6", "preset=1" }},
 		{"без шарда", func(j *Job) { j.PromotionSlug, j.PromotionQuery = "x", "preset=1" }},
 		{"без пресета", func(j *Job) { j.PromotionSlug, j.PromotionShard = "x", "promo/bucket_6" }},
-		{"пустое всё", func(j *Job) {}},
+		{"пустое всё", func(*Job) {}},
 	} {
 		j := base
 		c.mod(&j)

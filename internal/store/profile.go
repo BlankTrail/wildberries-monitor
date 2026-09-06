@@ -61,7 +61,6 @@ const (
 	StageFailed = "failed"
 )
 
-// ProfileRow is one «мой контур».
 // RunControls is what a collection is given when it is started: where to
 // collect, in how many threads, through which exits, with how many attempts
 // per request.
@@ -91,6 +90,8 @@ func (c RunControls) Apply(p *ProfileRow) {
 	p.Threads, p.Attempts, p.Channels = c.Threads, c.Attempts, c.Channels
 }
 
+// ProfileRow is one «мой контур»: the seller a pasted link resolved to, what
+// the chain has collected for them, and where that chain is now.
 type ProfileRow struct {
 	ID          int64
 	Name        string
@@ -301,7 +302,6 @@ func (s *Store) SaveProfile(ctx context.Context, p ProfileRow) (int64, error) {
 	return id, nil
 }
 
-// Profiles lists every profile, oldest first.
 // Started reports whether this installation has been set up at all: a profile
 // saved, or a job saved.
 //
@@ -324,6 +324,7 @@ func (s *Store) Started(ctx context.Context) (bool, error) {
 	return n > 0, nil
 }
 
+// Profiles lists every profile, oldest first.
 func (s *Store) Profiles(ctx context.Context) ([]ProfileRow, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, name, source_input, seller_id, created_at, updated_at,

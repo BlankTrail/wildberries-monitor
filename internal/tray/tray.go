@@ -216,10 +216,3 @@ func (i *Icon) Run(ctx context.Context) error {
 	}
 	return i.run(ctx)
 }
-
-// report says something went wrong, if the caller asked to be told.
-func (i *Icon) report(err error) {
-	if err != nil && i.Report != nil {
-		i.Report(err)
-	}
-}

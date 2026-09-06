@@ -164,7 +164,7 @@ func (s *Sheets) call(ctx context.Context, method, endpoint string, body, out an
 	if err != nil {
 		return fmt.Errorf("google: таблицы: %w", err)
 	}
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }()
 
 	raw, err := io.ReadAll(io.LimitReader(res.Body, 8<<20))
 	if err != nil {

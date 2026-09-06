@@ -296,7 +296,7 @@ func maskPassword(source string) string {
 // One form and not two. A screen with an «добавить» form and a separate
 // «изменить» form has two places for every field, and the day somebody adds a
 // field to one of them is the day the other quietly stops carrying it.
-func (s *Server) channelForm(r *http.Request, form store.ChannelRow, saved []store.ChannelRow) string {
+func (s *Server) channelForm(r *http.Request, form store.ChannelRow, _ []store.ChannelRow) string {
 	editing := form.ID != 0
 
 	// The value belongs to the field of the chosen kind and to no other. Three

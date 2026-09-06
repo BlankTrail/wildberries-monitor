@@ -71,7 +71,7 @@ func TestCategories_AnEmptyDirectorySaysWhatToPress(t *testing.T) {
 
 func TestCategories_RefreshReportsWhatItLoaded(t *testing.T) {
 	srv := newServer(t)
-	srv.Categories = func(ctx context.Context) (int, error) {
+	srv.Categories = func(context.Context) (int, error) {
 		seedCategories(t, srv)
 		return 3, nil
 	}

@@ -197,7 +197,7 @@ func Regions() []Region {
 	return out
 }
 
-// Region finds one by code.
+// RegionOf finds one by code.
 func RegionOf(code string) (Region, bool) {
 	for _, r := range regions {
 		if r.Code == code {

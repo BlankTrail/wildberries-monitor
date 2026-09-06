@@ -322,6 +322,12 @@ func pagesOf(j Job) int {
 	return j.MaxPages
 }
 
+// Plan enumerates a job's items without asking the site anything.
+//
+// Every kind whose walk is decided by what the job says rather than by what
+// the first page answers with — a phrase list, a list of article numbers, a
+// catalogue node with a page bound. What it cannot plan it refuses, so a kind
+// that needs the site is a refusal here rather than an empty run later.
 func (StaticPlanner) Plan(j Job) ([]Item, error) {
 	if err := j.Validate(); err != nil {
 		return nil, err

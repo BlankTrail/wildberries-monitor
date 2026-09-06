@@ -160,7 +160,6 @@ func (s *Store) ProfilePhrases(ctx context.Context, profileID int64, state strin
 	return out, nil
 }
 
-// DeletePhrase removes one.
 // RenamePhrase changes what a phrase says, keeping everything else about it.
 //
 // The state and the best place go with it, and that is the decision worth
@@ -198,6 +197,8 @@ func (s *Store) RenamePhrase(ctx context.Context, id int64, text string) error {
 	return nil
 }
 
+// DeletePhrase removes one, with everything said about it — the verdicts per
+// product and per region go with the row they describe.
 func (s *Store) DeletePhrase(ctx context.Context, id int64) error {
 	if _, err := s.db.ExecContext(ctx, `DELETE FROM phrases WHERE id = ?`, id); err != nil {
 		return fmt.Errorf("store: delete phrase %d: %w", id, err)

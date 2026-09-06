@@ -316,10 +316,7 @@ type PortReport struct {
 // address would be one screenshot away from publishing a proxy list.
 func (p *Pool) PortReports() []PortReport {
 	p.mu.Lock()
-	ports := make([]*poolPort, 0, len(p.ports))
-	for _, pt := range p.ports {
-		ports = append(ports, pt)
-	}
+	ports := append(make([]*poolPort, 0, len(p.ports)), p.ports...)
 	p.mu.Unlock()
 
 	out := make([]PortReport, 0, len(ports))

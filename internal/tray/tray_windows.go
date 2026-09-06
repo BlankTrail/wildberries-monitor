@@ -464,3 +464,14 @@ func Alert(title, text string) {
 	}
 	procMessageBox.Call(0, uintptr(unsafe.Pointer(body)), uintptr(unsafe.Pointer(head)), mbIconError)
 }
+
+// report says something went wrong, if the caller asked to be told.
+//
+// Here rather than in tray.go, which has no build tag: the only caller is the
+// Windows message loop, so on every other platform the method sat compiled and
+// unused — which the linter says, correctly, on the runner and never here.
+func (i *Icon) report(err error) {
+	if err != nil && i.Report != nil {
+		i.Report(err)
+	}
+}

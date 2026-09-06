@@ -586,13 +586,6 @@ func orderBy(f ProductFilter) string {
 	return col + " IS NULL, " + col + dir + ", " + tail
 }
 
-// CountProducts is how many readings the filter selects.
-//
-// Its own query rather than a count of what streamed, because the stream is
-// capped: the table shows a page and the number under it has to be the whole.
-// The window function is kept for the same reason it is in the stream — with
-// Latest set, «сколько всего» means how many series there are and not how many
-// readings they hold.
 // AnyRawKept reports whether any reading carries the site's own response.
 //
 // For the one screen that offers to export them: a link that produces a file
@@ -612,6 +605,13 @@ func (s *Store) AnyRawKept(ctx context.Context) (bool, error) {
 	return kept == 1, nil
 }
 
+// CountProducts is how many readings the filter selects.
+//
+// Its own query rather than a count of what streamed, because the stream is
+// capped: the table shows a page and the number under it has to be the whole.
+// The window function is kept for the same reason it is in the stream — with
+// Latest set, «сколько всего» means how many series there are and not how many
+// readings they hold.
 func (s *Store) CountProducts(ctx context.Context, f ProductFilter) (int64, error) {
 	// The page has no bearing on the total.
 	f.Limit, f.Offset, f.Sort = 0, 0, ""
@@ -719,7 +719,6 @@ type DestUse struct {
 	Known bool
 }
 
-// Dests lists the region codes this installation uses, the busiest first.
 // SubjectUse is one category something has been collected in.
 type SubjectUse struct {
 	ID   int64
@@ -768,6 +767,7 @@ func (s *Store) Subjects(ctx context.Context) ([]SubjectUse, error) {
 	return out, nil
 }
 
+// Dests lists the region codes this installation uses, the busiest first.
 func (s *Store) Dests(ctx context.Context) ([]DestUse, error) {
 	byCode := map[string]*DestUse{}
 	use := func(code string) *DestUse {

@@ -296,7 +296,7 @@ func stageLabel(p store.ProfileRow) string {
 // different reasons: «собираем ассортимент» is a walk through a storefront and
 // «проверяем позиции» is one search per phrase, and somebody watching a profile
 // with four hundred candidates deserves to know which of the two they are in.
-func (s *Server) chainState(r *http.Request, p store.ProfileRow) string {
+func (s *Server) chainState(_ *http.Request, p store.ProfileRow) string {
 	switch {
 	case p.Running():
 		out := `<div class="bt-alert bt-alert--neutral">Идёт сбор: ` +

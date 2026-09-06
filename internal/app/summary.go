@@ -156,7 +156,10 @@ func (a *App) writeSummaryFile(r rules.Rule, firings []rules.Firing) (string, er
 	w.Comma = ';'
 
 	if err := w.Write([]string{"артикул", "регион", "что", "было", "стало", "прочитано"}); err != nil {
-		f.Close()
+		// Закрытие здесь — уборка за уже случившейся ошибкой, и его собственная
+		// ошибка ничего к той не добавит: вернуть можно только одну, а вернуть
+		// надо ту, из-за которой файл и бросают. То же в двух местах ниже.
+		_ = f.Close()
 		return "", fmt.Errorf("app: %s: %w", path, err)
 	}
 	for _, fi := range firings {
@@ -169,13 +172,13 @@ func (a *App) writeSummaryFile(r rules.Rule, firings []rules.Firing) (string, er
 			sideOf(c.Now, c.HasNow, c.Unit),
 			time.Unix(c.TS, 0).UTC().Format(time.RFC3339),
 		}); err != nil {
-			f.Close()
+			_ = f.Close()
 			return "", fmt.Errorf("app: %s: %w", path, err)
 		}
 	}
 	w.Flush()
 	if err := w.Error(); err != nil {
-		f.Close()
+		_ = f.Close()
 		return "", fmt.Errorf("app: %s: %w", path, err)
 	}
 	if err := f.Close(); err != nil {

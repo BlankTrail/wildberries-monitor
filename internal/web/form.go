@@ -179,13 +179,6 @@ func pressWith(url, target, with, label, class string) string {
 		html.EscapeString(label) + `</button>`
 }
 
-// pressRaw is press for a label that is already markup.
-func pressRaw(url, target, inner, class string) string {
-	return `<button class="` + class + `" type="submit" form="` + sharedFormID +
-		`" data-post="` + html.EscapeString(url) +
-		`" data-target="` + html.EscapeString(target) + `">` + inner + `</button>`
-}
-
 // outerAction is the same press for a button that sits inside another form.
 //
 // A form inside a form is not HTML: the browser closes the outer one at the

@@ -77,7 +77,7 @@ func template(t *testing.T) []byte {
 			err = mkErr
 			return
 		}
-		defer os.RemoveAll(dir)
+		defer func() { _ = os.RemoveAll(dir) }()
 		path := filepath.Join(dir, "template.db")
 		s, openErr := store.Open(context.Background(), path)
 		if openErr != nil {

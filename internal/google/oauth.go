@@ -184,7 +184,7 @@ func (c Config) token(ctx context.Context, form url.Values) (Token, error) {
 	if err != nil {
 		return Token{}, fmt.Errorf("google: token: %w", err)
 	}
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }()
 
 	body, err := io.ReadAll(io.LimitReader(res.Body, 1<<20))
 	if err != nil {

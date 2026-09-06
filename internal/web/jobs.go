@@ -327,28 +327,6 @@ func (s *Server) uploadingJob(r *http.Request) *job.Job {
 	return &j
 }
 
-// editedJob is the saved job the open constructor is changing, or nil when it
-// is making a new one.
-//
-// Read from the form rather than the address, because that is where the id
-// travels: the constructor carries it in a hidden field so that saving,
-// re-estimating and re-rendering after an upload all keep changing the same
-// job instead of quietly making a second one.
-func (s *Server) editedJob(r *http.Request) *job.Job {
-	if err := parseForm(r); err != nil {
-		return nil
-	}
-	id := atoi64(r.Form.Get("id"))
-	if id == 0 {
-		return nil
-	}
-	j, err := job.Load(r.Context(), s.Store, id)
-	if err != nil {
-		return nil
-	}
-	return &j
-}
-
 // jobsFragment re-renders the screen after an action, without the page around
 // it.
 //

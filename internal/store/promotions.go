@@ -34,7 +34,6 @@ type PromotionRow struct {
 	FetchedAt int64
 }
 
-// SavePromotions replaces the list with what the site is running.
 // PromotionName is what a promotion is called, by the number a listing marks
 // its products with.
 //
@@ -57,6 +56,7 @@ func (s *Store) PromotionName(ctx context.Context, promoID int64) (string, error
 	return name, nil
 }
 
+// SavePromotions replaces the list with what the site is running.
 func (s *Store) SavePromotions(ctx context.Context, rows []PromotionRow) (int, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {

@@ -1387,7 +1387,7 @@ func (l liveLease) Release()                                   {}
 
 type liveLeaser struct{ hc *http.Client }
 
-func (l liveLeaser) Acquire(context.Context) (Lease, error) { return liveLease{l.hc}, nil }
+func (l liveLeaser) Acquire(context.Context) (Lease, error) { return liveLease(l), nil }
 
 // liveClient is a site client whose port is the given server.
 func liveClient(hc *http.Client) *Client { return NewClient(liveLeaser{hc}, NewSessions()) }

@@ -58,8 +58,8 @@ func Parse(address string) (settlement, region string) {
 	if open := strings.Index(s, "("); open >= 0 {
 		rest := s[open+1:]
 		inner, after := rest, ""
-		if close := strings.Index(rest, ")"); close >= 0 {
-			inner, after = rest[:close], rest[close+1:]
+		if shut := strings.Index(rest, ")"); shut >= 0 {
+			inner, after = rest[:shut], rest[shut+1:]
 		}
 		// Only the first part inside: «(Оренбургская область, городской округ
 		// Орск)» names the region and then narrows it.

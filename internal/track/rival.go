@@ -158,7 +158,7 @@ func priceCrossing(before, after Standing) []Change {
 		return nil
 	}
 	// Was cheaper or level, and is not any more.
-	if !(*before.MyPrice <= *before.RivalPrice) || !(*after.MyPrice > *after.RivalPrice) {
+	if *before.MyPrice > *before.RivalPrice || *after.MyPrice <= *after.RivalPrice {
 		return nil
 	}
 

@@ -33,6 +33,10 @@ import (
 // inside a run that is already paying for its own pace.
 const shelfTimeout = 30 * time.Second
 
+// ShelfSellerRecommends is the title the site gives the shelf this package
+// reads. Compared against rather than guessed at: a seller's own recommended
+// row and the site's «похожие товары» come back through the same address, and
+// only the title tells them apart.
 const ShelfSellerRecommends = "Продавец рекомендует"
 
 // ProductShelf is one shelf under one product's card.
