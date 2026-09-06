@@ -5,6 +5,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -14,9 +15,27 @@ import (
 // openTestStore opens a store on a database that lives only for this test.
 // Every test in this package uses it: a test that touched a real data
 // directory would be a test that can destroy a user's history.
+// openTestStore is an empty, fully migrated store of this test's own.
+//
+// Copied from a template rather than migrated from nothing, and the difference
+// is the whole runtime of this package. Migrating thirty-six files costs about
+// ninety-eight milliseconds; opening a database that has them already costs
+// four. Four hundred and ninety tests took the first price and the package ran
+// for forty-six seconds — of which forty-eight were migrations, which is to say
+// all of it.
+//
+// Under the race detector it is worse than proportionally: modernc.org/sqlite
+// is pure Go, so the detector instruments the database engine itself and every
+// migration statement with it. That is what put this package over the ten- and
+// then the thirty-minute ceiling in CI, on a suite whose slowest single test
+// takes two seconds.
 func openTestStore(t *testing.T) *Store {
 	t.Helper()
-	s, err := Open(context.Background(), filepath.Join(t.TempDir(), "test.db"))
+	path := filepath.Join(t.TempDir(), "test.db")
+	if err := os.WriteFile(path, migratedTemplate(t), 0o600); err != nil {
+		t.Fatalf("копия шаблона: %v", err)
+	}
+	s, err := Open(context.Background(), path)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -26,6 +45,48 @@ func openTestStore(t *testing.T) *Store {
 		}
 	})
 	return s
+}
+
+var (
+	templateOnce  sync.Once
+	templateBytes []byte
+	templateErr   error
+)
+
+// migratedTemplate is one migrated database, built once for the whole package
+// and handed out as bytes.
+//
+// Read back as bytes rather than kept as a path, because a test that copies a
+// file has to be sure nothing is still writing to it: the template's own store
+// is closed before the bytes are taken, and after that there is nothing to
+// race with. WAL and shm files are not copied and do not need to be — Open on
+// a closed database recovers from the main file alone, which is the guarantee
+// that makes this safe rather than merely fast.
+func migratedTemplate(t *testing.T) []byte {
+	t.Helper()
+	templateOnce.Do(func() {
+		dir, err := os.MkdirTemp("", "wbmon-template")
+		if err != nil {
+			templateErr = err
+			return
+		}
+		defer os.RemoveAll(dir)
+		path := filepath.Join(dir, "template.db")
+		s, err := Open(context.Background(), path)
+		if err != nil {
+			templateErr = err
+			return
+		}
+		if err := s.Close(); err != nil {
+			templateErr = err
+			return
+		}
+		templateBytes, templateErr = os.ReadFile(path)
+	})
+	if templateErr != nil {
+		t.Fatalf("шаблон базы: %v", templateErr)
+	}
+	return templateBytes
 }
 
 func TestOpen_CreatesTheFile(t *testing.T) {

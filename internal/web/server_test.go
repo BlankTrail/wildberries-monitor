@@ -17,16 +17,15 @@ import (
 
 	"github.com/BlankTrail/wildberries-monitor/internal/rules"
 	"github.com/BlankTrail/wildberries-monitor/internal/store"
+	"github.com/BlankTrail/wildberries-monitor/internal/testutil/storedb"
 )
 
 func newServer(t *testing.T) *Server {
 	t.Helper()
-	s, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "web.db"))
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
-	t.Cleanup(func() { s.Close() })
-	return &Server{Store: s, Password: "correct horse"}
+	// From a migrated template rather than migrated afresh: this package opens
+	// one store per test, two hundred and fifteen times, and the migrations
+	// were most of its runtime — see internal/testutil/storedb.
+	return &Server{Store: storedb.New(t), Password: "correct horse"}
 }
 
 func get(t *testing.T, srv *Server, path, password string) *httptest.ResponseRecorder {

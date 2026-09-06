@@ -16,11 +16,17 @@ import (
 	"github.com/BlankTrail/wildberries-monitor/internal/events"
 	"github.com/BlankTrail/wildberries-monitor/internal/store"
 	"github.com/BlankTrail/wildberries-monitor/internal/telegram"
+	"github.com/BlankTrail/wildberries-monitor/internal/testutil/storedb"
 )
 
 func newApp(t *testing.T) *App {
 	t.Helper()
-	a, err := New(t.Context(), Config{DataDir: t.TempDir(), Port: 0})
+	// The database is put there migrated, before New opens it. This package
+	// makes one App per test, a hundred and twenty-four times, and the
+	// migrations were most of its runtime — see internal/testutil/storedb.
+	dir := t.TempDir()
+	storedb.Seed(t, dir, "wbmon.db")
+	a, err := New(t.Context(), Config{DataDir: dir, Port: 0})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
