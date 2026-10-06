@@ -89,6 +89,12 @@ func (s *Server) compareBody(r *http.Request) (string, error) {
 		b.WriteString(`</div>`)
 	}
 
+	copies, err := s.Store.CopiesOfMine(ctx, 0)
+	if err != nil {
+		return "", err
+	}
+	b.WriteString(copiesSection(copies))
+
 	// Said once, at the bottom, rather than as an empty column per row: two of
 	// section 4.7's comparisons have no source in this build, and a column of
 	// dashes reads like «у всех поровну».
@@ -104,6 +110,43 @@ func (s *Server) compareBody(r *http.Request) (string, error) {
 		`на каком месте стояла рекламная вставка. Поэтому этих колонок в таблице нет, ` +
 		`а не стоят пустыми: пустая колонка выглядела бы как «у всех одинаково».</div>`)
 	return b.String(), nil
+}
+
+// copiesSection lists other sellers' listings that look like copies of mine.
+func copiesSection(cs []store.CopyCandidate) string {
+	var b strings.Builder
+	b.WriteString(`<h3 class="bt-form-head">Возможные копии ваших товаров</h3>`)
+	fmt.Fprintf(&b, `<p class="bt-form-hint">Товары других продавцов того же предмета, у которых название `+
+		`совпадает с вашим хотя бы на %.0f%% слов и не меньше чем в %d словах (слова бренда не считаются), `+
+		`и которые Wildberries не склеил с вашей карточкой. Короткое типовое название вроде «Кроссовки `+
+		`демисезонные» копией не считается. Ищутся среди всего, что собрали задания, — чем шире задания `+
+		`по вашим фразам, тем больше видно. Это подсказка, а не вердикт: проверьте карточку глазами.</p>`,
+		store.CopySimilarity*100, store.CopyMinShared)
+	if len(cs) == 0 {
+		b.WriteString(`<div class="bt-alert bt-alert--neutral">Похожих чужих карточек среди собранного нет.</div>`)
+		return b.String()
+	}
+	b.WriteString(`<div class="bt-table-wrap"><table class="bt-table"><thead><tr>` +
+		`<th class="bt-num">Ваш товар</th><th class="bt-num">Похожий</th><th>Название</th><th>Продавец</th>` +
+		`<th class="bt-num">Совпадение</th><th class="bt-num">Цена</th><th class="bt-num">Ваша цена</th>` +
+		`</tr></thead><tbody>`)
+	for _, c := range cs {
+		price, mine := "—", "—"
+		if c.CopyPrice > 0 {
+			price = wb.Money{Minor: c.CopyPrice, Currency: c.Currency}.String()
+		}
+		if c.MyPrice > 0 {
+			mine = wb.Money{Minor: c.MyPrice, Currency: c.Currency}.String()
+		}
+		fmt.Fprintf(&b, `<tr><td class="bt-mono">%d</td>`+
+			`<td class="bt-num"><a href="%s" target="_blank" rel="noopener">%d</a></td>`+
+			`<td>%s</td><td>%s</td><td class="bt-num">%.0f%%</td><td class="bt-num">%s</td><td class="bt-num">%s</td></tr>`,
+			c.Mine, html.EscapeString(wb.DefaultEndpoints().CardPageURL(c.Copy)), c.Copy,
+			html.EscapeString(c.CopyName), html.EscapeString(c.CopySeller), c.Similarity*100,
+			html.EscapeString(price), html.EscapeString(mine))
+	}
+	b.WriteString(`</tbody></table></div>`)
+	return b.String()
 }
 
 // compareTable draws the deltas, one row per (product, phrase, baseline).

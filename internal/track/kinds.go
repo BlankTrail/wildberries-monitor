@@ -37,7 +37,7 @@ package track
 //     than for one of the two kinds of storefront it happens on.
 type Kind string
 
-// The thirty-seven kinds this build can emit, grouped by what they are about. The
+// The thirty-nine kinds this build can emit, grouped by what they are about. The
 // spec section 6.1 names that are absent are listed on Kind above, with
 // the reason each of them has no producer here.
 //
@@ -120,6 +120,17 @@ const (
 
 	// And the card itself: what the seller wrote, when they rewrite it.
 	ContentChanged Kind = "content-changed"
+
+	// The same product priced differently by region: the seller's discount
+	// is one price, and the site's own (СПП) differs region by region.
+	// Measured on one card: 1225 and 1222 roubles in two regions, minutes
+	// apart. See region.go.
+	RegionPriceGap Kind = "region-price-gap"
+
+	// Another seller's listing that looks like a copy of mine: same subject,
+	// a name nearly the same, a different seller and a different card. See
+	// internal/store/copies.go.
+	CopyAppeared Kind = "copy-appeared"
 )
 
 // Unit says what the two numbers on a change are counted in.
@@ -170,5 +181,6 @@ func Kinds() []Kind {
 		AdAppeared, AdLost, AdCompetitorEntered,
 		ShelfEntered, ShelfLost, ShelfCompetitorEntered,
 		ContentChanged,
+		RegionPriceGap, CopyAppeared,
 	}
 }

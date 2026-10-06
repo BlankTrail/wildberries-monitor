@@ -210,6 +210,7 @@ func TestScreens_EveryAddressAPersonCanOpenAnswersAWholeScreen(t *testing.T) {
 		"/results/table":      "тело таблицы результатов",
 		"/results/stock":      "разбор остатка под строкой таблицы",
 		"/results/reputation": "отзывы и вопросы под строкой таблицы",
+		"/results/prices":     "цены по регионам под строкой таблицы",
 		"/jobs/detail":        "подробности задания под строкой списка",
 		"/channels/edit":      "форма правки канала на месте строки",
 		"/rules/log":          "журнал правила под строкой",

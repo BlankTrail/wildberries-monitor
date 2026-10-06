@@ -392,9 +392,9 @@ func snapshotPrices(p wb.Product) (base, sale, discount *int64, currency string)
 
 // snapshotStock is the single stock figure a snapshot row carries.
 //
-// wb.Product.TotalStock prefers the per-size breakdown the card sends and
-// falls back to the flat total the search response sends, so one column means
-// one thing across both producers. nil only when neither source was present,
+// wb.Product.TotalStock prefers the product's own total, which every producer
+// sends, and falls back to the per-size breakdown only without one, so one
+// column means one thing across producers. nil only when neither source was present,
 // which is a different fact from a stock of zero.
 func snapshotStock(p wb.Product) *int64 {
 	q, ok := p.TotalStock()

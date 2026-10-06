@@ -242,6 +242,12 @@ func resultsCell(q url.Values, names map[int64]string, row store.ProductRow, c w
 		return stockCell(row.NmID, text)
 	}
 
+	// The price opens the regions: one region's price beside the others is
+	// where the site's own discount, which differs by region, shows.
+	if c.Key == "price_sale" {
+		return priceCell(row.NmID, text)
+	}
+
 	// The review count opens the same way, and for the same kind of reason: the
 	// number is an aggregate and «что там пишут» is the question behind it. It
 	// is also the only door to what the review window and the question list

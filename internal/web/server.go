@@ -347,6 +347,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /profile/competitors/pin", s.auth(http.HandlerFunc(s.markCompetitor)))
 	mux.Handle("POST /profile/competitors/exclude", s.auth(http.HandlerFunc(s.markCompetitor)))
 	mux.Handle("GET /compare", s.auth(http.HandlerFunc(s.comparePage)))
+	mux.Handle("GET /sales", s.auth(http.HandlerFunc(s.salesPage)))
 	mux.Handle("POST /compare/recompute", s.auth(http.HandlerFunc(s.recompare)))
 	mux.Handle("GET /rules", s.auth(http.HandlerFunc(s.rulesPage)))
 	mux.Handle("POST /rules", s.auth(http.HandlerFunc(s.saveRule)))
@@ -358,6 +359,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /results", s.auth(http.HandlerFunc(s.resultsPage)))
 	mux.Handle("GET /results/table", s.auth(http.HandlerFunc(s.resultsFragment)))
 	mux.Handle("GET /results/stock", s.auth(http.HandlerFunc(s.stockPanel)))
+	mux.Handle("GET /results/prices", s.auth(http.HandlerFunc(s.pricesPanel)))
 	mux.Handle("GET /results/reputation", s.auth(http.HandlerFunc(s.reputationPanel)))
 	mux.Handle("GET /results/export", s.auth(http.HandlerFunc(s.exportHandler)))
 	mux.Handle("GET /live", s.auth(http.HandlerFunc(s.live)))
@@ -524,6 +526,7 @@ func (s *Server) tabs(current string) []Tab {
 		{Label: "Мой профиль", Href: "/profile"},
 		{Label: "Задачи", Href: "/jobs"},
 		{Label: "Сравнение", Href: "/compare"},
+		{Label: "Продажи", Href: "/sales"},
 		{Label: "Отслеживание", Href: "/track"},
 		{Label: "Уведомления", Href: "/rules"},
 		{Label: "Прокси", Href: "/channels"},

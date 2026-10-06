@@ -114,6 +114,20 @@ func (a *App) detectChanges(ctx context.Context) {
 		highest = max(highest, at)
 	}
 
+	if n, at, err := a.applyRegionPrices(ctx, engine, all, since); err != nil {
+		a.Log.Printf("правила: цены по регионам: %v", err)
+	} else {
+		fired += n
+		highest = max(highest, at)
+	}
+
+	if n, at, err := a.applyCopies(ctx, engine, all, since); err != nil {
+		a.Log.Printf("правила: копии: %v", err)
+	} else {
+		fired += n
+		highest = max(highest, at)
+	}
+
 	standings, err := a.Store.StandingsChangedSince(ctx, since)
 	if err != nil {
 		a.Log.Printf("правила: не прочитать изменившиеся сравнения: %v", err)
@@ -603,6 +617,90 @@ func (a *App) applyNewCompetitors(ctx context.Context, e *rules.Engine, all []ru
 	return fired, highest, nil
 }
 
+// applyRegionPrices runs the rules over the prices of every product read since
+// the watermark, region against region.
+//
+// Not a diff of two readings: the newest price of each region, side by side,
+// and every region dearer than the cheapest is one change. A gap that stays
+// the same is the same change and deduplication drops it; one that widens or
+// narrows is new.
+func (a *App) applyRegionPrices(ctx context.Context, e *rules.Engine, all []rules.Rule, since int64) (int, int64, error) {
+	groups, err := a.Store.RegionPricesChangedSince(ctx, since)
+	if err != nil {
+		return 0, 0, err
+	}
+	fired, highest := 0, int64(0)
+	for _, g := range groups {
+		prices := make([]track.RegionPrice, len(g.Rows))
+		for i, r := range g.Rows {
+			prices[i] = track.RegionPrice{Dest: r.Dest, TS: r.TS, Price: r.Sale}
+			highest = max(highest, r.TS)
+		}
+		changes := track.RegionGaps(g.NmID, g.AppType, prices)
+		if len(changes) == 0 {
+			continue
+		}
+		facts, err := a.Store.Facts(ctx, g.NmID)
+		if err != nil {
+			return fired, highest, err
+		}
+		jobs, err := a.Store.JobsOfProduct(ctx, g.NmID)
+		if err != nil {
+			return fired, highest, err
+		}
+		for _, c := range changes {
+			price := c.Now
+			n, err := e.Apply(ctx, all, rules.Event{
+				Change: c,
+				Now:    track.Reading{NmID: c.NmID, Dest: c.Dest, AppType: c.AppType, TS: c.TS, PriceSale: &price},
+				Brand:  facts.Brand, SupplierID: facts.SupplierID, SubjectID: facts.SubjectID,
+				JobIDs: jobs,
+			})
+			if err != nil {
+				return fired, highest, err
+			}
+			fired += n
+		}
+	}
+	return fired, highest, nil
+}
+
+// applyCopies tells about listings that look like copies of mine, first seen
+// since the watermark.
+//
+// One change per pair, on my product: the copy is the subject, so the same
+// pair is told once, and a second copy of the same product is its own news.
+func (a *App) applyCopies(ctx context.Context, e *rules.Engine, all []rules.Rule, since int64) (int, int64, error) {
+	copies, err := a.Store.CopiesOfMine(ctx, since)
+	if err != nil {
+		return 0, 0, err
+	}
+	fired, highest := 0, int64(0)
+	for _, c := range copies {
+		highest = max(highest, c.FirstSeenAt)
+		subject := fmt.Sprintf("товар %d «%s» продавца «%s», названия совпадают на %.0f%%",
+			c.Copy, c.CopyName, c.CopySeller, c.Similarity*100)
+		if c.CopyPrice > 0 && c.MyPrice > 0 {
+			subject += fmt.Sprintf(", цена %s против вашей %s",
+				inUnit(c.CopyPrice, track.UnitMinor), inUnit(c.MyPrice, track.UnitMinor))
+		}
+		facts, err := a.Store.Facts(ctx, c.Mine)
+		if err != nil {
+			return fired, highest, err
+		}
+		n, err := e.Apply(ctx, all, rules.Event{
+			Change: track.Change{Kind: track.CopyAppeared, NmID: c.Mine, TS: c.FirstSeenAt,
+				Subject: subject, Unit: track.UnitItems},
+			Brand: facts.Brand, SupplierID: facts.SupplierID, SubjectID: facts.SubjectID,
+		})
+		if err != nil {
+			return fired, highest, err
+		}
+		fired += n
+	}
+	return fired, highest, nil
+}
+
 // applyStanding runs the rules over one product's standing beside one rival.
 //
 // Spec section 6.1's comparison group, the last of the nine names that had no
@@ -840,6 +938,19 @@ func renderFiring(r rules.Rule, ev rules.Event) (body, attachment string) {
 // rendered in the change's own unit, because «упал на 200» means one thing in
 // kopecks and another in places.
 func describeChange(c track.Change) string {
+	switch c.Kind {
+	case track.RegionPriceGap:
+		// Two prices at one moment rather than one price over time, so not
+		// «было → стало»: the cheaper region is named, and the gap said.
+		line := fmt.Sprintf("цена выше, чем в регионе %s: там %s, здесь %s",
+			c.Subject, inUnit(c.Was, c.Unit), inUnit(c.Now, c.Unit))
+		if pct, ok := c.PercentChange(); ok {
+			line += fmt.Sprintf(" (+%.1f%%)", pct)
+		}
+		return line
+	case track.CopyAppeared:
+		return "возможная копия: " + c.Subject
+	}
 	what := changeNames[c.Kind]
 	if what == "" {
 		what = string(c.Kind)
