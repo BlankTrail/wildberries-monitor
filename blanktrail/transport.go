@@ -174,6 +174,46 @@ func (t *ladder) RoundTrip(req *http.Request) (*http.Response, error) {
 			return resp, nil
 		}
 
+		// The port answered for itself: the request never reached the origin.
+		// It is settled here and goes up as an error, because nothing above can
+		// judge it — the status belongs to no site, and counted as one it is
+		// a page given up on a word the site never said.
+		if ref := refusalOf(resp, t.port); ref != nil {
+			drainAndClose(resp)
+			switch {
+			case ref.BlamesExit():
+				// The exit is the fault, so it is struck and replaced at once:
+				// the consecutive-failure count is for failures that might be
+				// the origin's, and this one says outright that it is not.
+				// The repeat goes out only through an exit that actually
+				// changed — a port that could not change it would carry the
+				// same request into the same dead exit, and the pause between
+				// those would be the whole cost of the page.
+				t.rem.markBadEgress(t.port)
+				if t.rem.rotateEgress(req.Context(), t.port) != nil || transportRetries >= transportBudget {
+					return nil, ref
+				}
+				transportRetries++
+				delay = 0
+				continue
+			case ref.Reason == reasonConnLimit:
+				// Busy, not broken: wait and ask again, and leave the exit's
+				// record alone. Not counted as the port's strike either — a
+				// loaded port is the one most worth keeping.
+				if statusRetries >= statusBudget {
+					return nil, ref
+				}
+				statusRetries++
+				delay = backoff(attempt + 1)
+				continue
+			default:
+				// Nothing this port can do differently: a shared hop is down or
+				// the origin's name resolves nowhere. Another port might; that
+				// is the caller's move.
+				return nil, ref
+			}
+		}
+
 		// Any non-2xx counts against the port, whatever the reason, unless the
 		// caller has said this particular status should not. A dead proxy, a
 		// refused egress and a broken gateway are indistinguishable from here and

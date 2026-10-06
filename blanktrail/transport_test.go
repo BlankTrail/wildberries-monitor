@@ -76,6 +76,7 @@ type fakeRemedy struct {
 	retries          int
 	transportRetries int
 	rotateOnNth      int // attemptFailed returns true on this failure number (0 = never)
+	rotateErr        error
 }
 
 func (r *fakeRemedy) attemptFailed(int) bool {
@@ -84,7 +85,7 @@ func (r *fakeRemedy) attemptFailed(int) bool {
 }
 func (r *fakeRemedy) attemptFailedStatus(port, _ int) bool    { return r.attemptFailed(port) }
 func (r *fakeRemedy) attemptSucceeded(int)                    { r.successes++ }
-func (r *fakeRemedy) rotateEgress(context.Context, int) error { r.rotations++; return nil }
+func (r *fakeRemedy) rotateEgress(context.Context, int) error { r.rotations++; return r.rotateErr }
 func (r *fakeRemedy) markBadEgress(int)                       { r.markedBad++ }
 func (r *fakeRemedy) exhausted(int)                           { r.exhaustedCalls++ }
 func (r *fakeRemedy) unreachable(_ context.Context, port int) {

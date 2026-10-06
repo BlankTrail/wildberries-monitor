@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"time"
@@ -440,6 +441,20 @@ attempts:
 			faults++
 			lostOnPort++
 			last, lastErr = nil, err
+			// The port answered for itself that the request never reached the
+			// site. That is what three silent attempts would only suggest, said
+			// outright, so the next attempt goes to another port at once — the
+			// check at the top of the loop does the moving, and a pool of one
+			// is handled there the same way as for any other run of losses.
+			//
+			// So does an attempt that waited out its whole deadline. The
+			// deadline is generous so a challenge can be cleared, and a port
+			// that stays silent through all of it has answered as plainly as
+			// one that refused: measured, a hung gateway held a page for 808
+			// seconds, three full timeouts before the port was left.
+			if _, refused := blanktrail.Refusal(err); refused || timedOut(err) {
+				lostOnPort = max(lostOnPort, c.retry.AttemptsPerEgress)
+			}
 			// The request never reached the proxy: this port's own listener
 			// refused it, or it is gone. Rotating its egress would be
 			// meaningless — nothing was sent through the old one — and
@@ -655,4 +670,11 @@ func searchOrigin(eps Endpoints) string {
 		return u.Scheme + "://" + u.Host
 	}
 	return origin
+}
+
+// timedOut reports whether err is an attempt that waited out its deadline
+// with nothing back.
+func timedOut(err error) bool {
+	var ne net.Error
+	return errors.As(err, &ne) && ne.Timeout()
 }

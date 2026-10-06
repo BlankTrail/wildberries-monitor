@@ -1602,3 +1602,105 @@ func TestClient_AskingAPoolOfOneTwelveTimesBuysNothing(t *testing.T) {
 		t.Errorf("took %d leases and released %d", leaser.n, only.released)
 	}
 }
+
+func TestClient_APortsRefusalMovesToAnotherPortAtOnce(t *testing.T) {
+	// Measured: seven gateways in twenty-one could not finish a TLS handshake
+	// with any origin, and each answered for itself — the request never left.
+	// The page was lost after one attempt, as if the site had refused it,
+	// while fourteen working ports stood idle beside it. A port that says it
+	// could not deliver has said everything three lost attempts would.
+	refusal := &blanktrail.RefusalError{Port: 1, Status: 525, Reason: "origin_handshake_failed"}
+	dead := &fakeLease{port: 1, err: fmt.Errorf("request x: %w", refusal)}
+	live := &fakeLease{port: 2, replies: []*http.Response{reply(200, "{}")}}
+	c := NewClientWithRetry(&fakeLeaser{leases: []*fakeLease{dead, live}}, NewSessions(),
+		RetryPolicy{Attempts: 10, AttemptsPerEgress: 3})
+
+	got, err := c.Get(context.Background(), "https://www.wildberries.ru/x", KindSearch, "")
+	if err != nil {
+		t.Fatalf("Get: %v — a live port stood beside the refusing one", err)
+	}
+	if len(dead.sent) != 1 {
+		t.Errorf("the refusing port took %d requests, want 1", len(dead.sent))
+	}
+	if got.PortChanges != 1 || got.TransportErrors != 1 || got.Attempts != 2 {
+		t.Errorf("PortChanges=%d TransportErrors=%d Attempts=%d, want 1/1/2",
+			got.PortChanges, got.TransportErrors, got.Attempts)
+	}
+	if dead.rotations != 0 {
+		t.Errorf("rotations=%d — the port already did what could be done about its exit", dead.rotations)
+	}
+}
+
+func TestClient_ARefusalOnTheOnlyPortStillSpendsTheBudget(t *testing.T) {
+	// A pool of one has nowhere to move. The refusal is still a lost attempt,
+	// not a verdict: the port may get a new exit by the next try, and the
+	// failure that comes back names what happened rather than a status.
+	refusal := &blanktrail.RefusalError{Port: 1, Status: 523, Reason: "upstream_unreachable"}
+	only := &fakeLease{port: 1, err: fmt.Errorf("request x: %w", refusal)}
+	c := NewClientWithRetry(&fakeLeaser{leases: []*fakeLease{only}}, NewSessions(),
+		RetryPolicy{Attempts: 4, AttemptsPerEgress: 3})
+
+	_, err := c.Get(context.Background(), "https://www.wildberries.ru/x", KindSearch, "")
+	var fe *FetchError
+	if !errors.As(err, &fe) {
+		t.Fatalf("err = %v, want a FetchError", err)
+	}
+	if fe.Cost.Attempts != 4 || fe.Cost.TransportErrors != 4 {
+		t.Errorf("cost = %+v, want four attempts, all lost", fe.Cost)
+	}
+	if _, ok := blanktrail.Refusal(err); !ok {
+		t.Errorf("err = %v — the port's own account of the failure was dropped", err)
+	}
+}
+
+// timeoutErr is a request that waited out its whole deadline with nothing
+// back, the way net/http reports it.
+type timeoutErr struct{}
+
+func (timeoutErr) Error() string   { return "Client.Timeout exceeded while awaiting headers" }
+func (timeoutErr) Timeout() bool   { return true }
+func (timeoutErr) Temporary() bool { return true }
+
+func TestClient_AHungPortIsLeftAfterOneTimeout(t *testing.T) {
+	// Measured: a gateway that stopped answering without closing anything held
+	// a page for 808 seconds. Each attempt waited out the whole request
+	// timeout — five minutes, generous on purpose so a challenge can be
+	// cleared — and the port was only left after three of those. One full
+	// timeout already says what three do.
+	hung := &fakeLease{port: 1, err: fmt.Errorf("request x: %w", timeoutErr{})}
+	live := &fakeLease{port: 2, replies: []*http.Response{reply(200, "{}")}}
+	c := NewClientWithRetry(&fakeLeaser{leases: []*fakeLease{hung, live}}, NewSessions(),
+		RetryPolicy{Attempts: 10, AttemptsPerEgress: 3})
+
+	got, err := c.Get(context.Background(), "https://www.wildberries.ru/x", KindSearch, "")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if len(hung.sent) != 1 {
+		t.Errorf("the hung port took %d requests, want 1", len(hung.sent))
+	}
+	if got.PortChanges != 1 || got.Attempts != 2 {
+		t.Errorf("PortChanges=%d Attempts=%d, want 1/2", got.PortChanges, got.Attempts)
+	}
+}
+
+func TestClient_AQuickLossStillGetsThePortsUsualPatience(t *testing.T) {
+	// The other side: a connection that dropped at once is cheap to repeat and
+	// often a blip, and it keeps the three-in-a-row rule.
+	// A real network error, and one that says it is not a timeout: the
+	// distinction is read off the error, not off its being an error at all.
+	reset := &net.OpError{Op: "read", Net: "tcp", Err: errors.New("connection reset by peer")}
+	flaky := &fakeLease{port: 1, dropAt: map[int]error{1: reset},
+		replies: []*http.Response{reply(200, "{}")}}
+	other := &fakeLease{port: 2, replies: []*http.Response{reply(200, "{}")}}
+	c := NewClientWithRetry(&fakeLeaser{leases: []*fakeLease{flaky, other}}, NewSessions(),
+		RetryPolicy{Attempts: 10, AttemptsPerEgress: 3})
+
+	got, err := c.Get(context.Background(), "https://www.wildberries.ru/x", KindSearch, "")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.PortChanges != 0 || len(flaky.sent) != 2 {
+		t.Errorf("PortChanges=%d sent on the first port=%d, want 0 and 2", got.PortChanges, len(flaky.sent))
+	}
+}
