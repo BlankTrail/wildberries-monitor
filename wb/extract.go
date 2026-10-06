@@ -268,23 +268,29 @@ func (p Product) DiscountPercent() (int, bool) {
 	return rounded, true
 }
 
-// TotalStock sums every warehouse of every size when the payload carries a
-// per-size breakdown, and falls back to the product-level TotalQuantity when
-// it does not.
+// TotalStock is the product's stock: the product-level totalQuantity where
+// the payload carries one, and the sum over every warehouse of every size only
+// where it does not.
 //
-// The two sources are not interchangeable, they are sequential: only the card
-// endpoint sends sizes[].stocks[] at all — the search endpoint, which is the
-// only source this milestone scrapes, sends a single totalQuantity next to the
-// sizes array and nothing under it. Preferring an "unknown" answer over the
-// real total search does provide would report false negatives for 100% of
-// search rows. The bool is false only when neither source is present, which is
-// a different fact from a stock of zero.
+// The two are different measurements, and that decides the order. Measured on
+// 6 October 2026, the same card read for two regions: totalQuantity 42 in
+// both, the per-warehouse breakdown 183 for one and 462 for the other. The
+// breakdown lists only the warehouses that serve the region asked about, so
+// its sum is neither the product's stock nor comparable with a figure from a
+// listing page, which carries totalQuantity alone. Preferring the breakdown
+// put one number in the store from the card and another from the catalogue,
+// minutes apart, and a stock rule fired on the difference every pass (38, 8,
+// 38, 8 for one product over an afternoon). The breakdown stays on the
+// product, warehouse by warehouse, for whoever asks about warehouses.
 //
-// A present "stocks": [] on a size is a real, counted zero for that size, not
-// an absence — Stocks is non-nil for an empty JSON array and nil only when the
-// key was never sent, so a size that says nothing is not mistaken for a size
-// the payload counted and found empty.
+// The bool is false only when neither is present, which is a different fact
+// from a stock of zero. A present "stocks": [] on a size is a real, counted
+// zero for that size, not an absence — Stocks is non-nil for an empty JSON
+// array and nil only when the key was never sent.
 func (p Product) TotalStock() (int64, bool) {
+	if p.TotalQuantity != nil {
+		return *p.TotalQuantity, true
+	}
 	var sum int64
 	found := false
 	for _, s := range p.Sizes {
@@ -296,11 +302,5 @@ func (p Product) TotalStock() (int64, bool) {
 			sum += st.Qty
 		}
 	}
-	if found {
-		return sum, true
-	}
-	if p.TotalQuantity != nil {
-		return *p.TotalQuantity, true
-	}
-	return 0, false
+	return sum, found
 }

@@ -276,21 +276,29 @@ func TestProduct_PriceAboveBaseReportsNoDiscount(t *testing.T) {
 	}
 }
 
-func TestProduct_StockKeepsTheBreakdown(t *testing.T) {
-	// totalQuantity disagrees with the per-size sum on purpose: only the card
-	// endpoint sends a per-size breakdown, and when it does, that breakdown is
-	// the more precise answer and must win over the coarser product-level
-	// total, not the other way round.
-	p := mustExtract(t, `{"id":1,"totalQuantity":999,"sizes":[
+func TestProduct_StockIsTheProductTotalNotTheRegionsWarehouses(t *testing.T) {
+	// The card sends both, and they disagree by design: totalQuantity is the
+	// product's, the same whichever region is asked, while the breakdown lists
+	// only the warehouses serving the region asked about. Measured: 42 and 183
+	// for one region, 42 and 462 for another. Only totalQuantity is what a
+	// listing page carries too, so only it compares across sources.
+	p := mustExtract(t, `{"id":1,"totalQuantity":39,"sizes":[
 		{"stocks":[{"wh":507,"qty":7},{"wh":686,"qty":5}]},
 		{"stocks":[{"wh":507,"qty":3}]}]}`)
 
 	total, ok := p.TotalStock()
-	if !ok || total != 15 {
-		t.Errorf("TotalStock=%d ok=%v, want 15 — the per-size breakdown, not the unrelated totalQuantity fallback (999)", total, ok)
+	if !ok || total != 39 {
+		t.Errorf("TotalStock=%d ok=%v, want 39 — the product's total, not the region's 15", total, ok)
 	}
 	if len(p.Sizes) != 2 || len(p.Sizes[0].Stocks) != 2 || p.Sizes[0].Stocks[0].WarehouseID != 507 {
 		t.Error("the per-warehouse breakdown was collapsed; it is in the payload and a seller needs it")
+	}
+}
+
+func TestProduct_WithNoProductTotalTheBreakdownIsSummed(t *testing.T) {
+	p := mustExtract(t, `{"id":1,"sizes":[{"stocks":[{"wh":507,"qty":7},{"wh":686,"qty":5}]},{"stocks":[{"wh":507,"qty":3}]}]}`)
+	if total, ok := p.TotalStock(); !ok || total != 15 {
+		t.Errorf("TotalStock=%d ok=%v, want 15", total, ok)
 	}
 }
 
