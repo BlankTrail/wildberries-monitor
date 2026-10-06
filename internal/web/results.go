@@ -176,8 +176,12 @@ func lastPage(total int64) int {
 // a promise about what the next click does.
 func sortHeader(q url.Values, c wb.Field) string {
 	name := html.EscapeString(c.Name)
+	th := `<th>`
+	if numericColumn(c) {
+		th = `<th class="bt-num">`
+	}
 	if !store.Sortable(c.Key) {
-		return `<th>` + name + `</th>`
+		return th + name + `</th>`
 	}
 
 	active := q.Get("sort") == c.Key
@@ -201,9 +205,28 @@ func sortHeader(q url.Values, c wb.Field) string {
 		next.Del("desc")
 	}
 
-	return `<th><button class="` + class + `" type="button" data-get="` +
+	return th + `<button class="` + class + `" type="button" data-get="` +
 		html.EscapeString(resultsURL(next)) + `" data-target="#results-body">` +
 		name + arrow + `</button></th>`
+}
+
+// numericColumn reports whether a column holds a quantity, read right-aligned
+// so that its digits line up — and then its heading is right-aligned too.
+//
+// Both or neither: the price, stock and review cells were presses aligned to
+// the right under headings aligned to the left, and every number sat under the
+// next column's name. Identifiers are numbers nobody compares by size, and
+// read as labels, on the left.
+func numericColumn(c wb.Field) bool {
+	switch c.Key {
+	case "nm_id", "supplier_id", "warehouse_id", "promo_id", "shelf_nm_id", "app_type":
+		return false
+	}
+	switch c.Type {
+	case wb.FieldInt, wb.FieldMoney, wb.FieldFloat:
+		return true
+	}
+	return false
 }
 
 // resultsCell is one cell, and a way into the table where the value is one
@@ -216,6 +239,9 @@ func sortHeader(q url.Values, c wb.Field) string {
 func resultsCell(q url.Values, names map[int64]string, row store.ProductRow, c wb.Field) string {
 	text := cellText(row, c)
 	if text == "" {
+		if numericColumn(c) {
+			return `<td class="bt-num"></td>`
+		}
 		return `<td></td>`
 	}
 	// What the cell says and what it narrows by are not always the same
@@ -278,6 +304,9 @@ func resultsCell(q url.Values, names map[int64]string, row store.ProductRow, c w
 		narrowed = withParam(q, "dest", value)
 	}
 	if narrowed == nil {
+		if numericColumn(c) {
+			return `<td class="bt-num">` + html.EscapeString(text) + `</td>`
+		}
 		return `<td>` + longText(text) + `</td>`
 	}
 	return `<td><button class="bt-narrow" type="button" data-get="` +
