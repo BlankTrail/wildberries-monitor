@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"net/http"
 	"sort"
 	"strings"
@@ -209,6 +210,21 @@ type gatewayChannel struct {
 	fails map[string]int
 }
 
+// startAt is where a fresh rotation over n exits begins.
+//
+// Drawn, not zero. Every job builds its channels afresh, and starting each at
+// the head of the list put the first port of every job on the same exit — the
+// port a pool hands out first, since it is the coldest. Measured with three
+// jobs running together: all three first ports on one gateway, and when that
+// gateway hung, every job's first request hung with it while thirteen others
+// idled. A variable so a test that needs the old order can have it.
+var startAt = func(n int) int {
+	if n < 2 {
+		return 0
+	}
+	return rand.IntN(n)
+}
+
 // NewGatewayChannel egresses through BlankTrail gateway configs, by name.
 //
 // One name is one exit that cannot change: Renew says so rather than pretending,
@@ -229,6 +245,7 @@ func NewGatewayChannel(name string, gateways ...string) Channel {
 			c.gws = append(c.gws, g)
 		}
 	}
+	c.pos = startAt(len(c.gws))
 	return c
 }
 

@@ -226,7 +226,7 @@ func NewRotor(ctx context.Context, src Source) (*Rotor, error) {
 	if len(ups) == 0 {
 		return nil, fmt.Errorf("blanktrail: upstream source %q yielded no usable proxies", src.Location)
 	}
-	r := &Rotor{ups: ups, fails: map[string]int{}, maxFails: 3, src: src}
+	r := &Rotor{ups: ups, fails: map[string]int{}, maxFails: 3, src: src, pos: startAt(len(ups))}
 	if src.Refresh > 0 {
 		r.stop = make(chan struct{})
 		r.done = make(chan struct{})

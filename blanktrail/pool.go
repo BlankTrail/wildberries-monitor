@@ -418,13 +418,21 @@ func NewPool(ctx context.Context, cfg PoolConfig) (*Pool, error) {
 		// the provider retired, a tunnel that dies on launch — killed a
 		// fifty-thread collection before its first request. The other ten were
 		// fine and the run never found out.
-		var last error
+		var (
+			last       error
+			eg         Egress
+			conflicts  int
+			sameEgress bool
+		)
 		for try := 0; try < portOpenTries; try++ {
-			eg, ok := ch.Next()
-			if !ok {
-				last = fmt.Errorf("blanktrail: channel %q has no egress to hand out", ch.Name())
-				break
+			if !sameEgress {
+				var ok bool
+				if eg, ok = ch.Next(); !ok {
+					last = fmt.Errorf("blanktrail: channel %q has no egress to hand out", ch.Name())
+					break
+				}
 			}
+			sameEgress = false
 			num, err := p.pickPort(ctx, used)
 			if err != nil {
 				// Not this slot's problem and not fixable by trying again:
@@ -446,6 +454,19 @@ func NewPool(ctx context.Context, cfg PoolConfig) (*Pool, error) {
 			pt, err := p.openOne(ctx, num, ch, eg, host)
 			if err != nil {
 				last = err
+				// A number somebody else took is not this egress's failure:
+				// the same egress goes out again on the next number, and the
+				// try is not spent. Charged as one, three pools starting
+				// together left each other's slots empty — three jobs handed
+				// the same suggestion, and the losers' «already being opened»
+				// struck a gateway that had done nothing. Bounded on its own
+				// count, so a service that answers 409 to everything still
+				// ends the walk.
+				if portTaken(err) && conflicts < portConflictTries {
+					conflicts++
+					sameEgress = true
+					try--
+				}
 				continue
 			}
 			last = nil
@@ -481,6 +502,18 @@ func NewPool(ctx context.Context, cfg PoolConfig) (*Pool, error) {
 // address: enough to walk past a bad exit in a set, few enough that a channel
 // which is wholly broken does not spend the whole start-up budget proving it.
 const portOpenTries = 3
+
+// portConflictTries is how many taken numbers one slot walks past before the
+// collisions start costing it tries. Enough for a dozen pools starting at
+// once, few enough that a service refusing every number is found out quickly.
+const portConflictTries = 16
+
+// portTaken reports whether an open failed only because the number belongs to
+// somebody else.
+func portTaken(err error) bool {
+	var apiErr *APIError
+	return errors.As(err, &apiErr) && apiErr.Status == http.StatusConflict
+}
 
 // Shortfall reports how many of the ports asked for never opened, out of how
 // many were asked for, and why.

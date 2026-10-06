@@ -165,9 +165,11 @@ func TestNewPool_NotOneSlotOpeningIsStillAFailure(t *testing.T) {
 	clock := newFakeClock()
 	cfg := testPoolConfig(t, fake, clock, 1, 2)
 	cfg.PortRange = [2]int{20000, 20001}
-	// Every attempt refused: two slots, three egresses each.
+	// Every attempt refused: two slots, three egresses each. A refusal that
+	// blames the egress, not a 409 — a taken number is walked past without
+	// spending an egress, so six of those would be six numbers, not six tries.
 	for range 6 {
-		fake.FailNext("/api/v1/ports/open", http.StatusConflict, "port already open")
+		fake.FailNext("/api/v1/ports/open", http.StatusInternalServerError, "gateway would not start")
 	}
 
 	if _, err := NewPool(context.Background(), cfg); err == nil {
@@ -1924,5 +1926,123 @@ func TestPool_AChannelWithOneGatewayIsNotReopenedForNothing(t *testing.T) {
 	defer l.Release()
 	if n := p.Stats().Renewals; n != 0 {
 		t.Errorf("переоткрытий %d, а менять было не на что", n)
+	}
+}
+
+func TestNewPool_ANumberTakenByAnotherPoolCostsNoTry(t *testing.T) {
+	// Measured: three jobs started together, three pools asked the service for
+	// a number at once and were handed the same one, and the losers' 409
+	// «already being opened» was charged to the slot as a failed egress. Three
+	// of those and the slot was left empty — a port lost to a race between
+	// neighbours, with a gateway blamed for it. A taken number says nothing
+	// about the exit: the slot takes the next number and keeps its egress.
+	fake := fakebt.New(t)
+	clock := newFakeClock()
+	cfg := testPoolConfig(t, fake, clock, 1, 2)
+	cfg.PortRange = [2]int{20000, 20009}
+	for range 4 {
+		fake.FailNext("/api/v1/ports/open", http.StatusConflict, "port 20000 is already being opened")
+	}
+
+	p, err := NewPool(t.Context(), cfg)
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	defer p.Close()
+
+	if missing, want, why := p.Shortfall(); missing != 0 {
+		t.Errorf("не открылось %d из %d: %v — занятый номер съел попытки слота", missing, want, why)
+	}
+}
+
+func TestNewPool_EndlessCollisionsStillEnd(t *testing.T) {
+	// The other side: a service that answers 409 to every number must not keep
+	// a slot walking forever. The walk is bounded, and the slot is reported.
+	fake := fakebt.New(t)
+	clock := newFakeClock()
+	cfg := testPoolConfig(t, fake, clock, 1, 1)
+	cfg.PortRange = [2]int{20000, 20999}
+	for range 1000 {
+		fake.FailNext("/api/v1/ports/open", http.StatusConflict, "port is already being opened")
+	}
+
+	if _, err := NewPool(t.Context(), cfg); err == nil {
+		t.Fatal("NewPool завёл пул, хотя каждый номер был занят")
+	}
+	got := 0
+	for _, r := range fake.Requests() {
+		if r.Path == "/api/v1/ports/open" {
+			got++
+		}
+	}
+	if got > portConflictTries+portOpenTries {
+		t.Errorf("открытий %d, ожидалось не больше %d", got, portConflictTries+portOpenTries)
+	}
+}
+
+func TestNewPool_ATakenNumberKeepsTheSlotsEgress(t *testing.T) {
+	// The number was the problem, not the gateway: the slot tries the same
+	// gateway again on the next number rather than moving down the list, and
+	// a gateway skipped for a neighbour's race is a gateway the run never used.
+	fromHead(t)
+	fake := fakebt.New(t)
+	clock := newFakeClock()
+	cfg := testPoolConfig(t, fake, clock, 1, 1)
+	cfg.PortRange = [2]int{20000, 20009}
+	cfg.Channels = []Channel{NewGatewayChannel("gw", "first", "second", "third")}
+	fake.FailNext("/api/v1/ports/open", http.StatusConflict, "port 20000 is already being opened")
+
+	p, err := NewPool(t.Context(), cfg)
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	defer p.Close()
+
+	var opened []string
+	for _, r := range fake.Requests() {
+		if r.Path == "/api/v1/ports/open" {
+			opened = append(opened, r.Body)
+		}
+	}
+	if len(opened) != 2 {
+		t.Fatalf("открытий %d, ожидалось два: столкновение и повтор", len(opened))
+	}
+	for i, body := range opened {
+		if !strings.Contains(body, `"upstream_gateway":"first"`) {
+			t.Errorf("открытие %d шло через другой шлюз: %s", i+1, body)
+		}
+	}
+}
+
+func TestNewPool_AfterATakenNumberARealFailureStillMovesOn(t *testing.T) {
+	// Keeping the egress is for the number's sake only. Once that egress has
+	// failed on its own account, the slot moves down the list as it always did.
+	fromHead(t)
+	fake := fakebt.New(t)
+	clock := newFakeClock()
+	cfg := testPoolConfig(t, fake, clock, 1, 1)
+	cfg.PortRange = [2]int{20000, 20009}
+	cfg.Channels = []Channel{NewGatewayChannel("gw", "first", "second", "third")}
+	fake.FailNext("/api/v1/ports/open", http.StatusConflict, "port 20000 is already being opened")
+	fake.FailNext("/api/v1/ports/open", http.StatusInternalServerError, "gateway would not start")
+
+	p, err := NewPool(t.Context(), cfg)
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	defer p.Close()
+
+	var gws []string
+	for _, r := range fake.Requests() {
+		if r.Path == "/api/v1/ports/open" {
+			for _, g := range []string{"first", "second", "third"} {
+				if strings.Contains(r.Body, `"upstream_gateway":"`+g+`"`) {
+					gws = append(gws, g)
+				}
+			}
+		}
+	}
+	if strings.Join(gws, ",") != "first,first,second" {
+		t.Errorf("шлюзы открытий = %v, ожидалось first,first,second", gws)
 	}
 }

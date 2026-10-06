@@ -5,9 +5,13 @@ package blanktrail
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -237,6 +241,10 @@ func TestGatewayChannel_HandsOutTheSetInTurnAndRenewsWithinIt(t *testing.T) {
 	// list is: the pool asks a channel for an egress rather than for a
 	// particular gateway, so the set is handed out in turn and a renewal moves
 	// to the next one instead of saying it cannot.
+	//
+	// From the head of the list, so the turn can be read off it: where a
+	// rotation starts is drawn, and pinned by a test of its own.
+	fromHead(t)
 	ch := NewGatewayChannel("подписка", "de", "nl", "fr")
 	defer ch.Close()
 
@@ -314,4 +322,52 @@ func TestGatewayChannel_NamesNothingWhenGivenNothing(t *testing.T) {
 		}
 		ch.Close()
 	}
+}
+
+func TestChannels_DoNotAllStartAtTheHeadOfTheList(t *testing.T) {
+	// Every job builds its channels afresh, and each used to start at the
+	// first name in the list. Measured: three jobs running together all put
+	// their first port on the same gateway, and the coldest port — the one a
+	// pool hands out first — was that one in every job. When it hung, every
+	// job's first request hung with it, while thirteen other gateways idled.
+	// Where a channel starts is drawn instead; this pins that it is.
+	names := []string{"g1", "g2", "g3", "g4", "g5", "g6", "g7", "g8"}
+	firstGateway := map[string]bool{}
+	for range 64 {
+		eg, _ := NewGatewayChannel("gw", names...).Next()
+		firstGateway[eg.Gateway] = true
+	}
+	if len(firstGateway) < 2 {
+		t.Errorf("шлюзовой канал всегда начинает с %v", firstGateway)
+	}
+
+	var list strings.Builder
+	for i := range 8 {
+		fmt.Fprintf(&list, "http://10.0.0.%d:3128\n", i+1)
+	}
+	path := filepath.Join(t.TempDir(), "list.txt")
+	if err := os.WriteFile(path, []byte(list.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	firstProxy := map[string]bool{}
+	for range 64 {
+		r, err := NewRotor(t.Context(), Source{Kind: "file", Location: path})
+		if err != nil {
+			t.Fatalf("NewRotor: %v", err)
+		}
+		u, _ := r.Next()
+		firstProxy[u.Key()] = true
+	}
+	if len(firstProxy) < 2 {
+		t.Errorf("список прокси всегда начинает с %v", firstProxy)
+	}
+}
+
+// fromHead makes every rotation built during the test start at its first
+// exit, for tests that read the turn off the order of the list.
+func fromHead(t *testing.T) {
+	t.Helper()
+	prev := startAt
+	startAt = func(int) int { return 0 }
+	t.Cleanup(func() { startAt = prev })
 }
