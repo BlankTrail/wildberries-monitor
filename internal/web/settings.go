@@ -156,20 +156,6 @@ func (s *Server) writeSettingsForm(w http.ResponseWriter, r *http.Request, notic
   <span class="bt-form-hint">Управляющий API прокси-сервиса. Обычно на этой же машине.</span>
 </div>`)
 
-	// The panel's own gate, and it is off unless somebody says otherwise. The
-	// server listens on this machine only, so what a password keeps out is
-	// another account or another program here — worth having on a shared
-	// machine, worth nothing on a personal one.
-	checked := ""
-	if s.RequireAuth(r.Context()) {
-		checked = " checked"
-	}
-	b.WriteString(`<h3>Доступ к панели</h3>`)
-	b.WriteString(`<div class="bt-field">
-  <label class="bt-checkbox"><input type="checkbox" name="require_auth" value="1"` + checked + `><span>требовать пароль</span></label>
-  <span class="bt-form-hint">` + accessHint(s.Password, s.GeneratedPassword) + `</span>
-</div>`)
-
 	// The key field starts holding the mask, not the key. A field that
 	// pre-filled the real value would put it in the page source, and the
 	// point of masking it in the store would be lost at the last step.
@@ -185,6 +171,25 @@ func (s *Server) writeSettingsForm(w http.ResponseWriter, r *http.Request, notic
 </div>`)
 
 	b.WriteString(s.serviceChannelField(r))
+
+	// After the key, not between the address and it: the two fields that
+	// connect the program are typed one after the other, and a block about
+	// the panel's password sitting between them sent somebody filling the
+	// form in looking for where the key went.
+	// The panel's own gate, and it is off unless somebody says otherwise. The
+	// server listens on this machine only, so what a password keeps out is
+	// another account or another program here — worth having on a shared
+	// machine, worth nothing on a personal one.
+	checked := ""
+	if s.RequireAuth(r.Context()) {
+		checked = " checked"
+	}
+	b.WriteString(`<h3>Доступ к панели</h3>`)
+	b.WriteString(`<div class="bt-field">
+  <label class="bt-checkbox"><input type="checkbox" name="require_auth" value="1"` + checked + `><span>требовать пароль</span></label>
+  <span class="bt-form-hint">` + accessHint(s.Password, s.GeneratedPassword) + `</span>
+</div>`)
+
 	b.WriteString(s.lanField(r))
 
 	// The same masking as the API key, and for a stronger reason: whoever

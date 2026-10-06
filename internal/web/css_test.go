@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/BlankTrail/wildberries-monitor/internal/store"
 )
 
 // This test exists because of one line and the day it cost.
@@ -294,5 +296,89 @@ func TestStyles_ALongValueScrollsInsideItsCell(t *testing.T) {
 	// show.
 	if strings.Contains(block, "text-overflow: ellipsis") {
 		t.Error("длинное значение обрезано многоточием — выделить его целиком нельзя")
+	}
+}
+
+var badgeTone = regexp.MustCompile(`bt-badge--(warning|success|error|accent|info|neutral)\b`)
+
+func TestStyles_EveryBadgeToneThePanelWritesIsDrawn(t *testing.T) {
+	// The design system colours a badge only through a style modifier — soft,
+	// solid, outline — and the panel writes its status badges with a tone and
+	// no style. Every «идёт», «включён» and «завершено, отказов» rendered as
+	// bare text beside the grey pills, and nothing noticed until a screenshot
+	// put them side by side. Whatever tone the Go code writes has to have a
+	// rule of its own on the panel's light ground.
+	styles, err := staticFS.ReadFile("static/monitor.css")
+	if err != nil {
+		t.Fatalf("читаю monitor.css: %v", err)
+	}
+	files, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	used := map[string]bool{}
+	for _, f := range files {
+		if f.IsDir() || !strings.HasSuffix(f.Name(), ".go") || strings.HasSuffix(f.Name(), "_test.go") {
+			continue
+		}
+		src, err := os.ReadFile(f.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, m := range badgeTone.FindAllStringSubmatch(string(src), -1) {
+			used[m[1]] = true
+		}
+	}
+	if len(used) == 0 {
+		t.Fatal("не нашёл ни одного значка в коде панели — тест смотрит не туда")
+	}
+	for tone := range used {
+		rule := `.bt[data-bt-theme="dashboard"] .bt-badge--` + tone + ` {`
+		if !strings.Contains(string(styles), rule) {
+			t.Errorf("значок с тоном %q пишется кодом, а правила %q нет — он выйдет голым текстом", tone, rule)
+		}
+	}
+}
+
+func TestStyles_AClosedTooltipTakesNoRoom(t *testing.T) {
+	// A tooltip hidden with visibility or opacity still counts towards the
+	// page's scrollable width, and one beside a figure in the right-hand
+	// column gave every profile page a horizontal scrollbar.
+	styles, err := staticFS.ReadFile("static/monitor.css")
+	if err != nil {
+		t.Fatalf("читаю monitor.css: %v", err)
+	}
+	css := string(styles)
+	start := strings.Index(css, `.bt[data-bt-theme="dashboard"] .bt-tip {`)
+	if start < 0 {
+		t.Fatal("правило подсказки не найдено")
+	}
+	rule := css[start : start+strings.Index(css[start:], "}")]
+	if !strings.Contains(rule, "display: none") {
+		t.Errorf("закрытая подсказка остаётся в раскладке:\n%s", rule)
+	}
+}
+
+func TestStyles_TheJobListKeepsItsButtonsOnScreen(t *testing.T) {
+	// Every table scrolls sideways rather than shrink, which is right for forty
+	// columns of results and wrong for the job list: at 1440 pixels its last
+	// buttons sat past the edge. The list is fitted, and the fitting has to
+	// undo the scroller's floor.
+	styles, err := staticFS.ReadFile("static/monitor.css")
+	if err != nil {
+		t.Fatalf("monitor.css: %v", err)
+	}
+	if block := ruleBody(string(styles), ".bt-table-wrap .bt-table.bt-table--fit {"); !strings.Contains(block, "min-width: 0") {
+		t.Errorf("подогнанная таблица не снимает min-width: max-content: %q", block)
+	}
+	if block := ruleBody(string(styles), ".bt-table--fit td.bt-cell-clip {"); !strings.Contains(block, "max-width: 0") || !strings.Contains(block, "width: 100%") {
+		t.Errorf("обрезаемая колонка не уступает ширину: %q", block)
+	}
+	srv := newServer(t)
+	if _, err := srv.Store.SaveJob(t.Context(), store.JobRow{Name: "сбор", Type: "phrase", Params: "{}"}); err != nil {
+		t.Fatal(err)
+	}
+	if body := get(t, srv, "/jobs", "correct horse").Body.String(); !strings.Contains(body, `class="bt-table bt-table--fit"`) {
+		t.Error("список заданий снова прокручивается вбок")
 	}
 }

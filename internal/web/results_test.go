@@ -1144,3 +1144,20 @@ func TestSwaps_NoScreenNestsItselfInsideItself(t *testing.T) {
 		t.Error("уведомления: после сохранения заголовок исчез")
 	}
 }
+
+func TestResults_ATimeIsShownInLocalTimeLikeEveryOtherScreen(t *testing.T) {
+	// In UTC and unmarked, a reading the overview called 13:34 showed in the
+	// table as 10:34 — three hours off for anyone in Moscow.
+	prev := time.Local
+	time.Local = time.FixedZone("MSK", 3*3600)
+	t.Cleanup(func() { time.Local = prev })
+
+	col, ok := wb.FieldByKey("ts")
+	if !ok {
+		t.Fatal("нет поля ts")
+	}
+	at := time.Date(2026, 10, 6, 10, 34, 0, 0, time.UTC).Unix()
+	if got := cellText(store.ProductRow{NmID: 1, TS: at}, col); got != "06.10.2026 13:34" {
+		t.Errorf("время чтения = %q, ожидалось местное 06.10.2026 13:34", got)
+	}
+}

@@ -355,7 +355,11 @@ func (s *Server) jobListHTML(list []store.JobStatus) string {
 		return b.String()
 	}
 
-	b.WriteString(`<div class="bt-table-wrap"><table class="bt-table"><thead><tr>` +
+	// Fitted to the screen rather than scrolled: at 1440 pixels the row's own
+	// buttons ran past the edge, and «Удалить» was reachable only by scrolling
+	// the table sideways. The name is the column that gives way — clipped,
+	// with the whole of it in the title.
+	b.WriteString(`<div class="bt-table-wrap"><table class="bt-table bt-table--fit"><thead><tr>` +
 		`<th>№</th><th>Задание</th><th>Тип</th><th>Что сейчас</th><th>Расписание</th><th></th>` +
 		`</tr></thead><tbody>`)
 
@@ -422,15 +426,19 @@ func jobStateHTML(j store.JobStatus) string {
 		// any other reading of the word. The run screen already said so; this
 		// one — the list somebody actually looks at — did not, so nearly half a
 		// collection could be missing with nothing on screen to hint at it.
+		//
+		// The count goes inside the badge, named. Written after it, the bare
+		// number ran straight into the timestamp that follows — «2 06.10.2026»
+		// — and read as part of the date.
 		if j.LastErrors > 0 {
 			badge = fmt.Sprintf(
-				`<span class="bt-badge bt-badge--warning bt-badge--sm">завершено с отказами</span> %d`,
+				`<span class="bt-badge bt-badge--warning bt-badge--sm">завершено, отказов: %d</span>`,
 				j.LastErrors)
 		} else if j.LastLost > 0 {
 			// Nothing failed and something never arrived — a review window
 			// refused, a card lost. See job.Result.Lost.
 			badge = fmt.Sprintf(
-				`<span class="bt-badge bt-badge--warning bt-badge--sm">завершено, без части данных</span> %d`,
+				`<span class="bt-badge bt-badge--warning bt-badge--sm">завершено, без части данных: %d</span>`,
 				j.LastLost)
 		}
 	}
@@ -704,7 +712,7 @@ func (s *Server) constructorHTML(r *http.Request, edit *job.Job) (string, error)
 			"По умолчанию выключено: ответ на один товар — около семи килобайт, и на "+
 			"витрине в восемьдесят пять регионов это двести мегабайт за проход."))
 
-	b.WriteString(`<div id="estimate" class="bt-alert bt-alert--neutral">Отметьте поля — здесь появится оценка.</div>`)
+	b.WriteString(`<div id="estimate" class="bt-alert bt-alert--neutral">Заполните задание — здесь появится, сколько запросов оно потратит.</div>`)
 	b.WriteString(`<div class="bt-form-actions">
 	  <button class="bt-btn bt-btn--primary" type="submit">Сохранить задание</button>
 	  <button class="bt-btn bt-btn--secondary" type="button" data-post-form="/jobs/estimate" data-target="#estimate">Пересчитать оценку</button>
@@ -1581,7 +1589,7 @@ func runStateHTML(run store.RunRow) string {
 		// half its items is the sentence that keeps somebody from looking at
 		// the list right below it.
 		return fmt.Sprintf(
-			`<span class="bt-badge bt-badge--warning bt-badge--sm">завершено с отказами</span> %d`,
+			`<span class="bt-badge bt-badge--warning bt-badge--sm">завершено, отказов: %d</span>`,
 			run.Errors)
 	}
 	return `<span class="bt-badge bt-badge--neutral bt-badge--sm">завершено</span>`

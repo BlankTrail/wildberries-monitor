@@ -40,6 +40,17 @@ type Reader struct {
 	Store *store.Store
 	// Now is the clock. Replaced in tests; nothing else writes it.
 	Now func() time.Time
+	// Loc is the zone a chart's time axis is labelled in; nil is the
+	// machine's own. Every timestamp in the store is UTC, and left at that the
+	// axis said 11:30 under readings every other screen called 14:30.
+	Loc *time.Location
+}
+
+func (r Reader) loc() *time.Location {
+	if r.Loc != nil {
+		return r.Loc
+	}
+	return time.Local
 }
 
 // Facts are what the picture cannot say, because the chart carries no letters
@@ -107,6 +118,7 @@ func (r Reader) Price(ctx context.Context, nmID int64, window time.Duration) (ch
 
 	return chart.Line{
 		MaxGap: r.maxGap(),
+		Loc:    r.loc(),
 		Series: []chart.Series{{Points: points}},
 	}, facts, nil
 }
@@ -135,6 +147,7 @@ func (r Reader) Position(ctx context.Context, nmID int64, phrase string, window 
 
 	return chart.Line{
 		MaxGap: r.maxGap(),
+		Loc:    r.loc(),
 		// Rank 1 is the best result and belongs at the top. Drawn the usual way
 		// up, a product falling out of the first page draws a rising line, which
 		// reads as good news.

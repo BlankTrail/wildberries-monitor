@@ -402,7 +402,11 @@ func cellText(row store.ProductRow, col wb.Field) string {
 	case wb.FieldTime:
 		// The seconds and the zone are noise in a table; the export keeps
 		// RFC 3339, where sorting as text has to match sorting as time.
-		return time.Unix(v.Unix, 0).UTC().Format("2006-01-02 15:04")
+		//
+		// Local, and in the shape every other screen writes a time. In UTC and
+		// unmarked, a reading the overview called 13:34 showed here as 10:34 —
+		// three hours off for anyone in Moscow, with nothing to say why.
+		return time.Unix(v.Unix, 0).Local().Format("02.01.2006 15:04")
 	}
 
 	text, err := export.Cell(v, col.Type, '.')

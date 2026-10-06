@@ -294,3 +294,31 @@ func TestPosition_LabelsTheScaleInWholePlaces(t *testing.T) {
 		}
 	}
 }
+
+func TestCharts_ReadTheirTimeAxisInTheLocalZone(t *testing.T) {
+	// The chart package reads a nil zone as UTC, and nothing ever passed one:
+	// readings taken at half past two in Moscow were labelled 11:30, on a
+	// screen whose every other clock says 14:30.
+	r := collected(t, "куртка")
+
+	line, _, err := r.Price(t.Context(), 141504066, DefaultWindow)
+	if err != nil {
+		t.Fatalf("Price: %v", err)
+	}
+	if line.Loc != time.Local {
+		t.Errorf("цена: пояс оси %v, ожидался местный", line.Loc)
+	}
+	line, _, err = r.Position(t.Context(), 141504066, "куртка", DefaultWindow)
+	if err != nil {
+		t.Fatalf("Position: %v", err)
+	}
+	if line.Loc != time.Local {
+		t.Errorf("позиция: пояс оси %v, ожидался местный", line.Loc)
+	}
+
+	msk := time.FixedZone("MSK", 3*3600)
+	r.Loc = msk
+	if line, _, _ := r.Price(t.Context(), 141504066, DefaultWindow); line.Loc != msk {
+		t.Errorf("заданный пояс не дошёл до оси: %v", line.Loc)
+	}
+}

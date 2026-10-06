@@ -62,8 +62,12 @@ func (s *Server) sellerCard(r *http.Request, p store.ProfileRow) string {
 	b.WriteString(figure("Рейтинг", floatOrDash(row.Valuation),
 		"Оценка продавца на площадке. Прочерк — этой части профиля сайт не отдал."))
 	b.WriteString(figure("Отзывов", intOrDash(row.FeedbackCount), ""))
-	b.WriteString(figure("Товаров у продавца", intOrDash(row.ItemCount),
-		"Столько числится у самого Wildberries. Расхождение со списком ниже — это то, что не попало в обход."))
+	// Sold, not listed: the profile's saleItemQuantity counts what the seller
+	// has sold over its whole life on the site. Labelled as the size of the
+	// range, it put twenty million «товаров» beside a table of a few thousand
+	// and invited the reader to treat the gap as goods the crawl had missed.
+	b.WriteString(figure("Продано товаров", intOrDash(row.ItemCount),
+		"Сколько товаров продавец продал за всё время — по данным самого Wildberries. Это не размер ассортимента: ассортимент — в таблице ниже."))
 	b.WriteString(figure("Доставка", daysOrDash(row.DeliveryDuration),
 		"Срок доставки, который площадка обещает за этого продавца."))
 	b.WriteString(figure("На площадке с", dateOrDash(row.RegisteredAt), ""))
@@ -182,7 +186,9 @@ func intOrDash(v *int64) string {
 	if v == nil {
 		return "—"
 	}
-	return strconv.FormatInt(*v, 10)
+	// Grouped: «20170923» beside «4663410» on the seller card read as a date
+	// and a phone number; «20 170 923» is a count.
+	return thousands(*v)
 }
 
 func floatOrDash(v *float64) string {

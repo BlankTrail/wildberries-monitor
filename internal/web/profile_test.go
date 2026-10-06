@@ -1076,3 +1076,31 @@ func TestProfileNotice_AStopIsNotABreakdown(t *testing.T) {
 		t.Errorf("вторая точка: %q", got)
 	}
 }
+
+func TestProfile_TheSellersSalesAreNotPassedOffAsItsRange(t *testing.T) {
+	// The profile's saleItemQuantity counts what a seller has sold over its
+	// life. Labelled «Товаров у продавца», a large seller showed twenty million
+	// goods beside a table of a few thousand, with a note inviting the reader
+	// to read the gap as goods the crawl had missed.
+	srv := newServer(t)
+	ctx := t.Context()
+	seller := int64(4242)
+	sold := int64(20170923)
+	if err := srv.Store.SaveSeller(ctx, wb.Seller{ID: seller, Name: "Продавец", ItemCount: &sold}); err != nil {
+		t.Fatalf("SaveSeller: %v", err)
+	}
+	if _, err := srv.Store.SaveProfile(ctx, store.ProfileRow{Name: "мой", SellerID: &seller}); err != nil {
+		t.Fatalf("SaveProfile: %v", err)
+	}
+
+	body := get(t, srv, "/profile", "correct horse").Body.String()
+	if !strings.Contains(body, "20"+groupSep+"170"+groupSep+"923") {
+		t.Fatalf("число продаж не показано:\n%s", body)
+	}
+	if strings.Contains(body, "Товаров у продавца") {
+		t.Error("продажи подписаны как ассортимент")
+	}
+	if !strings.Contains(body, "Продано товаров") {
+		t.Error("нет подписи «Продано товаров»")
+	}
+}

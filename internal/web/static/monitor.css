@@ -248,6 +248,18 @@
   min-width: max-content;
 }
 
+/* A list that fits the screen instead of scrolling: one line per row, and
+   one column — the clipped one — gives up its width so the rest, the row's
+   buttons above all, stay in view. For the short lists whose last column is
+   what somebody came to press; the results table keeps scrolling. */
+.bt-table-wrap .bt-table.bt-table--fit {
+  min-width: 0;
+}
+
+.bt-table--fit td {
+  white-space: nowrap;
+}
+
 /* Headers on one line each. Wrapped, "Срок доставки, ч (до покупателя)" is
    four stacked lines that push every other header out of alignment and make
    the row four times as tall as it needs to be. */
@@ -464,26 +476,32 @@ dialog.bt-modal > #settings-body {
 
 /* The soft badges are drawn for a dark dashboard: a 10% wash of the accent
    over near-black. On white the same wash is invisible, and the one badge that
-   explains why nothing is collecting was the palest thing on the page. */
-.bt[data-bt-theme="dashboard"] .bt-badge--soft.bt-badge--warning {
+   explains why nothing is collecting was the palest thing on the page.
+
+   The tone alone is enough, with or without --soft. The design system colours
+   a badge only through a style modifier, and the panel writes its status
+   badges — «идёт», «включён», «завершено с отказами» — with a tone and no
+   style, so every one of them rendered as bare text beside the grey
+   «завершено» pills, which have a rule of their own below. */
+.bt[data-bt-theme="dashboard"] .bt-badge--warning {
   background: #fdf3e3;
   color: #8a4308;
   border: 1px solid #f0d9b0;
 }
 
-.bt[data-bt-theme="dashboard"] .bt-badge--soft.bt-badge--success {
+.bt[data-bt-theme="dashboard"] .bt-badge--success {
   background: #e8f6f0;
   color: #0f6f4d;
   border: 1px solid #bfe5d6;
 }
 
-.bt[data-bt-theme="dashboard"] .bt-badge--soft.bt-badge--error {
+.bt[data-bt-theme="dashboard"] .bt-badge--error {
   background: #fdeceb;
   color: #a11b12;
   border: 1px solid #f5c6c2;
 }
 
-.bt[data-bt-theme="dashboard"] .bt-badge--soft.bt-badge--accent {
+.bt[data-bt-theme="dashboard"] .bt-badge--accent {
   background: #f3e9fb;
   color: #7b2ff7;
   border: 1px solid #e2cdf6;
@@ -684,16 +702,18 @@ dialog.bt-modal > #settings-body {
   line-height: 1.45;
   text-align: left;
   white-space: normal;
-  opacity: 0;
-  visibility: hidden;
-  transition: opacity .12s ease;
+  /* Out of the layout until it is wanted, not merely invisible. A hidden
+     box still counts towards the page's scrollable width, and the ⓘ beside a
+     figure in the right-hand column pushed its 24rem tip past the edge: every
+     profile page carried a horizontal scrollbar for a tooltip nobody had
+     opened. */
+  display: none;
 }
 
 .bt[data-bt-theme="dashboard"] .bt-info:hover .bt-tip,
 .bt[data-bt-theme="dashboard"] .bt-info:focus .bt-tip,
 .bt[data-bt-theme="dashboard"] .bt-info:focus-visible .bt-tip {
-  opacity: 1;
-  visibility: visible;
+  display: block;
 }
 
 /* ---- conditions, as many as somebody needs ------------------------------ */
@@ -785,11 +805,13 @@ dialog.bt-modal > #settings-body {
   display: inline;
 }
 
-.bt[data-bt-theme="dashboard"] .bt-row-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-1);
-  align-items: center;
+/* A table cell and nothing else, and it stays one. Turned into a flexbox it
+   lost the cell's vertical alignment: in a row made tall by a long list of
+   gateways the buttons sat at the top while every other cell sat in the
+   middle. The buttons keep their spacing from the .bt-btn rule above. */
+.bt[data-bt-theme="dashboard"] td.bt-row-actions {
+  white-space: nowrap;
+  vertical-align: middle;
 }
 
 /* One number, said large enough to be read across a room — the front screen's
@@ -1553,6 +1575,14 @@ dialog.bt-modal > #settings-body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* In a fitted table the clipped column is the one that gives way: zero as its
+   floor, all the slack as its share — the one arrangement under which an
+   automatic table layout will clip a cell rather than widen for it. */
+.bt-table--fit td.bt-cell-clip {
+  max-width: 0;
+  width: 100%;
 }
 
 /* A long value inside a cell, in a box of its own.

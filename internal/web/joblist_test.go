@@ -402,7 +402,7 @@ func TestJobList_ARunThatLostHalfItsWorkDoesNotReadAsFinished(t *testing.T) {
 	}
 
 	body := get(t, srv, "/jobs", "correct horse").Body.String()
-	if !strings.Contains(body, "завершено с отказами") {
+	if !strings.Contains(body, "завершено, отказов: 102</span>") {
 		t.Errorf("список заданий не говорит, что прогон потерял 102 пункта из 240:\n%s", firstLines(body))
 	}
 }
@@ -428,7 +428,19 @@ func TestJobList_ARunThatLostOnlyItsExtrasSaysSoToo(t *testing.T) {
 	}
 
 	body := get(t, srv, "/jobs", "correct horse").Body.String()
-	if !strings.Contains(body, "без части данных") {
+	if !strings.Contains(body, "без части данных: 6</span>") {
 		t.Errorf("список заданий не говорит, что часть довесков не пришла:\n%s", firstLines(body))
+	}
+}
+
+func TestRunState_TheCountOfFailuresIsInsideTheBadge(t *testing.T) {
+	// After the badge, the bare number ran into the next cell's text and read
+	// as part of it.
+	got := runStateHTML(store.RunRow{State: store.RunDone, Errors: 2})
+	if !strings.Contains(got, "завершено, отказов: 2</span>") {
+		t.Errorf("значок прогона = %s", got)
+	}
+	if clean := runStateHTML(store.RunRow{State: store.RunDone}); strings.Contains(clean, "отказов") {
+		t.Errorf("чистый прогон = %s", clean)
 	}
 }
