@@ -1419,6 +1419,15 @@ func TestStepProfile_DispatchesOnTheRowTheLandedRunWrote(t *testing.T) {
 		t.Fatalf("StartProfileChain: %v", err)
 	}
 	stale, _ := a.Store.Profile(ctx, id)
+
+	// Held from before the run lands until the result is read, the lock the
+	// background walker takes. A finished run wakes that walker on its own;
+	// let in between the landing and the seller written below, it stepped the
+	// chain first, found no seller and failed it — under the race detector,
+	// often enough to turn CI red on code that had not changed.
+	a.profileMu.Lock()
+	defer a.profileMu.Unlock()
+
 	landed(t, a, stale.ResolveJob)
 
 	// What the resolve run writes, after the caller read its copy.
