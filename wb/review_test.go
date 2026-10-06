@@ -542,7 +542,7 @@ func findReview(t *testing.T, revs Reviews, id string) Review {
 
 func TestClient_ReviewsFetchesWithThePlainProfile(t *testing.T) {
 	fixture := reviewsFixture(t)
-	l := &fakeLease{port: 1, replies: []*http.Response{reply(200, string(fixture))}}
+	l := &fakeLease{port: 1, replies: []*http.Response{routedTo("feedback-view-01.wb.ru"), reply(200, string(fixture))}}
 	c := NewClient(&fakeLeaser{leases: []*fakeLease{l}}, NewSessions())
 
 	got, err := c.Reviews(context.Background(), DefaultEndpoints(), 3337911982)
@@ -553,15 +553,15 @@ func TestClient_ReviewsFetchesWithThePlainProfile(t *testing.T) {
 		t.Errorf("Summary.Count=%d, want 637 — the decode did not run, or ran on the wrong body", got.Summary.Count)
 	}
 
-	if len(l.sent) != 1 {
-		t.Fatalf("sent %d requests, want 1", len(l.sent))
+	if len(l.sent) != 2 {
+		t.Fatalf("sent %d requests, want 2: the route, then the reviews", len(l.sent))
 	}
 	wantURL := DefaultEndpoints().ReviewsURL(3337911982)
-	if got := l.sent[0].URL.String(); got != wantURL {
+	if got := l.sent[1].URL.String(); got != wantURL {
 		t.Errorf("URL=%q, want %q", got, wantURL)
 	}
 
-	h := l.sent[0].Header
+	h := l.sent[1].Header
 	for _, name := range []string{"deviceid", "x-queryid", "x-userid", "x-spa-version"} {
 		if len(h[name]) != 0 {
 			t.Errorf("request carries %q — the reviews endpoint has no gate and never asked for it; this is the gated profile sent to a plain endpoint", name)
@@ -586,14 +586,17 @@ func TestClient_ReviewsFetchesWithThePlainProfile(t *testing.T) {
 // added.
 func TestClient_ReviewsReportsThePortAndCostOfTheFetch(t *testing.T) {
 	fixture := reviewsFixture(t)
-	l := &fakeLease{port: 7, replies: []*http.Response{reply(200, string(fixture))}}
+	l := &fakeLease{port: 7, replies: []*http.Response{routedTo("feedback-view-01.wb.ru"), reply(200, string(fixture))}}
 	c := NewClient(&fakeLeaser{leases: []*fakeLease{l}}, NewSessions())
 
 	got, err := c.Reviews(context.Background(), DefaultEndpoints(), 3337911982)
 	if err != nil {
 		t.Fatalf("Reviews: %v", err)
 	}
-	f := onlyFetch(t, got.Fetches)
+	if len(got.Fetches) != 2 {
+		t.Fatalf("provenance = %+v, want two entries: the route and the reviews", got.Fetches)
+	}
+	f := got.Fetches[1]
 	if f.Source != SourceReviews {
 		t.Errorf("Source=%q, want %q — a provenance entry that does not name its source cannot be read "+
 			"alongside another endpoint's in one table", f.Source, SourceReviews)
@@ -635,7 +638,7 @@ func TestClient_ReviewsReportsNoPortOnATotalTransportFailure(t *testing.T) {
 // fetched for two different listings look identical to anything comparing
 // them.
 func TestClient_ReviewsCarriesTheImtIDItWasAskedFor(t *testing.T) {
-	l := &fakeLease{port: 1, replies: []*http.Response{reply(200, string(reviewsFixture(t)))}}
+	l := &fakeLease{port: 1, replies: []*http.Response{routedTo("feedback-view-01.wb.ru"), reply(200, string(reviewsFixture(t)))}}
 	c := NewClient(&fakeLeaser{leases: []*fakeLease{l}}, NewSessions())
 
 	got, err := c.Reviews(context.Background(), DefaultEndpoints(), 3337911982)
@@ -798,5 +801,128 @@ func TestDecodeReviews_ARatingThatIsNotANumberIsStillAnError(t *testing.T) {
 	raw := `{"valuation":"очень хорошо","feedbackCount":3,"feedbacks":[]}`
 	if _, err := decodeReviews([]byte(raw)); err == nil {
 		t.Error("decodeReviews succeeded on a non-numeric rating, want an error")
+	}
+}
+
+// --- routing to the shard that keeps a card's reviews ---
+
+// routedTo is the routing service's answer naming one reviews host.
+func routedTo(host string) *http.Response {
+	return reply(200, `["https://`+host+`"]`)
+}
+
+func TestClient_ReviewsAsksWhichHostKeepsThemFirst(t *testing.T) {
+	// Measured: reviews are kept on four hosts, feedback-view-01 to -04, and
+	// only the one a card is filed on has them. The others answer the same
+	// shape with a count of zero — so asking the first host for everything
+	// filed eight of twelve cards as having no reviews at all, 147 thousand of
+	// them on one, with nothing to say anything had gone wrong. The site asks
+	// a routing service first, and so does this.
+	fixture := reviewsFixture(t)
+	l := &fakeLease{port: 1, replies: []*http.Response{routedTo("feedback-view-03.wb.ru"), reply(200, string(fixture))}}
+	c := NewClient(&fakeLeaser{leases: []*fakeLease{l}}, NewSessions())
+
+	got, err := c.Reviews(context.Background(), DefaultEndpoints(), 4156371482)
+	if err != nil {
+		t.Fatalf("Reviews: %v", err)
+	}
+	if len(l.sent) != 2 {
+		t.Fatalf("sent %d requests, want 2: the route, then the reviews", len(l.sent))
+	}
+	if got := l.sent[0].URL.String(); got != DefaultEndpoints().ReviewsHostURL(4156371482) {
+		t.Errorf("first request = %q, want the route", got)
+	}
+	if got := l.sent[1].URL.String(); got != "https://feedback-view-03.wb.ru/feedbacks/v2/4156371482" {
+		t.Errorf("second request = %q, want the routed host", got)
+	}
+	if got.Summary.Count != 637 {
+		t.Errorf("Summary.Count = %d", got.Summary.Count)
+	}
+	if len(got.Fetches) != 2 || got.Fetches[0].Source != SourceReviewsHost || got.Fetches[1].Source != SourceReviews {
+		t.Errorf("fetches = %+v, want the route and the reviews, each under its own source", got.Fetches)
+	}
+}
+
+func TestClient_ReviewsWithNoRouteIsAFailureNotAnEmptyCard(t *testing.T) {
+	// Guessing a host when the route is not known is what produced the empty
+	// cards: three hosts in four answer «no reviews» for any card. A card
+	// whose host could not be learned is a fetch that failed, said as one.
+	for name, route := range map[string]*http.Response{
+		"empty list":     reply(200, `[]`),
+		"not json":       reply(200, `<html>`),
+		"foreign host":   reply(200, `["https://reviews.example.com"]`),
+		"plain http":     reply(200, `["http://feedback-view-03.wb.ru"]`),
+		"server refused": reply(500, ``),
+		// A refusal whose body happens to read as a route is still a refusal.
+		"refused with a body": reply(503, `["https://feedback-view-03.wb.ru"]`),
+	} {
+		t.Run(name, func(t *testing.T) {
+			l := &fakeLease{port: 1, replies: []*http.Response{route, route, route, route}}
+			c := NewClient(&fakeLeaser{leases: []*fakeLease{l}}, NewSessions())
+
+			got, err := c.Reviews(context.Background(), DefaultEndpoints(), 4156371482)
+			if err == nil {
+				t.Fatalf("no error; got %+v", got.Summary)
+			}
+			for _, r := range l.sent {
+				if strings.Contains(r.URL.Path, "/feedbacks/") {
+					t.Errorf("asked %s anyway — a guessed host is the defect", r.URL)
+				}
+			}
+			if got.ImtID != 4156371482 || len(got.Fetches) == 0 {
+				t.Errorf("ImtID=%d fetches=%d — the failed route still names its card and its cost", got.ImtID, len(got.Fetches))
+			}
+		})
+	}
+}
+
+func TestDecodeReviewsHost_TakesTheFirstUsableHost(t *testing.T) {
+	got, err := decodeReviewsHost([]byte(`["https://evil.example","https://feedback-view-02.wb.ru/","https://feedback-view-03.wb.ru"]`))
+	if err != nil {
+		t.Fatalf("decodeReviewsHost: %v", err)
+	}
+	if got != "feedback-view-02.wb.ru" {
+		t.Errorf("host = %q", got)
+	}
+	if got, err := decodeReviewsHost([]byte(`["https://FEEDBACK-VIEW-03.WB.RU"]`)); err != nil || got != "feedback-view-03.wb.ru" {
+		t.Errorf("upper-case host = %q, %v — a host name has no case", got, err)
+	}
+	if got, err := decodeReviewsHost([]byte(`["https://feedbacks.wildberries.ru"]`)); err != nil || got != "feedbacks.wildberries.ru" {
+		t.Errorf("wildberries.ru host = %q, %v", got, err)
+	}
+	if _, err := decodeReviewsHost([]byte(`["https://wb.ru.example.com"]`)); err == nil {
+		t.Error("a host merely containing wb.ru was accepted")
+	}
+}
+
+func TestReviewsHostURL_SubstitutesImtID(t *testing.T) {
+	want := "https://feedback-bt.wildberries.ru/feedback/api/v2/host?imt=42"
+	if got := DefaultEndpoints().ReviewsHostURL(42); got != want {
+		t.Errorf("ReviewsHostURL = %q, want %q", got, want)
+	}
+	eps := DefaultEndpoints()
+	eps.ReviewsHost = "https://example.test/route?imt={imtId}"
+	if got := eps.ReviewsHostURL(7); got != "https://example.test/route?imt=7" {
+		t.Errorf("configured ReviewsHostURL = %q", got)
+	}
+	eps.ReviewsHost = "https://example.test/route"
+	if err := eps.Validate(); err == nil {
+		t.Error("a route template without {imtId} validated")
+	}
+}
+
+func TestClient_ReviewsLostAfterTheRouteStillReportsBothRequests(t *testing.T) {
+	// The route answered and the reviews host did not: two requests went out,
+	// and the cost of the one that never landed is part of what the run spent.
+	l := &fakeLease{port: 3, replies: []*http.Response{routedTo("feedback-view-03.wb.ru")},
+		dropAt: map[int]error{2: errors.New("boom"), 3: errors.New("boom")}}
+	c := NewClient(&fakeLeaser{leases: []*fakeLease{l}}, NewSessions())
+
+	got, err := c.Reviews(context.Background(), DefaultEndpoints(), 4156371482)
+	if err == nil {
+		t.Fatal("a lost reviews fetch was accepted")
+	}
+	if len(got.Fetches) != 2 || got.Fetches[1].Source != SourceReviews || got.Fetches[1].Port != 0 {
+		t.Errorf("fetches = %+v, want the route and a lost reviews fetch with no port", got.Fetches)
 	}
 }

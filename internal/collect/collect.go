@@ -1004,7 +1004,10 @@ func (f *Fetcher) signals(ctx context.Context, imtID, nmID int64, feedbacks *int
 		// back the window, and it carried this article's reviews with it.
 		if !f.asked.already(wb.FieldSourceReviews, imtID) {
 			reviews, err := f.Site.Reviews(ctx, f.Eps, imtID)
-			requests++
+			// As many as were made: the route and the reviews, or only the
+			// route when that failed. Never fewer than one — a call that
+			// reports no fetches still went out.
+			requests += max(1, len(reviews.Fetches))
 			if err != nil {
 				// Not the item's failure — the page it belongs to is saved and
 				// the other products on it still have their windows to fetch —

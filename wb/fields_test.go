@@ -254,10 +254,11 @@ func TestSelectionCost_CountsOneRequestPerSourceNotPerField(t *testing.T) {
 
 func TestSelectionCost_AddsUpAcrossSources(t *testing.T) {
 	// Card, reviews and questions are three different responses — and the card
-	// is two requests of its own, so four.
+	// is two requests of its own, and so are the reviews (the route to their
+	// host, then the host), so five.
 	s := Selection{"description", "review_text", "question_text"}
-	if got := s.Cost().PerProduct; got != 4 {
-		t.Errorf("PerProduct = %d, want 4 (карточка вдвоём, отзывы, вопросы)", got)
+	if got := s.Cost().PerProduct; got != 5 {
+		t.Errorf("PerProduct = %d, want 5 (карточка вдвоём, отзывы вдвоём, вопросы)", got)
 	}
 }
 

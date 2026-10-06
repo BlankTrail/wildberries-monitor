@@ -38,6 +38,23 @@ import (
 // opens the promotions list or starts a job over it.
 const promotionTimeout = time.Minute
 
+// promotionsListURL is the banner list the promotions page draws itself from.
+//
+// It used to be a static file, banners-promo-ru-v2.json, until the site
+// emptied it on 18 September 2026: it has answered «[]» since, and every load
+// of the list reported no promotions at all. The page now asks the banner
+// service, and this is its request with the parameters it sends — urltype and
+// displaytype select the promotions page's placement. The answer mixes paid
+// placements in, many of them links off the site, which promotionSlug sorts
+// out by host.
+const promotionsListURL = "https://ads-media.wildberries.ru/public/v2/banners" +
+	"?urltype=1024&displaytype=3&longitude=37.6201&latitude=55.753737" +
+	"&country=1&culture=ru&dest=-1257786&apptype=1&ab_testing=false&lang=ru"
+
+// siteHosts are the hosts a promotion's link may point at. A path is a
+// promotion's path only on the site itself.
+var siteHosts = map[string]bool{"": true, "www.wildberries.ru": true, "wildberries.ru": true}
+
 // promoShardPrefix is what the site's own record puts in front of the shard.
 //
 // «presets/promo/bucket_6» is the path inside the search index; the address
@@ -174,10 +191,13 @@ func promotionSlug(href string) (string, bool) {
 	if href == "" {
 		return "", false
 	}
-	// A full URL as readily as a path: the file carries both.
-	if u, err := url.Parse(href); err == nil && u.Path != "" {
-		href = u.Path
+	// A full URL as readily as a path: the list carries both. But only the
+	// site's own — the same path on a partner's host is somebody else's page.
+	u, err := url.Parse(href)
+	if err != nil || !siteHosts[strings.ToLower(u.Host)] {
+		return "", false
 	}
+	href = u.Path
 	rest, ok := strings.CutPrefix(href, "/promotions/")
 	if !ok {
 		return "", false

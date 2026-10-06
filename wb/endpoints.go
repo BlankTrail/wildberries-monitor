@@ -39,6 +39,11 @@ type Endpoints struct {
 	// basket CDN's upstream-map address does: a hardcoded string can only be
 	// fixed by a release, an Endpoints field by editing a file.
 	Reviews string `yaml:"reviews"`
+	// ReviewsHost asks which host keeps one card's reviews, {imtId} for the
+	// card. Reviews are kept on several hosts and only the one a card is
+	// filed on has them; the rest answer the same shape with a count of zero.
+	// The host this names replaces the one in Reviews, whose path is kept.
+	ReviewsHost string `yaml:"reviews_host"`
 	// Questions is the questions endpoint, on its own host
 	// (questions.wildberries.ru) distinct from both the main site and the
 	// reviews host (feedback-view-01.wb.ru). Unlike Reviews, it carries no
@@ -219,6 +224,7 @@ func DefaultEndpoints() Endpoints {
 		ProductPage:   "https://www.wildberries.ru/catalog/{id}/detail.aspx",
 		CardDetail:    "https://www.wildberries.ru/__internal/u-card/cards/v4/detail",
 		Reviews:       "https://feedback-view-01.wb.ru/feedbacks/v2/{imtId}",
+		ReviewsHost:   "https://feedback-bt.wildberries.ru/feedback/api/v2/host?imt={imtId}",
 		Questions:     "https://questions.wildberries.ru/api/v1/questions",
 		SellerCatalog: "https://www.wildberries.ru/__internal/u-catalog/sellers/v4/catalog",
 		BrandCatalog:  "https://www.wildberries.ru/__internal/u-catalog/brands/v4/catalog",
@@ -229,7 +235,7 @@ func DefaultEndpoints() Endpoints {
 		PickupPoints:  "https://static-basket-01.wbbasket.ru/vol0/data/all-poo-fr-v3.json",
 		Suggest:       suggestTemplate,
 		MainFeed:      mainFeedTemplate,
-		Promotions:    "https://static-basket-01.wbbasket.ru/vol0/data/banners-promo-ru-v2.json",
+		Promotions:    promotionsListURL,
 		Promotion:     "https://static-basket-01.wbbasket.ru/vol0/data/promotions/{slug}-v3.json",
 		PromoCatalog:  promoCatalogTemplate,
 		Categories:    "https://static-basket-01.wbbasket.ru/vol0/data/main-menu-ru-ru-v3.json",
@@ -298,6 +304,7 @@ func (e Endpoints) Validate() error {
 		{"search", e.Search, []string{"{app}", "{dest}", "{query}"}},
 		{"product_page", e.ProductPage, []string{"{id}"}},
 		{"reviews", e.Reviews, []string{"{imtId}"}},
+		{"reviews_host", e.ReviewsHost, []string{"{imtId}"}},
 	} {
 		if strings.TrimSpace(c.tmpl) == "" {
 			return fmt.Errorf("%s template is empty", c.name)

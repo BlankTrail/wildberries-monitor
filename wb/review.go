@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -406,17 +407,77 @@ func (c *Client) Reviews(ctx context.Context, eps Endpoints, imtID int64) (Revie
 		return Reviews{}, fmt.Errorf("wb: reviews: invalid imtId %d", imtID)
 	}
 	referer := eps.CardPageURL(imtID)
-	res, err := c.Get(ctx, eps.ReviewsURL(imtID), KindPlain, referer)
+
+	// Which host keeps this card's reviews, asked first. There is no guessing
+	// past a failure here: three hosts in four answer «no reviews» for any
+	// card, so a guessed host is a card silently filed as unreviewed — the
+	// very defect this step exists to end. A card whose host is unknown is a
+	// fetch that failed, and says so.
+	route, err := c.Get(ctx, eps.ReviewsHostURL(imtID), KindPlain, referer)
 	if err != nil {
-		return Reviews{ImtID: imtID, Fetches: []Fetch{lostFetch(SourceReviews, err)}}, err
+		return Reviews{ImtID: imtID, Fetches: []Fetch{lostFetch(SourceReviewsHost, err)}}, fmt.Errorf("wb: reviews %d: host: %w", imtID, err)
 	}
+	fetches := []Fetch{fetchOf(SourceReviewsHost, route)}
+	if route.Class != ClassOK {
+		return Reviews{ImtID: imtID, Fetches: fetches}, fmt.Errorf("wb: reviews %d: host: status %d (%s)", imtID, route.Status, route.Class)
+	}
+	host, err := decodeReviewsHost(route.Body)
+	if err != nil {
+		return Reviews{ImtID: imtID, Fetches: fetches}, fmt.Errorf("wb: reviews %d: %w", imtID, err)
+	}
+
+	res, err := c.Get(ctx, eps.reviewsURLOn(host, imtID), KindPlain, referer)
+	if err != nil {
+		return Reviews{ImtID: imtID, Fetches: append(fetches, lostFetch(SourceReviews, err))}, err
+	}
+	fetches = append(fetches, fetchOf(SourceReviews, res))
 	if res.Class != ClassOK {
-		return Reviews{ImtID: imtID, Fetches: []Fetch{fetchOf(SourceReviews, res)}}, fmt.Errorf("wb: reviews %d: status %d (%s)", imtID, res.Status, res.Class)
+		return Reviews{ImtID: imtID, Fetches: fetches}, fmt.Errorf("wb: reviews %d: status %d (%s)", imtID, res.Status, res.Class)
 	}
 	revs, err := decodeReviews(res.Body)
 	if err != nil {
-		return Reviews{ImtID: imtID, Fetches: []Fetch{fetchOf(SourceReviews, res)}}, fmt.Errorf("wb: reviews %d: %w", imtID, err)
+		return Reviews{ImtID: imtID, Fetches: fetches}, fmt.Errorf("wb: reviews %d: %w", imtID, err)
 	}
-	revs.ImtID, revs.Fetches = imtID, []Fetch{fetchOf(SourceReviews, res)}
+	revs.ImtID, revs.Fetches = imtID, fetches
 	return revs, nil
+}
+
+// ReviewsHostURL is the address that names the host keeping one card's
+// reviews.
+func (e Endpoints) ReviewsHostURL(imtID int64) string {
+	return strings.ReplaceAll(e.ReviewsHost, "{imtId}", strconv.FormatInt(imtID, 10))
+}
+
+// reviewsURLOn is ReviewsURL with its host replaced by the one the routing
+// service named; the path and query are the template's own.
+func (e Endpoints) reviewsURLOn(host string, imtID int64) string {
+	u, err := url.Parse(e.ReviewsURL(imtID))
+	if err != nil {
+		return e.ReviewsURL(imtID)
+	}
+	u.Host = host
+	return u.String()
+}
+
+// decodeReviewsHost reads the routing service's answer — a list of base
+// addresses — and returns the host of the first one that is the site's own.
+//
+// Only https, and only on the site's domains: the answer decides where the
+// next request goes, and a list that named anything else would send it there.
+func decodeReviewsHost(body []byte) (string, error) {
+	var bases []string
+	if err := json.Unmarshal(body, &bases); err != nil {
+		return "", fmt.Errorf("reviews host: %w", err)
+	}
+	for _, b := range bases {
+		u, err := url.Parse(strings.TrimSpace(b))
+		if err != nil || u.Scheme != "https" {
+			continue
+		}
+		h := strings.ToLower(u.Host)
+		if strings.HasSuffix(h, ".wb.ru") || strings.HasSuffix(h, ".wildberries.ru") {
+			return h, nil
+		}
+	}
+	return "", errors.New("reviews host: the route names no usable host")
 }

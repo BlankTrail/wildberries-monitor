@@ -471,8 +471,10 @@ var requestsPerProduct = map[FieldSource]int{
 	// hundred and one requests, without the word «около» because that kind's
 	// estimate is marked exact, and then made two hundred and one.
 	FieldSourceCardDocument: 2,
-	FieldSourceReviews:      1,
-	FieldSourceQuestions:    1,
+	// Two as well: Client.Reviews first asks which host keeps the card's
+	// reviews, then asks that host.
+	FieldSourceReviews:   2,
+	FieldSourceQuestions: 1,
 }
 
 // requestsPerPhrase is what one extra fetch of each per-phrase source costs,

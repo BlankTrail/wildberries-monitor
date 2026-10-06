@@ -67,7 +67,7 @@ func TestCheckSizeAndColor_BothDirections(t *testing.T) {
 }
 
 func TestRunReviews_SucceedsWhenEveryReviewCarriesSizeAndColor(t *testing.T) {
-	lease := &scriptedLease{replies: []*http.Response{jsonReply(200, reviewsFixture(3, true))}}
+	lease := &scriptedLease{replies: []*http.Response{jsonReply(200, `["https://feedback-view-01.wb.ru"]`), jsonReply(200, reviewsFixture(3, true))}}
 	c := newTestClient(lease)
 
 	var rows, summary bytes.Buffer
@@ -92,7 +92,7 @@ func TestRunReviews_SucceedsWhenEveryReviewCarriesSizeAndColor(t *testing.T) {
 	if strings.Contains(summary.String(), "not grouped") {
 		t.Errorf("summary set the reviews fetch aside as ungrouped, though it reports its own port; got:\n%s", summary.String())
 	}
-	if !strings.Contains(summary.String(), "port 1 (1 call(s), 1 request(s))") {
+	if !strings.Contains(summary.String(), "port 1 (1 call(s), 2 request(s))") {
 		t.Errorf("summary does not group the fetch under its own port; got:\n%s", summary.String())
 	}
 }
@@ -103,7 +103,9 @@ func TestRunReviews_SucceedsWhenEveryReviewCarriesSizeAndColor(t *testing.T) {
 // not scattered across ungrouped lines.
 func TestRunReviews_GroupsRepeatedFetchesUnderTheirSharedPort(t *testing.T) {
 	lease := &scriptedLease{port: 4, replies: []*http.Response{
+		jsonReply(200, `["https://feedback-view-01.wb.ru"]`),
 		jsonReply(200, reviewsFixture(3, true)),
+		jsonReply(200, `["https://feedback-view-01.wb.ru"]`),
 		jsonReply(200, reviewsFixture(3, true)),
 	}}
 	c := newTestClient(lease)
@@ -114,7 +116,7 @@ func TestRunReviews_GroupsRepeatedFetchesUnderTheirSharedPort(t *testing.T) {
 	if err != nil {
 		t.Fatalf("runReviews: %v", err)
 	}
-	if !strings.Contains(summary.String(), "port 4 (2 call(s), 2 request(s))") {
+	if !strings.Contains(summary.String(), "port 4 (2 call(s), 4 request(s))") {
 		t.Errorf("summary does not group both fetches under port 4; got:\n%s", summary.String())
 	}
 	if !strings.Contains(summary.String(), "later median") {
@@ -127,7 +129,7 @@ func TestRunReviews_GroupsRepeatedFetchesUnderTheirSharedPort(t *testing.T) {
 // extraction-drops-a-field bug, reached through the real fetch-decode-assert
 // path this program actually runs, not just the pure function in isolation.
 func TestRunReviews_FailsWhenNoReviewCarriesASize(t *testing.T) {
-	lease := &scriptedLease{replies: []*http.Response{jsonReply(200, reviewsFixture(3, false))}}
+	lease := &scriptedLease{replies: []*http.Response{jsonReply(200, `["https://feedback-view-01.wb.ru"]`), jsonReply(200, reviewsFixture(3, false))}}
 	c := newTestClient(lease)
 
 	var rows, summary bytes.Buffer

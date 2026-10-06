@@ -39,6 +39,9 @@ const (
 	SourceCardDetail Source = "card live"
 	// SourceReviews is one card's review window and aggregate.
 	SourceReviews Source = "reviews"
+	// SourceReviewsHost is the question of which host keeps a card's reviews,
+	// asked before them.
+	SourceReviewsHost Source = "reviews host"
 	// SourceQuestions is one page of one card's buyer questions.
 	SourceQuestions Source = "questions"
 	// SourceQuestionCount is the cheap onlyCount=true aggregate, a different

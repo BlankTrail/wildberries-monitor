@@ -85,6 +85,9 @@ type fakeSite struct {
 	// window that failed must not count as read, or the group's other articles
 	// would all skip it and one timeout would cost a model its reviews.
 	reviewsFailOnce bool
+	// reviewFetches is the provenance a successful Reviews reports — one entry
+	// per request it made.
+	reviewFetches []wb.Fetch
 }
 
 // PromotionPage records which promotion was walked and answers with whatever
@@ -252,7 +255,7 @@ func (f *fakeSite) Reviews(_ context.Context, _ wb.Endpoints, imtID int64) (wb.R
 	if f.reviewsFailOnce && len(f.reviews) == 1 {
 		return wb.Reviews{}, errors.New("окно отзывов не ответило")
 	}
-	return wb.Reviews{ImtID: imtID}, nil
+	return wb.Reviews{ImtID: imtID, Fetches: f.reviewFetches}, nil
 }
 
 func (f *fakeSite) Questions(_ context.Context, _ wb.Endpoints, imtID int64, take, _ int) (wb.Questions, error) {
@@ -1913,5 +1916,35 @@ func TestBrand_APlanForABrandJobAsksForTheRecord(t *testing.T) {
 	}
 	if !asked {
 		t.Errorf("план задания по бренду не спрашивает запись бренда: %+v", plan)
+	}
+}
+
+func TestFetch_BillsTheReviewsForEveryRequestTheyMade(t *testing.T) {
+	// The review window is two requests now — the route to the host that keeps
+	// it, then that host — and a run that billed one would quote a thousand
+	// cards at a thousand requests and make two thousand.
+	for _, c := range []struct {
+		name    string
+		fetches []wb.Fetch
+		want    int
+	}{
+		{"route and window", []wb.Fetch{{Source: wb.SourceReviewsHost}, {Source: wb.SourceReviews}}, 3},
+		{"no provenance still went out", nil, 2},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			grouped := product(101)
+			grouped.Root = ptrTo(int64(900))
+			site := &fakeSite{products: []wb.Product{grouped}, cardImt: 900, reviewFetches: c.fetches}
+			f, _ := fetcherFor(t, site, "nm_id", "review_text")
+			n, err := f.Fetch(t.Context(), job.Item{Key: job.Key{
+				Kind: job.ItemPage, Phrase: "платье", Dest: "-1257786", AppType: 1, Page: 1,
+			}.String()})
+			if err != nil {
+				t.Fatalf("Fetch: %v", err)
+			}
+			if n != c.want {
+				t.Errorf("cost %d requests, want %d", n, c.want)
+			}
+		})
 	}
 }

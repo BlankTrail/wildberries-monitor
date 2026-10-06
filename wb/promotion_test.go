@@ -270,3 +270,42 @@ func TestMainFeedPage_FillsInThePlaceOnTheFrontPage(t *testing.T) {
 		t.Errorf("происхождение = %+v", env.Fetches)
 	}
 }
+
+func TestDecodePromotions_ALinkToAnotherSiteIsNotAPromotion(t *testing.T) {
+	// The list the site reads its promotions page from now carries paid
+	// placements as well, many of them links off the site entirely. A path is
+	// only a promotion's path on the site's own host: the same path anywhere
+	// else names nothing this program can ask a preset for.
+	got, err := decodePromotions([]byte(`[
+		{"href":"https://partner.example/promotions/chuzhaya?erid=1","alt":"Чужая"},
+		{"href":"https://specials.wildberries.ru/promotions/specproekt","alt":"Спецпроект"},
+		{"href":"//partner.example/promotions/bez-shemy","alt":"Без схемы"},
+		{"href":"https://wildberries.ru/promotions/bez-www?erid=2","alt":"Без www"},
+		{"href":"/promotions/svoya?erid=3&page=1","alt":"Своя"},
+		{"href":"https://WWW.Wildberries.RU/promotions/zaglavnaya","alt":"Заглавными"}
+	]`))
+	if err != nil {
+		t.Fatalf("decodePromotions: %v", err)
+	}
+	var slugs []string
+	for _, g := range got {
+		slugs = append(slugs, g.Slug)
+	}
+	if strings.Join(slugs, ",") != "bez-www,svoya,zaglavnaya" {
+		t.Errorf("акции = %v, ожидались bez-www, svoya и zaglavnaya — имя хоста не различает регистр", slugs)
+	}
+}
+
+func TestEndpoints_PromotionsComeFromTheListThePageReads(t *testing.T) {
+	// The static banner file this used to read was emptied on 18 September
+	// 2026 and has answered «[]» since, so every attempt to load the list said
+	// it held no promotions. The promotions page itself now draws them from
+	// the banner service; this pins the address to that one, with the
+	// promotions-page placement it asks for.
+	got := DefaultEndpoints().Promotions
+	for _, want := range []string{"https://ads-media.wildberries.ru/public/v2/banners?", "displaytype=3", "urltype=1024"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("адрес списка акций %q не содержит %q", got, want)
+		}
+	}
+}
