@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"sync"
 	"time"
 
 	"github.com/BlankTrail/wildberries-monitor/blanktrail"
@@ -210,6 +211,11 @@ type Client struct {
 	retry    RetryPolicy
 	// now reads the clock. Replaced in tests; nothing else writes it.
 	now func() time.Time
+
+	// capMu guards the stock ceiling last read off a page, and when.
+	capMu   sync.Mutex
+	capSeen int64
+	capAt   time.Time
 }
 
 // NewClient returns a client that borrows from leaser and mints visit identity
@@ -626,7 +632,7 @@ func (c *Client) SearchPage(ctx context.Context, eps Endpoints, q SearchQuery) (
 			q.Page, res.Status, res.Class, res.Attempts, res.PortChanges+1, res.Rotations, res.TransportErrors)
 	}
 
-	env, err := decodeEnvelope(res.Body)
+	env, err := c.envelope(res.Body)
 	if err != nil {
 		return Envelope{Fetches: []Fetch{fetchOf(SourceSearch, res)}}, fmt.Errorf("wb: search page %d: %w", q.Page, err)
 	}

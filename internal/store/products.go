@@ -272,12 +272,13 @@ func insertSnapshot(ctx context.Context, tx *sql.Tx, p wb.Product, fingerprint s
 		    nm_id, dest, app_type, ts, anchor, fingerprint,
 		    rating, rating_key, feedbacks, feedback_key, total_quantity,
 		    price_base, price_sale, discount_pct, currency,
-		    time1, time2, dist, warehouse_id, pics, job_id, raw, promo_id
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		    time1, time2, dist, warehouse_id, pics, job_id, raw, promo_id, stock_cap
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		p.ID, p.Dest, p.AppType, ts, anchorFlag, fingerprint,
 		p.Rating, p.RatingKey, p.Feedbacks, p.FeedbackKey, snapshotStock(p),
 		base, sale, discount, currency,
-		p.Time1, p.Time2, p.Dist, p.WarehouseID, p.Pics, nullableID(jobID), nullableJSON(p.Raw), p.PromoID)
+		p.Time1, p.Time2, p.Dist, p.WarehouseID, p.Pics, nullableID(jobID), nullableJSON(p.Raw), p.PromoID,
+		nullableID(p.StockCap))
 	if err != nil {
 		return 0, fmt.Errorf("store: write the snapshot of %d in %s: %w", p.ID, p.Dest, err)
 	}

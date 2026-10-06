@@ -118,6 +118,7 @@ func decodeEnvelope(b []byte) (Envelope, error) {
 			"wb: decode search envelope: %d item(s) present, all %d rejected by extraction; "+
 				"not an empty result, a parser failure", len(items), env.Dropped)
 	}
+	env.setStockCap(detectStockCap(env.Products))
 	return env, nil
 }
 

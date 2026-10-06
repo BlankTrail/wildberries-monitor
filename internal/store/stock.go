@@ -33,6 +33,8 @@ type StockRow struct {
 	// Regions is how many of the readings could see this warehouse. More than
 	// one is the overlap that makes adding regions up wrong.
 	Regions int64
+	// AtCap says Qty is the site's stock ceiling — at least that many.
+	AtCap bool
 }
 
 // Stock is a product's stock as of the newest reading in each region.
@@ -48,6 +50,18 @@ type Stock struct {
 	// Shared counts the warehouses more than one region could see. It is the
 	// answer to «что суммировать, а что нет», in one number.
 	Shared int
+	// Cap is the stock ceiling the newest readings were taken under — the
+	// lowest, where regions were read under different ones — zero where none
+	// was seen. A figure at it is «at least» — see migration 0037.
+	Cap int64
+	// TotalAtLeast says Total is a floor: a part of it sits at the ceiling.
+	TotalAtLeast bool
+}
+
+// RegionAtCap reports whether the site's figure for a region is the ceiling.
+func (st Stock) RegionAtCap(dest string) bool {
+	q, ok := st.ByRegion[dest]
+	return ok && st.Cap > 0 && q >= st.Cap
 }
 
 // StockOf reads one product's stock across the regions it was collected for.
@@ -59,7 +73,7 @@ func (s *Store) StockOf(ctx context.Context, nmID int64) (Stock, error) {
 
 	// The site's own per-region figure, from the newest reading of each.
 	byRegion, err := s.db.QueryContext(ctx, `
-		SELECT s.dest, s.total_quantity
+		SELECT s.dest, s.total_quantity, s.stock_cap
 		  FROM snapshots s
 		  JOIN (
 		      SELECT dest, MAX(ts) AS ts FROM snapshots WHERE nm_id = ? GROUP BY dest
@@ -71,12 +85,18 @@ func (s *Store) StockOf(ctx context.Context, nmID int64) (Stock, error) {
 	defer byRegion.Close()
 	for byRegion.Next() {
 		var dest string
-		var qty *int64
-		if err := byRegion.Scan(&dest, &qty); err != nil {
+		var qty, ceiling *int64
+		if err := byRegion.Scan(&dest, &qty, &ceiling); err != nil {
 			return out, fmt.Errorf("store: stock of %d: %w", nmID, err)
 		}
 		if qty != nil {
 			out.ByRegion[dest] = *qty
+		}
+		// The lowest ceiling among the regions: «at least 38» is true of a
+		// figure read under any ceiling, so a mark erring that way never
+		// lies, and one erring the other way passes a floor for a count.
+		if ceiling != nil && (out.Cap == 0 || *ceiling < out.Cap) {
+			out.Cap = *ceiling
 		}
 	}
 	if err := byRegion.Err(); err != nil {
@@ -123,6 +143,24 @@ func (s *Store) StockOf(ctx context.Context, nmID int64) (Stock, error) {
 	}
 	if err := rows.Err(); err != nil {
 		return out, fmt.Errorf("store: stock of %d: %w", nmID, err)
+	}
+
+	// The ceiling holds every warehouse line as well as the total, so a sum
+	// with one of them on it is a sum of floors.
+	if out.Cap > 0 {
+		for i := range out.ByWarehouse {
+			if out.ByWarehouse[i].Qty >= out.Cap {
+				out.ByWarehouse[i].AtCap = true
+				out.TotalAtLeast = true
+			}
+		}
+		if len(out.ByWarehouse) == 0 {
+			for dest := range out.ByRegion {
+				if out.RegionAtCap(dest) {
+					out.TotalAtLeast = true
+				}
+			}
+		}
 	}
 	return out, nil
 }

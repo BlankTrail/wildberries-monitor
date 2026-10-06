@@ -304,6 +304,11 @@ var catalogue = []Field{
 	// the detail fetch that prices need anyway rather than costing its own
 	// request.
 	{Key: "total_quantity", Name: "Остаток всего", Group: GroupStock, Type: FieldInt, Source: FieldSourceSearchResult},
+	// Beside the figure rather than folded into it: the site shows nobody's
+	// stock above a ceiling, and a column that read «≥38» would stop being a
+	// number a spreadsheet can add. «да» says the figure is that ceiling — at
+	// least so many — and costs nothing: it is read off the same page.
+	{Key: "stock_at_cap", Name: "Остаток на потолке WB", Group: GroupStock, Type: FieldBool, Source: FieldSourceSearchResult},
 	{Key: "size_name", Name: "Размер", Group: GroupStock, Type: FieldText, Source: FieldSourceCardDetail},
 	{Key: "size_quantity", Name: "Остаток по размеру", Group: GroupStock, Type: FieldInt, Source: FieldSourceCardDetail},
 	{Key: "warehouse_id", Name: "Склад", Group: GroupStock, Type: FieldInt, Source: FieldSourceCardDetail},

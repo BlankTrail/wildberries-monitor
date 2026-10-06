@@ -167,6 +167,11 @@ type Product struct {
 	// TotalQuantity is stock summed over every size and warehouse. Search
 	// results carry only this; per-size stock exists solely on the card.
 	TotalQuantity *int64 `json:"-"`
+	// StockCap is the ceiling the site held stocks to when this was read: it
+	// shows nobody's stock above it, writing the ceiling instead. Zero when
+	// none was seen. A TotalQuantity at the ceiling is a floor, «at least this
+	// many», and not a count — see StockAtCap.
+	StockCap int64 `json:"-"`
 
 	// Time1, Time2, Dist and WarehouseID are the product-level delivery figures
 	// for the region in Dest, repeated by the site outside the size objects.
@@ -214,6 +219,11 @@ type Envelope struct {
 	// of an Envelope, so a non-zero Dropped here always accompanies at least
 	// one surviving Product.
 	Dropped int
+
+	// StockCap is the stock ceiling this page showed, or the one the client
+	// saw last when the page was too small to show one; zero when neither.
+	// Every product on the page carries the same value.
+	StockCap int64
 
 	// Fetches is where the request behind this page went and what it cost:
 	// one entry, because one page is one request. It is carried out with the

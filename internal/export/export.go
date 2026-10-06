@@ -268,6 +268,11 @@ func valueOf(r store.ProductRow, f wb.Field) Value {
 		return optInt(r.Feedbacks)
 	case "total_quantity":
 		return optInt(r.TotalQuantity)
+	case "stock_at_cap":
+		if r.TotalQuantity == nil {
+			return Value{Absent: true}
+		}
+		return Value{Bool: r.AtStockCap()}
 
 	// Spec section 4.4's media group, the free half of it. See wb.GroupMedia
 	// for why the links are not beside it.

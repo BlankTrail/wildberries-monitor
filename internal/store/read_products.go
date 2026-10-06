@@ -47,6 +47,10 @@ type ProductRow struct {
 	Rating        *float64
 	Feedbacks     *int64
 	TotalQuantity *int64
+	// StockCap is the ceiling the site held stocks to at this reading, nil
+	// where none was seen. TotalQuantity equal to it is «at least», not a
+	// count — see migration 0037 and AtStockCap.
+	StockCap *int64
 	// Pics is how many photographs the card had at this reading. Free with
 	// every listing the site answers with — see migration 0031 — and the
 	// half of spec section 4.7's card completeness that costs nothing.
@@ -246,6 +250,7 @@ const productRowColumns = `
 	    s.raw                    AS raw,
 	    s.promo_id               AS promo_id,
 	    s.total_quantity         AS total_quantity,
+	    s.stock_cap              AS stock_cap,
 	    s.price_base             AS price_base,
 	    s.price_sale             AS price_sale,
 	    s.discount_pct           AS discount_pct,
@@ -317,7 +322,7 @@ const productRowColumns = `
 // rather than subtle: Scan reports the column count and every test in the
 // file says so at once.
 const productRowOutput = `nm_id, imt_id, name, brand, supplier_id, supplier_name,
-	    dest, app_type, ts, rating, feedbacks, pics, raw, promo_id, total_quantity,
+	    dest, app_type, ts, rating, feedbacks, pics, raw, promo_id, total_quantity, stock_cap,
 	    price_base, price_sale, discount_pct, currency,
 	    description, vendor_code, subject_name, card_created,
 	    options, compositions,
@@ -335,7 +340,7 @@ func scanProductRow(sc rowScanner) (ProductRow, error) {
 	var r ProductRow
 	err := sc.Scan(
 		&r.NmID, &r.ImtID, &r.Name, &r.Brand, &r.SupplierID, &r.SupplierName,
-		&r.Dest, &r.AppType, &r.TS, &r.Rating, &r.Feedbacks, &r.Pics, &r.Raw, &r.PromoID, &r.TotalQuantity,
+		&r.Dest, &r.AppType, &r.TS, &r.Rating, &r.Feedbacks, &r.Pics, &r.Raw, &r.PromoID, &r.TotalQuantity, &r.StockCap,
 		&r.PriceBase, &r.PriceSale, &r.DiscountPct, &r.Currency,
 		&r.Description, &r.VendorCode, &r.SubjectName, &r.CardCreated,
 		&r.Options, &r.Compositions,
@@ -860,4 +865,10 @@ func (s *Store) Dests(ctx context.Context) ([]DestUse, error) {
 		return strings.Compare(a.Code, b.Code)
 	})
 	return out, nil
+}
+
+// AtStockCap reports whether the stock this row shows is the site's ceiling
+// rather than a count: at least that many, and how many more nobody can say.
+func (r ProductRow) AtStockCap() bool {
+	return r.StockCap != nil && r.TotalQuantity != nil && *r.TotalQuantity >= *r.StockCap
 }

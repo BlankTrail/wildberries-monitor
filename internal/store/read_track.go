@@ -224,8 +224,11 @@ type TrackPoint struct {
 	DiscountPct *int64
 
 	TotalQuantity *int64
-	Rating        *float64
-	Feedbacks     *int64
+	// StockCap is the ceiling the site held stocks to at this point; nil where
+	// none was seen. See migration 0037.
+	StockCap  *int64
+	Rating    *float64
+	Feedbacks *int64
 
 	// DeliveryHours is the product-level time2 — the figure the site repeats
 	// outside the size objects, which moves with the region.
@@ -305,7 +308,7 @@ func (s *Store) PlacementsChangedSince(ctx context.Context, since int64) ([]Phra
 func (s *Store) LastTwoPoints(ctx context.Context, k SeriesKey) ([]TrackPoint, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, ts, anchor, price_sale, price_base, discount_pct,
-		       rating, feedbacks, total_quantity, time2
+		       rating, feedbacks, total_quantity, stock_cap, time2
 		  FROM snapshots
 		 WHERE nm_id = ? AND dest = ? AND app_type = ?
 		 ORDER BY ts DESC
@@ -324,7 +327,7 @@ func (s *Store) LastTwoPoints(ctx context.Context, k SeriesKey) ([]TrackPoint, e
 		var anchor int
 		if err := rows.Scan(&r.id, &r.p.TS, &anchor,
 			&r.p.PriceSale, &r.p.PriceBase, &r.p.DiscountPct,
-			&r.p.Rating, &r.p.Feedbacks, &r.p.TotalQuantity, &r.p.DeliveryHours); err != nil {
+			&r.p.Rating, &r.p.Feedbacks, &r.p.TotalQuantity, &r.p.StockCap, &r.p.DeliveryHours); err != nil {
 			rows.Close()
 			return nil, fmt.Errorf("store: last two points of %d: %w", k.NmID, err)
 		}

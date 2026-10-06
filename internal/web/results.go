@@ -233,6 +233,12 @@ func resultsCell(q url.Values, names map[int64]string, row store.ProductRow, c w
 	// region's, and «почему в Москве 120, а в Пензе 80, и сколько же всего» is
 	// the question it raises.
 	if c.Key == "total_quantity" {
+		// At the site's ceiling the figure is a floor, and the cell says so:
+		// a column where «38» sometimes means thirty-eight and sometimes
+		// «thirty-eight or more» is a column nobody can read.
+		if row.AtStockCap() {
+			text = "≥" + text
+		}
 		return stockCell(row.NmID, text)
 	}
 

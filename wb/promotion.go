@@ -293,7 +293,7 @@ func (c *Client) PromotionPage(ctx context.Context, eps Endpoints, p Promotion, 
 			"wb: promotion %q page %d: status %d (%s)", p.Slug, q.Page, res.Status, res.Class)
 	}
 
-	env, err := decodeEnvelope(res.Body)
+	env, err := c.envelope(res.Body)
 	if err != nil {
 		return Envelope{Fetches: []Fetch{fetchOf(SourcePromotion, res)}}, fmt.Errorf(
 			"wb: promotion %q page %d: %w", p.Slug, q.Page, err)

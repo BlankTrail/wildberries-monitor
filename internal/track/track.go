@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+
+	"github.com/BlankTrail/wildberries-monitor/wb"
 )
 
 // Reading is the state of one product, in one region, for one audience, at
@@ -31,6 +33,9 @@ type Reading struct {
 	DiscountPct *int64
 
 	TotalQuantity *int64
+	// StockCap is the ceiling the site held stocks to when this was read, zero
+	// where none was seen. A TotalQuantity at it is «at least that many».
+	StockCap int64
 	// Sizes is stock per size name, and Warehouses is stock per warehouse id.
 	// Both are maps rather than slices because what matters is which keys
 	// disappeared, and a slice would make that a search.
@@ -74,6 +79,10 @@ type Change struct {
 	// whose earlier side is absent is an appearance, not a move from zero,
 	// and PercentChange refuses it for that reason.
 	HadBefore, HasNow bool
+	// WasAtLeast and NowAtLeast say a side is a floor rather than a count: the
+	// site's stock ceiling, which shows nobody's stock above it. A percentage
+	// taken from a floor is the least the move can have been.
+	WasAtLeast, NowAtLeast bool
 }
 
 // PercentChange is how far the number moved, as a percentage of where it was.
@@ -163,6 +172,25 @@ func Diff(before, after Reading) ([]Change, error) {
 // the OutOfStock rule the user wrote for exactly that — one event arriving
 // twice under two names is how a notification list stops being read.
 func stockChanges(before, after Reading) []Change {
+	wasFloor, nowFloor := before.AtStockCap(), after.AtStockCap()
+	switch {
+	case wasFloor && after.TotalQuantity != nil && *after.TotalQuantity >= *before.TotalQuantity:
+		// At least so many, then at least as many: one stock, described twice.
+		// «At least» on both sides lands here or in the next case — the
+		// ceiling moving, measured three times in one day with every product
+		// moving with it, is not stock moving.
+		return nil
+	case nowFloor && before.TotalQuantity != nil && *before.TotalQuantity >= *after.TotalQuantity:
+		return nil
+	case nowFloor && mayBeFloor(before), wasFloor && mayBeFloor(after):
+		// A ceiling on one side and, on the other, a number read when no
+		// ceiling was known — before this build recorded one, or a lone card
+		// with no page to read it off. Such a number may be a ceiling itself:
+		// measured, readings of exactly 35 taken that way and «at least 38»
+		// right after, for hundreds of products at once. Nothing can be said
+		// about which way the stock went.
+		return nil
+	}
 	if same(before.TotalQuantity, after.TotalQuantity) {
 		return nil
 	}
@@ -175,7 +203,22 @@ func stockChanges(before, after Reading) []Change {
 		after.TotalQuantity != nil && *after.TotalQuantity > 0:
 		kind = BackInStock
 	}
-	return []Change{change(after, kind, "", before.TotalQuantity, after.TotalQuantity, UnitItems)}
+	c := change(after, kind, "", before.TotalQuantity, after.TotalQuantity, UnitItems)
+	c.WasAtLeast, c.NowAtLeast = wasFloor, nowFloor
+	return []Change{c}
+}
+
+// AtStockCap reports whether the stock this reading shows is the site's
+// ceiling rather than a count.
+func (r Reading) AtStockCap() bool {
+	return r.StockCap > 0 && r.TotalQuantity != nil && *r.TotalQuantity >= r.StockCap
+}
+
+// mayBeFloor reports whether a reading taken with no known ceiling could have
+// been one: a number at least as high as the lowest the site has used. Below
+// that it is a count whatever the ceiling was.
+func mayBeFloor(r Reading) bool {
+	return r.StockCap == 0 && r.TotalQuantity != nil && *r.TotalQuantity >= wb.MinStockCap
 }
 
 // goneChanges reports sizes and warehouses that were there and are not.

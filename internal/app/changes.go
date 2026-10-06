@@ -693,6 +693,7 @@ func readingOf(key store.SeriesKey, p store.TrackPoint) track.Reading {
 		NmID: key.NmID, Dest: key.Dest, AppType: key.AppType, TS: p.TS,
 		PriceSale: p.PriceSale, PriceBase: p.PriceBase, DiscountPct: p.DiscountPct,
 		TotalQuantity: p.TotalQuantity, Feedbacks: p.Feedbacks,
+		StockCap:      derefOr(p.StockCap),
 		DeliveryHours: p.DeliveryHours,
 		Sizes:         p.Sizes, Warehouses: p.Warehouses,
 		// A reading exists because the site returned this product for this
@@ -854,11 +855,21 @@ func describeChange(c track.Change) string {
 	case !c.HadBefore:
 		// An appearance rather than a move from zero — the distinction
 		// PercentChange refuses to blur, said in the same words here.
-		return fmt.Sprintf("%s: появилось, %s", what, inUnit(c.Now, c.Unit))
+		return fmt.Sprintf("%s: появилось, %s", what, side(c.Now, c.NowAtLeast, c.Unit))
 	case !c.HasNow:
-		return fmt.Sprintf("%s: было %s, теперь не сообщается", what, inUnit(c.Was, c.Unit))
+		return fmt.Sprintf("%s: было %s, теперь не сообщается", what, side(c.Was, c.WasAtLeast, c.Unit))
 	}
-	return fmt.Sprintf("%s: %s → %s", what, inUnit(c.Was, c.Unit), inUnit(c.Now, c.Unit))
+	return fmt.Sprintf("%s: %s → %s", what, side(c.Was, c.WasAtLeast, c.Unit), side(c.Now, c.NowAtLeast, c.Unit))
+}
+
+// side is one side of a change in words: a floor — the site's stock ceiling,
+// which shows nobody's stock above it — says so, rather than passing for a
+// count.
+func side(v int64, atLeast bool, u track.Unit) string {
+	if atLeast {
+		return "не меньше " + inUnit(v, u)
+	}
+	return inUnit(v, u)
 }
 
 // changeNames is what each kind is called in a message.
@@ -898,4 +909,12 @@ func inUnit(v int64, u track.Unit) string {
 	default:
 		return strconv.FormatInt(v, 10)
 	}
+}
+
+// derefOr is the value under p, or zero for nil.
+func derefOr(p *int64) int64 {
+	if p == nil {
+		return 0
+	}
+	return *p
 }

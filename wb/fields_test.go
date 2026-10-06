@@ -459,6 +459,7 @@ func TestFields_MatchTheGoldenList(t *testing.T) {
 		{"page", GroupBase, FieldInt},
 
 		{"total_quantity", GroupStock, FieldInt},
+		{"stock_at_cap", GroupStock, FieldBool},
 		{"size_name", GroupStock, FieldText},
 		{"size_quantity", GroupStock, FieldInt},
 		{"warehouse_id", GroupStock, FieldInt},

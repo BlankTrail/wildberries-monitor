@@ -1,0 +1,12 @@
+-- The stock ceiling the site held this reading to.
+--
+-- Wildberries stopped showing anybody's stock above a ceiling: a product with
+-- more says the ceiling instead. The ceiling moves — 65 in August 2026, then
+-- 52, 50 and 38 in one day of October — and every product moves with it at
+-- once. A total_quantity equal to this column is therefore «at least this
+-- many», not a count, and two readings at two ceilings are not a change.
+--
+-- Nullable: nil is a reading taken where no ceiling was seen, whose stock is
+-- read as the count it says it is — which is what every reading before this
+-- column existed was taken as.
+ALTER TABLE snapshots ADD COLUMN stock_cap INTEGER;

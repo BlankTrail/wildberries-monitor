@@ -68,7 +68,7 @@ func (c *Client) MainFeedPage(ctx context.Context, eps Endpoints, q SearchQuery)
 			"wb: main feed page %d: status %d (%s)", q.Page, res.Status, res.Class)
 	}
 
-	env, err := decodeEnvelope(res.Body)
+	env, err := c.envelope(res.Body)
 	if err != nil {
 		return Envelope{Fetches: []Fetch{fetchOf(SourceMainFeed, res)}}, fmt.Errorf(
 			"wb: main feed page %d: %w", q.Page, err)

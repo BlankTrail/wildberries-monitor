@@ -112,6 +112,10 @@ func stockLine(p store.ProductRow) string {
 		// formatting accident and this is the fact somebody set a rule on.
 		return "Остаток: нет в наличии\n"
 	}
+	if p.AtStockCap() {
+		// The site's ceiling, not a count: it shows nobody's stock above it.
+		return fmt.Sprintf("Остаток: не меньше %d (больше Wildberries не показывает)\n", *p.TotalQuantity)
+	}
 	return fmt.Sprintf("Остаток: %d\n", *p.TotalQuantity)
 }
 

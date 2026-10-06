@@ -168,8 +168,8 @@ func (a *App) writeSummaryFile(r rules.Rule, firings []rules.Firing) (string, er
 			strconv.FormatInt(c.NmID, 10),
 			c.Dest,
 			strings.TrimSpace(changeNames[c.Kind] + " " + c.Subject),
-			sideOf(c.Was, c.HadBefore, c.Unit),
-			sideOf(c.Now, c.HasNow, c.Unit),
+			sideOf(c.Was, c.HadBefore, c.WasAtLeast, c.Unit),
+			sideOf(c.Now, c.HasNow, c.NowAtLeast, c.Unit),
 			time.Unix(c.TS, 0).UTC().Format(time.RFC3339),
 		}); err != nil {
 			_ = f.Close()
@@ -191,9 +191,14 @@ func (a *App) writeSummaryFile(r rules.Rule, firings []rules.Firing) (string, er
 //
 // An empty cell rather than a zero, which is the same rule the whole product
 // keeps: a number nobody read is not a number that was nought.
-func sideOf(v int64, present bool, u track.Unit) string {
+func sideOf(v int64, present, atLeast bool, u track.Unit) string {
 	if !present {
 		return ""
+	}
+	if atLeast {
+		// A floor in a column of counts: the spreadsheet reader sees «≥38»
+		// and does not sum it as thirty-eight.
+		return "≥" + inUnit(v, u)
 	}
 	return inUnit(v, u)
 }

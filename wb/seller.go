@@ -489,7 +489,7 @@ func (c *Client) SellerCatalogPage(ctx context.Context, eps Endpoints, id int64,
 			"wb: seller catalog %d page %d: status %d (%s)", id, q.Page, res.Status, res.Class)
 	}
 
-	env, err := decodeEnvelope(res.Body)
+	env, err := c.envelope(res.Body)
 	if err != nil {
 		return Envelope{Fetches: []Fetch{fetchOf(SourceSellerCatalog, res)}}, fmt.Errorf("wb: seller catalog %d page %d: %w", id, q.Page, err)
 	}

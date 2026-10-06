@@ -46,8 +46,13 @@ func (s *Server) stockPanel(w http.ResponseWriter, r *http.Request) {
 	b.WriteString(`<section class="bt-card bt-card--inset">`)
 	fmt.Fprintf(&b, `<h4 class="bt-form-head">Остаток товара %d</h4>`, nm)
 
-	fmt.Fprintf(&b, `<p class="bt-stat"><span class="bt-stat__value">%d</span> `+
-		`<span class="bt-stat__label">всего по собранным регионам</span></p>`, got.Total)
+	fmt.Fprintf(&b, `<p class="bt-stat"><span class="bt-stat__value">%s</span> `+
+		`<span class="bt-stat__label">всего по собранным регионам</span></p>`, floorText(got.Total, got.TotalAtLeast))
+	if got.Cap > 0 {
+		fmt.Fprintf(&b, `<p class="bt-form-hint">Wildberries не показывает остаток больше %d: `+
+			`где стоит «≥», на складе может быть сколько угодно больше. Это ограничение сайта, `+
+			`а не сбор — точный остаток своих товаров виден только в личном кабинете продавца.</p>`, got.Cap)
+	}
 
 	// The sentence the whole panel exists for.
 	switch {
@@ -79,8 +84,8 @@ func (s *Server) stockPanel(w http.ResponseWriter, r *http.Request) {
 		b.WriteString(`<div class="bt-table-wrap"><table class="bt-table"><thead><tr>` +
 			`<th>Регион</th><th class="bt-num">Остаток</th></tr></thead><tbody>`)
 		for _, code := range codes {
-			fmt.Fprintf(&b, `<tr><td>%s</td><td class="bt-num">%d</td></tr>`,
-				html.EscapeString(regionLabel(names, code)), got.ByRegion[code])
+			fmt.Fprintf(&b, `<tr><td>%s</td><td class="bt-num">%s</td></tr>`,
+				html.EscapeString(regionLabel(names, code)), floorText(got.ByRegion[code], got.RegionAtCap(code)))
 		}
 		b.WriteString(`</tbody></table></div>`)
 	}
@@ -96,8 +101,8 @@ func (s *Server) stockPanel(w http.ResponseWriter, r *http.Request) {
 				seen = countOf(row.Regions, "региона", "регионов", "регионов")
 			}
 			fmt.Fprintf(&b, `<tr><td class="bt-mono bt-num">%d</td><td>%s</td>`+
-				`<td class="bt-num">%d</td><td>%s</td></tr>`,
-				row.WarehouseID, html.EscapeString(row.Size), row.Qty, html.EscapeString(seen))
+				`<td class="bt-num">%s</td><td>%s</td></tr>`,
+				row.WarehouseID, html.EscapeString(row.Size), floorText(row.Qty, row.AtCap), html.EscapeString(seen))
 		}
 		b.WriteString(`</tbody></table></div>`)
 	}
@@ -116,4 +121,13 @@ func stockCell(nmID int64, text string) string {
 	return `<td class="bt-num"><button class="bt-narrow" type="button" data-get="/results/stock?nm=` +
 		strconv.FormatInt(nmID, 10) + `" data-target="#results-detail" ` +
 		`title="Откуда это число и сколько всего">` + html.EscapeString(text) + `</button></td>`
+}
+
+// floorText is a stock figure, marked when it is the site's ceiling rather
+// than a count.
+func floorText(n int64, atLeast bool) string {
+	if atLeast {
+		return "≥" + strconv.FormatInt(n, 10)
+	}
+	return strconv.FormatInt(n, 10)
 }

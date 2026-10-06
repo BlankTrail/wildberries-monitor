@@ -306,7 +306,7 @@ func (c *Client) Details(ctx context.Context, eps Endpoints, nms []int64, dest s
 	if res.Class != ClassOK {
 		return nil, spent, fmt.Errorf("details of %d product(s): status %d (%s)", len(nms), res.Status, res.Class)
 	}
-	env, err := decodeEnvelope(res.Body)
+	env, err := c.envelope(res.Body)
 	if err != nil {
 		return nil, spent, err
 	}
@@ -336,7 +336,7 @@ func (c *Client) detail(ctx context.Context, eps Endpoints, nm int64, dest strin
 	if liveRes.Class != ClassOK {
 		return Product{}, fmt.Errorf("card %d detail: status %d (%s)", nm, liveRes.Status, liveRes.Class)
 	}
-	env, err := decodeEnvelope(liveRes.Body)
+	env, err := c.envelope(liveRes.Body)
 	if err != nil {
 		return Product{}, err
 	}
