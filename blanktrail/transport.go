@@ -83,6 +83,9 @@ type remedy interface {
 	attemptSucceeded(port int)
 	rotateEgress(ctx context.Context, port int) error
 	markBadEgress(port int)
+	// refreshTLS has the service drop what it holds for the port — pooled
+	// connections and TLS tickets — while keeping its exit. Best effort.
+	refreshTLS(ctx context.Context, port int)
 	// exhausted reports a failure that is the port's own: it spent the whole
 	// retry budget and is still not usable.
 	exhausted(port int)
@@ -124,6 +127,7 @@ func (t *ladder) RoundTrip(req *http.Request) (*http.Response, error) {
 	// what it is pacing is this port, not either failure in particular.
 	var (
 		delay            time.Duration
+		handshakeRetried bool
 		attempt          int
 		statusRetries    int
 		transportRetries int
@@ -181,14 +185,50 @@ func (t *ladder) RoundTrip(req *http.Request) (*http.Response, error) {
 		if ref := refusalOf(resp, t.port); ref != nil {
 			drainAndClose(resp)
 			switch {
+			case ref.ResumeDefect():
+				// The service's own TLS could not resume its session with the
+				// far end. The exit answered, so it keeps its standing; every
+				// attempt through this port carries the same ticket, so the
+				// port's TLS state is dropped and the request goes back to the
+				// caller to be taken elsewhere.
+				t.rem.refreshTLS(req.Context(), t.port)
+				return nil, ref
+
+			case ref.Reason == reasonOriginHandshake:
+				// Not the exit's on its own word, and asked again through the
+				// same port it is a handshake from the start. So once more here,
+				// at once — then the port's TLS state is dropped and the caller
+				// takes it elsewhere.
+				if !handshakeRetried {
+					handshakeRetried = true
+					delay = 0
+					continue
+				}
+				t.rem.refreshTLS(req.Context(), t.port)
+				// Twice in a row, each after the service's own three tries, is
+				// six handshakes through this exit without one coming together,
+				// and that exit is marked — the mark a channel forgives
+				// wholesale when everything carries it, not a ban. Left
+				// unmarked, measured here: seven gateways in twenty-one failed
+				// the handshake with every origin tried, the channel kept
+				// handing them out, and a page walked fifteen ports into dead
+				// exits while one live gateway stood beside them. The port's run
+				// of failures is counted as well, so it is moved on in time.
+				t.rem.markBadEgress(t.port)
+				if t.rem.attemptFailed(t.port) {
+					_ = t.rem.rotateEgress(req.Context(), t.port)
+				}
+				return nil, ref
+
 			case ref.BlamesExit():
-				// The exit is the fault, so it is struck and replaced at once:
-				// the consecutive-failure count is for failures that might be
-				// the origin's, and this one says outright that it is not.
-				// The repeat goes out only through an exit that actually
-				// changed — a port that could not change it would carry the
-				// same request into the same dead exit, and the pause between
-				// those would be the whole cost of the page.
+				// The exit is the fault — it would not take the connection, or
+				// a challenge could not be cleared from it — so it is struck and
+				// replaced at once: the consecutive-failure count is for
+				// failures that might be the origin's, and this one says
+				// outright that it is not. The repeat goes out only through an
+				// exit that actually changed — a port that could not change it
+				// would carry the same request into the same exit, and the
+				// pause between those would be the whole cost of the page.
 				t.rem.markBadEgress(t.port)
 				if t.rem.rotateEgress(req.Context(), t.port) != nil || transportRetries >= transportBudget {
 					return nil, ref
@@ -196,6 +236,24 @@ func (t *ladder) RoundTrip(req *http.Request) (*http.Response, error) {
 				transportRetries++
 				delay = 0
 				continue
+
+			case ref.Reason == reasonSolverTimeout, ref.Reason == reasonSolverCapacity:
+				// The challenge, not the road. One still being cleared pins
+				// itself to this port, so the warm place to ask from is the one
+				// already standing; leaving throws away the wait paid for and
+				// starts the challenge again elsewhere. Nothing free to clear it
+				// with is the same port a little later. The exit is not struck.
+				if statusRetries >= statusBudget {
+					t.rem.exhausted(t.port)
+					return nil, ref
+				}
+				statusRetries++
+				delay = solverAgain
+				if ref.Reason == reasonSolverCapacity {
+					delay = solverQueueAgain
+				}
+				continue
+
 			case ref.Reason == reasonConnLimit:
 				// Busy, not broken: wait and ask again, and leave the exit's
 				// record alone. Not counted as the port's strike either — a
@@ -206,6 +264,7 @@ func (t *ladder) RoundTrip(req *http.Request) (*http.Response, error) {
 				statusRetries++
 				delay = backoff(attempt + 1)
 				continue
+
 			default:
 				// Nothing this port can do differently: a shared hop is down or
 				// the origin's name resolves nowhere. Another port might; that
@@ -238,6 +297,14 @@ func (t *ladder) RoundTrip(req *http.Request) (*http.Response, error) {
 		drainAndClose(resp)
 	}
 }
+
+// How long to wait before asking a port again about a challenge it has not
+// finished with: a moment for one still being cleared, longer for a queue with
+// nothing free.
+const (
+	solverAgain      = 3 * time.Second
+	solverQueueAgain = 10 * time.Second
+)
 
 // drainAndClose consumes what is left of a response about to be discarded, so
 // the underlying connection returns to the pool instead of being torn down.

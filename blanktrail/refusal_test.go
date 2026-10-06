@@ -20,12 +20,12 @@ func portSays(status int, reason string) func() (*http.Response, error) {
 }
 
 func TestLadder_ADeadExitIsAnErrorAndNotTheSitesAnswer(t *testing.T) {
-	// Measured: seven gateways out of twenty-one answered 525 to every site
-	// tried, the target and two search engines alike. Handed up as a
-	// response, the status reached a classifier that took it for the origin's
-	// own error and gave the page up after one attempt, with no word that the
-	// site had never been asked.
-	for _, reason := range []string{"origin_handshake_failed", "upstream_unreachable"} {
+	// Handed up as a response, a port's refusal reached a classifier that took
+	// it for the origin's own error and gave the page up after one attempt,
+	// with no word that the site had never been asked. The two reasons that
+	// are the exit's — it would not take the connection, or a challenge could
+	// not be cleared from it — strike and replace it.
+	for _, reason := range []string{"upstream_unreachable", "solver_failed"} {
 		t.Run(reason, func(t *testing.T) {
 			rt := &fakeRT{steps: []func() (*http.Response, error){portSays(525, reason)}}
 			rem := &fakeRemedy{retries: 4, transportRetries: 1, rotateErr: ErrRenewUnsupported}
@@ -98,7 +98,7 @@ func TestLadder_ARepeatThroughANewExitIsBudgeted(t *testing.T) {
 	// The repeat is paid from the transport budget — the request never got an
 	// answer, which is that budget's whole subject — so a run of dead exits
 	// stops when it is spent rather than walking the entire list.
-	rt := &fakeRT{steps: []func() (*http.Response, error){portSays(525, "origin_handshake_failed")}}
+	rt := &fakeRT{steps: []func() (*http.Response, error){portSays(523, "upstream_unreachable")}}
 	rem := &fakeRemedy{retries: 4, transportRetries: 2}
 	l := &ladder{rt: rt, port: 20013, rem: rem}
 
@@ -254,8 +254,8 @@ func TestLadder_ARefusalsBodyIsClosed(t *testing.T) {
 	read := false
 	rt := &fakeRT{steps: []func() (*http.Response, error){func() (*http.Response, error) {
 		h := http.Header{}
-		h.Set(refusalHeader, "origin_handshake_failed")
-		return &http.Response{StatusCode: 525, Header: h,
+		h.Set(refusalHeader, "upstream_unreachable")
+		return &http.Response{StatusCode: 523, Header: h,
 			Body: &spyBody{r: strings.NewReader("PORT_REFUSAL\n"), read: &read, closed: &closed}}, nil
 	}}}
 	rem := &fakeRemedy{rotateErr: ErrRenewUnsupported}

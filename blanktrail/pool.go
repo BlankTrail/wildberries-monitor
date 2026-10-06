@@ -1077,6 +1077,23 @@ func (p *Pool) markBadEgress(num int) {
 	pt.ch.MarkBad(pt.egress())
 }
 
+// refreshTLS puts the port on the exit it already stands on, which is how the
+// service is told to drop what it holds for the port: its pooled connections
+// and its TLS tickets. It is the remedy for a refusal that is the port's TLS
+// rather than its exit. A gateway is not set this way and is left as it is;
+// our own idle connections to the port are dropped either way. Best effort —
+// a failure here leaves the port as it was, which is where it started.
+func (p *Pool) refreshTLS(ctx context.Context, num int) {
+	pt := p.port(num)
+	if pt == nil {
+		return
+	}
+	if up := pt.egress().Upstream; up != "" {
+		_ = p.cl.SetUpstream(ctx, num, up)
+	}
+	pt.base.CloseIdleConnections()
+}
+
 // attemptFailed records a failed attempt on a port and reports whether the
 // egress has failed often enough in a row to be replaced. The count is
 // consecutive: a single success clears it, so an occasional 404 in a healthy run
