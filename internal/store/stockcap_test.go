@@ -144,3 +144,58 @@ func TestStock_RegionAtCap(t *testing.T) {
 		t.Error("RegionAtCap misreads the ceiling")
 	}
 }
+
+func TestStock_BestTakesTheStrongerOfTheTwoFigures(t *testing.T) {
+	n := func(v int64) *int64 { return &v }
+	for name, c := range map[string]struct {
+		st                Stock
+		want              int64
+		atLeast, fromWhse bool
+	}{
+		// Under the ceiling the site counts the whole product; the regions'
+		// warehouses are a part of it, however they add up.
+		"site exact": {Stock{SiteTotal: n(39), Total: 60}, 39, false, false},
+		// At the ceiling the warehouses, each line capped on its own, can add
+		// up past it: measured, «42» and 462.
+		"warehouses past the ceiling": {Stock{SiteTotal: n(42), SiteAtCap: true, Total: 462}, 462, true, true},
+		"warehouses level with it":    {Stock{SiteTotal: n(42), SiteAtCap: true, Total: 42}, 42, true, false},
+		"warehouses below it":         {Stock{SiteTotal: n(42), SiteAtCap: true, Total: 9}, 42, true, false},
+		"only warehouses":             {Stock{Total: 30, TotalAtLeast: true}, 30, true, true},
+		"only warehouses, counted":    {Stock{Total: 30}, 30, false, true},
+	} {
+		got, atLeast, fromWhse := c.st.Best()
+		if got != c.want || atLeast != c.atLeast || fromWhse != c.fromWhse {
+			t.Errorf("%s: Best = %d, %v, %v; want %d, %v, %v", name, got, atLeast, fromWhse, c.want, c.atLeast, c.fromWhse)
+		}
+	}
+}
+
+func TestStockOf_TheSiteFigureIsTheNewestAndEachRegionSumsItsOwnWarehouses(t *testing.T) {
+	// The site's figure is the product's, the same whichever region asks, so
+	// the newest reading of any region is the one to show. The warehouses are
+	// the region's own, and each region gets its own sum.
+	now := time.Now().UTC()
+	for name, ps := range map[string][]wb.Product{
+		"newest in -1257786": {stockedIn(1, "-1059500", 40, 42, now, 42, 42), stockedIn(1, "-1257786", 42, 42, now.Add(time.Minute), 5, 3)},
+		"newest in -1059500": {stockedIn(1, "-1257786", 40, 42, now, 5, 3), stockedIn(1, "-1059500", 42, 42, now.Add(time.Minute), 42, 42)},
+	} {
+		got := stockOf(t, ps...)
+		if got.SiteTotal == nil || *got.SiteTotal != 42 || !got.SiteAtCap {
+			t.Errorf("%s: site total %v at cap %v, want ≥42 from the newest reading", name, got.SiteTotal, got.SiteAtCap)
+		}
+		if got.ByRegionWarehouses["-1059500"] != 84 || got.ByRegionWarehouses["-1257786"] != 8 {
+			t.Errorf("%s: region sums = %v, want 84 and 8", name, got.ByRegionWarehouses)
+		}
+		if !got.RegionWarehousesAtCap("-1059500") || got.RegionWarehousesAtCap("-1257786") {
+			t.Errorf("%s: only the region with a line at the ceiling is a floor", name)
+		}
+	}
+
+	exact := stockOf(t, stockedIn(2, "-1257786", 39, 42, now, 5, 4))
+	if exact.SiteTotal == nil || *exact.SiteTotal != 39 || exact.SiteAtCap {
+		t.Errorf("site total %v at cap %v, want an exact 39", exact.SiteTotal, exact.SiteAtCap)
+	}
+	if none := stockOf(t, stockedIn(3, "-1257786", 50, 0, now, 5)); none.SiteAtCap || none.RegionWarehousesAtCap("-1257786") {
+		t.Error("no ceiling known, and something marked as at it")
+	}
+}

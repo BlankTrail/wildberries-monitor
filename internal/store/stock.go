@@ -56,6 +56,43 @@ type Stock struct {
 	Cap int64
 	// TotalAtLeast says Total is a floor: a part of it sits at the ceiling.
 	TotalAtLeast bool
+
+	// SiteTotal is the product's stock as the site itself reports it, from the
+	// newest reading of any region — the figure is the product's, the same
+	// whichever region asks. Nil where no reading carried one.
+	SiteTotal *int64
+	// SiteAtCap says SiteTotal is the ceiling: at least that many.
+	SiteAtCap bool
+	// ByRegionWarehouses is each region's own warehouses summed: the
+	// warehouses that serve it, each line under the ceiling separately, so a
+	// product the site reports as «42» can show hundreds here.
+	ByRegionWarehouses map[string]int64
+	// regionWarehouseCap marks the regions whose sum includes a line at the
+	// ceiling.
+	regionWarehouseCap map[string]bool
+}
+
+// RegionWarehousesAtCap reports whether a region's warehouse sum is a floor.
+func (st Stock) RegionWarehousesAtCap(dest string) bool { return st.regionWarehouseCap[dest] }
+
+// Best is the most that can honestly be said about the product's stock, and
+// which of the two figures said it.
+//
+// The site's figure under its ceiling is a count of the whole product, and
+// nothing summed from regions beats it: a region's warehouses are a part.
+// At the ceiling it is only «at least», and the warehouses — each line capped
+// on its own — often add up past it: measured, «42» from the site and 462 from
+// one region's warehouses. Then the larger floor wins.
+func (st Stock) Best() (n int64, atLeast, fromWarehouses bool) {
+	switch {
+	case st.SiteTotal != nil && !st.SiteAtCap:
+		return *st.SiteTotal, false, false
+	case st.SiteTotal != nil && st.Total > *st.SiteTotal:
+		return st.Total, true, true
+	case st.SiteTotal != nil:
+		return *st.SiteTotal, true, false
+	}
+	return st.Total, st.TotalAtLeast, true
 }
 
 // RegionAtCap reports whether the site's figure for a region is the ceiling.
@@ -64,16 +101,30 @@ func (st Stock) RegionAtCap(dest string) bool {
 	return ok && st.Cap > 0 && q >= st.Cap
 }
 
+// newestStockLines is every size-and-warehouse line of the newest reading in
+// each region of one product, as «seen». Two arguments: the article, twice.
+const newestStockLines = `WITH newest AS (
+		    SELECT dest, MAX(ts) AS ts FROM snapshots WHERE nm_id = ? GROUP BY dest
+		),
+		seen AS (
+		    SELECT sz.name AS size, st.warehouse_id AS wh, st.qty AS qty, s.dest AS dest
+		      FROM snapshots s
+		      JOIN newest n ON n.dest = s.dest AND n.ts = s.ts
+		      JOIN snapshot_sizes sz ON sz.snapshot_id = s.id
+		      JOIN snapshot_stocks st ON st.snapshot_size_id = sz.id
+		     WHERE s.nm_id = ?
+		)`
+
 // StockOf reads one product's stock across the regions it was collected for.
 //
 // The newest reading per region, because a stock is a fact about now and two
 // regions are almost never read in the same second.
 func (s *Store) StockOf(ctx context.Context, nmID int64) (Stock, error) {
-	out := Stock{ByRegion: map[string]int64{}}
+	out := Stock{ByRegion: map[string]int64{}, ByRegionWarehouses: map[string]int64{}, regionWarehouseCap: map[string]bool{}}
 
 	// The site's own per-region figure, from the newest reading of each.
 	byRegion, err := s.db.QueryContext(ctx, `
-		SELECT s.dest, s.total_quantity, s.stock_cap
+		SELECT s.dest, s.ts, s.total_quantity, s.stock_cap
 		  FROM snapshots s
 		  JOIN (
 		      SELECT dest, MAX(ts) AS ts FROM snapshots WHERE nm_id = ? GROUP BY dest
@@ -83,14 +134,20 @@ func (s *Store) StockOf(ctx context.Context, nmID int64) (Stock, error) {
 		return out, fmt.Errorf("store: stock of %d: %w", nmID, err)
 	}
 	defer byRegion.Close()
+	var siteTS int64
 	for byRegion.Next() {
 		var dest string
+		var ts int64
 		var qty, ceiling *int64
-		if err := byRegion.Scan(&dest, &qty, &ceiling); err != nil {
+		if err := byRegion.Scan(&dest, &ts, &qty, &ceiling); err != nil {
 			return out, fmt.Errorf("store: stock of %d: %w", nmID, err)
 		}
 		if qty != nil {
 			out.ByRegion[dest] = *qty
+			if out.SiteTotal == nil || ts > siteTS {
+				out.SiteTotal, siteTS = qty, ts
+				out.SiteAtCap = ceiling != nil && *qty >= *ceiling
+			}
 		}
 		// The lowest ceiling among the regions: «at least 38» is true of a
 		// figure read under any ceiling, so a mark erring that way never
@@ -111,17 +168,7 @@ func (s *Store) StockOf(ctx context.Context, nmID int64) (Stock, error) {
 	// were taken minutes apart — the larger is the more recent count of a pile
 	// that is being sold from.
 	rows, err := s.db.QueryContext(ctx, `
-		WITH newest AS (
-		    SELECT dest, MAX(ts) AS ts FROM snapshots WHERE nm_id = ? GROUP BY dest
-		),
-		seen AS (
-		    SELECT sz.name AS size, st.warehouse_id AS wh, st.qty AS qty, s.dest AS dest
-		      FROM snapshots s
-		      JOIN newest n ON n.dest = s.dest AND n.ts = s.ts
-		      JOIN snapshot_sizes sz ON sz.snapshot_id = s.id
-		      JOIN snapshot_stocks st ON st.snapshot_size_id = sz.id
-		     WHERE s.nm_id = ?
-		)
+		`+newestStockLines+`
 		SELECT wh, size, MAX(qty), COUNT(DISTINCT dest)
 		  FROM seen
 		 GROUP BY wh, size
@@ -142,6 +189,26 @@ func (s *Store) StockOf(ctx context.Context, nmID int64) (Stock, error) {
 		out.ByWarehouse = append(out.ByWarehouse, r)
 	}
 	if err := rows.Err(); err != nil {
+		return out, fmt.Errorf("store: stock of %d: %w", nmID, err)
+	}
+
+	// Each region's own warehouses, summed: what that region can see.
+	perRegion, err := s.db.QueryContext(ctx, newestStockLines+`
+		SELECT dest, SUM(qty), MAX(qty) FROM seen GROUP BY dest`, nmID, nmID)
+	if err != nil {
+		return out, fmt.Errorf("store: stock of %d: %w", nmID, err)
+	}
+	defer perRegion.Close()
+	for perRegion.Next() {
+		var dest string
+		var sum, top int64
+		if err := perRegion.Scan(&dest, &sum, &top); err != nil {
+			return out, fmt.Errorf("store: stock of %d: %w", nmID, err)
+		}
+		out.ByRegionWarehouses[dest] = sum
+		out.regionWarehouseCap[dest] = out.Cap > 0 && top >= out.Cap
+	}
+	if err := perRegion.Err(); err != nil {
 		return out, fmt.Errorf("store: stock of %d: %w", nmID, err)
 	}
 
