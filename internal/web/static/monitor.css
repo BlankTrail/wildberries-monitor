@@ -843,6 +843,22 @@ dialog.bt-modal > #settings-body {
   width: 5rem;
 }
 
+/* «каждые [3] [часов]» on one line: the select is a word in a sentence here,
+   not a full-width field of its own. */
+.bt[data-bt-theme="dashboard"] .bt-compose__every .bt-select {
+  width: auto;
+  flex: 0 0 auto;
+}
+
+.bt[data-bt-theme="dashboard"] .bt-compose__label {
+  color: var(--text-muted);
+  font-size: .85rem;
+}
+
+.bt[data-bt-theme="dashboard"] .bt-compose__text {
+  max-width: 16rem;
+}
+
 /* ---- a list of codes to tick -------------------------------------------- */
 
 .bt[data-bt-theme="dashboard"] .bt-picklist {

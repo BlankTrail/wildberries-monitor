@@ -1098,3 +1098,21 @@ func TestKindLabels_NameEveryKindTheListCanShow(t *testing.T) {
 		}
 	}
 }
+
+func TestSchedule_OnDemandHidesTheWholeSchedule(t *testing.T) {
+	// With «по запросу» ticked, the box with «every 3h» greyed into it read as
+	// a schedule somebody had set. It goes with the composer, from the server
+	// too, so the form does not flash the fields on open.
+	none := scheduleControl("")
+	if !strings.Contains(none, `<div class="bt-compose__every" hidden>`) ||
+		!strings.Contains(none, `name="schedule" placeholder="every 3h" value="" hidden>`) {
+		t.Errorf("без расписания поля не скрыты:\n%s", none)
+	}
+	set := scheduleControl("every 6h")
+	if strings.Contains(set, " hidden") || !strings.Contains(set, `value="every 6h">`) {
+		t.Errorf("с расписанием что-то скрыто:\n%s", set)
+	}
+	if strings.Contains(set, `class="bt-form-hint">каждые`) || !strings.Contains(set, `bt-compose__label">каждые`) {
+		t.Error("«каждые» оформлено подсказкой с отступом снизу — строка съезжает")
+	}
+}

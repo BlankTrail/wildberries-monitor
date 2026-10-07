@@ -1668,15 +1668,18 @@ func scheduleControl(current string) string {
 	// saved schedule, the composer's own first pass clears the field it writes
 	// into — so opening a nightly job to change its thread count and saving
 	// would turn it into a job that never runs again.
-	off := " checked"
+	off, hidden := " checked", " hidden"
 	if strings.TrimSpace(current) != "" {
-		off = ""
+		off, hidden = "", ""
 	}
 	var b strings.Builder
 	b.WriteString(`<div class="bt-compose" data-compose="#job-schedule">`)
 	b.WriteString(`<label class="bt-checkbox"><input type="checkbox" data-compose-off` + off + `> по запросу, без расписания</label>`)
-	b.WriteString(`<div class="bt-compose__every">`)
-	b.WriteString(`<span class="bt-form-hint">каждые</span>`)
+	// Hidden from the server as well as by the script, so a form opened on a
+	// job with no schedule does not show the fields for a moment and then
+	// take them away.
+	b.WriteString(`<div class="bt-compose__every"` + hidden + `>`)
+	b.WriteString(`<span class="bt-compose__label">каждые</span>`)
 	b.WriteString(`<input class="bt-input bt-input--sm" type="number" min="1" value="3" data-compose-count>`)
 
 	b.WriteString(`<select class="bt-select" data-compose-unit>`)
@@ -1689,8 +1692,11 @@ func scheduleControl(current string) string {
 	}
 	b.WriteString(`</select>`)
 	b.WriteString(`</div>`)
-	b.WriteString(`<input class="bt-input bt-input--mono" id="job-schedule" name="schedule" placeholder="every 3h" value="` +
-		html.EscapeString(strings.TrimSpace(current)) + `">`)
+	// The string itself goes with the composer: with «по запросу» ticked there
+	// is nothing to read in it, and an empty box with «every 3h» greyed into
+	// it read as a schedule nobody had set.
+	b.WriteString(`<input class="bt-input bt-input--mono bt-compose__text" id="job-schedule" name="schedule" placeholder="every 3h" value="` +
+		html.EscapeString(strings.TrimSpace(current)) + `"` + hidden + `>`)
 	b.WriteString(`</div>`)
 	return b.String()
 }

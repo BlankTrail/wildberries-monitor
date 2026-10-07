@@ -331,6 +331,7 @@
       const every = box.querySelector(".bt-compose__every");
       const apply = () => {
         every.hidden = off.checked;
+        target.hidden = off.checked;
         if (off.checked) {
           target.value = "";
           return;
@@ -358,6 +359,7 @@
       if (target.value.trim() !== "") {
         off.checked = false;
         every.hidden = false;
+        target.hidden = false;
         return;
       }
       apply();
