@@ -108,15 +108,11 @@ func (e *Engine) Service(ctx context.Context) (*wb.Client, error) {
 
 	// The preflight is not skipped for being small: it is where the proxy's own
 	// CA comes from, and a pool built without it cannot read a single response.
-	report := blanktrail.Preflight(ctx, client, blanktrail.PreflightInput{
-		Domains: []string{hostOf(e.Endpoints.Home)},
-		Ports:   servicePorts,
-	})
-	for _, f := range report.Findings {
-		e.logf("прокси: [%s] %s — %s", f.Severity, f.Title, f.Action)
-	}
+	in := preflightFor(e.Endpoints, servicePorts)
+	report := blanktrail.Preflight(ctx, client, in)
+	e.logFindings(report, in)
 	if !report.OK() {
-		return nil, fmt.Errorf("engine: прокси не готов: %s", firstBlocking(report))
+		return nil, fmt.Errorf("engine: прокси не готов: %s", firstBlocking(report, in))
 	}
 
 	// Which exit the errands go out through, chosen in the panel. Nothing

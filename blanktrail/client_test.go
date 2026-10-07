@@ -141,9 +141,12 @@ func TestClient_UnauthorizedIsTyped(t *testing.T) {
 		t.Fatalf("NewClient: %v", err)
 	}
 
-	err = c.Health(context.Background())
+	// The licence and not health: the live service answers /health with no
+	// key at all (200 with none and with a wrong one), and refuses the first
+	// call that needs one.
+	_, err = c.LicenseStatus(context.Background())
 	if err == nil {
-		t.Fatal("Health with a wrong key returned nil error")
+		t.Fatal("LicenseStatus with a wrong key returned nil error")
 	}
 	if !IsUnauthorized(err) {
 		t.Errorf("IsUnauthorized(%v) = false, want true", err)

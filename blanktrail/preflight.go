@@ -35,6 +35,10 @@ func (s Severity) String() string {
 // Finding is one preflight verdict. Detail explains what is wrong in the user's
 // terms and Action says what to do about it — never leave Action empty on a
 // Warn or Fail, a bare error code is not an answer.
+//
+// ID is stable and names one situation, never two: a program that shows these
+// in its own language keys its wording on it, and two situations sharing an
+// ID would share one wording and one remedy.
 type Finding struct {
 	ID       string
 	Severity Severity
@@ -116,9 +120,27 @@ func Preflight(ctx context.Context, c *Client, in PreflightInput) Report {
 	}
 
 	lic, err := c.LicenseStatus(ctx)
-	if err != nil {
+	if err != nil && IsUnauthorized(err) {
+		// The health endpoint answers without a key — measured against a live
+		// instance — so a wrong key is first refused here, by the first call
+		// that needs one. Said as the key, not as an unreadable licence: the
+		// remedy for that one sends somebody to check an activation that is
+		// fine.
 		rep.Findings = append(rep.Findings, Finding{
-			ID:       "license_inactive",
+			ID:       "unauthorized",
+			Severity: SeverityFail,
+			Title:    "BlankTrail rejected the API key",
+			Detail:   err.Error(),
+			Action:   "Copy the current key from BlankTrail → Settings → API key and paste it into the connection settings.",
+		})
+		return rep
+	}
+	if err != nil {
+		// Its own ID, not license_inactive: «could not read» and «read, and
+		// inactive» have different remedies, and a caller that says them in
+		// its own words keys the words on this.
+		rep.Findings = append(rep.Findings, Finding{
+			ID:       "license_unreadable",
 			Severity: SeverityFail,
 			Title:    "Could not read the licence status",
 			Detail:   err.Error(),
@@ -145,7 +167,7 @@ func Preflight(ctx context.Context, c *Client, in PreflightInput) Report {
 	gws, err := c.Gateways(ctx)
 	if err != nil {
 		rep.Findings = append(rep.Findings, Finding{
-			ID:       "gateways",
+			ID:       "gateways_unlisted",
 			Severity: SeverityWarn,
 			Title:    "Could not list VPN gateways",
 			Detail:   err.Error(),

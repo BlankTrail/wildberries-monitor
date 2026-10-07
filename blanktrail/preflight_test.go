@@ -214,3 +214,23 @@ func genTestCA(t *testing.T) []byte {
 	}
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 }
+
+func TestPreflight_AWrongKeyIsTheKeyEvenWhenHealthAnswersWithoutOne(t *testing.T) {
+	// The live service answers /health with no key at all, so a wrong key is
+	// first refused by the licence call. It used to be reported as «could not
+	// read the licence status — check that the licence is activated», which
+	// sends somebody to an activation that is fine.
+	fake := fakebt.New(t)
+	c, _ := NewClient(fake.URL(), "wrong")
+
+	if err := c.Health(context.Background()); err != nil {
+		t.Fatalf("health with a wrong key = %v; the fake must answer it as the service does", err)
+	}
+	rep := Preflight(context.Background(), c, PreflightInput{Ports: 1})
+	if _, ok := rep.Find("unauthorized"); !ok {
+		t.Fatalf("no \"unauthorized\" finding; got %+v", rep.Findings)
+	}
+	if _, ok := rep.Find("license_unreadable"); ok {
+		t.Error("a refused key is reported as an unreadable licence")
+	}
+}

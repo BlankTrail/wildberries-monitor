@@ -346,6 +346,27 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 		ResolvePickup: func(ctx context.Context, groups [][]int64) (store.PickupResolution, error) {
 			return a.resolvePickup(ctx, groups)
 		},
+		// «Проверить соединение»: the preflight a run makes, in Russian.
+		CheckConnection: func(ctx context.Context) ([]web.ConnectionFinding, error) {
+			if a.Engine == nil {
+				return nil, errors.New("сбор не собран в этой сборке")
+			}
+			said, err := a.Engine.CheckConnection(ctx)
+			if err != nil {
+				return nil, err
+			}
+			out := make([]web.ConnectionFinding, len(said))
+			for i, s := range said {
+				out[i] = web.ConnectionFinding{
+					Level: s.Severity.String(), Title: s.Title, Detail: s.Detail, Action: s.Action,
+				}
+			}
+			return out, nil
+		},
+		// The header badge's question. The licence rather than health: the
+		// service answers /health with no key at all, so a badge built on it
+		// said «на связи» over a key BlankTrail had never accepted. Still one
+		// call — the badge is polled every few seconds.
 		CheckBlankTrail: func(ctx context.Context, url, apiKey string) error {
 			client, err := blanktrail.NewClient(url, apiKey)
 			if err != nil {
@@ -353,7 +374,14 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 			}
 			ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 			defer cancel()
-			return client.Health(ctx)
+			lic, err := client.LicenseStatus(ctx)
+			if err != nil {
+				return err
+			}
+			if !lic.Activated {
+				return web.ErrLicenceInactive
+			}
+			return nil
 		},
 		Gateways: func(ctx context.Context) (blanktrail.GatewayList, error) {
 			if a.Engine == nil {

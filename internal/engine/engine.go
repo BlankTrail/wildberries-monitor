@@ -124,12 +124,11 @@ func (e *Engine) RunnerFor(ctx context.Context, j job.Job) (*job.Runner, func(),
 	// single response. That it also answers "is the licence live, is the
 	// solver armed, can this instance reach the target" before any port is
 	// opened is the second reason to keep it.
-	report := blanktrail.Preflight(ctx, client, preflightInput(e.Endpoints, j))
-	for _, f := range report.Findings {
-		e.logf("прокси: [%s] %s — %s", f.Severity, f.Title, f.Action)
-	}
+	in := preflightInput(e.Endpoints, j)
+	report := blanktrail.Preflight(ctx, client, in)
+	e.logFindings(report, in)
 	if !report.OK() {
-		return nil, nil, fmt.Errorf("engine: прокси не готов: %s", firstBlocking(report))
+		return nil, nil, fmt.Errorf("engine: прокси не готов: %s", firstBlocking(report, in))
 	}
 
 	channels, closeChannels, err := e.Channels(ctx, profile.Channels...)
@@ -282,10 +281,7 @@ func setting(ctx context.Context, s *store.Store, key, fallback string) (string,
 // machine where it is fine. The port count is this job's, because a licence
 // counts ports and the answer to "will this run fit" depends on how many.
 func preflightInput(eps wb.Endpoints, j job.Job) blanktrail.PreflightInput {
-	return blanktrail.PreflightInput{
-		Domains: []string{hostOf(eps.Home)},
-		Ports:   threadsOf(j) * portsPerThread,
-	}
+	return preflightFor(eps, threadsOf(j)*portsPerThread)
 }
 
 // poolConfig is the pool this job will drive.
@@ -331,18 +327,6 @@ func (e *Engine) logf(format string, args ...any) {
 	if e.Log != nil {
 		e.Log(format, args...)
 	}
-}
-
-// firstBlocking is the finding to put in an error.
-//
-// One rather than all of them: every finding has already gone to the log with
-// its own remedy, and an error message carrying four paragraphs is one nobody
-// reads to the end. The first blocking one is the one to fix first.
-func firstBlocking(r blanktrail.Report) string {
-	for _, f := range r.Blocking() {
-		return f.Title + " — " + f.Action
-	}
-	return "причина не названа"
 }
 
 // hostOf is the host part of a registry address, for the preflight to ask

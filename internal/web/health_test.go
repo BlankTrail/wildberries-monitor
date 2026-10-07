@@ -5,10 +5,12 @@ package web
 import (
 	"context"
 	"errors"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/BlankTrail/wildberries-monitor/blanktrail"
 	"github.com/BlankTrail/wildberries-monitor/internal/store"
 )
 
@@ -141,5 +143,25 @@ func TestBlankTrailBadge_ASlowProxyDoesNotHoldTheBadge(t *testing.T) {
 	}
 	if !strings.Contains(body, "не отвечает") {
 		t.Errorf("прокси, не ответивший вовремя, показан рабочим: %s", body)
+	}
+}
+
+func TestBlankTrailBadge_AKeyRefusedIsNotAServiceDown(t *testing.T) {
+	// The service answers /health with no key at all, so the badge used to
+	// say «на связи» over a wrong key — and, once it asked something that
+	// needs one, «не отвечает» about a service that was running.
+	srv := newServer(t)
+	_ = srv.Store.SetSetting(context.Background(), store.SettingBlankTrailAPIKey, "wrong", store.SettingSecret)
+
+	srv.CheckBlankTrail = func(context.Context, string, string) error {
+		return &blanktrail.APIError{Status: http.StatusUnauthorized, Path: "/api/v1/license/status"}
+	}
+	if body := get(t, srv, "/blanktrail/state", "correct horse").Body.String(); !strings.Contains(body, "ключ не принят") {
+		t.Errorf("отказ в ключе показан как %q", body)
+	}
+
+	srv.CheckBlankTrail = func(context.Context, string, string) error { return ErrLicenceInactive }
+	if body := get(t, srv, "/blanktrail/state", "correct horse").Body.String(); !strings.Contains(body, "лицензия не активна") {
+		t.Errorf("неактивная лицензия показана как %q", body)
 	}
 }

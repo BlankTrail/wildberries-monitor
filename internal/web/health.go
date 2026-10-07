@@ -4,10 +4,12 @@ package web
 
 import (
 	"context"
+	"errors"
 	"html"
 	"net/http"
 	"time"
 
+	"github.com/BlankTrail/wildberries-monitor/blanktrail"
 	"github.com/BlankTrail/wildberries-monitor/internal/store"
 )
 
@@ -55,6 +57,11 @@ func blankTrailBadge(tone, state, note string) string {
 		html.EscapeString(note) + `">BlankTrail: ` + html.EscapeString(state) + `</span>`
 }
 
+// ErrLicenceInactive is what CheckBlankTrail returns for a service that
+// answers and accepts the key, with a licence that is not active — so the
+// badge can say that rather than «не отвечает».
+var ErrLicenceInactive = errors.New("лицензия BlankTrail не активирована")
+
 // blankTrailLive answers with the badge as it is right now.
 //
 // Asked by the page on load and every few seconds after — see data-live in
@@ -77,11 +84,23 @@ func (s *Server) blankTrailLive(w http.ResponseWriter, r *http.Request) {
 		checkCtx, cancel := context.WithTimeout(ctx, blankTrailCheck)
 		defer cancel()
 		if err := s.CheckBlankTrail(checkCtx, url, key); err != nil {
-			// The address in the title, because «не отвечает» about an
-			// address a person has forgotten they typed sends them looking at
-			// the wrong machine.
-			s.writeHTML(w, blankTrailBadge("error", "не отвечает",
-				url+" — "+err.Error()))
+			switch {
+			case blanktrail.IsUnauthorized(err):
+				// Answering, and refusing the key: a different fix from a
+				// service that is down, and «не отвечает» sent people to
+				// restart something that was running.
+				s.writeHTML(w, blankTrailBadge("error", "ключ не принят",
+					"Скопируйте действующий ключ в BlankTrail → Настройки → Ключ API и вставьте его в настройки."))
+			case errors.Is(err, ErrLicenceInactive):
+				s.writeHTML(w, blankTrailBadge("warning", "лицензия не активна",
+					"Активируйте лицензию в панели BlankTrail — без неё порты не открываются."))
+			default:
+				// The address in the title, because «не отвечает» about an
+				// address a person has forgotten they typed sends them
+				// looking at the wrong machine.
+				s.writeHTML(w, blankTrailBadge("error", "не отвечает",
+					url+" — "+err.Error()))
+			}
 			return
 		}
 		s.writeHTML(w, blankTrailBadge("success", "на связи", url))

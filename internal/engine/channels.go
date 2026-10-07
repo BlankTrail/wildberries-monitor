@@ -4,7 +4,10 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 	"sync"
 
@@ -125,17 +128,22 @@ const probeAtOnce = 5
 // well-formed, which is not the thing that goes wrong — a provider's addresses
 // stop answering, and the way that used to surface was fifteen attempts over
 // twelve exits an hour into a collection.
-func (e *Engine) probeList(ctx context.Context, ups []blanktrail.Upstream) string {
+//
+// failed is true when nothing in the sample answered, or the check could not
+// be made: the screen draws that as a failure, not as a summary. It used to
+// come back as text alone, and «ни один не ответил — список мёртв» was shown
+// in green.
+func (e *Engine) probeList(ctx context.Context, ups []blanktrail.Upstream) (text string, failed bool) {
 	client, err := e.control(ctx)
 	if err != nil {
-		return "Проверить адреса не удалось: " + err.Error()
+		return "Проверить адреса не удалось: " + err.Error(), true
 	}
 	// Spread across the list rather than taken off the front. A provider's
 	// file is often sorted, and its dead entries cluster: sampling the head
 	// answered a question about the head.
 	take := min(len(ups), probed)
 	if take == 0 {
-		return "Проверять нечего: в списке нет ни одного адреса."
+		return "Проверять нечего: в списке нет ни одного адреса.", true
 	}
 	stride := len(ups) / take
 	if stride < 1 {
@@ -173,7 +181,7 @@ func (e *Engine) probeList(ctx context.Context, ups []blanktrail.Upstream) strin
 		}
 	}
 
-	text := fmt.Sprintf("Проверено адресов: %d из %d, ответили %d.", len(chosen), len(ups), ok)
+	text = fmt.Sprintf("Проверено адресов: %d из %d, ответили %d.", len(chosen), len(ups), ok)
 	switch {
 	case ok == 0:
 		text += " Ни один из проверенных не ответил — похоже, список мёртв или закрыт для этой машины."
@@ -187,7 +195,7 @@ func (e *Engine) probeList(ctx context.Context, ups []blanktrail.Upstream) strin
 	if first != "" {
 		text += " Первый отказ: " + first + "."
 	}
-	return text
+	return text, ok == 0
 }
 
 // probeGateways tries every configuration of a set.
@@ -195,10 +203,12 @@ func (e *Engine) probeList(ctx context.Context, ups []blanktrail.Upstream) strin
 // All of them rather than a sample, because a set is a handful and a broken one
 // in it is exactly what stops a run: the pool hands them out in turn, so one
 // gateway that will not start costs every port it is offered to.
-func (e *Engine) probeGateways(ctx context.Context, names []string) string {
+//
+// failed is true when none of them answered, or the check could not be made.
+func (e *Engine) probeGateways(ctx context.Context, names []string) (text string, failed bool) {
 	client, err := e.control(ctx)
 	if err != nil {
-		return "Проверить шлюзы не удалось: " + err.Error()
+		return "Проверить шлюзы не удалось: " + err.Error(), true
 	}
 	ok, first := 0, ""
 	for _, name := range names {
@@ -208,23 +218,33 @@ func (e *Engine) probeGateways(ctx context.Context, names []string) string {
 			first = fmt.Sprintf("%s — %s", name, why)
 		}
 	}
-	out := fmt.Sprintf("Ответили шлюзов: %d из %d.", ok, len(names))
+	text = fmt.Sprintf("Ответили шлюзов: %d из %d.", ok, len(names))
 	if first != "" {
-		out += " Первый отказ: " + first + "."
+		text += " Первый отказ: " + first + "."
 	}
-	return out
+	return text, ok == 0
 }
 
-// probeText is one exit as a sentence.
-func (e *Engine) probeText(ctx context.Context, eg blanktrail.Egress) string {
+// probeText is one exit as a sentence, and whether it failed.
+func (e *Engine) probeText(ctx context.Context, eg blanktrail.Egress) (text string, failed bool) {
 	client, err := e.control(ctx)
 	if err != nil {
-		return "Проверить выход не удалось: " + err.Error()
+		return "Проверить выход не удалось: " + err.Error(), true
 	}
 	if why := probeOne(ctx, client, eg); why != "" {
-		return "Запрос через него не прошёл: " + why + "."
+		return "Запрос через него не прошёл: " + why + ".", true
 	}
-	return "Запрос через него проходит."
+	return "Запрос через него проходит.", false
+}
+
+// checked is a channel check's answer: the whole text either way, as an error
+// when the exit did not answer — so the screen draws it red, and the details
+// that say why are not lost to a shorter message.
+func checked(text string, failed bool) (string, error) {
+	if failed {
+		return "", errors.New(text)
+	}
+	return text, nil
 }
 
 // probeOne asks BlankTrail to try one exit, and answers with why it failed or
@@ -238,7 +258,10 @@ func probeOne(ctx context.Context, client *blanktrail.Client, eg blanktrail.Egre
 	if err != nil {
 		return err.Error()
 	}
-	for name, res := range got {
+	// In name order, so «первый отказ» is the same one on every press: a map
+	// handed them out in whatever order it liked.
+	for _, name := range slices.Sorted(maps.Keys(got)) {
+		res := got[name]
 		if res.OK || res.Skipped {
 			continue
 		}
@@ -395,8 +418,8 @@ func (e *Engine) TestChannel(ctx context.Context, id int64) (string, error) {
 		// Probed, not waved through. «Проверять нечего» was true about the
 		// configuration and not about the question people press this button
 		// with, which is «дойдёт ли отсюда запрос».
-		return "Прямое соединение, адрес — собственный адрес машины. " +
-			e.probeText(ctx, blanktrail.Egress{}), nil
+		probe, failed := e.probeText(ctx, blanktrail.Egress{})
+		return checked("Прямое соединение, адрес — собственный адрес машины. "+probe, failed)
 
 	case store.ChannelList:
 		ups, bad, err := sourceOf(row).Load(ctx)
@@ -415,7 +438,8 @@ func (e *Engine) TestChannel(ctx context.Context, id int64) (string, error) {
 			// still carries whatever credential was typed into it.
 			out += fmt.Sprintf(" Отброшено строк: %d, первая — %q.", len(bad), blanktrail.Redact(bad[0]))
 		}
-		return out + " " + e.probeList(ctx, ups), nil
+		probe, failed := e.probeList(ctx, ups)
+		return checked(out+" "+probe, failed)
 
 	case store.ChannelRotating:
 		up, err := singleUpstream(row.Source, row.DefaultScheme)
@@ -425,9 +449,10 @@ func (e *Engine) TestChannel(ctx context.Context, id int64) (string, error) {
 		if strings.TrimSpace(row.RotateURL) == "" {
 			return "", fmt.Errorf("не указана ссылка смены адреса")
 		}
-		return fmt.Sprintf("Точка входа разобрана: %s://%s. %s Ссылка смены не дёргается при проверке — "+
+		probe, failed := e.probeText(ctx, blanktrail.Egress{Upstream: up.URL()})
+		return checked(fmt.Sprintf("Точка входа разобрана: %s://%s. %s Ссылка смены не дёргается при проверке — "+
 			"у провайдера свой минимальный интервал, и лишний вызов стоит прокси.",
-			up.Scheme, up.Host, e.probeText(ctx, blanktrail.Egress{Upstream: up.URL()})), nil
+			up.Scheme, up.Host, probe), failed)
 
 	case store.ChannelGateway:
 		client, err := e.control(ctx)
@@ -486,13 +511,14 @@ func (e *Engine) TestChannel(ctx context.Context, id int64) (string, error) {
 			if g.running {
 				state = "запущен"
 			}
-			return fmt.Sprintf("Шлюз %s (%s): %s, портов на нём сейчас %d. %s",
-				want[0], g.kind, state, g.ports,
-				e.probeText(ctx, blanktrail.Egress{Gateway: want[0]})), nil
+			probe, failed := e.probeText(ctx, blanktrail.Egress{Gateway: want[0]})
+			return checked(fmt.Sprintf("Шлюз %s (%s): %s, портов на нём сейчас %d. %s",
+				want[0], g.kind, state, g.ports, probe), failed)
 		}
-		return fmt.Sprintf("Шлюзов в наборе %d, из них запущено %d, портов на них сейчас %d. "+
+		probe, failed := e.probeGateways(ctx, want)
+		return checked(fmt.Sprintf("Шлюзов в наборе %d, из них запущено %d, портов на них сейчас %d. "+
 			"Пул берёт их по очереди, так что смена личности порта переводит его на следующий. %s",
-			len(want), running, ports, e.probeGateways(ctx, want)), nil
+			len(want), running, ports, probe), failed)
 	}
 
 	return "", fmt.Errorf("вид %q этой сборке неизвестен", row.Kind)

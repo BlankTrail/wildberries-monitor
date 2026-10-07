@@ -306,6 +306,8 @@ func TestTestChannel_CountsWhatAListHoldsAndNamesWhatItThrewAway(t *testing.T) {
 	// twelve where four lines were dropped is a list with a mistake repeated
 	// four times, and seeing one of them is what tells its owner which.
 	e := openEngine(t)
+	fake := fakebt.New(t)
+	configure(t, e, fake.URL(), fake.Key())
 	path := listFile(t)
 	if err := os.WriteFile(path, []byte(
 		"socks5://user:pass@10.0.0.1:1080\n"+
@@ -368,6 +370,8 @@ func TestTestChannel_DoesNotPullARotatingChannelsChangeLink(t *testing.T) {
 	// would be worse than none — so the answer says that out loud, because
 	// otherwise "проверено" would read as "адрес сменился".
 	e := openEngine(t)
+	fake := fakebt.New(t)
+	configure(t, e, fake.URL(), fake.Key())
 	id := saveChannel(t, e, store.ChannelRow{
 		Name: "ротируемый", Kind: store.ChannelRotating,
 		Source:    "socks5://user:pass@10.0.0.1:1080",
@@ -407,6 +411,8 @@ func TestTestChannel_DirectSaysThereIsNothingToCheck(t *testing.T) {
 	// Silence would read as a button that does nothing. Saying "проверять
 	// нечего" is the answer, and it is also a reminder of what the channel is.
 	e := openEngine(t)
+	fake := fakebt.New(t)
+	configure(t, e, fake.URL(), fake.Key())
 	id := saveChannel(t, e, store.ChannelRow{
 		Name: "свой адрес", Kind: store.ChannelDirect, Enabled: true,
 	})
@@ -935,12 +941,14 @@ func TestTestChannel_ARotatingEntryPointIsProbed(t *testing.T) {
 		Source: "socks5://10.0.0.9:1080", RotateURL: "https://provider.example/rotate",
 	})
 
-	got, err := e.TestChannel(t.Context(), id)
-	if err != nil {
-		t.Fatalf("TestChannel: %v", err)
+	// A failure, not a summary: the screen draws an error red, and this used
+	// to come back as text with a nil error and be drawn green.
+	_, err := e.TestChannel(t.Context(), id)
+	if err == nil {
+		t.Fatal("точка входа не ответила, а проверка вернула успех")
 	}
-	if !strings.Contains(got, "не прошёл") || !strings.Contains(got, "connection refused") {
-		t.Errorf("точка входа не проверена: %q", got)
+	if !strings.Contains(err.Error(), "не прошёл") || !strings.Contains(err.Error(), "connection refused") {
+		t.Errorf("отказ не говорит, что и почему не прошло: %v", err)
 	}
 }
 
@@ -977,5 +985,32 @@ func TestServicePool_RenewsItsIdentityToo(t *testing.T) {
 	if cfg.RenewAfterRequests != wb.DefaultRenewAfterRequests || cfg.RenewAfterInterval != wb.DefaultRenewAfterInterval {
 		t.Errorf("служебный порт меняет личность через %d запросов / %v, ожидалось как у прогонов: %d / %v",
 			cfg.RenewAfterRequests, cfg.RenewAfterInterval, wb.DefaultRenewAfterRequests, wb.DefaultRenewAfterInterval)
+	}
+}
+
+func TestTestChannel_AListWhereNothingAnsweredIsAFailureNotAGreenSummary(t *testing.T) {
+	// «Ни один из проверенных не ответил — похоже, список мёртв» came back as
+	// a summary with a nil error, and the screen drew it in green beside a
+	// list that would stop every run.
+	e := openEngine(t)
+	fake := fakebt.New(t)
+	configure(t, e, fake.URL(), fake.Key())
+	fake.FailEgress("socks5://10.0.0.1:1080", "connection refused")
+	fake.FailEgress("socks5://10.0.0.2:1080", "connection refused")
+
+	path := listFile(t)
+	if err := os.WriteFile(path, []byte("10.0.0.1:1080\n10.0.0.2:1080\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	id := saveChannel(t, e, store.ChannelRow{
+		Name: "мёртвый", Kind: store.ChannelList, Source: path, DefaultScheme: "socks5", Enabled: true,
+	})
+
+	summary, err := e.TestChannel(t.Context(), id)
+	if err == nil {
+		t.Fatalf("список, где не ответил никто, вернулся успехом: %q", summary)
+	}
+	if !strings.Contains(err.Error(), "ответили 0") {
+		t.Errorf("отказ не говорит, сколько ответило: %v", err)
 	}
 }
