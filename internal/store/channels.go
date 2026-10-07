@@ -7,8 +7,11 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/BlankTrail/wildberries-monitor/blanktrail"
 )
 
 // This file is the egress channels of spec section 3.5, as the database holds
@@ -159,6 +162,13 @@ func (s *Store) Channels(ctx context.Context) ([]ChannelRow, error) {
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("store: channels: %w", err)
 	}
+	secrets, err := s.secrets.all()
+	if err != nil {
+		return nil, fmt.Errorf("store: channels: %w", err)
+	}
+	for i := range out {
+		withSecrets(&out[i], secrets)
+	}
 	return out, nil
 }
 
@@ -174,7 +184,70 @@ func (s *Store) Channel(ctx context.Context, id int64) (ChannelRow, error) {
 	if err != nil {
 		return ChannelRow{}, fmt.Errorf("store: channel %d: %w", id, err)
 	}
+	secrets, err := s.secrets.all()
+	if err != nil {
+		return ChannelRow{}, fmt.Errorf("store: channel %d: %w", id, err)
+	}
+	withSecrets(&c, secrets)
 	return c, nil
+}
+
+// A channel's address can carry a credential: the entry point of a rotating
+// proxy is user:pass@host:port, a provider's rotate link has its token in the
+// query, a list fetched over HTTP may have either. Such a value is kept in the
+// secrets file (see secrets.go), and the database keeps it with the
+// credential masked — readable to somebody looking at the table, useless to
+// somebody who was handed it. A value with nothing to hide, such as the path
+// of a list file, stays in the database as it is.
+//
+// What counts as a credential is blanktrail.Redact's decision, made once for
+// the screen, the errors and this. A token written into a link's path is not
+// one it can see, and so not one that leaves the database.
+
+// channelSecretKey is where one field of one channel is kept in the secrets
+// file. A namespace of its own, so it cannot meet a setting's key.
+func channelSecretKey(id int64, field string) string {
+	return "channel:" + strconv.FormatInt(id, 10) + ":" + field
+}
+
+// channelSecretFields are the two fields that can carry a credential.
+var channelSecretFields = []string{"source", "rotate_url"}
+
+// storedForm is what the database keeps of v, and whether v itself has to go
+// to the secrets file.
+func storedForm(v string) (stored string, secret bool) {
+	masked := blanktrail.Redact(v)
+	return masked, masked != v
+}
+
+// channelSecretChanges is the secrets-file side of saving c under id: each
+// credential-bearing field written, each that no longer carries one removed —
+// so an edit that drops a password from an address drops it from the file too.
+func channelSecretChanges(id int64, c ChannelRow) map[string]secretChange {
+	changes := map[string]secretChange{}
+	for _, field := range channelSecretFields {
+		v := c.Source
+		if field == "rotate_url" {
+			v = c.RotateURL
+		}
+		_, secret := storedForm(v)
+		changes[channelSecretKey(id, field)] = secretChange{value: v, keep: secret}
+	}
+	return changes
+}
+
+// withSecrets puts the real values back over the masked ones the database
+// holds. A field the file does not have keeps the database's value: either it
+// never carried a credential, or the file did not come along with the
+// database — and then the masked address is what the person sees on the
+// channels screen, which tells them what to type in again.
+func withSecrets(c *ChannelRow, secrets map[string]string) {
+	if v, ok := secrets[channelSecretKey(c.ID, "source")]; ok {
+		c.Source = v
+	}
+	if v, ok := secrets[channelSecretKey(c.ID, "rotate_url")]; ok {
+		c.RotateURL = v
+	}
 }
 
 // scanChannel reads one row, from a query or a single-row lookup.
@@ -215,37 +288,60 @@ func (s *Store) SaveChannel(ctx context.Context, c ChannelRow) (int64, error) {
 	}
 	seconds := int64(c.RotateMinInterval / time.Second)
 	refresh := int64(max(c.Refresh, 0) / time.Second)
+	source, _ := storedForm(c.Source)
+	rotate, _ := storedForm(c.RotateURL)
 
-	if c.ID == 0 {
-		res, err := s.db.ExecContext(ctx, `
+	// The row and the secrets file move together: the row in a transaction,
+	// the file written before it commits. A file write that fails rolls the
+	// row back, so the database never says «saved» over a password that went
+	// nowhere.
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("store: save channel: %w", err)
+	}
+	defer tx.Rollback()
+
+	id := c.ID
+	if id == 0 {
+		res, err := tx.ExecContext(ctx, `
 			INSERT INTO channels (name, kind, source, rotate_url, rotate_min_interval_sec,
 			                      refresh_sec, default_scheme, enabled, created_at, updated_at)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			c.Name, c.Kind, c.Source, c.RotateURL, seconds, refresh,
+			c.Name, c.Kind, source, rotate, seconds, refresh,
 			c.DefaultScheme, enabled, now, now)
 		if err != nil {
 			return 0, fmt.Errorf("store: save channel: %w", err)
 		}
-		return res.LastInsertId()
+		if id, err = res.LastInsertId(); err != nil {
+			return 0, fmt.Errorf("store: save channel: %w", err)
+		}
+	} else {
+		res, err := tx.ExecContext(ctx, `
+			UPDATE channels
+			SET name = ?, kind = ?, source = ?, rotate_url = ?, rotate_min_interval_sec = ?,
+			    refresh_sec = ?, default_scheme = ?, enabled = ?, updated_at = ?
+			WHERE id = ?`,
+			c.Name, c.Kind, source, rotate, seconds, refresh,
+			c.DefaultScheme, enabled, now, id)
+		if err != nil {
+			return 0, fmt.Errorf("store: save channel %d: %w", id, err)
+		}
+		// An update that matched nothing is an edit to a channel somebody
+		// deleted in another tab. Reported, because the alternative is a
+		// screen that says "сохранено" over a form whose contents went
+		// nowhere.
+		if n, err := res.RowsAffected(); err == nil && n == 0 {
+			return 0, fmt.Errorf("store: save channel %d: %w", id, ErrNoSuchChannel)
+		}
 	}
 
-	res, err := s.db.ExecContext(ctx, `
-		UPDATE channels
-		SET name = ?, kind = ?, source = ?, rotate_url = ?, rotate_min_interval_sec = ?,
-		    refresh_sec = ?, default_scheme = ?, enabled = ?, updated_at = ?
-		WHERE id = ?`,
-		c.Name, c.Kind, c.Source, c.RotateURL, seconds, refresh,
-		c.DefaultScheme, enabled, now, c.ID)
-	if err != nil {
-		return 0, fmt.Errorf("store: save channel %d: %w", c.ID, err)
+	if err := s.secrets.update(channelSecretChanges(id, c)); err != nil {
+		return 0, fmt.Errorf("store: save channel %d: %w", id, err)
 	}
-	// An update that matched nothing is an edit to a channel somebody deleted
-	// in another tab. Reported, because the alternative is a screen that says
-	// "сохранено" over a form whose contents went nowhere.
-	if n, err := res.RowsAffected(); err == nil && n == 0 {
-		return 0, fmt.Errorf("store: save channel %d: %w", c.ID, ErrNoSuchChannel)
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("store: save channel %d: %w", id, err)
 	}
-	return c.ID, nil
+	return id, nil
 }
 
 // ErrChannelInUse is a delete refused because a proxy profile still names the
@@ -290,6 +386,18 @@ func (s *Store) DeleteChannel(ctx context.Context, id int64) error {
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("store: delete channel %d: %w", id, err)
+	}
+	// After the commit: a password left behind for a channel that is gone is
+	// a smaller harm than a channel whose password went first and whose row
+	// is still there. Reported all the same, because «удалён» while the
+	// password is still on disk is not what the person asked for.
+	drop := map[string]secretChange{}
+	for _, field := range channelSecretFields {
+		drop[channelSecretKey(id, field)] = secretChange{}
+	}
+	if err := s.secrets.update(drop); err != nil {
+		return fmt.Errorf("store: channel %d deleted, but its password is still in %s: %w",
+			id, s.secrets.path, err)
 	}
 	return nil
 }

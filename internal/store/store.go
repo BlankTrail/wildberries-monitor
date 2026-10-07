@@ -28,6 +28,10 @@ type Store struct {
 	// volume telemetry — rather than for anything Open itself needs again.
 	path string
 
+	// secrets holds the values of secret settings, outside the database —
+	// see secrets.go for why.
+	secrets *secretFile
+
 	// now reads the clock. Replaced in tests through SetClock; nothing else
 	// writes it. Retention and the daily anchor both do arithmetic on time,
 	// and neither can be tested against a clock that only moves forwards at
@@ -165,7 +169,7 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	// test can observe is a setting the next person changes without knowing.
 	db.SetMaxIdleConns(maxIdleConns)
 
-	s := &Store{db: db, path: path, now: time.Now}
+	s := &Store{db: db, path: path, now: time.Now, secrets: newSecretFile(path)}
 	if err := s.migrate(ctx); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -174,6 +178,12 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	// carry would name no profile and fall through to a default that does not
 	// exist yet.
 	if err := s.CarryProxyProfiles(ctx); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	// And a secret read before this would come back empty from the file
+	// while its value still sat in the database.
+	if err := s.carrySecrets(ctx); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
