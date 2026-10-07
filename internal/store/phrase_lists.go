@@ -86,6 +86,15 @@ func (s *Store) SavePhraseList(ctx context.Context, name string, phrases iter.Se
 		}
 		res, err := ins.ExecContext(ctx, id, phrase, position)
 		if err != nil {
+			// A cancelled context is the cause even when it is not what the
+			// statement says. database/sql rolls the transaction back on
+			// cancellation from a goroutine of its own, closing this statement,
+			// and an insert that lands in between fails with «statement is
+			// closed» — seen under -race in CI — instead of the cancellation
+			// the caller is waiting to recognise.
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				err = ctxErr
+			}
 			return PhraseListRow{}, fmt.Errorf("store: save phrase list: %w", err)
 		}
 		// Affected rows rather than a counter: OR IGNORE makes a duplicate a
