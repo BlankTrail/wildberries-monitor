@@ -615,6 +615,16 @@
     if (job) follow(job);
   });
 
+  // A thumbnail the CDN would not give stays a blank tile rather than a broken
+  // picture. Captured on the document, because error does not bubble and the
+  // tables arrive as fragments long after this script ran.
+  document.addEventListener("error", (ev) => {
+    const img = ev.target;
+    if (img instanceof HTMLImageElement && img.classList.contains("bt-thumb")) {
+      img.removeAttribute("src");
+    }
+  }, true);
+
   // Exposed so a rendered fragment can start following a run it just began.
   window.btFollow = follow;
 })();

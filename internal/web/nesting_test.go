@@ -214,6 +214,7 @@ func TestScreens_EveryAddressAPersonCanOpenAnswersAWholeScreen(t *testing.T) {
 		"/jobs/detail":        "подробности задания под строкой списка",
 		"/channels/edit":      "форма правки канала на месте строки",
 		"/rules/log":          "журнал правила под строкой",
+		"/img/{nm}":           "фотография товара — перенаправление на CDN",
 		// Настройки — это модальное окно поверх любого экрана (см. layout.html,
 		// dialog#settings-dialog), а не вкладка. Отдельным адресом оно не
 		// открывается ни сейчас, ни задумано.

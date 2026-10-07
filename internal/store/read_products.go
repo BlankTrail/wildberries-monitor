@@ -37,6 +37,7 @@ type ProductRow struct {
 
 	Name         string
 	Brand        string
+	BrandID      *int64
 	SupplierID   *int64
 	SupplierName string
 
@@ -239,6 +240,7 @@ const productRowColumns = `
 	    p.imt_id                 AS imt_id,
 	    p.name                   AS name,
 	    p.brand                  AS brand,
+	    p.brand_id               AS brand_id,
 	    p.supplier_id            AS supplier_id,
 	    p.supplier_name          AS supplier_name,
 	    COALESCE(s.dest, '')     AS dest,
@@ -321,7 +323,7 @@ const productRowColumns = `
 // column added to one has to be added to all three. The failure is loud
 // rather than subtle: Scan reports the column count and every test in the
 // file says so at once.
-const productRowOutput = `nm_id, imt_id, name, brand, supplier_id, supplier_name,
+const productRowOutput = `nm_id, imt_id, name, brand, brand_id, supplier_id, supplier_name,
 	    dest, app_type, ts, rating, feedbacks, pics, raw, promo_id, total_quantity, stock_cap,
 	    price_base, price_sale, discount_pct, currency,
 	    description, vendor_code, subject_name, card_created,
@@ -339,7 +341,7 @@ const productRowOutput = `nm_id, imt_id, name, brand, supplier_id, supplier_name
 func scanProductRow(sc rowScanner) (ProductRow, error) {
 	var r ProductRow
 	err := sc.Scan(
-		&r.NmID, &r.ImtID, &r.Name, &r.Brand, &r.SupplierID, &r.SupplierName,
+		&r.NmID, &r.ImtID, &r.Name, &r.Brand, &r.BrandID, &r.SupplierID, &r.SupplierName,
 		&r.Dest, &r.AppType, &r.TS, &r.Rating, &r.Feedbacks, &r.Pics, &r.Raw, &r.PromoID, &r.TotalQuantity, &r.StockCap,
 		&r.PriceBase, &r.PriceSale, &r.DiscountPct, &r.Currency,
 		&r.Description, &r.VendorCode, &r.SubjectName, &r.CardCreated,

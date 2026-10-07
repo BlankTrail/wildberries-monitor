@@ -92,3 +92,11 @@ func (e *Engine) Promotion(ctx context.Context, slug string) (wb.Promotion, erro
 	return errand(func() (*wb.Client, error) { return e.Service(ctx) },
 		func(site *wb.Client) (wb.Promotion, error) { return site.Promotion(ctx, e.Endpoints, slug) })
 }
+
+// MediaRoute reads the CDN's media-basket route: which host serves which
+// product's photographs. One request, and the answer changes on the scale of
+// months — the caller keeps it.
+func (e *Engine) MediaRoute(ctx context.Context) (wb.Route, error) {
+	return errand(func() (*wb.Client, error) { return e.Service(ctx) },
+		func(site *wb.Client) (wb.Route, error) { return wb.NewBasket(site).Route(ctx) })
+}

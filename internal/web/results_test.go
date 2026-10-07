@@ -956,14 +956,14 @@ func TestResults_AShortValueIsNotPutInABox(t *testing.T) {
 	srv := newServer(t)
 	seedReadings(t, srv.Store, 1)
 
-	// The name, not the brand: a brand cell is a narrowing button and never
-	// reaches the boxing rule at all, so a test on it would pass whatever the
-	// rule said.
-	body := get(t, srv, "/results/table", "").Body.String()
-	if !strings.Contains(body, "<td>Платье 0</td>") {
+	// The size, not the brand or the name: a brand cell is a narrowing button
+	// and the name is drawn as the product's card, so neither reaches the
+	// boxing rule at all and a test on them would pass whatever it said.
+	body := get(t, srv, "/results/table?fields=nm_id&fields=size_name", "").Body.String()
+	if !strings.Contains(body, "<td>M</td>") {
 		t.Errorf("короткое значение не нарисовано простой ячейкой: %s", firstLines(body))
 	}
-	if strings.Contains(body, `<div class="bt-cell-long">Платье 0</div>`) {
+	if strings.Contains(body, `<div class="bt-cell-long">M</div>`) {
 		t.Error("короткое значение положено в бокс — полоса прокрутки в каждой ячейке")
 	}
 }
@@ -1061,10 +1061,10 @@ func TestResults_ThePromotionFilterShowsOnlyWhatWasInIt(t *testing.T) {
 	}
 
 	body := get(t, srv, "/results/table?promo_id=1050336&fields=nm_id&fields=promo_id", "").Body.String()
-	if !strings.Contains(body, ">100<") {
+	if !strings.Contains(body, ">ID 100<") {
 		t.Errorf("товара из акции нет в таблице: %s", firstLines(body))
 	}
-	if strings.Contains(body, ">101<") {
+	if strings.Contains(body, ">ID 101<") {
 		t.Error("в таблице есть товар, которого в акции не было")
 	}
 	// And the chip says which promotion, with the way back out of it. By its

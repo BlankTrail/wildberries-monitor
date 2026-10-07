@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/BlankTrail/wildberries-monitor/internal/store"
+	"github.com/BlankTrail/wildberries-monitor/wb"
 )
 
 // This file is what «Мой профиль» shows once the chain has run: the seller,
@@ -110,7 +111,7 @@ func (s *Server) storefrontTable(r *http.Request, p store.ProfileRow) string {
 			"которые из них видно, каждый по одному разу. Полная таблица с разбивкой "+
 			"по регионам и историей — на вкладке «Результаты».") + `</h4>`)
 	b.WriteString(`<div class="bt-table-wrap bt-table-wrap--capped"><table class="bt-table"><thead><tr>` +
-		`<th class="bt-num">Артикул</th><th>Название</th><th>Бренд</th>` +
+		`<th>Товар</th><th>Бренд</th>` +
 		`<th class="bt-num">Цена</th><th class="bt-num">Остаток</th>` +
 		`<th class="bt-num">Регионов</th>` +
 		`<th class="bt-num">Рейтинг</th><th class="bt-num">Отзывов</th>` +
@@ -119,12 +120,12 @@ func (s *Server) storefrontTable(r *http.Request, p store.ProfileRow) string {
 
 	for _, row := range rows {
 		n := counts[row.NmID]
-		fmt.Fprintf(&b, `<tr><td class="bt-num bt-mono">%d</td><td class="bt-cell-wrap">%s</td>`+
-			`<td>%s</td><td class="bt-num">%s</td><td class="bt-num">%s</td>`+
+		b.WriteString(`<tr>` + productCell(row.NmID, row.Name, wb.DefaultEndpoints().CardPageURL(row.NmID)))
+		fmt.Fprintf(&b, `<td>%s</td><td class="bt-num">%s</td><td class="bt-num">%s</td>`+
 			`<td class="bt-num">%d</td>`+
 			`<td class="bt-num">%s</td><td class="bt-num">%s</td>`+
 			`<td class="bt-num">%s</td><td class="bt-num">%s</td><td class="bt-mono">%s</td></tr>`,
-			row.NmID, html.EscapeString(row.Name), html.EscapeString(row.Brand),
+			html.EscapeString(row.Brand),
 			priceRange(row.PriceLow, row.PriceHigh), intOrDash(row.Stock),
 			row.Regions,
 			floatOrDash(row.Rating), intOrDash(row.Feedbacks),

@@ -96,6 +96,7 @@ func (s *Server) resultsBody(r *http.Request) (string, error) {
 	// Read once for the whole table rather than per cell: it is a query, and a
 	// hundred rows would make it a hundred.
 	names := s.regionNames(r)
+	photo := photoColumn(cols)
 
 	b.WriteString(`<div class="bt-table-wrap bt-table-wrap--window"><table class="bt-table bt-table--results"><thead><tr>`)
 	for _, c := range cols {
@@ -113,7 +114,7 @@ func (s *Server) resultsBody(r *http.Request) (string, error) {
 		}
 		b.WriteString(`<tr>`)
 		for _, c := range cols {
-			b.WriteString(resultsCell(q, names, row, c))
+			b.WriteString(resultsCell(q, names, row, c, photo))
 		}
 		b.WriteString(`</tr>`)
 		shown++
@@ -236,7 +237,15 @@ func numericColumn(c wb.Field) bool {
 // immediately wants only: «покажи мне всё этого бренда» is the next thought
 // after seeing one. Making the cell the control is what saves them from
 // retyping into a box what is already on the screen in front of them.
-func resultsCell(q url.Values, names map[int64]string, row store.ProductRow, c wb.Field) string {
+func resultsCell(q url.Values, names map[int64]string, row store.ProductRow, c wb.Field, photo string) string {
+	// The product as people recognise it: its picture, its name, its number.
+	if c.Key == photo {
+		name := ""
+		if c.Key == "name" {
+			name = row.Name
+		}
+		return productCell(row.NmID, name, wb.DefaultEndpoints().CardPageURL(row.NmID))
+	}
 	text := cellText(row, c)
 	if text == "" {
 		if numericColumn(c) {
@@ -271,7 +280,11 @@ func resultsCell(q url.Values, names map[int64]string, row store.ProductRow, c w
 	// The price opens the regions: one region's price beside the others is
 	// where the site's own discount, which differs by region, shows.
 	if c.Key == "price_sale" {
-		return priceCell(row.NmID, text)
+		before := ""
+		if f, ok := wb.FieldByKey("price_base"); ok && row.PriceBase != nil && row.PriceSale != nil && *row.PriceBase > *row.PriceSale {
+			before = cellText(row, f)
+		}
+		return priceCell(row.NmID, text, before)
 	}
 
 	// The review count opens the same way, and for the same kind of reason: the
@@ -309,9 +322,40 @@ func resultsCell(q url.Values, names map[int64]string, row store.ProductRow, c w
 		}
 		return `<td>` + longText(text) + `</td>`
 	}
+	// A brand and a seller carry their number underneath, the way the site's
+	// own seller pages name them: two sellers may print the same name.
+	sub := ""
+	switch c.Key {
+	case "brand":
+		if row.BrandID != nil {
+			sub = `<span class="bt-sub">ID ` + strconv.FormatInt(*row.BrandID, 10) + `</span>`
+		}
+	case "supplier_name":
+		if row.SupplierID != nil {
+			sub = `<span class="bt-sub">ID ` + strconv.FormatInt(*row.SupplierID, 10) + `</span>`
+		}
+	}
 	return `<td><button class="bt-narrow" type="button" data-get="` +
 		html.EscapeString(resultsURL(narrowed)) + `" data-target="#results-body" ` +
-		`title="Показать только это">` + html.EscapeString(text) + `</button></td>`
+		`title="Показать только это">` + html.EscapeString(text) + `</button>` + sub + `</td>`
+}
+
+// photoColumn is the column a product's picture goes in: beside its name
+// where the name is shown, beside its article where only that is, and
+// nowhere when neither is.
+func photoColumn(cols []wb.Field) string {
+	hasName, hasArticle := false, false
+	for _, c := range cols {
+		hasName = hasName || c.Key == "name"
+		hasArticle = hasArticle || c.Key == "nm_id"
+	}
+	switch {
+	case hasName:
+		return "name"
+	case hasArticle:
+		return "nm_id"
+	}
+	return ""
 }
 
 // longRun is how many characters a value may have before the cell puts it in a

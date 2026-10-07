@@ -879,7 +879,7 @@ func TestStorefront_OneRowPerProductRatherThanOnePerRegion(t *testing.T) {
 	}
 
 	body := get(t, srv, "/profile", "").Body.String()
-	if n := strings.Count(body, `<td class="bt-num bt-mono">100</td>`); n != 1 {
+	if n := strings.Count(body, `src="/img/100"`); n != 1 {
 		t.Errorf("артикул 100 в списке %d раз, ожидался один", n)
 	}
 	// The two things the fold has to say: what the regions charged, and how

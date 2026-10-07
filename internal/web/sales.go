@@ -100,8 +100,8 @@ func (s *Server) salesPage(w http.ResponseWriter, r *http.Request) {
 		b.WriteString(alert("neutral", "По этому поиску товаров нет."))
 	default:
 		b.WriteString(`<div class="bt-table-wrap"><table class="bt-table"><thead><tr>` +
-			`<th class="bt-num">Артикул</th><th class="bt-num">Продано</th><th class="bt-num">В день</th>` +
-			`<th class="bt-num">Выручка</th><th>Товар</th><th>Бренд</th><th>Продавец</th>` +
+			`<th>Товар</th><th class="bt-num">Продано</th><th class="bt-num">В день</th>` +
+			`<th class="bt-num">Выручка</th><th>Бренд</th><th>Продавец</th>` +
 			`<th class="bt-num">Съёмок</th><th>По чему</th></tr></thead><tbody>`)
 		b.WriteString(rows.String())
 		b.WriteString(`</tbody></table></div>`)
@@ -153,12 +153,11 @@ func salesRow(e store.SalesEstimate, l store.ProductLabel) string {
 	if e.FromWarehouses {
 		source = "склады"
 	}
-	// The numbers first: names run to a line and a half, and the column that
-	// answers the question should not be the one pushed off the screen.
-	return fmt.Sprintf(`<tr><td class="bt-num"><a href="%s" target="_blank" rel="noopener">%d</a></td>`+
-		`<td class="bt-num">%s</td><td class="bt-num">%s</td><td class="bt-num">%s</td>`+
-		`<td>%s</td><td>%s</td><td>%s</td><td class="bt-num">%d</td><td>%s</td></tr>`,
-		html.EscapeString(wb.DefaultEndpoints().CardPageURL(e.NmID)), e.NmID,
-		sold, perDay, html.EscapeString(revenue),
-		html.EscapeString(l.Name), html.EscapeString(l.Brand), html.EscapeString(l.Supplier), e.Readings, source)
+	// The product as a card, then the numbers: the name wraps within its own
+	// cell, so the column that answers the question stays on the screen.
+	return `<tr>` + productCell(e.NmID, l.Name, wb.DefaultEndpoints().CardPageURL(e.NmID)) +
+		fmt.Sprintf(`<td class="bt-num">%s</td><td class="bt-num">%s</td><td class="bt-num">%s</td>`+
+			`<td>%s</td><td>%s</td><td class="bt-num">%d</td><td>%s</td></tr>`,
+			sold, perDay, html.EscapeString(revenue),
+			labelled(l.Brand, l.BrandID), labelled(l.Supplier, l.SupplierID), e.Readings, source)
 }

@@ -111,6 +111,11 @@ type Server struct {
 	// tests must not need a live Wildberries to render a directory.
 	PickupPoint func(ctx context.Context, id int64) (wb.PickupPoint, error)
 
+	// ProductImage is the address of a product's thumbnail on the site's CDN.
+	// Nil, or an error, and the tables draw a blank tile where the picture
+	// would be — a table is never held up for a photograph.
+	ProductImage func(ctx context.Context, nmID int64) (string, error)
+
 	// Promotions reads the site's list of what it is running and stores it,
 	// returning how many landed and how many could not be read. Spec section
 	// 4.6's type 8 — a promotion runs for a fortnight, so this is refreshed
@@ -360,6 +365,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /results/table", s.auth(http.HandlerFunc(s.resultsFragment)))
 	mux.Handle("GET /results/stock", s.auth(http.HandlerFunc(s.stockPanel)))
 	mux.Handle("GET /results/prices", s.auth(http.HandlerFunc(s.pricesPanel)))
+	mux.Handle("GET /img/{nm}", s.auth(http.HandlerFunc(s.productImage)))
 	mux.Handle("GET /results/reputation", s.auth(http.HandlerFunc(s.reputationPanel)))
 	mux.Handle("GET /results/export", s.auth(http.HandlerFunc(s.exportHandler)))
 	mux.Handle("GET /live", s.auth(http.HandlerFunc(s.live)))

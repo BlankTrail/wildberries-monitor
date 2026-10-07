@@ -261,6 +261,7 @@ func (s *Store) SalesSince(ctx context.Context, since, nmID int64) ([]SalesEstim
 // ProductLabel is what a row of a list says about a product besides numbers.
 type ProductLabel struct {
 	Name, Brand, Supplier string
+	BrandID, SupplierID   *int64
 }
 
 // ProductLabels names the products given, by article. Ones the store does not
@@ -276,14 +277,14 @@ func (s *Store) ProductLabels(ctx context.Context, nms []int64) (map[int64]Produ
 			args[i] = nm
 		}
 		rows, err := s.db.QueryContext(ctx,
-			`SELECT nm_id, name, brand, supplier_name FROM products WHERE nm_id IN (`+marks+`)`, args...)
+			`SELECT nm_id, name, brand, supplier_name, brand_id, supplier_id FROM products WHERE nm_id IN (`+marks+`)`, args...)
 		if err != nil {
 			return nil, fmt.Errorf("store: product labels: %w", err)
 		}
 		for rows.Next() {
 			var nm int64
 			var l ProductLabel
-			if err := rows.Scan(&nm, &l.Name, &l.Brand, &l.Supplier); err != nil {
+			if err := rows.Scan(&nm, &l.Name, &l.Brand, &l.Supplier, &l.BrandID, &l.SupplierID); err != nil {
 				rows.Close()
 				return nil, fmt.Errorf("store: product labels: %w", err)
 			}

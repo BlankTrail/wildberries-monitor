@@ -173,6 +173,34 @@ func (b *Basket) CardURL(ctx context.Context, nm int64) (string, error) {
 	return "https://" + host + basketPath(nm), nil
 }
 
+// ImageSize is the thumbnail the panel shows beside a product: 246 by 328, the
+// size the site's own listing uses, about ten kilobytes.
+const ImageSize = "c246x328"
+
+// ImageURL is the address of a product's first photograph on the CDN, at the
+// thumbnail size.
+//
+// The path beside the card's, measured on 7 October 2026: four products on
+// four volumes, each answered 200 with image/webp from the host this route
+// named for it.
+func (r Route) ImageURL(nm int64) (string, error) {
+	if nm <= 0 {
+		return "", fmt.Errorf("image URL: invalid product id %d", nm)
+	}
+	if len(r.Entries) == 0 {
+		// A route read back from storage rather than decoded from the CDN:
+		// with no hosts the modulus below would divide by zero.
+		return "", errors.New("image URL: the route lists no hosts")
+	}
+	host, err := r.host(nm)
+	if err != nil {
+		return "", err
+	}
+	return "https://" + host + "/vol" + strconv.FormatInt(volume(nm), 10) +
+		"/part" + strconv.FormatInt(nm/1000, 10) + "/" + strconv.FormatInt(nm, 10) +
+		"/images/" + ImageSize + "/1.webp", nil
+}
+
 // volume is the CDN's coarse shard key: one run of 100000 product ids. It is
 // both the first path segment and, under the range rule, the number that picks
 // the host — the same quantity in both places, so it is computed in one.

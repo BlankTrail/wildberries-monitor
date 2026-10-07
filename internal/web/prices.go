@@ -113,8 +113,10 @@ func priceGroup(g store.RegionPrices, names map[int64]string, labelled bool) str
 }
 
 // priceCell is the results table's price, as a press that opens the regions.
-func priceCell(nmID int64, text string) string {
+// The price before the discount sits under it, smaller, the way the site
+// prints it — where it was read and differs.
+func priceCell(nmID int64, text, before string) string {
 	return `<td class="bt-num"><button class="bt-narrow" type="button" data-get="/results/prices?nm=` +
 		strconv.FormatInt(nmID, 10) + `" data-target="#results-detail" ` +
-		`title="Цена в других регионах">` + html.EscapeString(text) + `</button></td>`
+		`title="Цена в других регионах">` + priceStack(text, before) + `</button></td>`
 }

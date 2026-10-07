@@ -306,6 +306,7 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 		// the point carries its address and the dest code the site prices with.
 		// Wired here because it costs a proxy port, and the engine is the one
 		// place in this program that decides to spend one.
+		ProductImage: a.productImage(),
 		PickupPoint: func(ctx context.Context, id int64) (wb.PickupPoint, error) {
 			if a.Engine == nil {
 				return wb.PickupPoint{}, errors.New("сбор не собран в этой сборке")

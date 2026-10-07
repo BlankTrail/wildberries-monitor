@@ -1602,3 +1602,77 @@ dialog.bt-modal > #settings-body {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+
+/* ---- products as people recognise them ----------------------------------
+   A picture, the name over two lines at most, the article underneath. The
+   results table does not wrap its cells, so this one is let wrap within a
+   width of its own. */
+.bt[data-bt-theme="dashboard"] .bt-thumb {
+  flex: none;
+  width: 40px;
+  height: 53px;
+  object-fit: cover;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card-2);
+}
+
+.bt[data-bt-theme="dashboard"] td.bt-product {
+  min-width: 260px;
+  max-width: 340px;
+  white-space: normal;
+}
+
+.bt[data-bt-theme="dashboard"] .bt-product__box {
+  display: flex;
+  gap: var(--space-3);
+  align-items: center;
+}
+
+.bt[data-bt-theme="dashboard"] .bt-product__text,
+.bt[data-bt-theme="dashboard"] .bt-labelled {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+/* A name is read, not compared digit by digit: the results table sets its
+   cells in the monospace face, and a product's name is the exception. */
+.bt[data-bt-theme="dashboard"] .bt-product__text {
+  font-family: var(--font);
+}
+
+.bt[data-bt-theme="dashboard"] .bt-product__name {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.bt[data-bt-theme="dashboard"] .bt-sub {
+  display: block;
+  color: var(--text-muted);
+  font-size: .85em;
+  line-height: 1.3;
+}
+
+.bt[data-bt-theme="dashboard"] .bt-sub a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.bt[data-bt-theme="dashboard"] .bt-sub a:hover {
+  color: var(--text-link);
+  text-decoration: underline;
+}
+
+.bt[data-bt-theme="dashboard"] .bt-sub--was {
+  text-decoration: line-through;
+}
+
+.bt[data-bt-theme="dashboard"] .bt-price {
+  display: block;
+  font-weight: 600;
+}

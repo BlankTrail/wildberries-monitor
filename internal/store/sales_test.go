@@ -142,7 +142,7 @@ func TestSalesSince_ReadsTheStoreAndRanksBySold(t *testing.T) {
 	save := func(nm, qty int64, at time.Time, wh ...int64) {
 		t.Helper()
 		p := wb.Product{ID: nm, Name: "товар", Brand: "Бренд", SupplierName: "Продавец", Dest: "-1257786",
-			AppType: 1, FetchedAt: at, TotalQuantity: &qty, StockCap: 100}
+			AppType: 1, FetchedAt: at, TotalQuantity: &qty, StockCap: 100, BrandID: ptr(77), SupplierID: ptr(88)}
 		if len(wh) > 0 {
 			p.Sizes = []wb.Size{{Name: "M", Stocks: []wb.Stock{{WarehouseID: wh[0], Qty: wh[1]}}}}
 		}
@@ -176,6 +176,9 @@ func TestSalesSince_ReadsTheStoreAndRanksBySold(t *testing.T) {
 	}
 	if len(labels) != 2 || labels[1].Brand != "Бренд" || labels[2].Supplier != "Продавец" || labels[1].Name != "товар" {
 		t.Errorf("labels = %+v", labels)
+	}
+	if l := labels[1]; l.BrandID == nil || *l.BrandID != 77 || l.SupplierID == nil || *l.SupplierID != 88 {
+		t.Errorf("label ids = %v, %v; want 77 and 88", l.BrandID, l.SupplierID)
 	}
 }
 

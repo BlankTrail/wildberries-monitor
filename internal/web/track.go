@@ -142,13 +142,12 @@ func watchedHTML(s *Server, r *http.Request) string {
 	var b strings.Builder
 	b.WriteString(`<h3>Под наблюдением</h3>`)
 	b.WriteString(`<div class="bt-table-wrap"><table class="bt-table"><thead><tr>` +
-		`<th>Артикул</th><th>Товар</th><th>Цена</th><th>Последнее чтение</th>` +
+		`<th>Товар</th><th class="bt-num">Цена</th><th>Последнее чтение</th>` +
 		`</tr></thead><tbody>`)
 	for _, row := range rows {
 		b.WriteString(`<tr>`)
-		fmt.Fprintf(&b, `<td><a class="bt-link" href="/track?nm=%d">%d</a></td>`, row.NmID, row.NmID)
-		b.WriteString(`<td>` + html.EscapeString(productTitle(row)) + `</td>`)
-		b.WriteString(`<td>` + html.EscapeString(priceText(row)) + `</td>`)
+		b.WriteString(productCell(row.NmID, productTitle(row), "/track?nm="+strconv.FormatInt(row.NmID, 10)))
+		b.WriteString(`<td class="bt-num">` + html.EscapeString(priceText(row)) + `</td>`)
 		b.WriteString(`<td>` + html.EscapeString(readAtText(row.TS)) + `</td>`)
 		b.WriteString(`</tr>`)
 	}

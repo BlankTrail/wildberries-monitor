@@ -52,6 +52,11 @@ const (
 	// the two are tied together where the port is opened rather than here.
 	SettingRequireAuth = "web.require_auth"
 
+	// SettingMediaRoute is the CDN's media-basket route, as JSON with the
+	// moment it was read: which host serves which product's photographs. One
+	// proxy request every few weeks rather than one per page of thumbnails.
+	SettingMediaRoute = "cdn.media_route"
+
 	// SettingTelegramToken is the bot token, and it is a secret in the strong
 	// sense: whoever holds it holds the bot, including every chat it is in.
 	SettingTelegramToken = "telegram.token"

@@ -127,7 +127,7 @@ func copiesSection(cs []store.CopyCandidate) string {
 		return b.String()
 	}
 	b.WriteString(`<div class="bt-table-wrap"><table class="bt-table"><thead><tr>` +
-		`<th class="bt-num">Ваш товар</th><th class="bt-num">Похожий</th><th>Название</th><th>Продавец</th>` +
+		`<th>Ваш товар</th><th>Похожий</th><th>Продавец</th>` +
 		`<th class="bt-num">Совпадение</th><th class="bt-num">Цена</th><th class="bt-num">Ваша цена</th>` +
 		`</tr></thead><tbody>`)
 	for _, c := range cs {
@@ -138,12 +138,12 @@ func copiesSection(cs []store.CopyCandidate) string {
 		if c.MyPrice > 0 {
 			mine = wb.Money{Minor: c.MyPrice, Currency: c.Currency}.String()
 		}
-		fmt.Fprintf(&b, `<tr><td class="bt-mono">%d</td>`+
-			`<td class="bt-num"><a href="%s" target="_blank" rel="noopener">%d</a></td>`+
-			`<td>%s</td><td>%s</td><td class="bt-num">%.0f%%</td><td class="bt-num">%s</td><td class="bt-num">%s</td></tr>`,
-			c.Mine, html.EscapeString(wb.DefaultEndpoints().CardPageURL(c.Copy)), c.Copy,
-			html.EscapeString(c.CopyName), html.EscapeString(c.CopySeller), c.Similarity*100,
-			html.EscapeString(price), html.EscapeString(mine))
+		// Side by side, both as pictures: whether the photographs were lifted
+		// with the title is the first thing to look at.
+		b.WriteString(`<tr>` + productCell(c.Mine, "", wb.DefaultEndpoints().CardPageURL(c.Mine)) +
+			productCell(c.Copy, c.CopyName, wb.DefaultEndpoints().CardPageURL(c.Copy)))
+		fmt.Fprintf(&b, `<td>%s</td><td class="bt-num">%.0f%%</td><td class="bt-num">%s</td><td class="bt-num">%s</td></tr>`,
+			html.EscapeString(c.CopySeller), c.Similarity*100, html.EscapeString(price), html.EscapeString(mine))
 	}
 	b.WriteString(`</tbody></table></div>`)
 	return b.String()
@@ -162,8 +162,8 @@ func compareTable(rows []store.BenchmarkRow) string {
 		`</tr></thead><tbody>`)
 
 	for _, r := range rows {
-		fmt.Fprintf(&b, `<tr><td class="bt-mono">%d</td><td>%s</td><td>%s</td>`,
-			r.NmID, html.EscapeString(r.Query), html.EscapeString(baselineText(r)))
+		b.WriteString(`<tr>` + productCell(r.NmID, "", wb.DefaultEndpoints().CardPageURL(r.NmID)))
+		fmt.Fprintf(&b, `<td>%s</td><td>%s</td>`, html.EscapeString(r.Query), html.EscapeString(baselineText(r)))
 
 		// Position: fewer is better, which is the one column where a smaller
 		// number is the winning side.
@@ -218,8 +218,8 @@ func fullnessTable(rows []store.BenchmarkRow) string {
 		`</tr></thead><tbody>`)
 
 	for _, r := range shown {
-		fmt.Fprintf(&b, `<tr><td class="bt-mono">%d</td><td>%s</td>`,
-			r.NmID, html.EscapeString(r.Query))
+		b.WriteString(`<tr>` + productCell(r.NmID, "", wb.DefaultEndpoints().CardPageURL(r.NmID)))
+		fmt.Fprintf(&b, `<td>%s</td>`, html.EscapeString(r.Query))
 		b.WriteString(deltaCell(r.PhotoCount, r.RivalPhotoCount, higherIsBetter, plainInt))
 		b.WriteString(deltaCell(r.OptionsFilledPct, r.RivalOptionsFilledPct, higherIsBetter, percent))
 		b.WriteString(deltaCell(r.DescriptionLen, r.RivalDescriptionLen, higherIsBetter, plainInt))
