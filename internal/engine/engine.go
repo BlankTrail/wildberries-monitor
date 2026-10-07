@@ -22,7 +22,6 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
-	"time"
 
 	"github.com/BlankTrail/wildberries-monitor/blanktrail"
 	"github.com/BlankTrail/wildberries-monitor/internal/collect"
@@ -94,21 +93,6 @@ func retryPolicyFor(j job.Job, pooled bool) wb.RetryPolicy {
 	return policy
 }
 
-// throughProxies is whether any of channels leads somewhere other than the
-// host's own address.
-//
-// Not len(channels) > 0. Since migration 0012 a fresh install has one channel,
-// and it is the direct one — counted as a pool, it gave a run with a single
-// address the fifteen-attempt budget meant for walking through a list.
-func throughProxies(channels []blanktrail.Channel) bool {
-	for _, ch := range channels {
-		if ch.Kind() != blanktrail.KindDirect {
-			return true
-		}
-	}
-	return false
-}
-
 // RunnerFor builds everything one job needs, and the cleanup that closes it.
 //
 // The order is the order things can fail in, cheapest first: settings before a
@@ -177,7 +161,7 @@ func (e *Engine) RunnerFor(ctx context.Context, j job.Job) (*job.Runner, func(),
 	// should walk through addresses until one gets through; on the host's own
 	// address there is one and no search to make, so the budget stops early.
 	site := wb.NewClientWithRetry(wb.FromPool(pool), wb.NewSessions(),
-		retryPolicyFor(j, throughProxies(channels)))
+		retryPolicyFor(j, wb.ThroughProxies(channels)))
 
 	runner := &job.Runner{
 		Store:   e.Store,
@@ -247,14 +231,6 @@ func portStats(pool *blanktrail.Pool) []job.PortStat {
 // sitting idle on a licence that counts them.
 const portsPerThread = 2
 
-// requestTimeout bounds one request through a leased port, retries included.
-//
-// Generous on purpose: a port clearing an interactive challenge legitimately
-// takes minutes, and cutting it short throws away both the request and the
-// session it was solving for. A dead address is caught long before this by the
-// port's own timeout, so the two are not the same budget.
-const requestTimeout = 300 * time.Second
-
 // control builds the API client from what the settings screen saved.
 func (e *Engine) control(ctx context.Context) (*blanktrail.Client, error) {
 	addr, err := setting(ctx, e.Store, store.SettingBlankTrailURL, store.DefaultBlankTrailURL)
@@ -312,27 +288,6 @@ func preflightInput(eps wb.Endpoints, j job.Job) blanktrail.PreflightInput {
 	}
 }
 
-// How long one identity lives, as spec section 3.4's two proactive triggers.
-//
-// They add rather than choose: a fast run reaches the count first and a slow
-// one reaches the clock, and a port that has been sitting on one address for
-// twenty minutes is as worth renewing as one that has made forty requests
-// through it.
-//
-// Forty requests is about what one visit to a shop looks like — a search page
-// and the cards on it — and twenty minutes is short enough that a run left
-// going overnight does not spend the night on one address. Both are held here
-// rather than offered on the job form: section 7's constructor lists threads,
-// ports and the pause, and a knob nobody can judge the value of is a knob that
-// gets set wrong.
-//
-// Renewal is a reopen — see Pool.renewIfDue — so the cost is one control call
-// per identity, made against the local service.
-const (
-	renewAfterRequests = 40
-	renewAfterInterval = 20 * time.Minute
-)
-
 // poolConfig is the pool this job will drive.
 //
 // A named function rather than a literal inline, for the reason the reference
@@ -340,40 +295,27 @@ const (
 // without a live proxy, and CountFailure in particular is invisible by
 // inspection once it is missing. It cannot be reached any other way — the
 // preflight above needs a real instance, and it comes first on purpose.
+//
+// What every pool on this site needs — the fingerprint, the failure rule, the
+// renewal contour, the request budget — is wb.PoolConfig's, shared with the
+// standing port and the example programs. What is here is only what a job
+// decides: how many threads, through which exits, at what pace.
 func poolConfig(client *blanktrail.Client, j job.Job, ca *x509.CertPool, channels []blanktrail.Channel) blanktrail.PoolConfig {
-	return blanktrail.PoolConfig{
+	return wb.PoolConfig(wb.PoolOptions{
 		Client:         client,
+		CA:             ca,
+		Mode:           wb.ModeOf(j.AppType),
+		Channels:       channels,
 		Threads:        threadsOf(j),
 		PortsPerThread: portsPerThread,
-		Spec:           wb.ModeOf(j.AppType).Spec(blanktrail.DefaultPortSpec()),
-		// Spec section 3.5's mix, as the channels screen saved it. Empty is not a
-		// mistake: it is what a person who has configured nothing has, and the
-		// pool reads it as the host's own address.
-		Channels:       channels,
-		CA:             ca,
-		RequestTimeout: requestTimeout,
-		// The pause the pool offers callers between requests, taken from the job
-		// because that is where a person set it. Both ends the same: a job that
-		// asked for half a second means half a second, and a range it never named
-		// would be this package inventing jitter on somebody else's budget.
+		// The pause the pool offers callers between requests, taken from the
+		// job because that is where a person set it. Both ends the same: a job
+		// that asked for half a second means half a second, and a range it
+		// never named would be this package inventing jitter on somebody
+		// else's budget.
 		DelayMin: j.Delay,
 		DelayMax: j.Delay,
-		// The one thing the pool cannot know and this package can. Left nil it
-		// counts every non-2xx towards replacing a port's address, and on this
-		// target that is wrong twice over: a challenge status is what the port's
-		// own solver is there to clear, and a refusal aimed at our headers travels
-		// with the request rather than with the address — so rotating on either
-		// throws away a solved challenge and buys nothing.
-		CountFailure: wb.CountFailure,
-		// Spec section 3.4's proactive contour, which the pool implements and
-		// nothing was switching on: both triggers were left at zero, so a port
-		// kept one fingerprint, one address and one cookie jar for the whole
-		// run. A collection of forty thousand requests over a hundred ports is
-		// four hundred requests on each identity, which is the thing the
-		// contour exists to prevent.
-		RenewAfterRequests: renewAfterRequests,
-		RenewAfterInterval: renewAfterInterval,
-	}
+	})
 }
 
 // threadsOf is how hard this job asked to be pushed, with the floor a run needs

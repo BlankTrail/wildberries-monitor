@@ -685,21 +685,31 @@ func TestServiceChannel_EverySettingItWasOpenedWithIsCompared(t *testing.T) {
 }
 
 func TestServiceChannel_TheBuiltExitReachesThePoolThatOpensThePort(t *testing.T) {
-	// A source-level check, for the same reason RunnerFor gets one: everything
-	// past this line needs a live licensed service, because it opens a port
-	// before the first fetch. What is guarded is one argument — the channel
-	// this file just built reaching the pool config — and dropped, the port
-	// opens direct while every screen says it goes through a proxy. That is
-	// worse than never having offered the setting.
-	src, err := os.ReadFile("service.go")
+	// What is guarded is the channel this file just built reaching the pool
+	// config — dropped, the port opens direct while every screen says it goes
+	// through a proxy — and, beside it, what the standing port's own copy of
+	// the config once lacked: the failure rule every pool on this site needs.
+	e := openEngine(t)
+	id := saveChannel(t, e, store.ChannelRow{Name: "шлюз", Kind: store.ChannelGateway, Source: "berlin", Enabled: true})
+	channels, done, err := e.Channels(t.Context(), id)
 	if err != nil {
-		t.Fatalf("read: %v", err)
+		t.Fatalf("Channels: %v", err)
 	}
-	body := string(src)
-	cfg := body[strings.Index(body, "blanktrail.NewPool(ctx, blanktrail.PoolConfig{"):]
-	cfg = cfg[:strings.Index(cfg, "})")]
-	if !strings.Contains(cfg, "Channels:       channels,") {
+	defer done()
+
+	cfg := servicePoolConfig(nil, nil, channels)
+	if len(cfg.Channels) != 1 || cfg.Channels[0] != channels[0] {
 		t.Error("собранный канал не передан в пул — служебный порт откроется напрямую")
+	}
+	if cfg.CountFailure == nil {
+		t.Error("у служебного порта нет правила отказов — проверка будет засчитана адресу и решённая сессия потеряна")
+	}
+	if cfg.PortsPerThread != servicePorts || cfg.DelayMin != serviceDelay || cfg.DelayMax != serviceDelay {
+		t.Errorf("служебный порт: портов %d, пауза %v–%v — ожидались %d и %v",
+			cfg.PortsPerThread, cfg.DelayMin, cfg.DelayMax, servicePorts, serviceDelay)
+	}
+	if cfg.RenewAfterRequests == 0 || cfg.RenewAfterInterval == 0 {
+		t.Error("служебный порт не меняет личность — он живёт дольше любого прогона")
 	}
 }
 
@@ -958,24 +968,14 @@ func TestTestChannel_ACheckTheTariffSkipsIsNotAFailure(t *testing.T) {
 }
 
 func TestServicePool_RenewsItsIdentityToo(t *testing.T) {
-	// A source-level check, for the reason the file's other two give:
-	// everything past this line needs a live licensed service, because it
-	// opens a port.
-	//
 	// The service port outlives every run — it answers directory refreshes and
 	// the panel's own checks for as long as the program is up — so a pool
 	// built without spec section 3.4's triggers would spend days on one
-	// fingerprint and one address.
-	src, err := os.ReadFile("service.go")
-	if err != nil {
-		t.Fatalf("read: %v", err)
-	}
-	body := string(src)
-	cfg := body[strings.Index(body, "blanktrail.NewPool(ctx, blanktrail.PoolConfig{"):]
-	cfg = cfg[:strings.Index(cfg, "})")]
-	for _, want := range []string{"RenewAfterRequests:", "RenewAfterInterval:"} {
-		if !strings.Contains(cfg, want) {
-			t.Errorf("служебный порт живёт без смены личности: в конфиге нет %s", want)
-		}
+	// fingerprint and one address. Read off the config the port is opened
+	// with, which is the same function a run's pool is built by.
+	cfg := servicePoolConfig(nil, nil, nil)
+	if cfg.RenewAfterRequests != wb.DefaultRenewAfterRequests || cfg.RenewAfterInterval != wb.DefaultRenewAfterInterval {
+		t.Errorf("служебный порт меняет личность через %d запросов / %v, ожидалось как у прогонов: %d / %v",
+			cfg.RenewAfterRequests, cfg.RenewAfterInterval, wb.DefaultRenewAfterRequests, wb.DefaultRenewAfterInterval)
 	}
 }

@@ -226,26 +226,23 @@ func run() error {
 // that passes the zero value — as the existing tests do — gets the same
 // behaviour this function had before either flag existed.
 func poolConfig(client *blanktrail.Client, mode wb.Mode, threads, perThread int, ca *x509.CertPool, channels []blanktrail.Channel, requestTimeout time.Duration, portTimeoutSeconds int) blanktrail.PoolConfig {
-	spec := mode.Spec(blanktrail.DefaultPortSpec())
-	if portTimeoutSeconds > 0 {
-		spec.TimeoutSeconds = portTimeoutSeconds
-	}
 	if len(channels) == 0 {
 		channels = []blanktrail.Channel{blanktrail.NewDirectChannel("direct")}
 	}
-	if requestTimeout <= 0 {
-		requestTimeout = 300 * time.Second
-	}
-	return blanktrail.PoolConfig{
-		Client:         client,
-		Threads:        threads,
-		PortsPerThread: perThread,
-		Spec:           spec,
-		Channels:       channels,
-		CA:             ca,
-		RequestTimeout: requestTimeout,
-		CountFailure:   wb.CountFailure,
-	}
+	// Everything a pool on this site needs — the fingerprint for the mode,
+	// the failure rule, identity renewal, the request budget — is wb's, the
+	// same function the monitor itself opens its pools with. What this
+	// program adds is only what its flags decide.
+	return wb.PoolConfig(wb.PoolOptions{
+		Client:             client,
+		CA:                 ca,
+		Mode:               mode,
+		Channels:           channels,
+		Threads:            threads,
+		PortsPerThread:     perThread,
+		RequestTimeout:     requestTimeout,
+		PortTimeoutSeconds: portTimeoutSeconds,
+	})
 }
 
 // retryPolicy is how hard this run tries when the edge answers with a challenge

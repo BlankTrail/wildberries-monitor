@@ -4,6 +4,7 @@ package engine
 
 import (
 	"context"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"net/http"
@@ -130,14 +131,41 @@ func (e *Engine) Service(ctx context.Context) (*wb.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	pool, err := blanktrail.NewPool(ctx, blanktrail.PoolConfig{
+	pool, err := blanktrail.NewPool(ctx, servicePoolConfig(client, report.CA, channels))
+	if err != nil {
+		closeChannels()
+		return nil, fmt.Errorf("engine: не удалось открыть служебный порт: %w", err)
+	}
+
+	// The budget follows the exit, as a run's does. It used to be the direct
+	// one whatever was chosen, so errands sent through a proxy list gave up
+	// after two tries instead of walking to the next address.
+	e.svc.pool = pool
+	e.svc.site = wb.NewClientWithRetry(wb.FromPool(pool), wb.NewSessions(),
+		wb.DefaultRetryPolicy(wb.ThroughProxies(channels)))
+	e.svc.addr, e.svc.key, e.svc.channel = addr, key, channel
+	e.svc.closeChannel = closeChannels
+	e.logf("служебный порт открыт — через него идут справочники и разовые запросы панели")
+	return e.svc.site, nil
+}
+
+// servicePoolConfig is the standing port's pool: the one every run gets —
+// wb.PoolConfig — with the two settings a standing port has of its own, one
+// port and an errand's pace.
+//
+// A named function for the reason poolConfig is one: what it carries is
+// invisible by inspection once it is wrong, and the call it feeds needs a live
+// licensed service. It used to be a literal of its own, and the copy had
+// drifted: no CountFailure, so a challenge here was counted against the
+// address, the port moved on and the solved session went with it.
+func servicePoolConfig(client *blanktrail.Client, ca *x509.CertPool, channels []blanktrail.Channel) blanktrail.PoolConfig {
+	return wb.PoolConfig(wb.PoolOptions{
 		Client:         client,
+		CA:             ca,
+		Mode:           wb.ModeOf(wb.AppWeb),
+		Channels:       channels,
 		Threads:        1,
 		PortsPerThread: servicePorts,
-		Channels:       channels,
-		Spec:           wb.ModeOf(wb.AppWeb).Spec(blanktrail.DefaultPortSpec()),
-		CA:             report.CA,
-		RequestTimeout: requestTimeout,
 		// The pace, named rather than left to the pool's default, and this is
 		// the one setting where a standing port differs from a run's.
 		//
@@ -154,27 +182,7 @@ func (e *Engine) Service(ctx context.Context) (*wb.Client, error) {
 		// so that a button press stops costing seconds.
 		DelayMin: serviceDelay,
 		DelayMax: serviceDelay,
-		// The same proactive contour a run's pool gets — see poolConfig. This
-		// port outlives every run: it answers directory refreshes and the
-		// panel's own checks for as long as the program is up, so left without
-		// triggers it would spend days on one fingerprint and one address.
-		RenewAfterRequests: renewAfterRequests,
-		RenewAfterInterval: renewAfterInterval,
 	})
-	if err != nil {
-		closeChannels()
-		return nil, fmt.Errorf("engine: не удалось открыть служебный порт: %w", err)
-	}
-
-	// The conservative retry budget: one address, nowhere to move to, and a
-	// challenge that survives a couple of tries is not going to be beaten by a
-	// third on the same exit.
-	e.svc.pool = pool
-	e.svc.site = wb.NewClientWithRetry(wb.FromPool(pool), wb.NewSessions(), wb.DefaultRetryPolicy(false))
-	e.svc.addr, e.svc.key, e.svc.channel = addr, key, channel
-	e.svc.closeChannel = closeChannels
-	e.logf("служебный порт открыт — через него идут справочники и разовые запросы панели")
-	return e.svc.site, nil
 }
 
 // serviceIsCurrentLocked reports whether the standing port still matches what
