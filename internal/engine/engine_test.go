@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -224,17 +225,28 @@ func TestPreflightInput_AsksAboutTheHostAndNotTheWholeAddress(t *testing.T) {
 	// The preflight resolves and dials what it is given. Handed a whole URL it
 	// reports the target as unreachable on a machine where it is fine, and the
 	// run stops for a reason that is not true.
+	//
+	// And every host a run talks to, not the home page's alone: a licence
+	// covering www.wildberries.ru and nothing else passed the check that
+	// named one host, then failed on the first card from the CDN.
 	eps := wb.DefaultEndpoints()
 	in := preflightInput(eps, job.Job{})
 
-	if len(in.Domains) != 1 {
-		t.Fatalf("доменов %d, ожидался один", len(in.Domains))
+	for _, d := range append(append([]string{}, in.Domains...), in.OptionalDomains...) {
+		if strings.ContainsAny(d, "/:") {
+			t.Errorf("предполётной передан адрес целиком: %q", d)
+		}
 	}
-	if strings.Contains(in.Domains[0], "/") {
-		t.Errorf("предполётной передан адрес целиком: %q", in.Domains[0])
+	for _, want := range []string{hostOf(eps.Home), "basket-01.wbbasket.ru"} {
+		if !slices.Contains(in.Domains, want) {
+			t.Errorf("обязательные домены %v не включают %s", in.Domains, want)
+		}
 	}
-	if in.Domains[0] != hostOf(eps.Home) {
-		t.Errorf("спрашивает про %q, а собирать будет с %q", in.Domains[0], eps.Home)
+	if len(in.OptionalDomains) == 0 {
+		t.Error("домены отзывов, вопросов и акций не проверяются вовсе")
+	}
+	if in.Ports != portsPerThread {
+		t.Errorf("портов %d, у задания в один поток их %d", in.Ports, portsPerThread)
 	}
 }
 
@@ -311,14 +323,14 @@ func TestFirstBlocking_NamesOneThingToFix(t *testing.T) {
 		{Severity: blanktrail.SeverityFail, Title: "второе", Action: "тоже"},
 	}}
 
-	got := firstBlocking(report)
+	got := firstBlocking(report, blanktrail.PreflightInput{})
 	if !strings.Contains(got, "лицензия истекла") || !strings.Contains(got, "продлите") {
 		t.Errorf("firstBlocking = %q — не назвал первое блокирующее с лечением", got)
 	}
 	if strings.Contains(got, "второе") {
 		t.Errorf("firstBlocking = %q — вывалил всё сразу", got)
 	}
-	if got := firstBlocking(blanktrail.Report{}); got == "" {
+	if got := firstBlocking(blanktrail.Report{}, blanktrail.PreflightInput{}); got == "" {
 		t.Error("отказ без находок остался без объяснения вовсе")
 	}
 }

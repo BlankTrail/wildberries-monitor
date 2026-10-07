@@ -390,41 +390,56 @@ func TestCheckSettings_ReportsWhatThePreflightSaid(t *testing.T) {
 	ctx := context.Background()
 	_ = srv.Store.SetSetting(ctx, store.SettingBlankTrailAPIKey, "abc", store.SettingSecret)
 
-	srv.CheckBlankTrail = func(context.Context, string, string) error { return errors.New("license expired") }
+	// Every finding, each with what to do: the screen is where a licence or a
+	// solver problem is found, not the first run.
+	srv.CheckConnection = func(context.Context) ([]ConnectionFinding, error) {
+		return []ConnectionFinding{
+			{Level: "fail", Title: "Лицензия BlankTrail не активирована", Action: "Активируйте лицензию."},
+			{Level: "warn", Title: "Шлюзы BlankTrail недоступны", Action: "Установите модуль шлюзов."},
+		}, nil
+	}
 	body := check(t, srv)
-	if !strings.Contains(body, "license expired") {
-		t.Errorf("the dialog does not show what the preflight said: %q", firstLines(body))
+	for _, want := range []string{"bt-alert--error", "не активирована", "Активируйте лицензию.", "bt-alert--warning", "Шлюзы"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("в окне нет %q: %q", want, firstLines(body))
+		}
+	}
+	if strings.Contains(body, "установлено") {
+		t.Errorf("при блокирующей находке окно говорит, что соединение установлено: %q", firstLines(body))
 	}
 
-	srv.CheckBlankTrail = func(context.Context, string, string) error { return nil }
-	if body := check(t, srv); !strings.Contains(body, "установлено") {
+	srv.CheckConnection = func(context.Context) ([]ConnectionFinding, error) {
+		return []ConnectionFinding{{Level: "ok", Title: "Соединение установлено, лицензия активна"}}, nil
+	}
+	if body := check(t, srv); !strings.Contains(body, "установлено") || !strings.Contains(body, "bt-alert--success") {
 		t.Errorf("a successful check does not say so: %q", firstLines(body))
+	}
+
+	// A check that could not be made at all is said as such.
+	srv.CheckConnection = func(context.Context) ([]ConnectionFinding, error) {
+		return nil, errors.New("BlankTrail не настроен")
+	}
+	if body := check(t, srv); !strings.Contains(body, "Проверить не удалось") {
+		t.Errorf("невыполненная проверка не названа: %q", firstLines(body))
 	}
 }
 
-func TestCheckSettings_ChecksTheAddressItWouldActuallyDial(t *testing.T) {
+func TestCheckSettings_RunsWithNoAddressSaved(t *testing.T) {
 	// The panel dials the default address when nothing is saved, so a check
 	// that refused to run without a saved one would refuse the case it exists
-	// for: a fresh install with BlankTrail on this machine.
+	// for: a fresh install with BlankTrail on this machine. Which address is
+	// dialled is the engine's to decide, and its own tests say so.
 	srv := newServer(t)
 	_ = srv.Store.SetSetting(context.Background(), store.SettingBlankTrailAPIKey, "abc", store.SettingSecret)
 
-	var asked string
-	srv.CheckBlankTrail = func(_ context.Context, url, _ string) error {
-		asked = url
-		return nil
+	asked := false
+	srv.CheckConnection = func(context.Context) ([]ConnectionFinding, error) {
+		asked = true
+		return []ConnectionFinding{{Level: "ok", Title: "Соединение установлено"}}, nil
 	}
 	check(t, srv)
-	if asked != store.DefaultBlankTrailURL {
-		t.Errorf("проверен адрес %q, ожидался %q", asked, store.DefaultBlankTrailURL)
-	}
-
-	// And a saved address is the one checked, or the check would be about
-	// somewhere else entirely.
-	_ = srv.Store.SetSetting(context.Background(), store.SettingBlankTrailURL, "http://10.0.0.5:9000", store.SettingText)
-	check(t, srv)
-	if asked != "http://10.0.0.5:9000" {
-		t.Errorf("проверен адрес %q, ожидался сохранённый", asked)
+	if !asked {
+		t.Error("без сохранённого адреса проверка не запустилась")
 	}
 }
 

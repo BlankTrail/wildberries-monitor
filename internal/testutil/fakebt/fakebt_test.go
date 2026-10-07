@@ -9,7 +9,10 @@ import (
 	"testing"
 )
 
-func TestFake_HealthRequiresKey(t *testing.T) {
+func TestFake_HealthAnswersWithoutAKeyAndTheRestDoNot(t *testing.T) {
+	// As the live service does, measured: /health is 200 with no key and with
+	// a wrong one, the licence is 401 with a wrong one. A fake stricter than
+	// the real thing hid a preflight that blamed the licence for the key.
 	s := New(t)
 
 	resp, err := http.Get(s.URL() + "/api/v1/health")
@@ -17,19 +20,28 @@ func TestFake_HealthRequiresKey(t *testing.T) {
 		t.Fatalf("get health: %v", err)
 	}
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("health without key: status=%d, want 401", resp.StatusCode)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("health without key: status=%d, want 200", resp.StatusCode)
 	}
 
-	req, _ := http.NewRequest(http.MethodGet, s.URL()+"/api/v1/health", nil)
+	resp, err = http.Get(s.URL() + "/api/v1/license/status")
+	if err != nil {
+		t.Fatalf("get licence: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("licence without key: status=%d, want 401", resp.StatusCode)
+	}
+
+	req, _ := http.NewRequest(http.MethodGet, s.URL()+"/api/v1/license/status", nil)
 	req.Header.Set("X-API-Key", s.Key())
 	resp, err = http.DefaultClient.Do(req)
 	if err != nil {
-		t.Fatalf("get health with key: %v", err)
+		t.Fatalf("get licence with key: %v", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("health with key: status=%d, want 200", resp.StatusCode)
+		t.Fatalf("licence with key: status=%d, want 200", resp.StatusCode)
 	}
 }
 

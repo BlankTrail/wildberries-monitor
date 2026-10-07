@@ -90,6 +90,14 @@ type Server struct {
 	// asked for.
 	CheckBlankTrail func(ctx context.Context, url, apiKey string) error
 
+	// CheckConnection is «Проверить соединение»: the whole preflight a run
+	// makes, against what is saved, as findings in Russian. Separate from
+	// CheckBlankTrail, which the header badge polls every few seconds and
+	// which must stay one cheap call; this one reads the licence, the solver,
+	// the domains and the certificate, and runs when somebody presses a
+	// button.
+	CheckConnection func(ctx context.Context) ([]ConnectionFinding, error)
+
 	// CheckTelegram asks Telegram who this bot is, over whatever ladder the
 	// wiring built. A field for the same reason CheckBlankTrail is one: the
 	// suite must not need a live Telegram.

@@ -257,7 +257,12 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Unlock()
 
-	if r.Header.Get("X-API-Key") != s.key {
+	// Health answers without a key, as the real service does — measured on a
+	// live instance: a wrong key got 200 from /health and 401 from the
+	// licence. This fake used to refuse health too, which was stricter than
+	// the thing it stands in for and hid a preflight that blamed the licence
+	// for a key BlankTrail had never accepted.
+	if r.URL.Path != "/api/v1/health" && r.Header.Get("X-API-Key") != s.key {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
 		return
 	}

@@ -22,6 +22,7 @@ import (
 	"github.com/BlankTrail/wildberries-monitor/internal/job"
 	"github.com/BlankTrail/wildberries-monitor/internal/rules"
 	"github.com/BlankTrail/wildberries-monitor/internal/store"
+	"github.com/BlankTrail/wildberries-monitor/internal/testutil/fakebt"
 	"github.com/BlankTrail/wildberries-monitor/internal/track"
 	"github.com/BlankTrail/wildberries-monitor/wb"
 )
@@ -605,23 +606,21 @@ func TestLoadEndpoints_AFileThatWillNotParseIsAnErrorAndNotAShrug(t *testing.T) 
 
 func TestPanelCheck_ActuallyAsksTheProxy(t *testing.T) {
 	// The panel had the button, the route and the handler, and nothing at all
-	// behind them: App never filled in Server.CheckBlankTrail, so pressing
-	// «Проверить соединение» answered «Проверка недоступна в этой сборке» on
-	// a build that collects perfectly well. Wiring is exactly what a package
-	// cannot test about itself, so it is tested here, where it is done.
-	var asked []string
-	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		asked = append(asked, r.URL.Path)
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer proxy.Close()
+	// behind them: App never filled in the check, so pressing «Проверить
+	// соединение» answered «Проверка недоступна в этой сборке» on a build that
+	// collects perfectly well. Wiring is exactly what a package cannot test
+	// about itself, so it is tested here, where it is done.
+	//
+	// And it asks for the licence, not only whether something answers: a
+	// health call alone said «установлено» over a licence that was not active.
+	fake := fakebt.New(t).WithCA(t)
 
 	a := newApp(t)
 	ctx := t.Context()
-	if err := a.Store.SetSetting(ctx, store.SettingBlankTrailURL, proxy.URL, store.SettingText); err != nil {
+	if err := a.Store.SetSetting(ctx, store.SettingBlankTrailURL, fake.URL(), store.SettingText); err != nil {
 		t.Fatalf("SetSetting: %v", err)
 	}
-	if err := a.Store.SetSetting(ctx, store.SettingBlankTrailAPIKey, "secret", store.SettingSecret); err != nil {
+	if err := a.Store.SetSetting(ctx, store.SettingBlankTrailAPIKey, fake.Key(), store.SettingSecret); err != nil {
 		t.Fatalf("SetSetting: %v", err)
 	}
 
@@ -633,11 +632,20 @@ func TestPanelCheck_ActuallyAsksTheProxy(t *testing.T) {
 	if !strings.Contains(w.Body.String(), "Соединение установлено") {
 		t.Errorf("проверка не подтвердила связь:\n%s", firstLines(w.Body.String()))
 	}
-	if len(asked) == 0 {
-		t.Fatal("прокси никто не спросил")
+	var paths []string
+	for _, r := range fake.Requests() {
+		paths = append(paths, r.Path)
 	}
-	if !strings.Contains(asked[0], "health") {
-		t.Errorf("спрошено %q, ожидался health", asked[0])
+	for _, want := range []string{"health", "license"} {
+		found := false
+		for _, p := range paths {
+			if strings.Contains(p, want) {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("проверка не спросила %s: %v", want, paths)
+		}
 	}
 }
 

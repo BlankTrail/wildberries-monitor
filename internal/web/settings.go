@@ -421,32 +421,72 @@ func (s *Server) saveSettings(w http.ResponseWriter, r *http.Request) {
 	s.writeSettingsForm(w, r, `<div class="bt-alert bt-alert--success">Сохранено. Настройки переживут перезапуск.</div>`)
 }
 
-// checkSettings runs the SDK's own preflight against what is configured.
+// ConnectionFinding is one line of «Проверить соединение», as the screen
+// draws it. Level is "ok", "warn" or "fail".
+type ConnectionFinding struct {
+	Level  string
+	Title  string
+	Detail string
+	Action string
+}
+
+// checkSettings runs the preflight a run would make, against what is saved,
+// and shows every finding.
+//
+// It used to ask only whether something answered at the address, and said
+// «Соединение установлено» over an inactive licence or a switched-off solver —
+// the two things that actually stop a run, found out at its first start.
 //
 // The result is shown in the dialog rather than stored: a check is a fact
 // about this moment, and a stored verdict is a verdict that goes stale
 // without anyone noticing.
 func (s *Server) checkSettings(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	url := s.Store.SettingOr(ctx, store.SettingBlankTrailURL, store.DefaultBlankTrailURL)
 	key := s.Store.SettingOr(ctx, store.SettingBlankTrailAPIKey, "")
 
 	switch {
 	case key == "":
 		s.writeSettingsForm(w, r, `<div class="bt-alert bt-alert--warning">Сначала сохраните ключ API, затем проверяйте.</div>`)
-	case s.CheckBlankTrail == nil:
+	case s.CheckConnection == nil:
 		s.writeSettingsForm(w, r, `<div class="bt-alert bt-alert--neutral">Проверка недоступна в этой сборке.</div>`)
 	default:
-		if err := s.CheckBlankTrail(ctx, url, key); err != nil {
-			// The error is shown as text the user can act on. It comes from
-			// the SDK's preflight, which was built to say what is wrong
-			// rather than that something is.
+		found, err := s.CheckConnection(ctx)
+		if err != nil {
 			s.writeSettingsForm(w, r,
-				`<div class="bt-alert bt-alert--error">Не отвечает: `+html.EscapeString(err.Error())+`</div>`)
+				`<div class="bt-alert bt-alert--error">Проверить не удалось: `+html.EscapeString(err.Error())+`</div>`)
 			return
 		}
-		s.writeSettingsForm(w, r, `<div class="bt-alert bt-alert--success">Соединение установлено.</div>`)
+		s.writeSettingsForm(w, r, connectionFindings(found))
 	}
+}
+
+// connectionFindings draws a check's findings, one alert each: what is wrong,
+// in bold, then why and what to do. A blocking one is red, a warning yellow,
+// the summary of a check that found nothing blocking green.
+func connectionFindings(found []ConnectionFinding) string {
+	if len(found) == 0 {
+		return `<div class="bt-alert bt-alert--neutral">Проверка ничего не сообщила.</div>`
+	}
+	tone := map[string]string{"ok": "success", "warn": "warning", "fail": "error"}
+	var b strings.Builder
+	for _, f := range found {
+		kind := tone[f.Level]
+		if kind == "" {
+			kind = "neutral"
+		}
+		// Title, then why, then what to do — the last on its own line, so the
+		// remedy does not run on from an error text that ends mid-thought.
+		var body []string
+		if f.Detail != "" {
+			body = append(body, html.EscapeString(f.Detail))
+		}
+		if f.Action != "" {
+			body = append(body, html.EscapeString(f.Action))
+		}
+		b.WriteString(`<div class="bt-alert bt-alert--` + kind + `"><strong>` + html.EscapeString(f.Title) +
+			`</strong><span>` + strings.Join(body, "<br>") + `</span></div>`)
+	}
+	return b.String()
 }
 
 // telegramRoute names the rung of the ladder currently in use.
