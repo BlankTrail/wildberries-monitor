@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"sync"
 
 	"github.com/BlankTrail/wildberries-monitor/blanktrail"
 	"github.com/BlankTrail/wildberries-monitor/internal/collect"
@@ -57,6 +58,11 @@ type Engine struct {
 
 	// Log is where a run's preparation reports what it found. Optional.
 	Log func(format string, args ...any)
+
+	// bench is where failing exits rest, shared by every channel this engine
+	// builds and kept in the database — see bench.go. Made on first use.
+	bench     *blanktrail.Bench
+	benchOnce sync.Once
 
 	// svc is the standing port the panel's own requests go through. See
 	// service.go — it opens once and is held, because opening a port per

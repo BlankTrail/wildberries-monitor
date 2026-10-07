@@ -77,7 +77,7 @@ func (e *Engine) Channels(ctx context.Context, want ...int64) ([]blanktrail.Chan
 		if !chosen[row.ID] {
 			continue
 		}
-		ch, err := buildChannel(ctx, row)
+		ch, err := buildChannel(ctx, row, e.exitBench(ctx))
 		if err != nil {
 			// The whole run stops, and the alternative is why. Skipping a
 			// channel that will not build leaves the run collecting through
@@ -283,7 +283,11 @@ type gatewayState struct {
 }
 
 // buildChannel is one row, as the thing that dials it.
-func buildChannel(ctx context.Context, row store.ChannelRow) (blanktrail.Channel, error) {
+//
+// bench is where the list and gateway channels keep their record of failing
+// exits; see bench.go. A rotating channel has one address and a direct one
+// none, so neither has anything to rest.
+func buildChannel(ctx context.Context, row store.ChannelRow, bench *blanktrail.Bench) (blanktrail.Channel, error) {
 	switch row.Kind {
 	case store.ChannelDirect:
 		return blanktrail.NewDirectChannel(row.Name), nil
@@ -297,13 +301,13 @@ func buildChannel(ctx context.Context, row store.ChannelRow) (blanktrail.Channel
 		if len(names) == 0 {
 			return nil, fmt.Errorf("не отмечено ни одного шлюза")
 		}
-		return blanktrail.NewGatewayChannel(row.Name, names...), nil
+		return blanktrail.NewGatewayChannelOn(bench, row.Name, names...), nil
 
 	case store.ChannelList:
 		// The list is read where the user put it and re-read on the rotor's own
 		// schedule, so an edited list takes effect without anybody re-saving
 		// anything — and the credentials in it never reach this database.
-		rotor, err := blanktrail.NewRotor(ctx, sourceOf(row))
+		rotor, err := blanktrail.NewRotor(ctx, sourceOf(row), blanktrail.WithBench(bench))
 		if err != nil {
 			return nil, err
 		}

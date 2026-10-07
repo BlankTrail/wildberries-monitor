@@ -908,3 +908,25 @@ func unpinChannels(t *testing.T, s *store.Store) {
 		}
 	}
 }
+
+func TestChannels_RestingExitsAreSaidWithAWayToBringThemBack(t *testing.T) {
+	// Somebody who has just repaired a list would otherwise wait out the rest
+	// of the hour before the addresses they fixed are tried.
+	srv := newServer(t)
+	resting := 3
+	srv.RestingExits = func(context.Context) int { return resting }
+	srv.ReleaseExits = func(context.Context) error { resting = 0; return nil }
+
+	body := get(t, srv, "/channels", "correct horse").Body.String()
+	if !strings.Contains(body, "Отдыхает адресов после сбоев: 3") || !strings.Contains(body, "/channels/release") {
+		t.Fatalf("экран не говорит об отдыхающих адресах:\n%s", firstLines(body))
+	}
+
+	w := postForm(t, srv, "/channels/release", url.Values{})
+	if !strings.Contains(w.Body.String(), "Адреса возвращены") {
+		t.Errorf("возврат не подтверждён: %s", firstLines(w.Body.String()))
+	}
+	if strings.Contains(w.Body.String(), "Отдыхает адресов") {
+		t.Error("после возврата строка об отдыхающих осталась")
+	}
+}

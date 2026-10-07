@@ -187,7 +187,7 @@ func TestBuildChannel_AKindThisBuildCannotDialIsRefusedRatherThanSkipped(t *test
 	// it, and the store tests say so — but a database written by a newer release
 	// can hold one, and a channel silently absent from the mix is a run
 	// collecting through the others without saying so.
-	_, err := buildChannel(t.Context(), store.ChannelRow{Name: "из будущего", Kind: "wireguard"})
+	_, err := buildChannel(t.Context(), store.ChannelRow{Name: "из будущего", Kind: "wireguard"}, nil)
 	if err == nil {
 		t.Fatal("вид wireguard собран")
 	}

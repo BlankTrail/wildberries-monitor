@@ -346,6 +346,19 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 		ResolvePickup: func(ctx context.Context, groups [][]int64) (store.PickupResolution, error) {
 			return a.resolvePickup(ctx, groups)
 		},
+		// The bench of failing exits, for the proxies screen.
+		RestingExits: func(ctx context.Context) int {
+			if a.Engine == nil {
+				return 0
+			}
+			return a.Engine.RestingExits(ctx)
+		},
+		ReleaseExits: func(ctx context.Context) error {
+			if a.Engine == nil {
+				return errors.New("сбор не собран в этой сборке")
+			}
+			return a.Engine.ReleaseExits(ctx)
+		},
 		// «Проверить соединение»: the preflight a run makes, in Russian.
 		CheckConnection: func(ctx context.Context) ([]web.ConnectionFinding, error) {
 			if a.Engine == nil {

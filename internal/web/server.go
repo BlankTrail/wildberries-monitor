@@ -98,6 +98,12 @@ type Server struct {
 	// button.
 	CheckConnection func(ctx context.Context) ([]ConnectionFinding, error)
 
+	// RestingExits and ReleaseExits are the bench of failing exits — see
+	// internal/engine/bench.go. Fields for the reason the checks above are:
+	// the bench lives in the engine, and the suite runs without one.
+	RestingExits func(ctx context.Context) int
+	ReleaseExits func(ctx context.Context) error
+
 	// CheckTelegram asks Telegram who this bot is, over whatever ladder the
 	// wiring built. A field for the same reason CheckBlankTrail is one: the
 	// suite must not need a live Telegram.
@@ -385,6 +391,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /channels/gateways", s.auth(http.HandlerFunc(s.refreshGateways)))
 	mux.Handle("GET /channels/test", s.auth(http.HandlerFunc(s.testChannel)))
 	mux.Handle("POST /channels/delete", s.auth(http.HandlerFunc(s.deleteChannel)))
+	mux.Handle("POST /channels/release", s.auth(http.HandlerFunc(s.releaseExits)))
 	mux.Handle("GET /proxy-profiles/list", s.auth(http.HandlerFunc(s.listProxyProfiles)))
 	mux.Handle("GET /proxy-profiles/edit", s.auth(http.HandlerFunc(s.editProxyProfile)))
 	mux.Handle("POST /proxy-profiles", s.auth(http.HandlerFunc(s.saveProxyProfile)))
