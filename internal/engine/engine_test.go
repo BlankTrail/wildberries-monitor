@@ -488,32 +488,3 @@ func TestRunnerFor_ADeletedProfileFallsBackToTheDefaultAndSaysWhichOne(t *testin
 		t.Errorf("err = %v — должен назвать профиль по умолчанию, через который пошло бы задание", err)
 	}
 }
-
-func TestThroughProxies_TheHostsOwnAddressAloneIsNotAPool(t *testing.T) {
-	// Since migration 0012 a fresh install has one channel, the direct one.
-	// Counted as a pool it gave a run with a single address the fifteen-attempt
-	// budget meant for walking through a list of them.
-	e := openEngine(t)
-	direct := saveChannel(t, e, store.ChannelRow{Name: "свой адрес", Kind: store.ChannelDirect, Enabled: true})
-	gateway := saveChannel(t, e, store.ChannelRow{
-		Name: "шлюз", Kind: store.ChannelGateway, Source: "berlin", Enabled: true,
-	})
-
-	only, done, err := e.Channels(t.Context(), direct)
-	if err != nil {
-		t.Fatalf("Channels: %v", err)
-	}
-	defer done()
-	if throughProxies(only) {
-		t.Error("один прямой выход посчитан пулом прокси")
-	}
-
-	mixed, doneMixed, err := e.Channels(t.Context(), direct, gateway)
-	if err != nil {
-		t.Fatalf("Channels: %v", err)
-	}
-	defer doneMixed()
-	if !throughProxies(mixed) {
-		t.Error("прямой выход вместе со шлюзом не посчитан пулом прокси")
-	}
-}

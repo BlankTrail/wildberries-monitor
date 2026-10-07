@@ -521,30 +521,26 @@ func buildEgressSetup(ctx context.Context, proxiesPath, proxyScheme, rotateURL, 
 	return setup, nil
 }
 
-// poolConfig is wbsearch's own function, copied verbatim (including its
-// CountFailure wiring, the whole point of the wb↔blanktrail seam — see
-// wbsearch's own doc comment on this function for the full reasoning).
+// poolConfig is wbsearch's, and both are thin over wb.PoolConfig — the copy
+// this used to be had to be kept in step by hand, CountFailure included.
 func poolConfig(client *blanktrail.Client, mode wb.Mode, threads, perThread int, ca *x509.CertPool, channels []blanktrail.Channel, requestTimeout time.Duration, portTimeoutSeconds int) blanktrail.PoolConfig {
-	spec := mode.Spec(blanktrail.DefaultPortSpec())
-	if portTimeoutSeconds > 0 {
-		spec.TimeoutSeconds = portTimeoutSeconds
-	}
 	if len(channels) == 0 {
 		channels = []blanktrail.Channel{blanktrail.NewDirectChannel("direct")}
 	}
-	if requestTimeout <= 0 {
-		requestTimeout = 300 * time.Second
-	}
-	return blanktrail.PoolConfig{
-		Client:         client,
-		Threads:        threads,
-		PortsPerThread: perThread,
-		Spec:           spec,
-		Channels:       channels,
-		CA:             ca,
-		RequestTimeout: requestTimeout,
-		CountFailure:   wb.CountFailure,
-	}
+	// Everything a pool on this site needs — the fingerprint for the mode,
+	// the failure rule, identity renewal, the request budget — is wb's, the
+	// same function the monitor itself opens its pools with. What this
+	// program adds is only what its flags decide.
+	return wb.PoolConfig(wb.PoolOptions{
+		Client:             client,
+		CA:                 ca,
+		Mode:               mode,
+		Channels:           channels,
+		Threads:            threads,
+		PortsPerThread:     perThread,
+		RequestTimeout:     requestTimeout,
+		PortTimeoutSeconds: portTimeoutSeconds,
+	})
 }
 
 // retryPolicy is wbsearch's own function, copied verbatim.
