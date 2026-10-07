@@ -611,13 +611,10 @@ func (s *Server) restingLine(r *http.Request) string {
 
 func (s *Server) releaseExits(w http.ResponseWriter, r *http.Request) {
 	notice := alert("success", "Адреса возвращены: следующий запрос может пойти через любой из них.")
-	switch {
-	case s.ReleaseExits == nil:
+	if s.ReleaseExits == nil {
 		notice = alert("neutral", "Возврат адресов недоступен в этой сборке.")
-	default:
-		if err := s.ReleaseExits(r.Context()); err != nil {
-			notice = alert("error", "Вернуть адреса не удалось: "+err.Error())
-		}
+	} else if err := s.ReleaseExits(r.Context()); err != nil {
+		notice = alert("error", "Вернуть адреса не удалось: "+err.Error())
 	}
 	s.channelsFragment(w, r, notice, store.ChannelRow{})
 }
