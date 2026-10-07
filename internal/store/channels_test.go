@@ -167,7 +167,6 @@ func TestChannels_ListsWhatWasSavedOldestFirst(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Channels: %v", err)
 	}
-	unpinChannels(t, s)
 	for _, c := range seeded {
 		if err := s.DeleteChannel(ctx, c.ID); err != nil {
 			t.Fatalf("DeleteChannel: %v", err)
@@ -235,7 +234,6 @@ func TestChannels_NoneIsAnEmptyListAndNotAnError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Channels: %v", err)
 	}
-	unpinChannels(t, s)
 	for _, c := range list {
 		if err := s.DeleteChannel(ctx, c.ID); err != nil {
 			t.Fatalf("DeleteChannel: %v", err)
@@ -267,7 +265,6 @@ func TestChannels_TheDefaultOneStaysDeleted(t *testing.T) {
 	if err != nil || len(list) != 1 {
 		t.Fatalf("Channels: %v, %d", err, len(list))
 	}
-	unpinChannels(t, first)
 	if err := first.DeleteChannel(ctx, list[0].ID); err != nil {
 		t.Fatalf("DeleteChannel: %v", err)
 	}
@@ -428,22 +425,5 @@ func TestGatewayNames_AreParsedInOnePlaceAndTidiedThere(t *testing.T) {
 	names := []string{"de", "nl"}
 	if got := (ChannelRow{Source: JoinGatewayNames(names)}).GatewayNames(); !slices.Equal(got, names) {
 		t.Errorf("после записи и чтения %v", got)
-	}
-}
-
-// unpinChannels empties every proxy profile, so a test that starts by deleting
-// the seeded channels can: DeleteChannel refuses a channel a profile names, and
-// the carry put the seeded direct exit in «Основной».
-func unpinChannels(t *testing.T, s *Store) {
-	t.Helper()
-	profiles, err := s.ProxyProfiles(t.Context())
-	if err != nil {
-		t.Fatalf("ProxyProfiles: %v", err)
-	}
-	for _, p := range profiles {
-		p.Channels = nil
-		if err := s.SaveProxyProfile(t.Context(), p); err != nil {
-			t.Fatalf("SaveProxyProfile: %v", err)
-		}
 	}
 }

@@ -315,9 +315,6 @@ func (s *Store) SaveChannel(ctx context.Context, c ChannelRow) (int64, error) {
 		if id, err = res.LastInsertId(); err != nil {
 			return 0, fmt.Errorf("store: save channel: %w", err)
 		}
-		if err := joinDefaultProfile(ctx, tx, id, now); err != nil {
-			return 0, fmt.Errorf("store: save channel: %w", err)
-		}
 	} else {
 		res, err := tx.ExecContext(ctx, `
 			UPDATE channels
@@ -351,15 +348,15 @@ func (s *Store) SaveChannel(ctx context.Context, c ChannelRow) (int64, error) {
 // channel. ChannelInUseError carries which profiles.
 var ErrChannelInUse = errors.New("store: channel is in a proxy profile")
 
-// ChannelInUseError says which profiles stand in the way of a delete, so the
+// ChannelInUseError says which jobs stand in the way of a delete, so the
 // screen can name them instead of saying «используется» and leaving the person
 // to search.
 type ChannelInUseError struct {
-	Profiles []string
+	Users []string
 }
 
 func (e *ChannelInUseError) Error() string {
-	return "store: channel is in proxy profiles: " + strings.Join(e.Profiles, ", ")
+	return "store: channel is picked by " + strings.Join(e.Users, ", ")
 }
 
 func (e *ChannelInUseError) Unwrap() error { return ErrChannelInUse }
@@ -377,18 +374,15 @@ func (s *Store) DeleteChannel(ctx context.Context, id int64) error {
 	}
 	defer tx.Rollback()
 
-	// Refused only for a set somebody made: the default one took the proxy in
-	// by itself when it was added (see joinDefaultProfile), and lets it go the
-	// same way — asking to untick it there first would be asking twice.
-	using, err := proxyProfilesUsing(ctx, tx, id, false)
+	// Refused only for a job that chose this proxy by hand: the default set is
+	// every enabled proxy, read when it is asked for, and a deleted proxy
+	// simply stops being one of them.
+	using, err := proxyUsers(ctx, tx, id)
 	if err != nil {
 		return err
 	}
 	if len(using) > 0 {
-		return &ChannelInUseError{Profiles: using}
-	}
-	if err := leaveDefaultProfile(ctx, tx, id, s.now().UTC().Unix()); err != nil {
-		return fmt.Errorf("store: delete channel %d: %w", id, err)
+		return &ChannelInUseError{Users: using}
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM channels WHERE id = ?`, id); err != nil {
 		return fmt.Errorf("store: delete channel %d: %w", id, err)

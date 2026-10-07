@@ -683,9 +683,9 @@ func (s *Server) constructorHTML(r *http.Request, edit *job.Job) (string, error)
 	// Which exits, beside the regions: both are «где смотреть», and a job that
 	// must go through one country's proxies is the same kind of decision as one
 	// that must be read for one region.
-	b.WriteString(s.proxyProfileField(r, d.ProxyProfileID,
-		"Через какой набор прокси идёт задание. Наборы настраиваются на вкладке «Прокси»; "+
-			"«по умолчанию» следует за отметкой, если её перенесут на другой набор."))
+	b.WriteString(s.proxyChoice(r, d.ProxyProfileID,
+		"Обычно задание идёт через все прокси, включённые на вкладке «Прокси». "+
+			"Если ему нужны другие — отметьте их здесь."))
 
 	b.WriteString(`<h3 class="bt-form-head">Когда и как быстро</h3>`)
 	b.WriteString(`<div class="bt-form-grid">`)
@@ -1098,6 +1098,11 @@ func assumedItems(j job.Job) int {
 // saveJobHandler stores what the constructor submitted.
 func (s *Server) saveJobHandler(w http.ResponseWriter, r *http.Request) {
 	j, err := s.jobFromForm(r)
+	if err == nil {
+		// Read here and not in jobFromForm: the estimate calls that on every
+		// keystroke, and ticking proxies must not make a set each time.
+		j.ProxyProfileID, err = s.proxyChoiceFrom(r.Context(), r.PostForm)
+	}
 	if err != nil {
 		// Onto the screen with the constructor still open, for the same reason
 		// the validation failure below arrives that way: everything this
@@ -1110,6 +1115,10 @@ func (s *Server) saveJobHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id, err := job.Save(r.Context(), s.Store, j)
+	if err == nil {
+		// A set made for a choice nobody holds any more goes with it.
+		err = s.Store.PruneProxyProfiles(r.Context())
+	}
 	if err != nil {
 		// A validation failure is the user's to fix, not a server fault, and
 		// it arrives in the page rather than as a status the browser would
@@ -1138,19 +1147,18 @@ func (s *Server) jobFromForm(r *http.Request) (job.Job, error) {
 		// Zero for a new job, and the saved job's own id when the constructor
 		// was opened to change one. job.Save reads it: without it every
 		// correction to a job would write a second copy of it.
-		ID:             atoi64(f.Get("id")),
-		Name:           strings.TrimSpace(f.Get("name")),
-		Kind:           job.Kind(f.Get("kind")),
-		Regions:        splitCommas(f.Get("regions")),
-		AppType:        int(atoi64(f.Get("app_type"))),
-		Fields:         wb.Selection(f["fields"]),
-		Threads:        int(atoi64(f.Get("threads"))),
-		ProxyProfileID: atoi64(f.Get("proxy_profile")),
-		Attempts:       int(atoi64(f.Get("attempts"))),
-		Delay:          time.Duration(atoi64(f.Get("delay_ms"))) * time.Millisecond,
-		Schedule:       strings.TrimSpace(f.Get("schedule")),
-		Enabled:        enabledFrom(f),
-		KeepRaw:        f.Get("keep_raw") != "",
+		ID:       atoi64(f.Get("id")),
+		Name:     strings.TrimSpace(f.Get("name")),
+		Kind:     job.Kind(f.Get("kind")),
+		Regions:  splitCommas(f.Get("regions")),
+		AppType:  int(atoi64(f.Get("app_type"))),
+		Fields:   wb.Selection(f["fields"]),
+		Threads:  int(atoi64(f.Get("threads"))),
+		Attempts: int(atoi64(f.Get("attempts"))),
+		Delay:    time.Duration(atoi64(f.Get("delay_ms"))) * time.Millisecond,
+		Schedule: strings.TrimSpace(f.Get("schedule")),
+		Enabled:  enabledFrom(f),
+		KeepRaw:  f.Get("keep_raw") != "",
 	}
 
 	// Only the chosen kind's own parameters are read. The constructor shows

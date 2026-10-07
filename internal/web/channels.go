@@ -65,12 +65,7 @@ func (s *Server) channelsPage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "channels: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	profiles, err := s.proxyProfilesSection(r)
-	if err != nil {
-		http.Error(w, "proxy profiles: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-	s.render(w, r, page{Title: "Прокси", Body: rawHTML(body + profiles)})
+	s.render(w, r, page{Title: "Прокси", Body: rawHTML(body)})
 }
 
 // channelsFragment renders the inside of that section, for a save that must not
@@ -113,6 +108,8 @@ func (s *Server) channelsBody(r *http.Request, notice string, form store.Channel
 
 	var b strings.Builder
 	b.WriteString(`<h2>Прокси</h2>`)
+	b.WriteString(`<p class="bt-form-hint">Задания идут через все включённые прокси. ` +
+		`Если одному заданию нужны другие, их отмечают в настройках самого задания.</p>`)
 	b.WriteString(notice)
 	b.WriteString(channelList(list, form.ID))
 	b.WriteString(s.restingLine(r))
@@ -556,9 +553,8 @@ func (s *Server) deleteChannel(w http.ResponseWriter, r *http.Request) {
 			// Refused, and said where: the profiles are in the section below,
 			// and «используется» without naming them is a search.
 			s.channelsFragment(w, r, alert("error",
-				"Этот прокси отмечен в наборах: «"+strings.Join(inUse.Profiles, "», «")+
-					"». Уберите его оттуда в разделе «Наборы прокси для заданий» ниже — или выключите прокси, "+
-					"если он нужен позже."), store.ChannelRow{})
+				"Этот прокси выбран вручную: "+strings.Join(inUse.Users, ", ")+
+					". Уберите его в настройках прокси этих заданий — или выключите прокси, если он нужен позже."), store.ChannelRow{})
 			return
 		}
 		http.Error(w, "channels: "+err.Error(), http.StatusInternalServerError)

@@ -7,8 +7,8 @@ import (
 	"errors"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
-	"time"
 )
 
 func TestCarryProxyProfiles_AFreshDatabaseGetsOneDefaultHoldingTheSeededExit(t *testing.T) {
@@ -179,74 +179,6 @@ func TestCarryProxyProfiles_RunsOnce(t *testing.T) {
 	}
 }
 
-func TestProxyProfiles_ThereIsAlwaysExactlyOneDefault(t *testing.T) {
-	s := openTestStore(t)
-	ctx := context.Background()
-
-	first, err := s.DefaultProxyProfile(ctx)
-	if err != nil {
-		t.Fatalf("DefaultProxyProfile: %v", err)
-	}
-
-	// A new profile asked to be the default takes the mark.
-	second, err := s.CreateProxyProfile(ctx, ProxyProfile{Name: "второй", Default: true})
-	if err != nil {
-		t.Fatalf("CreateProxyProfile: %v", err)
-	}
-	defaults(t, s, second)
-
-	// Unticking it on an edit does not leave nobody holding it.
-	if err := s.SaveProxyProfile(ctx, ProxyProfile{ID: second, Name: "второй", Default: false}); err != nil {
-		t.Fatalf("SaveProxyProfile: %v", err)
-	}
-	defaults(t, s, second)
-
-	// Moving it explicitly moves it.
-	if err := s.SetDefaultProxyProfile(ctx, first.ID); err != nil {
-		t.Fatalf("SetDefaultProxyProfile: %v", err)
-	}
-	defaults(t, s, first.ID)
-
-	// Deleting the default hands it on rather than leaving none.
-	if err := s.DeleteProxyProfile(ctx, first.ID); err != nil {
-		t.Fatalf("DeleteProxyProfile: %v", err)
-	}
-	defaults(t, s, second)
-}
-
-// defaults asserts that exactly one profile is the default, and that it is id.
-func defaults(t *testing.T, s *Store, id int64) {
-	t.Helper()
-	profiles, err := s.ProxyProfiles(context.Background())
-	if err != nil {
-		t.Fatalf("ProxyProfiles: %v", err)
-	}
-	var marked []int64
-	for _, p := range profiles {
-		if p.Default {
-			marked = append(marked, p.ID)
-		}
-	}
-	if !slices.Equal(marked, []int64{id}) {
-		t.Errorf("по умолчанию отмечены %v, ожидался только %d", marked, id)
-	}
-}
-
-func TestProxyProfiles_TheLastOneCannotBeDeleted(t *testing.T) {
-	// A job that names no profile has to go through something; the last
-	// profile is emptied by editing it.
-	s := openTestStore(t)
-	ctx := context.Background()
-
-	p, err := s.DefaultProxyProfile(ctx)
-	if err != nil {
-		t.Fatalf("DefaultProxyProfile: %v", err)
-	}
-	if err := s.DeleteProxyProfile(ctx, p.ID); !errors.Is(err, ErrLastProxyProfile) {
-		t.Errorf("удаление последнего = %v, ожидался ErrLastProxyProfile", err)
-	}
-}
-
 func TestProxyProfiles_ANameHasToBeThereAndBeItsOwn(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
@@ -256,13 +188,6 @@ func TestProxyProfiles_ANameHasToBeThereAndBeItsOwn(t *testing.T) {
 	}
 	if _, err := s.CreateProxyProfile(ctx, ProxyProfile{Name: "Основной"}); !errors.Is(err, ErrProxyProfileName) {
 		t.Errorf("занятое название = %v, ожидался ErrProxyProfileName", err)
-	}
-	id, err := s.CreateProxyProfile(ctx, ProxyProfile{Name: "второй"})
-	if err != nil {
-		t.Fatalf("CreateProxyProfile: %v", err)
-	}
-	if err := s.SaveProxyProfile(ctx, ProxyProfile{ID: id, Name: "Основной"}); !errors.Is(err, ErrProxyProfileName) {
-		t.Errorf("переименование в занятое = %v, ожидался ErrProxyProfileName", err)
 	}
 }
 
@@ -316,123 +241,220 @@ func TestProxyProfileFor_NamingNoneOrAGoneOneIsTheDefault(t *testing.T) {
 	}
 }
 
-func TestDeleteChannel_RefusedWhileAProfileNamesItAndSaysWhich(t *testing.T) {
-	// Deleting a channel checked nothing, and the first anybody heard of it was
-	// the next run of every job that went through it.
+func TestDefaultSet_IsEveryEnabledProxyReadNow(t *testing.T) {
+	// One switch: «Включён» on the proxy is what the default set is made of.
+	// A proxy added and switched on is in it, one switched off is not — no
+	// second list to keep in step with the first.
 	s := openTestStore(t)
 	ctx := context.Background()
-
-	id, err := s.SaveChannel(ctx, ChannelRow{Name: "список", Kind: ChannelList, Source: "/tmp/l.txt", Enabled: true})
+	on, err := s.SaveChannel(ctx, ChannelRow{Name: "включён", Kind: ChannelList, Source: "/tmp/a.txt", Enabled: true})
 	if err != nil {
 		t.Fatalf("SaveChannel: %v", err)
 	}
-	if _, err := s.CreateProxyProfile(ctx, ProxyProfile{Name: "через список", Channels: []int64{id}}); err != nil {
+	off, err := s.SaveChannel(ctx, ChannelRow{Name: "выключен", Kind: ChannelList, Source: "/tmp/b.txt"})
+	if err != nil {
+		t.Fatalf("SaveChannel: %v", err)
+	}
+	def, err := s.DefaultProxyProfile(ctx)
+	if err != nil {
+		t.Fatalf("DefaultProxyProfile: %v", err)
+	}
+	for name, read := range map[string]func() (ProxyProfile, error){
+		"DefaultProxyProfile": func() (ProxyProfile, error) { return s.DefaultProxyProfile(ctx) },
+		"ProxyProfile(id)":    func() (ProxyProfile, error) { return s.ProxyProfile(ctx, def.ID) },
+		"ProxyProfileFor(0)":  func() (ProxyProfile, error) { return s.ProxyProfileFor(ctx, 0) },
+		"ProxyProfiles[0]": func() (ProxyProfile, error) {
+			l, err := s.ProxyProfiles(ctx)
+			if err != nil {
+				return ProxyProfile{}, err
+			}
+			return l[0], nil
+		},
+	} {
+		p, err := read()
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if !slices.Contains(p.Channels, on) || slices.Contains(p.Channels, off) {
+			t.Errorf("%s: в наборе по умолчанию %v — нужен включённый %d и не нужен выключенный %d", name, p.Channels, on, off)
+		}
+	}
+	// Switched off, it leaves.
+	if _, err := s.SaveChannel(ctx, ChannelRow{ID: on, Name: "включён", Kind: ChannelList, Source: "/tmp/a.txt"}); err != nil {
+		t.Fatalf("SaveChannel: %v", err)
+	}
+	if p, _ := s.DefaultProxyProfile(ctx); slices.Contains(p.Channels, on) {
+		t.Error("выключенный прокси остался в наборе по умолчанию")
+	}
+	// A hand-picked set keeps exactly what was picked, switched on or not.
+	picked, err := s.ProxyProfileForChannels(ctx, []int64{off})
+	if err != nil {
+		t.Fatalf("ProxyProfileForChannels: %v", err)
+	}
+	if p, _ := s.ProxyProfile(ctx, picked); !slices.Equal(p.Channels, []int64{off}) || p.Default {
+		t.Errorf("выбранный вручную набор = %+v", p)
+	}
+}
+
+func TestProxyProfileForChannels_ReusesAndNames(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	a, _ := s.SaveChannel(ctx, ChannelRow{Name: "Альфа", Kind: ChannelList, Source: "/tmp/a.txt", Enabled: true})
+	b, _ := s.SaveChannel(ctx, ChannelRow{Name: "Бета", Kind: ChannelList, Source: "/tmp/b.txt", Enabled: true})
+
+	first, err := s.ProxyProfileForChannels(ctx, []int64{b, a, b})
+	if err != nil {
+		t.Fatalf("ProxyProfileForChannels: %v", err)
+	}
+	again, err := s.ProxyProfileForChannels(ctx, []int64{a, b})
+	if err != nil || again != first {
+		t.Errorf("тот же выбор дал другой набор: %d и %d, %v", first, again, err)
+	}
+	p, _ := s.ProxyProfile(ctx, first)
+	if p.Name != "Только: Альфа, Бета" {
+		t.Errorf("название = %q", p.Name)
+	}
+	// A name already taken by another set gets a number.
+	if _, err := s.CreateProxyProfile(ctx, ProxyProfile{Name: "Только: Альфа", Channels: []int64{b}}); err != nil {
 		t.Fatalf("CreateProxyProfile: %v", err)
 	}
+	onlyA, err := s.ProxyProfileForChannels(ctx, []int64{a})
+	if err != nil {
+		t.Fatalf("ProxyProfileForChannels: %v", err)
+	}
+	if p, _ := s.ProxyProfile(ctx, onlyA); p.Name != "Только: Альфа (2)" || !slices.Equal(p.Channels, []int64{a}) {
+		t.Errorf("набор = %+v", p)
+	}
+	if _, err := s.ProxyProfileForChannels(ctx, nil); err == nil {
+		t.Error("пустой выбор дал набор")
+	}
+	// Ticking exactly what is switched on today is still a choice of its own:
+	// it must not turn into «все включённые», which follows tomorrow's switches.
+	all, err := s.DefaultProxyProfile(ctx)
+	if err != nil {
+		t.Fatalf("DefaultProxyProfile: %v", err)
+	}
+	same, err := s.ProxyProfileForChannels(ctx, all.Channels)
+	if err != nil || same == all.ID {
+		t.Errorf("выбор, совпавший с включёнными, отдан набору по умолчанию: %d, %v", same, err)
+	}
+	if _, err := s.ProxyProfileForChannels(ctx, []int64{9999}); err == nil {
+		t.Error("несуществующий прокси дал набор")
+	}
+}
 
+func TestPruneProxyProfiles_KeepsWhatIsChosenAndTheDefault(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	a, _ := s.SaveChannel(ctx, ChannelRow{Name: "Альфа", Kind: ChannelList, Source: "/tmp/a.txt", Enabled: true})
+	b, _ := s.SaveChannel(ctx, ChannelRow{Name: "Бета", Kind: ChannelList, Source: "/tmp/b.txt", Enabled: true})
+	c, _ := s.SaveChannel(ctx, ChannelRow{Name: "Гамма", Kind: ChannelList, Source: "/tmp/c.txt", Enabled: true})
+	byJob, _ := s.ProxyProfileForChannels(ctx, []int64{a})
+	byChain, _ := s.ProxyProfileForChannels(ctx, []int64{b})
+	orphan, _ := s.ProxyProfileForChannels(ctx, []int64{c})
+	job, err := s.SaveJob(ctx, JobRow{Name: "задание", Type: "phrase", Params: `{}`, Fields: `[]`, Regions: `[]`})
+	if err != nil {
+		t.Fatalf("SaveJob: %v", err)
+	}
+	chain, err := s.SaveProfile(ctx, ProfileRow{Name: "магазин"})
+	if err != nil {
+		t.Fatalf("SaveProfile: %v", err)
+	}
+	for _, q := range []struct {
+		sql     string
+		set, id int64
+	}{
+		{`UPDATE jobs SET proxy_profile_id = ? WHERE id = ?`, byJob, job},
+		{`UPDATE profiles SET proxy_profile_id = ? WHERE id = ?`, byChain, chain},
+	} {
+		if _, err := s.db.ExecContext(ctx, q.sql, q.set, q.id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.PruneProxyProfiles(ctx); err != nil {
+		t.Fatalf("PruneProxyProfiles: %v", err)
+	}
+	for id, want := range map[int64]bool{byJob: true, byChain: true, orphan: false} {
+		_, err := s.ProxyProfile(ctx, id)
+		if (err == nil) != want {
+			t.Errorf("набор %d: остался = %v, ожидалось %v", id, err == nil, want)
+		}
+	}
+	if _, err := s.DefaultProxyProfile(ctx); err != nil {
+		t.Errorf("набор по умолчанию удалён: %v", err)
+	}
+}
+
+func TestDeleteChannel_RefusedWhileAJobPickedItAndSaysWhich(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	id, _ := s.SaveChannel(ctx, ChannelRow{Name: "список", Kind: ChannelList, Source: "/tmp/l.txt", Enabled: true})
+	set, err := s.ProxyProfileForChannels(ctx, []int64{id})
+	if err != nil {
+		t.Fatalf("ProxyProfileForChannels: %v", err)
+	}
+	job, err := s.SaveJob(ctx, JobRow{Name: "позиции", Type: "phrase", Params: `{}`, Fields: `[]`, Regions: `[]`})
+	if err != nil {
+		t.Fatalf("SaveJob: %v", err)
+	}
+	chain, err := s.SaveProfile(ctx, ProfileRow{Name: "мой магазин"})
+	if err != nil {
+		t.Fatalf("SaveProfile: %v", err)
+	}
+	for _, q := range []string{`UPDATE jobs SET proxy_profile_id = ? WHERE id = ?`, `UPDATE profiles SET proxy_profile_id = ? WHERE id = ?`} {
+		target := job
+		if q[7] == 'p' {
+			target = chain
+		}
+		if _, err := s.db.ExecContext(ctx, q, set, target); err != nil {
+			t.Fatal(err)
+		}
+	}
 	err = s.DeleteChannel(ctx, id)
 	var inUse *ChannelInUseError
 	if !errors.As(err, &inUse) || !errors.Is(err, ErrChannelInUse) {
 		t.Fatalf("DeleteChannel = %v, ожидался ChannelInUseError", err)
 	}
-	if !slices.Equal(inUse.Profiles, []string{"через список"}) {
-		t.Errorf("названы профили %v", inUse.Profiles)
+	if !slices.Equal(inUse.Users, []string{"задание «позиции»", "магазин «мой магазин»"}) {
+		t.Errorf("названы %v", inUse.Users)
 	}
-	if _, err := s.Channel(ctx, id); err != nil {
-		t.Errorf("канал удалён, хотя удаление отказано: %v", err)
+	if !strings.Contains(err.Error(), "задание «позиции»") {
+		t.Errorf("Error() = %q", err.Error())
 	}
-}
-
-func TestSaveChannel_ANewProxyJoinsTheDefaultSetAndLeavesItWhenDeleted(t *testing.T) {
-	// Added, listed, «включён» — and used by nothing, because jobs go through a
-	// set and the new proxy was in none: the screen read as two lists of the
-	// same proxies that disagreed.
-	s := openTestStore(t)
-	ctx := context.Background()
+	// Only in the default set — merely switched on — even with a job naming
+	// the default set by its number: deleted.
 	def, err := s.DefaultProxyProfile(ctx)
 	if err != nil {
 		t.Fatalf("DefaultProxyProfile: %v", err)
 	}
-	before := len(def.Channels)
-
-	id, err := s.SaveChannel(ctx, ChannelRow{Name: "список", Kind: ChannelList, Source: "/tmp/l.txt", Enabled: true})
-	if err != nil {
-		t.Fatalf("SaveChannel: %v", err)
+	if _, err := s.db.ExecContext(ctx, `UPDATE jobs SET proxy_profile_id = ? WHERE id = ?`, def.ID, job); err != nil {
+		t.Fatal(err)
 	}
-	def, _ = s.DefaultProxyProfile(ctx)
-	if !slices.Contains(def.Channels, id) || len(def.Channels) != before+1 {
-		t.Fatalf("новый прокси не в наборе по умолчанию: %v", def.Channels)
+	free, _ := s.SaveChannel(ctx, ChannelRow{Name: "свободный", Kind: ChannelList, Source: "/tmp/m.txt", Enabled: true})
+	// A database from before this build keeps the default's old list in its
+	// column; that list no longer means anything and must not hold a proxy.
+	if _, err := s.db.ExecContext(ctx, `UPDATE proxy_profiles SET channels = ? WHERE id = ?`,
+		"["+strconv.FormatInt(free, 10)+"]", def.ID); err != nil {
+		t.Fatal(err)
 	}
-
-	// Taken out by hand, an edit of the proxy does not put it back.
-	def.Channels = slices.DeleteFunc(def.Channels, func(v int64) bool { return v == id })
-	if err := s.SaveProxyProfile(ctx, def); err != nil {
-		t.Fatalf("SaveProxyProfile: %v", err)
-	}
-	if _, err := s.SaveChannel(ctx, ChannelRow{ID: id, Name: "список", Kind: ChannelList, Source: "/tmp/l2.txt", Enabled: true}); err != nil {
-		t.Fatalf("SaveChannel edit: %v", err)
-	}
-	if def, _ = s.DefaultProxyProfile(ctx); slices.Contains(def.Channels, id) {
-		t.Error("правка прокси вернула его в набор, откуда его убрали")
-	}
-
-	// Back in the default set, deleted: gone from it as well.
-	def.Channels = append(def.Channels, id)
-	if err := s.SaveProxyProfile(ctx, def); err != nil {
-		t.Fatalf("SaveProxyProfile: %v", err)
-	}
-	if err := s.DeleteChannel(ctx, id); err != nil {
-		t.Fatalf("DeleteChannel: %v", err)
-	}
-	def, _ = s.DefaultProxyProfile(ctx)
-	if slices.Contains(def.Channels, id) || len(def.Channels) != before {
-		t.Errorf("удалённый прокси остался в наборе по умолчанию: %v", def.Channels)
+	if err := s.DeleteChannel(ctx, free); err != nil {
+		t.Errorf("прокси, не выбранный ни одним заданием, не удалился: %v", err)
 	}
 }
 
-func TestDeleteChannel_NotInTheDefaultSetLeavesItAlone(t *testing.T) {
+func TestProxyProfiles_AFailedReadOfTheEnabledProxiesIsAnError(t *testing.T) {
+	// The default set is read from the proxies table each time; a read that
+	// failed must not pass for a default set with nothing in it, which a run
+	// would then refuse as «ни один прокси не включён» — the wrong fix.
 	s := openTestStore(t)
 	ctx := context.Background()
-	id, err := s.SaveChannel(ctx, ChannelRow{Name: "список", Kind: ChannelList, Source: "/tmp/l.txt", Enabled: true})
-	if err != nil {
-		t.Fatalf("SaveChannel: %v", err)
+	if _, err := s.db.ExecContext(ctx, `ALTER TABLE channels RENAME TO channels_gone`); err != nil {
+		t.Fatal(err)
 	}
-	def, _ := s.DefaultProxyProfile(ctx)
-	def.Channels = slices.DeleteFunc(def.Channels, func(v int64) bool { return v == id })
-	if err := s.SaveProxyProfile(ctx, def); err != nil {
-		t.Fatalf("SaveProxyProfile: %v", err)
+	if _, err := s.ProxyProfiles(ctx); err == nil {
+		t.Error("ProxyProfiles без таблицы прокси ошибки не дал")
 	}
-	def, _ = s.DefaultProxyProfile(ctx)
-	freezeClock(s, time.Unix(def.LastSavedAt+3600, 0))
-	if err := s.DeleteChannel(ctx, id); err != nil {
-		t.Fatalf("DeleteChannel: %v", err)
-	}
-	after, _ := s.DefaultProxyProfile(ctx)
-	if after.LastSavedAt != def.LastSavedAt || !slices.Equal(after.Channels, def.Channels) {
-		t.Errorf("набор по умолчанию переписан, хотя прокси в нём не было: %+v → %+v", def, after)
-	}
-}
-
-func TestDefaultSetMembership_ADamagedSetStopsTheSaveAndTheDelete(t *testing.T) {
-	// The set's column is written only by this package, so a value that will
-	// not parse is damage — and a proxy saved or deleted around it would leave
-	// the set saying one thing and the list another.
-	s := openTestStore(t)
-	ctx := context.Background()
-	id, err := s.SaveChannel(ctx, ChannelRow{Name: "список", Kind: ChannelList, Source: "/tmp/l.txt", Enabled: true})
-	if err != nil {
-		t.Fatalf("SaveChannel: %v", err)
-	}
-	if _, err := s.db.ExecContext(ctx, `UPDATE proxy_profiles SET channels = 'не список' WHERE is_default = 1`); err != nil {
-		t.Fatalf("damage: %v", err)
-	}
-	if _, err := s.SaveChannel(ctx, ChannelRow{Name: "второй", Kind: ChannelList, Source: "/tmp/m.txt", Enabled: true}); err == nil {
-		t.Error("новый прокси сохранён при испорченном наборе по умолчанию")
-	}
-	if err := s.DeleteChannel(ctx, id); err == nil {
-		t.Error("прокси удалён при испорченном наборе по умолчанию")
-	}
-	if _, err := s.Channel(ctx, id); err != nil {
-		t.Errorf("удаление откатилось не до конца: %v", err)
+	if _, err := s.DefaultProxyProfile(ctx); err == nil {
+		t.Error("DefaultProxyProfile без таблицы прокси ошибки не дал")
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -205,6 +206,23 @@ func TestProfile_RefusesAPlanWithNoRegion(t *testing.T) {
 	w := postForm(t, srv, "/profile/plan?id="+itoa(id), form)
 	if !strings.Contains(w.Body.String(), "Не указан ни один регион") {
 		t.Errorf("пустой список регионов принят: %s", firstLines(w.Body.String()))
+	}
+}
+
+func TestProfile_APlanPickingNoProxyIsRefused(t *testing.T) {
+	srv := newServer(t)
+	seller := int64(4242)
+	id, err := srv.Store.SaveProfile(t.Context(), store.ProfileRow{Name: "мой", SellerID: &seller})
+	if err != nil {
+		t.Fatalf("SaveProfile: %v", err)
+	}
+	form := url.Values{}
+	form.Set("regions", "-1257786")
+	form.Add("groups", string(wb.GroupBase))
+	form.Set("proxy_mode", "picked")
+	w := postForm(t, srv, "/profile/plan?id="+itoa(id), form)
+	if !strings.Contains(w.Body.String(), "не выбран ни один прокси") {
+		t.Errorf("пустой выбор прокси принят: %s", firstLines(w.Body.String()))
 	}
 }
 
@@ -621,11 +639,17 @@ func TestProfile_TheFirstPressCarriesTheRunControls(t *testing.T) {
 		return srv.Store.SaveProfile(ctx, store.ProfileRow{Name: input, SourceInput: input})
 	}
 
+	picked, err := srv.Store.SaveChannel(t.Context(), store.ChannelRow{Name: "свой список", Kind: store.ChannelList,
+		Source: "/tmp/l.txt", Enabled: true})
+	if err != nil {
+		t.Fatalf("SaveChannel: %v", err)
+	}
 	postForm(t, srv, "/profile", url.Values{
-		"input":         {"141504066"},
-		"threads":       {"9"},
-		"attempts":      {"10"},
-		"proxy_profile": {"3"},
+		"input":          {"141504066"},
+		"threads":        {"9"},
+		"attempts":       {"10"},
+		"proxy_mode":     {"picked"},
+		"proxy_channels": {strconv.FormatInt(picked, 10)},
 	})
 
 	if got.Threads != 9 {
@@ -634,8 +658,9 @@ func TestProfile_TheFirstPressCarriesTheRunControls(t *testing.T) {
 	if got.Attempts != 10 {
 		t.Errorf("повторов %d, форма просила 10", got.Attempts)
 	}
-	if got.ProxyProfileID != 3 {
-		t.Errorf("профиль прокси %d, форма просила 3", got.ProxyProfileID)
+	if set, err := srv.Store.ProxyProfile(t.Context(), got.ProxyProfileID); err != nil || set.Default ||
+		len(set.Channels) != 1 || set.Channels[0] != picked {
+		t.Errorf("прокси магазина = %+v, %v; форма выбрала только %d", set, err, picked)
 	}
 }
 
@@ -646,7 +671,7 @@ func TestProfile_TheFirstScreenOffersTheRunControls(t *testing.T) {
 	srv := newServer(t)
 	body := get(t, srv, "/profile", "").Body.String()
 
-	for _, want := range []string{`name="threads"`, `name="attempts"`, `name="proxy_profile"`} {
+	for _, want := range []string{`name="threads"`, `name="attempts"`, `name="proxy_mode"`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("на первом экране нет поля %s:\n%s", want, firstLines(body))
 		}

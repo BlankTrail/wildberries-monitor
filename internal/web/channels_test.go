@@ -68,11 +68,11 @@ func TestChannels_WithEverythingRemovedTheScreenSaysJobsWillNotStart(t *testing.
 	}
 }
 
-func TestChannels_DeletingOneAProfileNamesIsRefusedWithTheProfilesNamed(t *testing.T) {
+func TestChannels_DeletingOneAJobPickedIsRefusedWithTheJobNamed(t *testing.T) {
 	// Deleting a channel used to check nothing, and the first anybody heard of
-	// it was the next run of every job going through it. A set somebody made
-	// still holds on to its proxies; the default one does not — it took each
-	// proxy in by itself when it was added, and lets it go the same way.
+	// it was the next run of every job going through it. A job that ticked a
+	// proxy on its own form still holds on to it; one that is merely switched
+	// on is in nobody's way.
 	srv := newServer(t)
 	ctx := t.Context()
 	kept, err := srv.Store.SaveChannel(ctx, store.ChannelRow{Name: "список", Kind: store.ChannelList,
@@ -80,19 +80,20 @@ func TestChannels_DeletingOneAProfileNamesIsRefusedWithTheProfilesNamed(t *testi
 	if err != nil {
 		t.Fatalf("SaveChannel: %v", err)
 	}
-	if _, err := srv.Store.CreateProxyProfile(ctx, store.ProxyProfile{Name: "через список", Channels: []int64{kept}}); err != nil {
-		t.Fatalf("CreateProxyProfile: %v", err)
-	}
+	form := goodForm()
+	form.Set("name", "позиции")
+	form.Set("proxy_mode", "picked")
+	form.Set("proxy_channels", strconv.FormatInt(kept, 10))
+	postForm(t, srv, "/jobs", form)
 
 	w := postForm(t, srv, "/channels/delete?id="+strconv.FormatInt(kept, 10), url.Values{})
-	if !strings.Contains(w.Body.String(), "«через список»") || strings.Contains(w.Body.String(), "«Основной»") {
-		t.Errorf("отказ называет не тот набор:\n%s", firstLines(w.Body.String()))
+	if !strings.Contains(w.Body.String(), "задание «позиции»") {
+		t.Errorf("отказ не называет задание:\n%s", firstLines(w.Body.String()))
 	}
 	if _, err := srv.Store.Channel(ctx, kept); err != nil {
-		t.Errorf("прокси удалён, хотя набор «через список» его называет: %v", err)
+		t.Errorf("прокси удалён, хотя задание его выбрало: %v", err)
 	}
 
-	// In the default set only: deleted, and gone from the set too.
 	free, err := srv.Store.SaveChannel(ctx, store.ChannelRow{Name: "второй", Kind: store.ChannelList,
 		Source: "/tmp/m.txt", Enabled: true})
 	if err != nil {
@@ -100,11 +101,7 @@ func TestChannels_DeletingOneAProfileNamesIsRefusedWithTheProfilesNamed(t *testi
 	}
 	postForm(t, srv, "/channels/delete?id="+strconv.FormatInt(free, 10), url.Values{})
 	if _, err := srv.Store.Channel(ctx, free); err == nil {
-		t.Error("прокси из одного лишь набора по умолчанию не удалился")
-	}
-	def, err := srv.Store.DefaultProxyProfile(ctx)
-	if err != nil || slices.Contains(def.Channels, free) {
-		t.Errorf("удалённый прокси остался в наборе по умолчанию: %v, %v", def.Channels, err)
+		t.Error("прокси, не выбранный ни одним заданием, не удалился")
 	}
 }
 
@@ -118,7 +115,6 @@ func clearedChannels(t *testing.T) *Server {
 	if err != nil {
 		t.Fatalf("Channels: %v", err)
 	}
-	unpinChannels(t, srv.Store)
 	for _, c := range list {
 		if err := srv.Store.DeleteChannel(t.Context(), c.ID); err != nil {
 			t.Fatalf("DeleteChannel: %v", err)
@@ -909,23 +905,6 @@ func TestChannels_AnIdNamingNothingIsRefusedRatherThanQuietlyAdded(t *testing.T)
 	}
 	if len(list) != 0 {
 		t.Errorf("отказ всё-таки записал %d канал(ов)", len(list))
-	}
-}
-
-// unpinChannels empties every proxy profile, so a test that starts by deleting
-// the seeded channels can: DeleteChannel refuses a channel a profile names, and
-// the carry put the seeded direct exit in «Основной».
-func unpinChannels(t *testing.T, s *store.Store) {
-	t.Helper()
-	profiles, err := s.ProxyProfiles(t.Context())
-	if err != nil {
-		t.Fatalf("ProxyProfiles: %v", err)
-	}
-	for _, p := range profiles {
-		p.Channels = nil
-		if err := s.SaveProxyProfile(t.Context(), p); err != nil {
-			t.Fatalf("SaveProxyProfile: %v", err)
-		}
 	}
 }
 

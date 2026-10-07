@@ -121,8 +121,12 @@ func (e *Engine) RunnerFor(ctx context.Context, j job.Job) (*job.Runner, func(),
 		return nil, nil, fmt.Errorf("engine: набор прокси: %w", err)
 	}
 	if profile.Empty() {
-		return nil, nil, fmt.Errorf("engine: в наборе прокси «%s» не отмечено ни одного прокси — "+
-			"откройте вкладку «Прокси» и отметьте, через что собирать", profile.Name)
+		if profile.Default {
+			return nil, nil, errors.New("engine: ни один прокси не включён — " +
+				"откройте вкладку «Прокси» и включите хотя бы один")
+		}
+		return nil, nil, errors.New("engine: для задания выбраны прокси, которых больше нет — " +
+			"отметьте другие в настройках прокси задания")
 	}
 
 	// The preflight is not optional and not only advice: it is where the

@@ -58,11 +58,6 @@ var (
 	// ErrProxyProfileName is a name that is blank or already taken. One error
 	// for both, because the remedy is the same: type another name.
 	ErrProxyProfileName = errors.New("store: proxy profile needs a name of its own")
-
-	// ErrLastProxyProfile is a delete that would leave no profile at all.
-	// There has to be a default for a job that names none to go through, so
-	// the last one is emptied by editing it, not by deleting it.
-	ErrLastProxyProfile = errors.New("store: the last proxy profile cannot be deleted")
 )
 
 // proxyProfileColumns is the column list every read below uses, written once
@@ -112,7 +107,43 @@ func (s *Store) ProxyProfiles(ctx context.Context) ([]ProxyProfile, error) {
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("store: proxy profiles: %w", err)
 	}
+	rows.Close()
+	for i := range out {
+		if err := s.live(ctx, &out[i]); err != nil {
+			return nil, err
+		}
+	}
 	return out, nil
+}
+
+// live fills the default set with what it is: every enabled proxy, read now.
+//
+// The default set used to be a list of its own beside the list of proxies,
+// with the proxies' own «Включён» box meaning the same thing a second time —
+// and the two drifted: a proxy added and switched on was in no set and carried
+// nothing. One switch now: «Включён» is what the default set is made of.
+func (s *Store) live(ctx context.Context, p *ProxyProfile) error {
+	if !p.Default {
+		return nil
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT id FROM channels WHERE enabled = 1 ORDER BY id`)
+	if err != nil {
+		return fmt.Errorf("store: enabled proxies: %w", err)
+	}
+	defer rows.Close()
+	ids := []int64{}
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return fmt.Errorf("store: enabled proxies: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("store: enabled proxies: %w", err)
+	}
+	p.Channels = ids
+	return nil
 }
 
 // ProxyProfile reads one.
@@ -125,7 +156,7 @@ func (s *Store) ProxyProfile(ctx context.Context, id int64) (ProxyProfile, error
 	if err != nil {
 		return ProxyProfile{}, fmt.Errorf("store: proxy profile %d: %w", id, err)
 	}
-	return p, nil
+	return p, s.live(ctx, &p)
 }
 
 // DefaultProxyProfile is the one marked default.
@@ -142,7 +173,7 @@ func (s *Store) DefaultProxyProfile(ctx context.Context) (ProxyProfile, error) {
 	if err != nil {
 		return ProxyProfile{}, fmt.Errorf("store: default proxy profile: %w", err)
 	}
-	return p, nil
+	return p, s.live(ctx, &p)
 }
 
 // ProxyProfileFor is the profile a job that names id runs through.
@@ -219,190 +250,55 @@ func (s *Store) CreateProxyProfile(ctx context.Context, p ProxyProfile) (int64, 
 	return id, nil
 }
 
-// SaveProxyProfile writes an edit to an existing profile.
+// ProxyProfileForChannels is the set a job that chose exactly these proxies
+// goes through: the one already holding them, or a new one named after them.
 //
-// Default can be given but not taken away here. Unticking «по умолчанию» on
-// the default would leave no default at all, and which profile should have it
-// instead is not something an edit to this one can know — so the mark moves
-// only by being given to another profile, here or through
-// SetDefaultProxyProfile.
-func (s *Store) SaveProxyProfile(ctx context.Context, p ProxyProfile) error {
-	name := strings.TrimSpace(p.Name)
-	if name == "" {
-		return ErrProxyProfileName
+// Sets are not something a person names or manages any more — a job form says
+// «все включённые» or ticks the proxies it wants, and this turns the ticks into
+// the set the engine reads. Two jobs that ticked the same proxies share one.
+func (s *Store) ProxyProfileForChannels(ctx context.Context, channels []int64) (int64, error) {
+	want := canonicalIDs(channels)
+	if len(want) == 0 {
+		return 0, errors.New("store: a hand-picked proxy set needs at least one proxy")
 	}
-	channels, err := json.Marshal(canonicalIDs(p.Channels))
+	list, err := s.ProxyProfiles(ctx)
 	if err != nil {
-		return fmt.Errorf("store: save proxy profile %d: %w", p.ID, err)
+		return 0, err
 	}
-
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("store: save proxy profile %d: %w", p.ID, err)
-	}
-	defer tx.Rollback()
-
-	if p.Default {
-		if _, err := tx.ExecContext(ctx,
-			`UPDATE proxy_profiles SET is_default = 0 WHERE is_default = 1 AND id <> ?`, p.ID); err != nil {
-			return fmt.Errorf("store: save proxy profile %d: %w", p.ID, err)
+	for _, p := range list {
+		if !p.Default && idsKey(p.Channels) == idsKey(want) {
+			return p.ID, nil
 		}
 	}
-	res, err := tx.ExecContext(ctx, `
-		UPDATE proxy_profiles
-		   SET name = ?, channels = ?,
-		       is_default = CASE WHEN ? THEN 1 ELSE is_default END,
-		       updated_at = ?
-		 WHERE id = ?`,
-		name, string(channels), boolInt(p.Default), s.now().UTC().Unix(), p.ID)
-	if err != nil {
-		return nameTaken(err, fmt.Sprintf("store: save proxy profile %d", p.ID))
-	}
-	if n, err := res.RowsAffected(); err == nil && n == 0 {
-		// Rolled back with it: the demotion above must not survive an edit
-		// to a profile that is not there, or the default would be gone.
-		return fmt.Errorf("store: save proxy profile %d: %w", p.ID, ErrNoProxyProfile)
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("store: save proxy profile %d: %w", p.ID, err)
-	}
-	return nil
-}
-
-// joinDefaultProfile puts a newly added channel into the default profile.
-//
-// A proxy somebody has just added is a proxy they mean to collect through.
-// Left out of every profile it was saved, listed, «включён» — and used by
-// nothing, because jobs go through a profile and not through the list; the
-// screen then read as two lists of proxies that disagreed. Joining the
-// default is what adding one means for everybody who never made a second
-// profile, and somebody who did can still take it out.
-func joinDefaultProfile(ctx context.Context, tx *sql.Tx, channelID, now int64) error {
-	var id int64
-	var raw string
-	err := tx.QueryRowContext(ctx, `SELECT id, channels FROM proxy_profiles WHERE is_default = 1`).Scan(&id, &raw)
-	if errors.Is(err, sql.ErrNoRows) {
-		// No profiles yet: the first run of CarryProxyProfiles makes the
-		// default out of the channels there are, this one included.
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("default proxy profile: %w", err)
-	}
-	ids, err := idsOf(raw)
-	if err != nil {
-		return fmt.Errorf("default proxy profile %d: channels: %w", id, err)
-	}
-	joined, err := json.Marshal(canonicalIDs(append(ids, channelID)))
-	if err != nil {
-		return fmt.Errorf("default proxy profile %d: %w", id, err)
-	}
-	if _, err := tx.ExecContext(ctx, `UPDATE proxy_profiles SET channels = ?, updated_at = ? WHERE id = ?`,
-		string(joined), now, id); err != nil {
-		return fmt.Errorf("default proxy profile %d: %w", id, err)
-	}
-	return nil
-}
-
-// leaveDefaultProfile takes a channel out of the default profile, the other
-// half of joinDefaultProfile.
-func leaveDefaultProfile(ctx context.Context, tx *sql.Tx, channelID, now int64) error {
-	var id int64
-	var raw string
-	err := tx.QueryRowContext(ctx, `SELECT id, channels FROM proxy_profiles WHERE is_default = 1`).Scan(&id, &raw)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("default proxy profile: %w", err)
-	}
-	ids, err := idsOf(raw)
-	if err != nil {
-		return fmt.Errorf("default proxy profile %d: channels: %w", id, err)
-	}
-	n := len(ids)
-	kept := slices.DeleteFunc(ids, func(v int64) bool { return v == channelID })
-	if len(kept) == n {
-		return nil
-	}
-	left, err := json.Marshal(canonicalIDs(kept))
-	if err != nil {
-		return fmt.Errorf("default proxy profile %d: %w", id, err)
-	}
-	if _, err := tx.ExecContext(ctx, `UPDATE proxy_profiles SET channels = ?, updated_at = ? WHERE id = ?`,
-		string(left), now, id); err != nil {
-		return fmt.Errorf("default proxy profile %d: %w", id, err)
-	}
-	return nil
-}
-
-// SetDefaultProxyProfile moves the default mark to id.
-func (s *Store) SetDefaultProxyProfile(ctx context.Context, id int64) error {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("store: default proxy profile %d: %w", id, err)
-	}
-	defer tx.Rollback()
-
-	if _, err := tx.ExecContext(ctx,
-		`UPDATE proxy_profiles SET is_default = 0 WHERE is_default = 1 AND id <> ?`, id); err != nil {
-		return fmt.Errorf("store: default proxy profile %d: %w", id, err)
-	}
-	res, err := tx.ExecContext(ctx, `UPDATE proxy_profiles SET is_default = 1 WHERE id = ?`, id)
-	if err != nil {
-		return fmt.Errorf("store: default proxy profile %d: %w", id, err)
-	}
-	if n, err := res.RowsAffected(); err == nil && n == 0 {
-		return fmt.Errorf("store: default proxy profile %d: %w", id, ErrNoProxyProfile)
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("store: default proxy profile %d: %w", id, err)
-	}
-	return nil
-}
-
-// DeleteProxyProfile removes one.
-//
-// The last one is refused (ErrLastProxyProfile). Deleting the default hands
-// the mark to the first remaining profile by name, in the same transaction.
-// Jobs that named the deleted profile are left as they are and go through the
-// default from then on — see ProxyProfileFor for why that is the fallback and
-// the only one.
-func (s *Store) DeleteProxyProfile(ctx context.Context, id int64) error {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("store: delete proxy profile %d: %w", id, err)
-	}
-	defer tx.Rollback()
-
-	var def int
-	err = tx.QueryRowContext(ctx, `SELECT is_default FROM proxy_profiles WHERE id = ?`, id).Scan(&def)
-	if errors.Is(err, sql.ErrNoRows) {
-		return fmt.Errorf("store: delete proxy profile %d: %w", id, ErrNoProxyProfile)
-	}
-	if err != nil {
-		return fmt.Errorf("store: delete proxy profile %d: %w", id, err)
-	}
-	var count int
-	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM proxy_profiles`).Scan(&count); err != nil {
-		return fmt.Errorf("store: delete proxy profile %d: %w", id, err)
-	}
-	if count <= 1 {
-		return ErrLastProxyProfile
-	}
-
-	if _, err := tx.ExecContext(ctx, `DELETE FROM proxy_profiles WHERE id = ?`, id); err != nil {
-		return fmt.Errorf("store: delete proxy profile %d: %w", id, err)
-	}
-	if def != 0 {
-		if _, err := tx.ExecContext(ctx, `
-			UPDATE proxy_profiles SET is_default = 1
-			 WHERE id = (SELECT id FROM proxy_profiles ORDER BY name, id LIMIT 1)`); err != nil {
-			return fmt.Errorf("store: delete proxy profile %d: %w", id, err)
+	names := make([]string, 0, len(want))
+	for _, id := range want {
+		var name string
+		if err := s.db.QueryRowContext(ctx, `SELECT name FROM channels WHERE id = ?`, id).Scan(&name); err != nil {
+			return 0, fmt.Errorf("store: proxy %d: %w", id, err)
 		}
+		names = append(names, name)
 	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("store: delete proxy profile %d: %w", id, err)
+	base := "Только: " + strings.Join(names, ", ")
+	name := base
+	for n := 2; ; n++ {
+		id, err := s.CreateProxyProfile(ctx, ProxyProfile{Name: name, Channels: want})
+		if !errors.Is(err, ErrProxyProfileName) {
+			return id, err
+		}
+		name = fmt.Sprintf("%s (%d)", base, n)
+	}
+}
+
+// PruneProxyProfiles deletes the hand-picked sets no job and no «Мой профиль»
+// chain goes through any more: they were made for a choice nobody holds.
+func (s *Store) PruneProxyProfiles(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx, `
+		DELETE FROM proxy_profiles
+		 WHERE is_default = 0
+		   AND id NOT IN (SELECT proxy_profile_id FROM jobs)
+		   AND id NOT IN (SELECT proxy_profile_id FROM profiles)`)
+	if err != nil {
+		return fmt.Errorf("store: prune proxy profiles: %w", err)
 	}
 	return nil
 }
@@ -411,18 +307,23 @@ type queryer interface {
 	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 }
 
-// proxyProfilesUsing names the profiles that list channel id, by name.
+// proxyUsers names the jobs and «Мой профиль» chains that picked channel id
+// by hand, as a person knows them: «задание «…»», «магазин «…»».
 //
-// For the channels screen's delete: a channel a profile names is one the next
-// run of every job on that profile would fail without, and the person deleting
-// it should hear which profiles those are before it goes, not after.
-// withDefault says whether the default set counts.
-func proxyProfilesUsing(ctx context.Context, q queryer, channelID int64, withDefault bool) ([]string, error) {
+// For the channels screen's delete: a proxy a job picked is one its next run
+// would fail without, and the person deleting it should hear which jobs those
+// are before it goes, not after. The default set is not asked: it is every
+// enabled proxy, read when a run starts, and a deleted one is simply not in it.
+func proxyUsers(ctx context.Context, q queryer, channelID int64) ([]string, error) {
 	rows, err := q.QueryContext(ctx, `
-		SELECT DISTINCT p.name
-		  FROM proxy_profiles p, json_each(p.channels) c
-		 WHERE c.value = ? AND (? OR p.is_default = 0)
-		 ORDER BY p.name`, channelID, withDefault)
+		WITH picked AS (
+		    SELECT p.id FROM proxy_profiles p, json_each(p.channels) c
+		     WHERE c.value = ? AND p.is_default = 0
+		)
+		SELECT 'задание «' || name || '»' FROM jobs WHERE proxy_profile_id IN (SELECT id FROM picked)
+		UNION
+		SELECT 'магазин «' || name || '»' FROM profiles WHERE proxy_profile_id IN (SELECT id FROM picked)
+		ORDER BY 1`, channelID)
 	if err != nil {
 		return nil, fmt.Errorf("store: profiles using channel %d: %w", channelID, err)
 	}
@@ -439,19 +340,6 @@ func proxyProfilesUsing(ctx context.Context, q queryer, channelID int64, withDef
 		return nil, fmt.Errorf("store: profiles using channel %d: %w", channelID, err)
 	}
 	return names, nil
-}
-
-// SetJobProxyProfile points one job at a profile. Zero is the default.
-func (s *Store) SetJobProxyProfile(ctx context.Context, jobID, profileID int64) error {
-	res, err := s.db.ExecContext(ctx,
-		`UPDATE jobs SET proxy_profile_id = ? WHERE id = ?`, max(profileID, 0), jobID)
-	if err != nil {
-		return fmt.Errorf("store: job %d proxy profile: %w", jobID, err)
-	}
-	if n, err := res.RowsAffected(); err == nil && n == 0 {
-		return fmt.Errorf("store: job %d proxy profile: no such job", jobID)
-	}
-	return nil
 }
 
 // defaultProxyProfileName is what the carry calls the profile it makes out of

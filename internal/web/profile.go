@@ -185,20 +185,25 @@ func (s *Server) runControls(r *http.Request, c store.RunControls, folded bool) 
 			"один — порт меняет отпечаток и личность, оставаясь на том же адресе.",
 			wb.DefaultAttemptsPooled, wb.DefaultAttemptsDirect)))
 	b.WriteString(`</div>`)
-	b.WriteString(s.proxyProfileField(r, c.ProxyProfileID,
-		"Через какой набор прокси собирается ваш магазин. Наборы настраиваются на вкладке «Прокси»."))
+	b.WriteString(s.proxyChoice(r, c.ProxyProfileID,
+		"Обычно магазин собирается через все прокси, включённые на вкладке «Прокси». "+
+			"Если нужны другие — отметьте их здесь."))
 	b.WriteString(`</details>`)
 	return b.String()
 }
 
 // runControlsFrom reads them back off whichever form posted them.
-func runControlsFrom(r *http.Request) store.RunControls {
+func (s *Server) runControlsFrom(r *http.Request) (store.RunControls, error) {
+	proxies, err := s.proxyChoiceFrom(r.Context(), r.PostForm)
+	if err != nil {
+		return store.RunControls{}, err
+	}
 	return store.RunControls{
 		Regions:        splitList(r.PostFormValue("regions")),
 		Threads:        int(atoi64(r.PostFormValue("threads"))),
 		Attempts:       int(atoi64(r.PostFormValue("attempts"))),
-		ProxyProfileID: atoi64(r.PostFormValue("proxy_profile")),
-	}
+		ProxyProfileID: proxies,
+	}, nil
 }
 
 // profileCard is one profile: who they are, what they sell, and the chain that
@@ -490,7 +495,11 @@ func (s *Server) saveProfile(w http.ResponseWriter, r *http.Request) {
 	// The whole chain, not a job. Building the resolve job here was the shape
 	// of the defect: nothing was waiting on it, so the run that learned who the
 	// seller was handed that fact to nobody and the profile stopped there.
-	if _, err := s.ResolveProfile(r.Context(), input, runControlsFrom(r)); err != nil {
+	controls, err := s.runControlsFrom(r)
+	if err == nil {
+		_, err = s.ResolveProfile(r.Context(), input, controls)
+	}
+	if err != nil {
 		s.profileFragment(w, r, alert("error", err.Error()))
 		return
 	}
@@ -575,7 +584,12 @@ func (s *Server) saveProfilePlan(w http.ResponseWriter, r *http.Request) {
 			"Не указан ни один регион. Выберите его в поле «Регионы» выше — справочник пунктов выдачи там же."))
 		return
 	}
-	runControlsFrom(r).Apply(&p)
+	controls, err := s.runControlsFrom(r)
+	if err != nil {
+		s.profileFragment(w, r, alert("error", err.Error()))
+		return
+	}
+	controls.Apply(&p)
 
 	fields := fieldsOfGroups(r.PostForm["groups"])
 	if len(fields) == 0 {

@@ -39,7 +39,6 @@ func openEngine(t *testing.T) *Engine {
 	if err != nil {
 		t.Fatalf("Channels: %v", err)
 	}
-	unpinChannels(t, s)
 	for _, c := range list {
 		if err := s.DeleteChannel(t.Context(), c.ID); err != nil {
 			t.Fatalf("DeleteChannel: %v", err)
@@ -421,23 +420,6 @@ func TestPoolConfig_SwitchesOnTheProactiveIdentityRenewal(t *testing.T) {
 	}
 }
 
-// unpinChannels empties every proxy profile, so a test that starts by deleting
-// the seeded channels can: DeleteChannel refuses a channel a profile names, and
-// the carry put the seeded direct exit in «Основной».
-func unpinChannels(t *testing.T, s *store.Store) {
-	t.Helper()
-	profiles, err := s.ProxyProfiles(t.Context())
-	if err != nil {
-		t.Fatalf("ProxyProfiles: %v", err)
-	}
-	for _, p := range profiles {
-		p.Channels = nil
-		if err := s.SaveProxyProfile(t.Context(), p); err != nil {
-			t.Fatalf("SaveProxyProfile: %v", err)
-		}
-	}
-}
-
 // pinDirect gives the default proxy profile one exit — the host's own address
 // — so a test about what comes after the profile can get past it. openEngine
 // empties the profiles with the channels it deletes.
@@ -448,14 +430,6 @@ func pinDirect(t *testing.T, e *Engine) int64 {
 	})
 	if err != nil {
 		t.Fatalf("SaveChannel: %v", err)
-	}
-	p, err := e.Store.DefaultProxyProfile(t.Context())
-	if err != nil {
-		t.Fatalf("DefaultProxyProfile: %v", err)
-	}
-	p.Channels = []int64{id}
-	if err := e.Store.SaveProxyProfile(t.Context(), p); err != nil {
-		t.Fatalf("SaveProxyProfile: %v", err)
 	}
 	return id
 }
@@ -476,8 +450,8 @@ func TestRunnerFor_AnEmptyProxyProfileStopsTheRunBeforeTheNetwork(t *testing.T) 
 	if err == nil {
 		t.Fatal("прогон собран с пустым профилем прокси")
 	}
-	if !strings.Contains(err.Error(), "Основной") || !strings.Contains(err.Error(), "не отмечено") {
-		t.Errorf("err = %v — не называет профиль и не говорит, что в нём пусто", err)
+	if !strings.Contains(err.Error(), "ни один прокси не включён") {
+		t.Errorf("err = %v — не говорит, что не включён ни один прокси", err)
 	}
 	if len(logged) != 0 {
 		t.Errorf("до отказа успела пройти предполётная проверка: %v", logged)
@@ -496,7 +470,7 @@ func TestRunnerFor_ADeletedProfileFallsBackToTheDefaultAndSaysWhichOne(t *testin
 	if err == nil {
 		t.Fatal("прогон собран с пустым профилем прокси")
 	}
-	if !strings.Contains(err.Error(), "Основной") {
-		t.Errorf("err = %v — должен назвать профиль по умолчанию, через который пошло бы задание", err)
+	if !strings.Contains(err.Error(), "ни один прокси не включён") {
+		t.Errorf("err = %v — должен сказать про набор по умолчанию, через который пошло бы задание", err)
 	}
 }

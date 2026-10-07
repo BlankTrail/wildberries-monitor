@@ -1676,3 +1676,20 @@ dialog.bt-modal > #settings-body {
   display: block;
   font-weight: 600;
 }
+
+/* ---- which proxies a job goes through -------------------------------------
+   Two choices, one under the other; the proxies to tick belong to the second
+   and are shown only while it is chosen. */
+.bt[data-bt-theme="dashboard"] .bt-proxy-choice {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.bt[data-bt-theme="dashboard"] .bt-proxy-choice .bt-checks {
+  margin-left: var(--space-6);
+}
+
+.bt[data-bt-theme="dashboard"] .bt-proxy-choice:has(input[value="all"]:checked) .bt-checks {
+  display: none;
+}
