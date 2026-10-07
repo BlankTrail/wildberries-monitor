@@ -43,6 +43,17 @@ func (s *Server) live(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "live: which job?", http.StatusBadRequest)
 		return
 	}
+	// The newest run there was before the press that opened this panel (see
+	// runLiveDoneHTML). Absent on a page that follows whatever is newest.
+	// Refused rather than read as zero when it is not a number: zero would
+	// quietly let the run before the press answer for the one it started.
+	var after int64
+	if v := r.URL.Query().Get("after"); v != "" {
+		if after, err = strconv.ParseInt(v, 10, 64); err != nil {
+			http.Error(w, "live: after which run?", http.StatusBadRequest)
+			return
+		}
+	}
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -81,7 +92,7 @@ func (s *Server) live(w http.ResponseWriter, r *http.Request) {
 	// «План составляется…» over an empty log for minutes, and there was no way
 	// to tell that from a run that had hung. And a tab opened after the run
 	// ended showed it forever.
-	if name, data, ok := s.standing(r, jobID); ok {
+	if name, data, ok := s.standing(r, jobID, after); ok {
 		writeEvent(w, name, data)
 		flusher.Flush()
 		if name == "done" {
@@ -128,7 +139,10 @@ func (s *Server) live(w http.ResponseWriter, r *http.Request) {
 //
 // Built from the store rather than from the bus, because the bus has no memory:
 // what it said before this connection opened is gone.
-func (s *Server) standing(r *http.Request, jobID int64) (name, data string, ok bool) {
+//
+// after is the newest run there was before the press that opened the panel;
+// runs up to it are not the one the panel follows.
+func (s *Server) standing(r *http.Request, jobID, after int64) (name, data string, ok bool) {
 	ctx := r.Context()
 	runs, err := s.Store.Runs(ctx, jobID, 1)
 	if err != nil || len(runs) == 0 {
@@ -137,6 +151,15 @@ func (s *Server) standing(r *http.Request, jobID int64) (name, data string, ok b
 	}
 
 	run := runs[0]
+	if run.ID <= after {
+		// The newest row is still the run before the press: the one it started
+		// writes its own only once the plan and the ports are ready. Until then
+		// «План составляется…» is the truth. Answered with that run's "done",
+		// the panel stopped listening the moment it opened — every second
+		// press of «Запустить» sat on «План составляется…» to the end, found
+		// filming the WB Monitor tutorial, 07.10.2026.
+		return "", "", false
+	}
 	if run.FinishedAt != nil {
 		// Over before anybody looked. Said as the same event a live run ends
 		// with, so the screen does with it whatever it does with that — which

@@ -312,7 +312,11 @@ func (s *Server) chainState(_ *http.Request, p store.ProfileRow) string {
 			// to step and redraws, so the next stage's panel appears without
 			// anybody reloading. Before this the screen froze on the first
 			// stage's «Идёт сбор» for the whole of the chain.
-			out += runLiveDoneHTML(p.StageJob,
+			//
+			// StageRun is the run the stage itself waits past: the chain reruns
+			// the same jobs, and the run before this stage's must not answer
+			// for it.
+			out += runLiveDoneHTML(p.StageJob, p.StageRun,
 				fmt.Sprintf("/profile/step?id=%d", p.ID), "#profile-body")
 		}
 		return out

@@ -497,6 +497,14 @@ func (s *Server) runJobHandler(w http.ResponseWriter, r *http.Request) {
 		s.jobsFragment(w, r, alert("neutral", "Запуск заданий недоступен в этой сборке."), false)
 		return
 	}
+	// Read before the start, as the profile chain does: the run this press
+	// starts is the first one past it, and the panel must not take the run
+	// before it — still the newest row while the new one plans — for its own.
+	after, err := s.Store.LatestRunID(r.Context(), id)
+	if err != nil {
+		s.jobsFragment(w, r, alert("error", err.Error()), false)
+		return
+	}
 	if err := s.StartJob(r.Context(), id); err != nil {
 		// Onto the screen rather than out as a status: every refusal here — no
 		// proxy configured, already running, no such job — is something the
@@ -508,7 +516,7 @@ func (s *Server) runJobHandler(w http.ResponseWriter, r *http.Request) {
 	// and the client that reads them were all built — nothing ever asked the
 	// page to start listening, so a run showed a line saying it had started
 	// and then nothing at all until it was over.
-	s.jobsFragment(w, r, alert("success", fmt.Sprintf("Задание %d запущено.", id))+runLiveHTML(id), false)
+	s.jobsFragment(w, r, alert("success", fmt.Sprintf("Задание %d запущено.", id))+runLiveHTML(id, after), false)
 }
 
 func (s *Server) stopJobHandler(w http.ResponseWriter, r *http.Request) {
@@ -1814,7 +1822,10 @@ func destUseText(d store.DestUse) string {
 // data-follow is what starts the listening. The stream carries every event
 // this program emits, so the id is what the panel says it is watching rather
 // than a filter.
-func runLiveHTML(jobID int64) string { return runLiveDoneHTML(jobID, "", "") }
+//
+// data-after is the newest run there was before the press (zero when the job
+// had never run): the stream answers only for runs past it — see standing.
+func runLiveHTML(jobID, after int64) string { return runLiveDoneHTML(jobID, after, "", "") }
 
 // runLiveDoneHTML is the same panel, plus what to do when the run it follows
 // ends.
@@ -1824,18 +1835,18 @@ func runLiveHTML(jobID int64) string { return runLiveDoneHTML(jobID, "", "") }
 // redrawn, because its next stage is a different job and nothing else would
 // ever start following it — the tab froze on the first stage until somebody
 // reloaded.
-func runLiveDoneHTML(jobID int64, donePost, doneTarget string) string {
+func runLiveDoneHTML(jobID, after int64, donePost, doneTarget string) string {
 	done := ""
 	if donePost != "" {
 		done = ` data-done-post="` + html.EscapeString(donePost) +
 			`" data-done-target="` + html.EscapeString(doneTarget) + `"`
 	}
-	return fmt.Sprintf(`<section class="bt-card" id="run-live" data-follow="%d"`+done+`>`+
+	return fmt.Sprintf(`<section class="bt-card" id="run-live" data-follow="%d" data-after="%d"`+done+`>`+
 		`<h3>Идёт сбор: задание №%d</h3>`+
 		`<div id="run-progress"><div class="bt-alert bt-alert--neutral">План составляется…</div></div>`+
 		`<h4 class="bt-form-head">Живой лог</h4>`+
 		`<div id="run-log" class="bt-log"></div>`+
-		`</section>`, jobID, jobID)
+		`</section>`, jobID, after, jobID)
 }
 
 // brandField is which brand a brand job walks.

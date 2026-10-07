@@ -509,7 +509,7 @@ func TestProfile_TheTabWalksTheStagesWithoutAReload(t *testing.T) {
 		t.Errorf("не сказано, что перерисовывать:\n%s", firstLines(body))
 	}
 	// The jobs screen wants none of it: its list already says the run ended.
-	if strings.Contains(runLiveHTML(7), "data-done-post") {
+	if strings.Contains(runLiveHTML(7, 0), "data-done-post") {
 		t.Error("панель на вкладке заданий тоже что-то дёргает по окончании")
 	}
 }
@@ -1102,5 +1102,20 @@ func TestProfile_TheSellersSalesAreNotPassedOffAsItsRange(t *testing.T) {
 	}
 	if !strings.Contains(body, "Продано товаров") {
 		t.Error("нет подписи «Продано товаров»")
+	}
+}
+
+func TestChainState_TheStagesPanelFollowsTheRunItStarted(t *testing.T) {
+	// The chain reruns the same jobs, so a stage's job has usually run before.
+	// Its panel says which run was the newest when the stage started it — the
+	// one the stage itself waits past — or the old run's "done" moves the
+	// chain on before the new run has done anything.
+	p := store.ProfileRow{Stage: store.StageCatalog, StageJob: 7, StageRun: 5}
+	html := (&Server{}).chainState(nil, p)
+	if !strings.Contains(html, `data-follow="7"`) {
+		t.Fatalf("за этапом не следят:\n%s", html)
+	}
+	if !strings.Contains(html, `data-after="5"`) {
+		t.Errorf("панель этапа не знает, какой прогон был до него:\n%s", html)
 	}
 }

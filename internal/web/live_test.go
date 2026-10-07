@@ -381,7 +381,7 @@ func TestLive_ThePanelAndTheStreamNameTheSameThing(t *testing.T) {
 	ts, bus := liveServer(t)
 
 	// The id the rendered panel tells the browser to follow.
-	panel := runLiveHTML(41)
+	panel := runLiveHTML(41, 0)
 	const mark = `data-follow="`
 	at := strings.Index(panel, mark)
 	if at < 0 {
@@ -507,5 +507,114 @@ func TestLive_EveryEventTheBusCarriesHasSomethingToSay(t *testing.T) {
 		if name, _ := renderEvent(events.Event{Kind: kind, JobID: 7}); name == "" {
 			t.Errorf("экран прогона ничего не говорит о событии %q", kind)
 		}
+	}
+}
+
+// finishedRun writes one run of a job that has already ended, collecting items,
+// and hands back its id.
+func finishedRun(t *testing.T, srv *Server, jobID, items int64) int64 {
+	t.Helper()
+	ctx := context.Background()
+	runID, err := srv.Store.StartRun(ctx, jobID, []store.ItemRow{
+		{Position: 1, Kind: "listing", Key: "a", State: "pending"},
+	})
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+	if err := srv.Store.FinishRun(ctx, runID, store.RunOutcome{State: store.RunDone, Requests: 1, Items: items}); err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+	return runID
+}
+
+func TestLive_APressOnAJobThatRanBeforeFollowsTheRunItStarted(t *testing.T) {
+	// «Запустить» on a job that had run before was «готово» the moment it was
+	// pressed. The new run writes its row only once the plan and the ports are
+	// ready, so the newest row the stream found was the previous run, finished
+	// hours earlier. The panel took that "done" for its own, stopped listening,
+	// and sat on «План составляется…» while the run went on without it — found
+	// filming the WB Monitor tutorial, 07.10.2026.
+	ts, bus, srv := liveServerWithStore(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	id := savedJobRow(t, srv, "второй запуск", "", true)
+	before := finishedRun(t, srv, id, 34)
+
+	res := openStream(ctx, t, ts, itoa(id)+"&after="+itoa(before))
+	if err := bus.Publish(ctx, events.Event{
+		Kind: events.RunProgress, JobID: id, Payload: "1 из 3",
+	}); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	msg := readMessage(t, res)
+	if strings.Contains(msg, "event: done") {
+		t.Fatalf("поток ответил за прошлый прогон, а новый уже не услышит: %q", msg)
+	}
+	if !strings.Contains(msg, "1 из 3") {
+		t.Errorf("ход нового прогона не дошёл: %q", msg)
+	}
+}
+
+func TestLive_ARunThePressStartedIsSaidToBeOverEvenIfItBeatTheScreen(t *testing.T) {
+	// The other side of the same line. A run quick enough to finish before the
+	// stream opened is still the run this press started, and its end is said —
+	// with its own numbers, not the previous run's.
+	ts, _, srv := liveServerWithStore(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	id := savedJobRow(t, srv, "быстрый", "", true)
+	before := finishedRun(t, srv, id, 34)
+	finishedRun(t, srv, id, 56)
+
+	res := openStream(ctx, t, ts, itoa(id)+"&after="+itoa(before))
+	msg := readMessage(t, res)
+	if !strings.Contains(msg, "event: done") {
+		t.Fatalf("о конце своего прогона поток не сказал: %q", msg)
+	}
+	if !strings.Contains(msg, "собрано 56") {
+		t.Errorf("сказано не про тот прогон: %q", msg)
+	}
+}
+
+func TestLive_RefusesAnAfterThatIsNotARun(t *testing.T) {
+	// A panel that wrote something else there is a wiring mistake, and read as
+	// zero it would quietly bring the old run's "done" back.
+	//
+	// Through a real server and with a deadline, not through a recorder: a
+	// stream that accepted the request would never end, and the test would be
+	// the suite's ten-minute timeout instead of a failure.
+	ts, _ := liveServer(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ts.URL+"/live?job=1&after=вчера", nil)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	req.SetBasicAuth("monitor", "correct horse")
+	res, err := ts.Client().Do(req)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	res.Body.Close()
+	if res.StatusCode != http.StatusBadRequest {
+		t.Errorf("after=вчера = %d, want 400", res.StatusCode)
+	}
+}
+
+func TestLive_TheScriptTellsTheStreamWhichRunCameBeforeThePress(t *testing.T) {
+	// The panel carries the run before the press and the stream reads it; the
+	// script in between is the one place the two could drift apart unnoticed —
+	// and then every second press of «Запустить» is «готово» again.
+	raw, err := staticFS.ReadFile("static/app.js")
+	if err != nil {
+		t.Fatalf("app.js: %v", err)
+	}
+	script := string(raw)
+	if !strings.Contains(script, "`&after=${encodeURIComponent(panel.dataset.after)}`") ||
+		!strings.Contains(script, "new EventSource(`/live?job=${encodeURIComponent(jobID)}${after}`)") {
+		t.Error("скрипт не передаёт потоку прогон до нажатия — прошлый прогон снова ответит за новый")
 	}
 }

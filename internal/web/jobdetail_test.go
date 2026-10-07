@@ -243,3 +243,29 @@ func TestRunHandler_ARefusalDoesNotPretendSomethingIsRunning(t *testing.T) {
 		t.Error("после отказа страница всё равно слушает прогон")
 	}
 }
+
+func TestRunHandler_ThePanelFollowsTheRunThisPressStarts(t *testing.T) {
+	// The panel names the newest run there was before the press, and the
+	// stream answers only for runs after it. Without that, a job that had run
+	// before was «готово» the moment it was started (see standing in live.go).
+	srv := newServer(t)
+	id := oneJob(t, srv)
+	var before int64
+	for before <= id+1 { // a run id that cannot be mistaken for the job's
+		before = finishedRun(t, srv, id, 1)
+	}
+	// A start whose run writes its row at once — the fastest a run can be. The
+	// run before the press has to be read before this, or the panel would wait
+	// past the very run it started.
+	srv.StartJob = func(ctx context.Context, jobID int64) error {
+		_, err := srv.Store.StartRun(ctx, jobID, []store.ItemRow{
+			{Position: 1, Kind: "listing", Key: "a", State: "pending"},
+		})
+		return err
+	}
+
+	body := postForm(t, srv, fmt.Sprintf("/jobs/run?id=%d", id), nil).Body.String()
+	if !strings.Contains(body, fmt.Sprintf(`data-after="%d"`, before)) {
+		t.Fatalf("панель не знает, какой прогон был до нажатия (%d):\n%s", before, firstLines(body))
+	}
+}

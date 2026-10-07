@@ -568,7 +568,11 @@
 
   function follow(jobID, panel) {
     stopFollowing();
-    live = new EventSource(`/live?job=${encodeURIComponent(jobID)}`);
+    // The run there was before the press, which the stream is not to answer
+    // for: without it a job that had run before was «готово» the moment it was
+    // started, from the old run's row. See standing in live.go.
+    const after = panel && panel.dataset.after ? `&after=${encodeURIComponent(panel.dataset.after)}` : "";
+    live = new EventSource(`/live?job=${encodeURIComponent(jobID)}${after}`);
     live.addEventListener("progress", (ev) => {
       const el = document.querySelector("#run-progress");
       if (el) el.innerHTML = ev.data;
