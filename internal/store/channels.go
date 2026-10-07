@@ -248,9 +248,47 @@ func (s *Store) SaveChannel(ctx context.Context, c ChannelRow) (int64, error) {
 	return c.ID, nil
 }
 
+// ErrChannelInUse is a delete refused because a proxy profile still names the
+// channel. ChannelInUseError carries which profiles.
+var ErrChannelInUse = errors.New("store: channel is in a proxy profile")
+
+// ChannelInUseError says which profiles stand in the way of a delete, so the
+// screen can name them instead of saying «используется» and leaving the person
+// to search.
+type ChannelInUseError struct {
+	Profiles []string
+}
+
+func (e *ChannelInUseError) Error() string {
+	return "store: channel is in proxy profiles: " + strings.Join(e.Profiles, ", ")
+}
+
+func (e *ChannelInUseError) Unwrap() error { return ErrChannelInUse }
+
 // DeleteChannel removes one.
+//
+// Refused while a proxy profile names it. Deleting it anyway is what used to
+// happen, and the first anybody heard of it was the next run of every job that
+// went through it, stopping on «прокси выключен или удалён». The check and the
+// delete share a transaction so a profile saved in between cannot slip past.
 func (s *Store) DeleteChannel(ctx context.Context, id int64) error {
-	if _, err := s.db.ExecContext(ctx, `DELETE FROM channels WHERE id = ?`, id); err != nil {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("store: delete channel %d: %w", id, err)
+	}
+	defer tx.Rollback()
+
+	using, err := proxyProfilesUsing(ctx, tx, id)
+	if err != nil {
+		return err
+	}
+	if len(using) > 0 {
+		return &ChannelInUseError{Profiles: using}
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM channels WHERE id = ?`, id); err != nil {
+		return fmt.Errorf("store: delete channel %d: %w", id, err)
+	}
+	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("store: delete channel %d: %w", id, err)
 	}
 	return nil

@@ -392,9 +392,9 @@ func (a *App) profileResolve(ctx context.Context, p store.ProfileRow) error {
 		// One thread whatever the profile says: this reads one card, and a pool
 		// of sixteen ports opened to fetch one document is sixteen control
 		// calls spent on nothing.
-		Threads:  1,
-		Channels: p.Channels,
-		Attempts: p.Attempts,
+		Threads:        1,
+		ProxyProfileID: p.ProxyProfileID,
+		Attempts:       p.Attempts,
 	}
 	id, err := job.Save(ctx, a.Store, j)
 	if err != nil {
@@ -430,17 +430,17 @@ func (a *App) profileCatalog(ctx context.Context, p store.ProfileRow) error {
 	}
 
 	j := job.Job{
-		ID:         p.CatalogJob,
-		Name:       "профиль: ассортимент " + p.Name,
-		Kind:       job.KindSeller,
-		SupplierID: *p.SellerID,
-		Regions:    p.Regions,
-		AppType:    wb.AppWeb,
-		MaxPages:   p.MaxPages,
-		Threads:    profileThreadCount(p),
-		Channels:   p.Channels,
-		Attempts:   p.Attempts,
-		Fields:     wb.Selection(p.Fields),
+		ID:             p.CatalogJob,
+		Name:           "профиль: ассортимент " + p.Name,
+		Kind:           job.KindSeller,
+		SupplierID:     *p.SellerID,
+		Regions:        p.Regions,
+		AppType:        wb.AppWeb,
+		MaxPages:       p.MaxPages,
+		Threads:        profileThreadCount(p),
+		ProxyProfileID: p.ProxyProfileID,
+		Attempts:       p.Attempts,
+		Fields:         wb.Selection(p.Fields),
 	}
 	id, err := job.Save(ctx, a.Store, j)
 	if err != nil {
@@ -692,18 +692,18 @@ func (a *App) profileCheck(ctx context.Context, p store.ProfileRow) error {
 	// how much of each page is kept, and keeping all of it is what «собрать
 	// всё, чтобы потом сравнивать» means.
 	j := job.Job{
-		ID:       p.CheckJob,
-		Name:     "профиль: проверка фраз " + p.Name,
-		Kind:     job.KindPhrase,
-		Phrases:  texts,
-		Articles: products,
-		Regions:  p.Regions,
-		AppType:  wb.AppWeb,
-		MaxPages: profileCheckTopPages,
-		Threads:  profileThreadCount(p),
-		Channels: p.Channels,
-		Attempts: p.Attempts,
-		Fields:   wb.Selection(p.Fields),
+		ID:             p.CheckJob,
+		Name:           "профиль: проверка фраз " + p.Name,
+		Kind:           job.KindPhrase,
+		Phrases:        texts,
+		Articles:       products,
+		Regions:        p.Regions,
+		AppType:        wb.AppWeb,
+		MaxPages:       profileCheckTopPages,
+		Threads:        profileThreadCount(p),
+		ProxyProfileID: p.ProxyProfileID,
+		Attempts:       p.Attempts,
+		Fields:         wb.Selection(p.Fields),
 	}
 	id, err := job.Save(ctx, a.Store, j)
 	if err != nil {

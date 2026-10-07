@@ -170,6 +170,13 @@ func Open(ctx context.Context, path string) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	// After the schema and before anything reads it: a job read before the
+	// carry would name no profile and fall through to a default that does not
+	// exist yet.
+	if err := s.CarryProxyProfiles(ctx); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	return s, nil
 }
 

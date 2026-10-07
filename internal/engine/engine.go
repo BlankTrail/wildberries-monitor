@@ -94,6 +94,21 @@ func retryPolicyFor(j job.Job, pooled bool) wb.RetryPolicy {
 	return policy
 }
 
+// throughProxies is whether any of channels leads somewhere other than the
+// host's own address.
+//
+// Not len(channels) > 0. Since migration 0012 a fresh install has one channel,
+// and it is the direct one — counted as a pool, it gave a run with a single
+// address the fifteen-attempt budget meant for walking through a list.
+func throughProxies(channels []blanktrail.Channel) bool {
+	for _, ch := range channels {
+		if ch.Kind() != blanktrail.KindDirect {
+			return true
+		}
+	}
+	return false
+}
+
 // RunnerFor builds everything one job needs, and the cleanup that closes it.
 //
 // The order is the order things can fail in, cheapest first: settings before a
@@ -104,6 +119,20 @@ func (e *Engine) RunnerFor(ctx context.Context, j job.Job) (*job.Runner, func(),
 	client, err := e.control(ctx)
 	if err != nil {
 		return nil, nil, err
+	}
+
+	// Which exits, read now and not when the job was saved: an edit on the
+	// proxies screen reaches every job that has not started yet. Before the
+	// preflight because it is a read from the database and the preflight is a
+	// call over the network, and a profile nobody finished is a reason to stop
+	// that costs nothing to find out.
+	profile, err := e.Store.ProxyProfileFor(ctx, j.ProxyProfileID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("engine: профиль прокси: %w", err)
+	}
+	if profile.Empty() {
+		return nil, nil, fmt.Errorf("engine: в профиле прокси «%s» не отмечено ни одного выхода — "+
+			"откройте вкладку «Прокси» и отметьте, через что собирать", profile.Name)
 	}
 
 	// The preflight is not optional and not only advice: it is where the
@@ -119,9 +148,9 @@ func (e *Engine) RunnerFor(ctx context.Context, j job.Job) (*job.Runner, func(),
 		return nil, nil, fmt.Errorf("engine: прокси не готов: %s", firstBlocking(report))
 	}
 
-	channels, closeChannels, err := e.Channels(ctx, j.Channels...)
+	channels, closeChannels, err := e.Channels(ctx, profile.Channels...)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("профиль прокси «%s»: %w", profile.Name, err)
 	}
 
 	pool, err := blanktrail.NewPool(ctx, poolConfig(client, j, report.CA, channels))
@@ -148,7 +177,7 @@ func (e *Engine) RunnerFor(ctx context.Context, j job.Job) (*job.Runner, func(),
 	// should walk through addresses until one gets through; on the host's own
 	// address there is one and no search to make, so the budget stops early.
 	site := wb.NewClientWithRetry(wb.FromPool(pool), wb.NewSessions(),
-		retryPolicyFor(j, len(channels) > 0))
+		retryPolicyFor(j, throughProxies(channels)))
 
 	runner := &job.Runner{
 		Store:   e.Store,

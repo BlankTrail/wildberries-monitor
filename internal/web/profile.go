@@ -185,9 +185,8 @@ func (s *Server) runControls(r *http.Request, c store.RunControls, folded bool) 
 			"один — порт меняет отпечаток и личность, оставаясь на том же адресе.",
 			wb.DefaultAttemptsPooled, wb.DefaultAttemptsDirect)))
 	b.WriteString(`</div>`)
-	b.WriteString(field("Через какие прокси", s.channelPicker(r, "channels", c.Channels),
-		"Ничего не отмечено — через все включённые. Отметьте, если этот профиль должен "+
-			"собираться только через определённые выходы."))
+	b.WriteString(field("Профиль прокси", s.proxyProfilePicker(r, "proxy_profile", c.ProxyProfileID),
+		"Через какой набор выходов собирается этот профиль. Наборы настраиваются на вкладке «Прокси»."))
 	b.WriteString(`</details>`)
 	return b.String()
 }
@@ -195,10 +194,10 @@ func (s *Server) runControls(r *http.Request, c store.RunControls, folded bool) 
 // runControlsFrom reads them back off whichever form posted them.
 func runControlsFrom(r *http.Request) store.RunControls {
 	return store.RunControls{
-		Regions:  splitList(r.PostFormValue("regions")),
-		Threads:  int(atoi64(r.PostFormValue("threads"))),
-		Attempts: int(atoi64(r.PostFormValue("attempts"))),
-		Channels: idList(r.PostForm["channels"]),
+		Regions:        splitList(r.PostFormValue("regions")),
+		Threads:        int(atoi64(r.PostFormValue("threads"))),
+		Attempts:       int(atoi64(r.PostFormValue("attempts"))),
+		ProxyProfileID: atoi64(r.PostFormValue("proxy_profile")),
 	}
 }
 
@@ -405,7 +404,7 @@ func (s *Server) profilePlanForm(r *http.Request, p store.ProfileRow) string {
 	// settings, and a setting folded away on a screen for changing settings is
 	// one somebody reports as missing.
 	b.WriteString(s.runControls(r, store.RunControls{
-		Threads: p.Threads, Attempts: p.Attempts, Channels: p.Channels,
+		Threads: p.Threads, Attempts: p.Attempts, ProxyProfileID: p.ProxyProfileID,
 	}, false))
 
 	b.WriteString(`<div class="bt-field"><label class="bt-checkbox">` +
@@ -982,13 +981,13 @@ func (s *Server) checkPhrases(w http.ResponseWriter, r *http.Request) {
 		// attempts. Hard-coded here, this job ran through every proxy and in
 		// four threads whatever the profile said — two settings on one screen
 		// that a job started from the same screen ignored.
-		Regions:  p.Regions,
-		AppType:  1,
-		MaxPages: profileCheckPages,
-		Threads:  profileThreads(p),
-		Channels: p.Channels,
-		Attempts: p.Attempts,
-		Fields:   baseFields(),
+		Regions:        p.Regions,
+		AppType:        1,
+		MaxPages:       profileCheckPages,
+		Threads:        profileThreads(p),
+		ProxyProfileID: p.ProxyProfileID,
+		Attempts:       p.Attempts,
+		Fields:         baseFields(),
 	})
 	if err != nil {
 		s.profileFragment(w, r, alert("error", err.Error()))
@@ -1246,13 +1245,13 @@ func (s *Server) collectPhrasePages(w http.ResponseWriter, r *http.Request) {
 		// attempts. Hard-coded here, this job ran through every proxy and in
 		// four threads whatever the profile said — two settings on one screen
 		// that a job started from the same screen ignored.
-		Regions:  p.Regions,
-		AppType:  1,
-		MaxPages: profileCheckPages,
-		Threads:  profileThreads(p),
-		Channels: p.Channels,
-		Attempts: p.Attempts,
-		Fields:   baseFields(),
+		Regions:        p.Regions,
+		AppType:        1,
+		MaxPages:       profileCheckPages,
+		Threads:        profileThreads(p),
+		ProxyProfileID: p.ProxyProfileID,
+		Attempts:       p.Attempts,
+		Fields:         baseFields(),
 	})
 	if err != nil {
 		s.profileFragment(w, r, alert("error", err.Error()))

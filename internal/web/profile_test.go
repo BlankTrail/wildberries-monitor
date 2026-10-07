@@ -557,7 +557,7 @@ func TestProfile_TheJobsThisScreenBuildsCarryTheProfilesAnswers(t *testing.T) {
 		t.Fatalf("SaveProfile: %v", err)
 	}
 	p, _ := srv.Store.Profile(ctx, id)
-	p.Threads, p.Attempts, p.Channels = 9, 10, []int64{3}
+	p.Threads, p.Attempts, p.ProxyProfileID = 9, 10, 3
 	if err := srv.Store.SaveProfilePlan(ctx, p); err != nil {
 		t.Fatalf("SaveProfilePlan: %v", err)
 	}
@@ -602,8 +602,8 @@ func TestProfile_TheJobsThisScreenBuildsCarryTheProfilesAnswers(t *testing.T) {
 		if made.Attempts != 10 {
 			t.Errorf("%s: повторов %d, профиль просил 10", path, made.Attempts)
 		}
-		if len(made.Channels) != 1 || made.Channels[0] != 3 {
-			t.Errorf("%s: каналы %v, профиль просил [3]", path, made.Channels)
+		if made.ProxyProfileID != 3 {
+			t.Errorf("%s: профиль прокси %d, профиль просил 3", path, made.ProxyProfileID)
 		}
 	}
 }
@@ -622,10 +622,10 @@ func TestProfile_TheFirstPressCarriesTheRunControls(t *testing.T) {
 	}
 
 	postForm(t, srv, "/profile", url.Values{
-		"input":    {"141504066"},
-		"threads":  {"9"},
-		"attempts": {"10"},
-		"channels": {"", "3"},
+		"input":         {"141504066"},
+		"threads":       {"9"},
+		"attempts":      {"10"},
+		"proxy_profile": {"3"},
 	})
 
 	if got.Threads != 9 {
@@ -634,8 +634,8 @@ func TestProfile_TheFirstPressCarriesTheRunControls(t *testing.T) {
 	if got.Attempts != 10 {
 		t.Errorf("повторов %d, форма просила 10", got.Attempts)
 	}
-	if len(got.Channels) != 1 || got.Channels[0] != 3 {
-		t.Errorf("каналы %v, форма просила [3]", got.Channels)
+	if got.ProxyProfileID != 3 {
+		t.Errorf("профиль прокси %d, форма просила 3", got.ProxyProfileID)
 	}
 }
 
@@ -646,7 +646,7 @@ func TestProfile_TheFirstScreenOffersTheRunControls(t *testing.T) {
 	srv := newServer(t)
 	body := get(t, srv, "/profile", "").Body.String()
 
-	for _, want := range []string{`name="threads"`, `name="attempts"`, `name="channels"`} {
+	for _, want := range []string{`name="threads"`, `name="attempts"`, `name="proxy_profile"`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("на первом экране нет поля %s:\n%s", want, firstLines(body))
 		}

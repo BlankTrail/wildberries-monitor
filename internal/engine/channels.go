@@ -22,17 +22,21 @@ import (
 // re-reading its source, and a run that dropped its channels without closing
 // them would leave one per run behind for the life of the program.
 //
-// Disabled channels are left out, which is the whole of what the switch on the
-// screen does. None enabled — or none saved — comes back empty, and the pool
-// reads that as the host's own address.
+// want names the channels to build, by store id — a proxy profile's set, or
+// the one channel the panel's own errands go through. It must name at least
+// one: «nothing named» used to mean «every enabled channel», and with nothing
+// enabled that was the host's own address, reached without anybody choosing
+// it. Since proxy profiles the set is always written down, so an empty one is
+// a caller's fault and is refused as one.
 //
-// want names the channels a job asked for, by store id. Empty is every enabled
-// one, which is what every run did before a job could say. A named channel that
-// is gone or switched off stops the run rather than being skipped: skipping
-// would collect through exits the person deliberately excluded, and skipping
-// the last one would collect through the machine's own address — the one
-// outcome anybody configuring proxies is trying to avoid.
+// A named channel that is gone or switched off stops the run rather than being
+// skipped: skipping would collect through exits the person deliberately
+// excluded, and skipping the last one would collect through the machine's own
+// address — the one outcome anybody configuring proxies is trying to avoid.
 func (e *Engine) Channels(ctx context.Context, want ...int64) ([]blanktrail.Channel, func(), error) {
+	if len(want) == 0 {
+		return nil, nil, fmt.Errorf("engine: не названо ни одного прокси")
+	}
 	rows, err := e.Store.Channels(ctx)
 	if err != nil {
 		return nil, nil, err
@@ -42,19 +46,17 @@ func (e *Engine) Channels(ctx context.Context, want ...int64) ([]blanktrail.Chan
 	for _, id := range want {
 		chosen[id] = true
 	}
-	if len(chosen) > 0 {
-		usable := map[int64]bool{}
-		for _, row := range rows {
-			if row.Enabled {
-				usable[row.ID] = true
-			}
+	usable := map[int64]bool{}
+	for _, row := range rows {
+		if row.Enabled {
+			usable[row.ID] = true
 		}
-		for _, id := range want {
-			if !usable[id] {
-				return nil, nil, fmt.Errorf(
-					"engine: задание назначено на прокси №%d, а он выключен или удалён — "+
-						"выберите прокси заново", id)
-			}
+	}
+	for _, id := range want {
+		if !usable[id] {
+			return nil, nil, fmt.Errorf(
+				"прокси №%d выключен или удалён — включите его на вкладке «Прокси» "+
+					"или уберите из профиля", id)
 		}
 	}
 
@@ -69,7 +71,7 @@ func (e *Engine) Channels(ctx context.Context, want ...int64) ([]blanktrail.Chan
 		if !row.Enabled {
 			continue
 		}
-		if len(chosen) > 0 && !chosen[row.ID] {
+		if !chosen[row.ID] {
 			continue
 		}
 		ch, err := buildChannel(ctx, row)
