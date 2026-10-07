@@ -63,10 +63,22 @@ func (s *Server) proxyProfilePicker(r *http.Request, name string, chosen int64) 
 	b.WriteString(`</select>`)
 	if !found {
 		b.WriteString(`<div class="bt-alert bt-alert--warning bt-alert--sm">` +
-			`Профиль прокси, который было выбрано, удалён — задание пойдёт через профиль по умолчанию, «` +
+			`Набор прокси, который был выбран, удалён — задание пойдёт через набор по умолчанию, «` +
 			html.EscapeString(defaultName) + `». Сохраните, чтобы это стало явным выбором.</div>`)
 	}
 	return b.String()
+}
+
+// proxyProfileField is the job form's choice of proxy set — or, while there is
+// only the one set, nothing at all but the value «по умолчанию». A select with
+// one option is a question with one answer, and it was the third place on the
+// panel the same proxies were named.
+func (s *Server) proxyProfileField(r *http.Request, chosen int64, hint string) string {
+	list, err := s.Store.ProxyProfiles(r.Context())
+	if err == nil && len(list) == 1 && (chosen == 0 || chosen == list[0].ID) {
+		return `<input type="hidden" name="proxy_profile" value="0">`
+	}
+	return field("Набор прокси", s.proxyProfilePicker(r, "proxy_profile", chosen), hint)
 }
 
 // proxyProfileNotice is the banner that goes on every page while the default
@@ -85,21 +97,21 @@ func (s *Server) proxyProfileNotice(ctx context.Context, path string) string {
 	p, err := s.Store.DefaultProxyProfile(ctx)
 	switch {
 	case errors.Is(err, store.ErrNoProxyProfile):
-		return proxyProfileBanner("Нет профиля прокси по умолчанию — задания без выбранного профиля не запустятся.")
+		return proxyProfileBanner("Нет набора прокси по умолчанию — задания без выбранного набора не запустятся.")
 	case err != nil:
 		// A read that failed is not a misconfiguration, and a banner saying it
 		// is would send somebody to fix a setting that is fine.
 		return ""
 	case p.Empty():
-		return proxyProfileBanner("В профиле прокси по умолчанию «" + p.Name +
-			"» не отмечено ни одного выхода — задания без выбранного профиля не запустятся.")
+		return proxyProfileBanner("В наборе прокси по умолчанию «" + p.Name +
+			"» не отмечено ни одного прокси — задания без выбранного набора не запустятся.")
 	}
 	return ""
 }
 
 func proxyProfileBanner(text string) string {
 	return `<div class="bt-alert bt-alert--warning">` + html.EscapeString(text) +
-		` <a href="/channels#proxy-profiles-body">Открыть профили прокси</a></div>`
+		` <a href="/channels#proxy-profiles-body">Открыть наборы прокси</a></div>`
 }
 
 // proxyProfilesSection is the whole section, for the page.
@@ -157,14 +169,33 @@ func (s *Server) proxyProfilesBody(r *http.Request, notice string, form store.Pr
 	}
 
 	var b strings.Builder
-	b.WriteString(`<h2>Профили прокси</h2>`)
-	b.WriteString(`<p class="bt-form-hint">Профиль — это набор выходов, через который идёт задание. ` +
-		`Задание выбирает профиль, а не отдельные прокси, поэтому изменение профиля доходит ` +
-		`до всех заданий, которые ещё не запущены.</p>`)
+	b.WriteString(`<h2>Наборы прокси для заданий</h2>`)
 	b.WriteString(notice)
 
+	// One set is what almost everybody has, and for them this is not a second
+	// list of proxies but one sentence: where the jobs go out through. The
+	// table, the default mark and the delete buttons are for somebody who made
+	// a second set — shown to everybody, they read as the proxies twice over.
+	if len(profiles) == 1 && !open {
+		p := profiles[0]
+		b.WriteString(`<p>Все задания идут через: ` + profileExits(p, byID) + `</p>`)
+		fmt.Fprintf(&b, `<p class="bt-form-hint">Новый прокси попадает сюда сам. Второй набор нужен, `+
+			`только если разным заданиям нужны разные прокси — например, мониторингу позиций одни, `+
+			`а сбору отзывов другие.</p>`)
+		fmt.Fprintf(&b, `<div class="bt-form-actions">`+
+			`<button class="bt-btn bt-btn--ghost bt-btn--sm" type="button" data-get="/proxy-profiles/edit?id=%d" `+
+			`data-target="%s">Изменить состав</button>`+
+			`<button class="bt-btn bt-btn--ghost bt-btn--sm" type="button" data-get="/proxy-profiles/edit" `+
+			`data-target="%s">Добавить второй набор</button></div>`, p.ID, proxyProfilesAt, proxyProfilesAt)
+		return b.String(), nil
+	}
+
+	b.WriteString(`<p class="bt-form-hint">Задание выбирает набор, а не отдельные прокси, поэтому изменение ` +
+		`набора доходит до всех заданий, которые ещё не запущены. Новый прокси попадает в набор ` +
+		`по умолчанию сам.</p>`)
+
 	b.WriteString(`<div class="bt-table-wrap"><table class="bt-table"><thead><tr>` +
-		`<th>Профиль</th><th>Выходы</th><th></th></tr></thead><tbody>`)
+		`<th>Набор</th><th>Прокси</th><th></th></tr></thead><tbody>`)
 	for _, p := range profiles {
 		if open && p.ID == form.ID && form.ID != 0 {
 			b.WriteString(`<tr class="bt-row--current" aria-current="true">`)
@@ -198,7 +229,7 @@ func (s *Server) proxyProfilesBody(r *http.Request, notice string, form store.Pr
 		b.WriteString(proxyProfileForm(form, channels))
 	} else {
 		fmt.Fprintf(&b, `<div class="bt-form-actions"><button class="bt-btn bt-btn--primary bt-btn--sm" type="button" `+
-			`data-get="/proxy-profiles/edit" data-target="%s">Новый профиль</button></div>`, proxyProfilesAt)
+			`data-get="/proxy-profiles/edit" data-target="%s">Новый набор</button></div>`, proxyProfilesAt)
 	}
 	return b.String(), nil
 }
@@ -241,9 +272,9 @@ func proxyProfileForm(p store.ProxyProfile, channels []store.ChannelRow) string 
 	}
 
 	var b strings.Builder
-	head := "Новый профиль прокси"
+	head := "Новый набор прокси"
 	if p.ID != 0 {
-		head = "Профиль «" + p.Name + "»"
+		head = "Набор «" + p.Name + "»"
 	}
 	b.WriteString(`<form class="bt-fieldset bt-form" data-post="/proxy-profiles" data-target="` +
 		proxyProfilesAt + `">`)
@@ -251,7 +282,7 @@ func proxyProfileForm(p store.ProxyProfile, channels []store.ChannelRow) string 
 	b.WriteString(`<input type="hidden" name="id" value="` + strconv.FormatInt(p.ID, 10) + `">`)
 	b.WriteString(field("Название",
 		`<input class="bt-input" name="name" required value="`+html.EscapeString(p.Name)+`">`,
-		"Так профиль называется в выборе на форме задания."))
+		"Так набор называется в выборе на форме задания."))
 
 	var boxes strings.Builder
 	if len(channels) == 0 {
@@ -274,19 +305,19 @@ func proxyProfileForm(p store.ProxyProfile, channels []store.ChannelRow) string 
 		boxes.WriteString(`</div>`)
 	}
 	b.WriteString(field("Через какие прокси", boxes.String(),
-		"Задания этого профиля идут через отмеченные выходы. Выключенный или удалённый выход "+
+		"Задания этого набора идут через отмеченные прокси. Выключенный или удалённый прокси "+
 			"останавливает запуск — молча собирать через остальные или с адреса машины нельзя."))
 
 	if p.Default {
-		b.WriteString(`<p class="bt-form-hint">Это профиль по умолчанию. Чтобы снять отметку, ` +
-			`сделайте профилем по умолчанию другой.</p>`)
+		b.WriteString(`<p class="bt-form-hint">Это набор по умолчанию. Чтобы снять отметку, ` +
+			`сделайте набором по умолчанию другой.</p>`)
 	} else {
 		b.WriteString(`<div class="bt-field"><label class="bt-checkbox">` +
-			`<input type="checkbox" name="default" value="1"> Сделать профилем по умолчанию</label></div>`)
+			`<input type="checkbox" name="default" value="1"> Сделать набором по умолчанию</label></div>`)
 	}
 
 	b.WriteString(`<div class="bt-form-actions">` +
-		`<button class="bt-btn bt-btn--primary" type="submit">Сохранить профиль</button>` +
+		`<button class="bt-btn bt-btn--primary" type="submit">Сохранить набор</button>` +
 		`<button class="bt-btn bt-btn--ghost" type="button" data-get="/proxy-profiles/list" data-target="` +
 		proxyProfilesAt + `">Отмена</button></div>`)
 	b.WriteString(`</form>`)
@@ -329,10 +360,10 @@ func (s *Server) saveProxyProfile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var err error
-	saved := "Профиль изменён."
+	saved := "Набор изменён."
 	if p.ID == 0 {
 		_, err = s.Store.CreateProxyProfile(r.Context(), p)
-		saved = "Профиль создан."
+		saved = "Набор создан."
 	} else {
 		// The saved default stays the default: the form does not offer to
 		// untick it, and the store would not take it away if it did.
@@ -351,7 +382,7 @@ func (s *Server) saveProxyProfile(w http.ResponseWriter, r *http.Request) {
 	}
 	notice := alert("success", saved)
 	if len(p.Channels) == 0 {
-		notice += alert("warning", "В профиле не отмечено ни одного выхода: задания с ним не запустятся.")
+		notice += alert("warning", "В наборе не отмечено ни одного прокси: задания с ним не запустятся.")
 	}
 	s.proxyProfilesFragment(w, r, notice, store.ProxyProfile{}, false)
 }
@@ -362,7 +393,7 @@ func (s *Server) defaultProxyProfile(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "proxy profiles: which profile?", http.StatusBadRequest)
 		return
 	}
-	notice := alert("success", "Профиль по умолчанию изменён.")
+	notice := alert("success", "Набор по умолчанию изменён.")
 	if err := s.Store.SetDefaultProxyProfile(r.Context(), id); err != nil {
 		notice = alert("error", proxyProfileFault(err))
 	}
@@ -375,7 +406,7 @@ func (s *Server) deleteProxyProfile(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "proxy profiles: which profile?", http.StatusBadRequest)
 		return
 	}
-	notice := alert("success", "Профиль удалён. Задания, которые его выбирали, пойдут через профиль по умолчанию.")
+	notice := alert("success", "Набор удалён. Задания, которые его выбирали, пойдут через набор по умолчанию.")
 	if err := s.Store.DeleteProxyProfile(r.Context(), id); err != nil {
 		notice = alert("error", proxyProfileFault(err))
 	}
@@ -386,12 +417,12 @@ func (s *Server) deleteProxyProfile(w http.ResponseWriter, r *http.Request) {
 func proxyProfileFault(err error) string {
 	switch {
 	case errors.Is(err, store.ErrProxyProfileName):
-		return "Нужно название, и не такое, как у другого профиля."
+		return "Нужно название, и не такое, как у другого набора."
 	case errors.Is(err, store.ErrLastProxyProfile):
-		return "Последний профиль удалить нельзя: заданиям без выбранного профиля нужно, через что идти. " +
+		return "Последний набор удалить нельзя: заданиям без выбранного набора нужно, через что идти. " +
 			"Его можно изменить."
 	case errors.Is(err, store.ErrNoProxyProfile):
-		return "Этот профиль удалили, пока форма была открыта."
+		return "Этот набор удалили, пока форма была открыта."
 	}
 	return err.Error()
 }

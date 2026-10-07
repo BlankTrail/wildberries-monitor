@@ -269,6 +269,73 @@ func (s *Store) SaveProxyProfile(ctx context.Context, p ProxyProfile) error {
 	return nil
 }
 
+// joinDefaultProfile puts a newly added channel into the default profile.
+//
+// A proxy somebody has just added is a proxy they mean to collect through.
+// Left out of every profile it was saved, listed, «включён» — and used by
+// nothing, because jobs go through a profile and not through the list; the
+// screen then read as two lists of proxies that disagreed. Joining the
+// default is what adding one means for everybody who never made a second
+// profile, and somebody who did can still take it out.
+func joinDefaultProfile(ctx context.Context, tx *sql.Tx, channelID, now int64) error {
+	var id int64
+	var raw string
+	err := tx.QueryRowContext(ctx, `SELECT id, channels FROM proxy_profiles WHERE is_default = 1`).Scan(&id, &raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		// No profiles yet: the first run of CarryProxyProfiles makes the
+		// default out of the channels there are, this one included.
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("default proxy profile: %w", err)
+	}
+	ids, err := idsOf(raw)
+	if err != nil {
+		return fmt.Errorf("default proxy profile %d: channels: %w", id, err)
+	}
+	joined, err := json.Marshal(canonicalIDs(append(ids, channelID)))
+	if err != nil {
+		return fmt.Errorf("default proxy profile %d: %w", id, err)
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE proxy_profiles SET channels = ?, updated_at = ? WHERE id = ?`,
+		string(joined), now, id); err != nil {
+		return fmt.Errorf("default proxy profile %d: %w", id, err)
+	}
+	return nil
+}
+
+// leaveDefaultProfile takes a channel out of the default profile, the other
+// half of joinDefaultProfile.
+func leaveDefaultProfile(ctx context.Context, tx *sql.Tx, channelID, now int64) error {
+	var id int64
+	var raw string
+	err := tx.QueryRowContext(ctx, `SELECT id, channels FROM proxy_profiles WHERE is_default = 1`).Scan(&id, &raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("default proxy profile: %w", err)
+	}
+	ids, err := idsOf(raw)
+	if err != nil {
+		return fmt.Errorf("default proxy profile %d: channels: %w", id, err)
+	}
+	n := len(ids)
+	kept := slices.DeleteFunc(ids, func(v int64) bool { return v == channelID })
+	if len(kept) == n {
+		return nil
+	}
+	left, err := json.Marshal(canonicalIDs(kept))
+	if err != nil {
+		return fmt.Errorf("default proxy profile %d: %w", id, err)
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE proxy_profiles SET channels = ?, updated_at = ? WHERE id = ?`,
+		string(left), now, id); err != nil {
+		return fmt.Errorf("default proxy profile %d: %w", id, err)
+	}
+	return nil
+}
+
 // SetDefaultProxyProfile moves the default mark to id.
 func (s *Store) SetDefaultProxyProfile(ctx context.Context, id int64) error {
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -340,25 +407,22 @@ func (s *Store) DeleteProxyProfile(ctx context.Context, id int64) error {
 	return nil
 }
 
-// ProxyProfilesUsing names the profiles that list channel id, by name.
-//
-// For the channels screen's delete: a channel a profile names is one the next
-// run of every job on that profile would fail without, and the person deleting
-// it should hear which profiles those are before it goes, not after.
-func (s *Store) ProxyProfilesUsing(ctx context.Context, channelID int64) ([]string, error) {
-	return proxyProfilesUsing(ctx, s.db, channelID)
-}
-
 type queryer interface {
 	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 }
 
-func proxyProfilesUsing(ctx context.Context, q queryer, channelID int64) ([]string, error) {
+// proxyProfilesUsing names the profiles that list channel id, by name.
+//
+// For the channels screen's delete: a channel a profile names is one the next
+// run of every job on that profile would fail without, and the person deleting
+// it should hear which profiles those are before it goes, not after.
+// withDefault says whether the default set counts.
+func proxyProfilesUsing(ctx context.Context, q queryer, channelID int64, withDefault bool) ([]string, error) {
 	rows, err := q.QueryContext(ctx, `
 		SELECT DISTINCT p.name
 		  FROM proxy_profiles p, json_each(p.channels) c
-		 WHERE c.value = ?
-		 ORDER BY p.name`, channelID)
+		 WHERE c.value = ? AND (? OR p.is_default = 0)
+		 ORDER BY p.name`, channelID, withDefault)
 	if err != nil {
 		return nil, fmt.Errorf("store: profiles using channel %d: %w", channelID, err)
 	}

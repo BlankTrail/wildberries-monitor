@@ -118,10 +118,10 @@ func (e *Engine) RunnerFor(ctx context.Context, j job.Job) (*job.Runner, func(),
 	// that costs nothing to find out.
 	profile, err := e.Store.ProxyProfileFor(ctx, j.ProxyProfileID)
 	if err != nil {
-		return nil, nil, fmt.Errorf("engine: профиль прокси: %w", err)
+		return nil, nil, fmt.Errorf("engine: набор прокси: %w", err)
 	}
 	if profile.Empty() {
-		return nil, nil, fmt.Errorf("engine: в профиле прокси «%s» не отмечено ни одного выхода — "+
+		return nil, nil, fmt.Errorf("engine: в наборе прокси «%s» не отмечено ни одного прокси — "+
 			"откройте вкладку «Прокси» и отметьте, через что собирать", profile.Name)
 	}
 

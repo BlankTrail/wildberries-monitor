@@ -606,6 +606,8 @@ func TestPages_PointOnlyAtRoutesThatAnswer(t *testing.T) {
 				if !strings.HasPrefix(target, "/") || strings.HasPrefix(target, "/static/") {
 					continue
 				}
+				// The part after # is the browser's, never the server's.
+				target, _, _ = strings.Cut(target, "#")
 				if seen[k.method+" "+target] {
 					continue
 				}

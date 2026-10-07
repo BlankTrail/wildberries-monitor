@@ -315,6 +315,9 @@ func (s *Store) SaveChannel(ctx context.Context, c ChannelRow) (int64, error) {
 		if id, err = res.LastInsertId(); err != nil {
 			return 0, fmt.Errorf("store: save channel: %w", err)
 		}
+		if err := joinDefaultProfile(ctx, tx, id, now); err != nil {
+			return 0, fmt.Errorf("store: save channel: %w", err)
+		}
 	} else {
 		res, err := tx.ExecContext(ctx, `
 			UPDATE channels
@@ -374,12 +377,18 @@ func (s *Store) DeleteChannel(ctx context.Context, id int64) error {
 	}
 	defer tx.Rollback()
 
-	using, err := proxyProfilesUsing(ctx, tx, id)
+	// Refused only for a set somebody made: the default one took the proxy in
+	// by itself when it was added (see joinDefaultProfile), and lets it go the
+	// same way — asking to untick it there first would be asking twice.
+	using, err := proxyProfilesUsing(ctx, tx, id, false)
 	if err != nil {
 		return err
 	}
 	if len(using) > 0 {
 		return &ChannelInUseError{Profiles: using}
+	}
+	if err := leaveDefaultProfile(ctx, tx, id, s.now().UTC().Unix()); err != nil {
+		return fmt.Errorf("store: delete channel %d: %w", id, err)
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM channels WHERE id = ?`, id); err != nil {
 		return fmt.Errorf("store: delete channel %d: %w", id, err)

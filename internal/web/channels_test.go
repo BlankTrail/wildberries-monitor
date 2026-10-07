@@ -70,21 +70,41 @@ func TestChannels_WithEverythingRemovedTheScreenSaysJobsWillNotStart(t *testing.
 
 func TestChannels_DeletingOneAProfileNamesIsRefusedWithTheProfilesNamed(t *testing.T) {
 	// Deleting a channel used to check nothing, and the first anybody heard of
-	// it was the next run of every job going through it. The seeded direct
-	// exit is in «Основной» after the carry, so that is the profile to name.
+	// it was the next run of every job going through it. A set somebody made
+	// still holds on to its proxies; the default one does not — it took each
+	// proxy in by itself when it was added, and lets it go the same way.
 	srv := newServer(t)
-	list, err := srv.Store.Channels(t.Context())
-	if err != nil || len(list) == 0 {
-		t.Fatalf("Channels: %v, %d", err, len(list))
+	ctx := t.Context()
+	kept, err := srv.Store.SaveChannel(ctx, store.ChannelRow{Name: "список", Kind: store.ChannelList,
+		Source: "/tmp/l.txt", Enabled: true})
+	if err != nil {
+		t.Fatalf("SaveChannel: %v", err)
+	}
+	if _, err := srv.Store.CreateProxyProfile(ctx, store.ProxyProfile{Name: "через список", Channels: []int64{kept}}); err != nil {
+		t.Fatalf("CreateProxyProfile: %v", err)
 	}
 
-	w := postForm(t, srv, "/channels/delete?id="+strconv.FormatInt(list[0].ID, 10), url.Values{})
-	if !strings.Contains(w.Body.String(), "«Основной»") {
-		t.Errorf("отказ не называет профиль, в котором отмечен прокси:\n%s", firstLines(w.Body.String()))
+	w := postForm(t, srv, "/channels/delete?id="+strconv.FormatInt(kept, 10), url.Values{})
+	if !strings.Contains(w.Body.String(), "«через список»") || strings.Contains(w.Body.String(), "«Основной»") {
+		t.Errorf("отказ называет не тот набор:\n%s", firstLines(w.Body.String()))
 	}
-	still, err := srv.Store.Channels(t.Context())
-	if err != nil || len(still) != len(list) {
-		t.Errorf("прокси удалён, хотя профиль его называет: было %d, стало %d", len(list), len(still))
+	if _, err := srv.Store.Channel(ctx, kept); err != nil {
+		t.Errorf("прокси удалён, хотя набор «через список» его называет: %v", err)
+	}
+
+	// In the default set only: deleted, and gone from the set too.
+	free, err := srv.Store.SaveChannel(ctx, store.ChannelRow{Name: "второй", Kind: store.ChannelList,
+		Source: "/tmp/m.txt", Enabled: true})
+	if err != nil {
+		t.Fatalf("SaveChannel: %v", err)
+	}
+	postForm(t, srv, "/channels/delete?id="+strconv.FormatInt(free, 10), url.Values{})
+	if _, err := srv.Store.Channel(ctx, free); err == nil {
+		t.Error("прокси из одного лишь набора по умолчанию не удалился")
+	}
+	def, err := srv.Store.DefaultProxyProfile(ctx)
+	if err != nil || slices.Contains(def.Channels, free) {
+		t.Errorf("удалённый прокси остался в наборе по умолчанию: %v, %v", def.Channels, err)
 	}
 }
 
@@ -797,7 +817,7 @@ func TestChannels_ASwapDoesNotNestTheScreenInsideItself(t *testing.T) {
 		t.Errorf("фрагмент несёт свою же секцию:\n%s", firstLines(body))
 	}
 	// And it still carries the heading, or a save would take it off the screen.
-	if !strings.Contains(body, "Прокси выхода") {
+	if !strings.Contains(body, "<h2>Прокси</h2>") {
 		t.Errorf("после сохранения заголовок исчез:\n%s", firstLines(body))
 	}
 }

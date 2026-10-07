@@ -683,9 +683,9 @@ func (s *Server) constructorHTML(r *http.Request, edit *job.Job) (string, error)
 	// Which exits, beside the regions: both are «где смотреть», and a job that
 	// must go through one country's proxies is the same kind of decision as one
 	// that must be read for one region.
-	b.WriteString(field("Профиль прокси", s.proxyProfilePicker(r, "proxy_profile", d.ProxyProfileID),
-		"Через какой набор выходов идёт задание. Наборы настраиваются на вкладке «Прокси»; "+
-			"«по умолчанию» следует за отметкой, если её перенесут на другой профиль."))
+	b.WriteString(s.proxyProfileField(r, d.ProxyProfileID,
+		"Через какой набор прокси идёт задание. Наборы настраиваются на вкладке «Прокси»; "+
+			"«по умолчанию» следует за отметкой, если её перенесут на другой набор."))
 
 	b.WriteString(`<h3 class="bt-form-head">Когда и как быстро</h3>`)
 	b.WriteString(`<div class="bt-form-grid">`)

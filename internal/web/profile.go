@@ -185,8 +185,8 @@ func (s *Server) runControls(r *http.Request, c store.RunControls, folded bool) 
 			"один — порт меняет отпечаток и личность, оставаясь на том же адресе.",
 			wb.DefaultAttemptsPooled, wb.DefaultAttemptsDirect)))
 	b.WriteString(`</div>`)
-	b.WriteString(field("Профиль прокси", s.proxyProfilePicker(r, "proxy_profile", c.ProxyProfileID),
-		"Через какой набор выходов собирается этот профиль. Наборы настраиваются на вкладке «Прокси»."))
+	b.WriteString(s.proxyProfileField(r, c.ProxyProfileID,
+		"Через какой набор прокси собирается ваш магазин. Наборы настраиваются на вкладке «Прокси»."))
 	b.WriteString(`</details>`)
 	return b.String()
 }

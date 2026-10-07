@@ -41,7 +41,7 @@ var channelKinds = []struct {
 	{store.ChannelGateway, "Шлюз BlankTrail",
 		"Имя конфигурации из BlankTrail — то же, что показывает список шлюзов."},
 	{store.ChannelDirect, "Прямое соединение",
-		"Собственный адрес машины. Имеет смысл в смеси с другими выходами."},
+		"Собственный адрес машины. Имеет смысл в смеси с другими прокси."},
 }
 
 func channelLabel(kind string) string {
@@ -112,7 +112,7 @@ func (s *Server) channelsBody(r *http.Request, notice string, form store.Channel
 	}
 
 	var b strings.Builder
-	b.WriteString(`<h2>Прокси выхода</h2>`)
+	b.WriteString(`<h2>Прокси</h2>`)
 	b.WriteString(notice)
 	b.WriteString(channelList(list, form.ID))
 	b.WriteString(s.restingLine(r))
@@ -556,8 +556,8 @@ func (s *Server) deleteChannel(w http.ResponseWriter, r *http.Request) {
 			// Refused, and said where: the profiles are in the section below,
 			// and «используется» without naming them is a search.
 			s.channelsFragment(w, r, alert("error",
-				"Этот прокси отмечен в профилях: «"+strings.Join(inUse.Profiles, "», «")+
-					"». Уберите его оттуда в разделе «Профили прокси» ниже — или выключите прокси, "+
+				"Этот прокси отмечен в наборах: «"+strings.Join(inUse.Profiles, "», «")+
+					"». Уберите его оттуда в разделе «Наборы прокси для заданий» ниже — или выключите прокси, "+
 					"если он нужен позже."), store.ChannelRow{})
 			return
 		}
