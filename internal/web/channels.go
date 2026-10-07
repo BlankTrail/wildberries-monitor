@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/BlankTrail/wildberries-monitor/blanktrail"
 	"github.com/BlankTrail/wildberries-monitor/internal/store"
 )
 
@@ -186,7 +187,7 @@ func sourceText(c store.ChannelRow) string {
 	case store.ChannelDirect:
 		return "собственный адрес"
 	case store.ChannelRotating:
-		out := maskPassword(c.Source)
+		out := blanktrail.Redact(c.Source)
 		if c.RotateMinInterval > 0 {
 			out += fmt.Sprintf(", смена не чаще чем раз в %s", humanDuration(c.RotateMinInterval))
 		}
@@ -204,55 +205,14 @@ func sourceText(c store.ChannelRow) string {
 		// is the half of «перечитывается сам» that a person cannot otherwise
 		// see, and it is the one they change when a provider starts refusing
 		// pulls.
-		out := maskPassword(c.Source)
+		out := blanktrail.Redact(c.Source)
 		if c.DefaultScheme != "" {
 			out += ", по умолчанию " + c.DefaultScheme
 		}
 		return out + fmt.Sprintf(", перечитывать каждые %d мин",
 			int(c.RefreshOrDefault()/time.Minute))
 	}
-	return maskPassword(c.Source)
-}
-
-// maskPassword hides the credential inside an address before it is drawn.
-//
-// A rotating channel's entry point is written "scheme://user:pass@host:port",
-// and the whole string is what a person pastes — so the password arrives here
-// whether or not anybody meant it to be on screen. The panel is behind a
-// password on somebody's own machine, which is an argument for not worrying and
-// not an argument for printing it: this table is the thing that gets
-// screenshotted into a support chat.
-//
-// The user name is left alone. It is half of what identifies which of a
-// provider's accounts this is, and masking it would leave two channels looking
-// identical.
-func maskPassword(source string) string {
-	// The authority is what is before the first slash after the scheme, and
-	// only there does an "@" separate credentials from a host. A path or a
-	// query holding one is not a credential this can recognise, and guessing
-	// would garble addresses that are fine.
-	rest := source
-	prefix := ""
-	if at := strings.Index(source, "://"); at >= 0 {
-		prefix, rest = source[:at+3], source[at+3:]
-	}
-	authority, tail := rest, ""
-	if slash := strings.IndexAny(rest, "/?#"); slash >= 0 {
-		authority, tail = rest[:slash], rest[slash:]
-	}
-
-	at := strings.LastIndex(authority, "@")
-	if at < 0 {
-		return source
-	}
-	userinfo, host := authority[:at], authority[at:]
-	colon := strings.Index(userinfo, ":")
-	if colon < 0 {
-		// A user with no password. Nothing to hide, and blanking the name
-		// would lose which account this is.
-		return source
-	}
-	return prefix + userinfo[:colon] + ":***" + host + tail
+	return blanktrail.Redact(c.Source)
 }
 
 // channelForm is the form, empty for a new proxy and filled in for one being

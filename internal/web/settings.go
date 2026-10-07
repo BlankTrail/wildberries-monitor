@@ -163,11 +163,16 @@ func (s *Server) writeSettingsForm(w http.ResponseWriter, r *http.Request, notic
 	if key.Set && key.Value != "" {
 		keyHint = "Ключ сохранён. Оставьте поле как есть, чтобы не менять его."
 	}
+	// Where it is, because it is no longer where the rest is: a person moving
+	// the program copies the database and has to know there is a second file
+	// to take — and that handing somebody the database does not hand them this.
+	keyHint += " Ключи и пароли прокси хранятся не в базе, а в файле " + s.Store.SecretsPath() +
+		". При переносе на другой компьютер возьмите его вместе с базой."
 	b.WriteString(`<div class="bt-field">
   <label class="bt-label" for="bt-key">Ключ API</label>
   <input class="bt-input bt-input--mono" id="bt-key" name="api_key" type="password"
          autocomplete="off" value="` + html.EscapeString(key.Value) + `">
-  <span class="bt-form-hint">` + keyHint + `</span>
+  <span class="bt-form-hint">` + html.EscapeString(keyHint) + `</span>
 </div>`)
 
 	b.WriteString(s.serviceChannelField(r))

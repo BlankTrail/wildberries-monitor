@@ -118,7 +118,7 @@ func parseLine(line, defaultScheme string) (Upstream, error) {
 		return newUpstream(scheme, parts[0], parts[1], parts[2], parts[3])
 	}
 
-	return Upstream{}, fmt.Errorf("cannot parse %q", line)
+	return Upstream{}, fmt.Errorf("cannot parse %q", Redact(line))
 }
 
 // splitHostPort accepts host:port and [ipv6]:port; it rejects anything with
@@ -172,7 +172,7 @@ func (s Source) Load(ctx context.Context) (ups []Upstream, bad []string, err err
 		return nil, nil, fmt.Errorf("blanktrail: unknown upstream source kind %q", s.Kind)
 	}
 	if err != nil {
-		return nil, nil, fmt.Errorf("blanktrail: load upstreams from %s %q: %w", s.Kind, s.Location, err)
+		return nil, nil, fmt.Errorf("blanktrail: load upstreams from %s %q: %w", s.Kind, Redact(s.Location), err)
 	}
 	ups, bad = Parse(string(raw), s.DefaultScheme)
 	return ups, bad, nil
@@ -224,7 +224,7 @@ func NewRotor(ctx context.Context, src Source) (*Rotor, error) {
 		return nil, err
 	}
 	if len(ups) == 0 {
-		return nil, fmt.Errorf("blanktrail: upstream source %q yielded no usable proxies", src.Location)
+		return nil, fmt.Errorf("blanktrail: upstream source %q yielded no usable proxies", Redact(src.Location))
 	}
 	r := &Rotor{ups: ups, fails: map[string]int{}, maxFails: 3, src: src, pos: startAt(len(ups))}
 	if src.Refresh > 0 {

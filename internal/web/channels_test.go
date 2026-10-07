@@ -335,31 +335,6 @@ func TestChannels_EverySchemeTheFormOffersIsOneTheStoreAccepts(t *testing.T) {
 	}
 }
 
-func TestMaskPassword_HidesTheCredentialAndKeepsTheAddressReadable(t *testing.T) {
-	// The table is the thing that gets screenshotted into a support chat. The
-	// user name stays: it is half of what says which of a provider's accounts
-	// this is, and masking it would leave two channels looking identical.
-	for _, c := range []struct{ in, want string }{
-		{"socks5://user:pass@10.0.0.1:1080", "socks5://user:***@10.0.0.1:1080"},
-		{"user:pass@10.0.0.1:1080", "user:***@10.0.0.1:1080"},
-		{"http://u:p@host:8080/list.txt", "http://u:***@host:8080/list.txt"},
-		// Nothing to hide, and nothing to garble.
-		{"socks5://10.0.0.1:1080", "socks5://10.0.0.1:1080"},
-		{"user@10.0.0.1:1080", "user@10.0.0.1:1080"},
-		{"https://provider.example/list.txt", "https://provider.example/list.txt"},
-		{`C:\proxies\list.txt`, `C:\proxies\list.txt`},
-		{"/etc/wbmon/proxies.txt", "/etc/wbmon/proxies.txt"},
-		{"", ""},
-		// An "@" past the authority is not a credential, and treating it as one
-		// would garble an address that is fine.
-		{"https://provider.example/list.txt?tag=a@b", "https://provider.example/list.txt?tag=a@b"},
-	} {
-		if got := maskPassword(c.in); got != c.want {
-			t.Errorf("maskPassword(%q) = %q, ожидалось %q", c.in, got, c.want)
-		}
-	}
-}
-
 func TestChannels_TheTableDoesNotPrintAProxyPassword(t *testing.T) {
 	srv := clearedChannels(t)
 	if _, err := srv.Store.SaveChannel(context.Background(), store.ChannelRow{

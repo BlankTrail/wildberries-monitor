@@ -343,7 +343,7 @@ func singleUpstream(raw, defaultScheme string) (blanktrail.Upstream, error) {
 	ups, bad := blanktrail.Parse(raw, defaultScheme)
 	if len(ups) == 0 {
 		if len(bad) > 0 {
-			return blanktrail.Upstream{}, fmt.Errorf("не разобрать адрес %q", bad[0])
+			return blanktrail.Upstream{}, fmt.Errorf("не разобрать адрес %q", blanktrail.Redact(bad[0]))
 		}
 		return blanktrail.Upstream{}, fmt.Errorf("адрес не указан")
 	}
@@ -410,8 +410,10 @@ func (e *Engine) TestChannel(ctx context.Context, id int64) (string, error) {
 		if len(bad) > 0 {
 			// Named, not just counted. A list where four lines in twenty are
 			// wrong is usually four lines with the same mistake, and seeing one
-			// of them is what tells its owner which.
-			out += fmt.Sprintf(" Отброшено строк: %d, первая — %q.", len(bad), bad[0])
+			// of them is what tells its owner which. With the password hidden:
+			// the summary is read off a screen, and a line that will not parse
+			// still carries whatever credential was typed into it.
+			out += fmt.Sprintf(" Отброшено строк: %d, первая — %q.", len(bad), blanktrail.Redact(bad[0]))
 		}
 		return out + " " + e.probeList(ctx, ups), nil
 

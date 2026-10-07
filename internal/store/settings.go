@@ -177,8 +177,17 @@ func (s *Store) SetSetting(ctx context.Context, key, value, typ string) error {
 		return errors.New("store: setting: the key is empty")
 	}
 	secret := 0
+	stored := value
 	if typ == SettingSecret {
-		secret = 1
+		// The value goes to the secrets file and the row keeps only that the
+		// key is set — see secrets.go. File first: a crash between the two
+		// leaves a row saying «not changed» over a file that already has the
+		// new value, which the next save corrects; the other order could
+		// leave a row that says «set» over nothing.
+		secret, stored = 1, ""
+		if err := s.secrets.set(key, value); err != nil {
+			return fmt.Errorf("store: setting %q: %w", key, err)
+		}
 	}
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO settings (key, value, type, secret, updated_at)
@@ -188,7 +197,7 @@ func (s *Store) SetSetting(ctx context.Context, key, value, typ string) error {
 		    type = excluded.type,
 		    secret = excluded.secret,
 		    updated_at = excluded.updated_at`,
-		key, value, typ, secret, s.now().UTC().Unix())
+		key, stored, typ, secret, s.now().UTC().Unix())
 	if err != nil {
 		return fmt.Errorf("store: setting %q: %w", key, err)
 	}
@@ -204,10 +213,29 @@ func (s *Store) SetSetting(ctx context.Context, key, value, typ string) error {
 // deliberate call to the one named for it.
 func (s *Store) Setting(ctx context.Context, key string) (string, error) {
 	var v string
-	err := s.db.QueryRowContext(ctx, `SELECT value FROM settings WHERE key = ?`, key).Scan(&v)
+	var secret int
+	err := s.db.QueryRowContext(ctx, `SELECT value, secret FROM settings WHERE key = ?`, key).Scan(&v, &secret)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", fmt.Errorf("%w: %q", ErrNoSetting, key)
 	}
+	if err != nil {
+		return "", fmt.Errorf("store: setting %q: %w", key, err)
+	}
+	if secret != 0 {
+		return s.secretValue(key)
+	}
+	return v, nil
+}
+
+// secretValue is a secret setting's value, from the file.
+//
+// A row that says «set» with no value in the file is a file that was deleted
+// or not copied along with the database. That reads as empty rather than as
+// an error: the screen then shows the field as not filled in, which is the
+// truth and the thing to fix, and nothing downstream is handed a value that
+// is not there.
+func (s *Store) secretValue(key string) (string, error) {
+	v, _, err := s.secrets.get(key)
 	if err != nil {
 		return "", fmt.Errorf("store: setting %q: %w", key, err)
 	}
@@ -273,8 +301,17 @@ func (s *Store) SettingsForDisplay(ctx context.Context, keys ...string) ([]Displ
 			return nil, fmt.Errorf("store: settings for display: %w", err)
 		}
 		d := DisplaySetting{Key: key, Value: value, Type: typ, Secret: secret != 0, Set: true}
-		if d.Secret && value != "" {
-			d.Value = maskedSecret
+		if d.Secret {
+			// The value is in the file, and only whether it is there decides
+			// between the mask and an empty field.
+			v, err := s.secretValue(key)
+			if err != nil {
+				return nil, fmt.Errorf("store: settings for display: %w", err)
+			}
+			d.Value = ""
+			if v != "" {
+				d.Value = maskedSecret
+			}
 		}
 		out = append(out, d)
 	}
