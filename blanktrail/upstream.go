@@ -204,6 +204,9 @@ type Rotor struct {
 	fails    map[string]int
 	maxFails int
 
+	// bench, when set, replaces fails and maxFails: see Bench.
+	bench *Bench
+
 	src  Source
 	stop chan struct{}
 	done chan struct{}
@@ -211,14 +214,28 @@ type Rotor struct {
 	closeOnce sync.Once
 }
 
+// RotorOption customises a Rotor.
+type RotorOption func(*Rotor)
+
+// WithBench has the rotor keep its failure record on b rather than on its own:
+// an exit rests there for b's rest and then comes back, and the record is
+// shared with every other channel handed the same Bench.
+func WithBench(b *Bench) RotorOption {
+	return func(r *Rotor) { r.bench = b }
+}
+
 // NewStaticRotor rotates over a fixed list with no background refresh.
-func NewStaticRotor(ups []Upstream) *Rotor {
-	return &Rotor{ups: ups, fails: map[string]int{}, maxFails: 3}
+func NewStaticRotor(ups []Upstream, opts ...RotorOption) *Rotor {
+	r := &Rotor{ups: ups, fails: map[string]int{}, maxFails: 3}
+	for _, o := range opts {
+		o(r)
+	}
+	return r
 }
 
 // NewRotor loads the source once and, if Source.Refresh > 0, starts a
 // background reloader. Call Close to stop it.
-func NewRotor(ctx context.Context, src Source) (*Rotor, error) {
+func NewRotor(ctx context.Context, src Source, opts ...RotorOption) (*Rotor, error) {
 	ups, _, err := src.Load(ctx)
 	if err != nil {
 		return nil, err
@@ -227,6 +244,9 @@ func NewRotor(ctx context.Context, src Source) (*Rotor, error) {
 		return nil, fmt.Errorf("blanktrail: upstream source %q yielded no usable proxies", Redact(src.Location))
 	}
 	r := &Rotor{ups: ups, fails: map[string]int{}, maxFails: 3, src: src, pos: startAt(len(ups))}
+	for _, o := range opts {
+		o(r)
+	}
 	if src.Refresh > 0 {
 		r.stop = make(chan struct{})
 		r.done = make(chan struct{})
@@ -251,6 +271,25 @@ func (r *Rotor) Next() (Upstream, bool) {
 	if n == 0 {
 		return Upstream{}, false
 	}
+	if r.bench != nil {
+		keys := make([]string, n)
+		for i, u := range r.ups {
+			keys[i] = u.Key()
+		}
+		free := r.bench.available(keys)
+		for i := 0; i < n; i++ {
+			u := r.ups[r.pos%n]
+			r.pos = (r.pos + 1) % n
+			if free[u.Key()] {
+				return u, true
+			}
+		}
+		// Not reached: available always frees at least one of a non-empty
+		// set. Kept so a fault there costs a rested exit, not a stalled run.
+		u := r.ups[r.pos%n]
+		r.pos = (r.pos + 1) % n
+		return u, true
+	}
 	for i := 0; i < n; i++ {
 		u := r.ups[r.pos%n]
 		r.pos = (r.pos + 1) % n
@@ -269,6 +308,12 @@ func (r *Rotor) Next() (Upstream, bool) {
 // MarkBad records a connection-level failure for an upstream. After maxFails it
 // is skipped until the list is reloaded (or all upstreams burn out).
 func (r *Rotor) MarkBad(u Upstream) {
+	if r.bench != nil {
+		// Without r.mu: the bench has its own lock, and its callback may write
+		// to a database — every Next on this rotor would wait for that write.
+		r.bench.MarkBad(u.Key())
+		return
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.fails[u.Key()]++

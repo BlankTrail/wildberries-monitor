@@ -115,6 +115,7 @@ func (s *Server) channelsBody(r *http.Request, notice string, form store.Channel
 	b.WriteString(`<h2>Прокси выхода</h2>`)
 	b.WriteString(notice)
 	b.WriteString(channelList(list, form.ID))
+	b.WriteString(s.restingLine(r))
 	b.WriteString(s.channelForm(r, form, list))
 	return b.String(), nil
 }
@@ -586,4 +587,37 @@ func (s *Server) testChannel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	fmt.Fprint(w, `<div class="bt-alert bt-alert--success">`+html.EscapeString(summary)+`</div>`)
+}
+
+// restingLine says how many exits are resting after failing, with the button
+// that brings them back.
+//
+// Nothing when none are: a line reading «отдыхает 0» is a line nobody needs.
+// The button is for somebody who has just repaired a list — without it the
+// addresses they fixed would sit out the rest of their hour.
+func (s *Server) restingLine(r *http.Request) string {
+	if s.RestingExits == nil {
+		return ""
+	}
+	n := s.RestingExits(r.Context())
+	if n == 0 {
+		return ""
+	}
+	return `<div class="bt-alert bt-alert--neutral bt-alert--sm">` +
+		fmt.Sprintf("Отдыхает адресов после сбоев: %d. Они вернутся сами через час после сбоя; ", n) +
+		`если вы только что починили список — верните их сейчас. ` +
+		action("/channels/release", "#channels-body", "Вернуть адреса") + `</div>`
+}
+
+func (s *Server) releaseExits(w http.ResponseWriter, r *http.Request) {
+	notice := alert("success", "Адреса возвращены: следующий запрос может пойти через любой из них.")
+	switch {
+	case s.ReleaseExits == nil:
+		notice = alert("neutral", "Возврат адресов недоступен в этой сборке.")
+	default:
+		if err := s.ReleaseExits(r.Context()); err != nil {
+			notice = alert("error", "Вернуть адреса не удалось: "+err.Error())
+		}
+	}
+	s.channelsFragment(w, r, notice, store.ChannelRow{})
 }
