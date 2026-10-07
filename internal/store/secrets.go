@@ -84,18 +84,18 @@ func (f *secretFile) save(values map[string]string) error {
 	name := tmp.Name()
 	// Removed on every way out but the rename; after the rename there is no
 	// file by this name to remove and the call is a harmless miss.
-	defer os.Remove(name)
+	defer func() { _ = os.Remove(name) }()
 
 	if err := tmp.Chmod(0o600); err != nil && !errors.Is(err, errors.ErrUnsupported) {
-		tmp.Close()
+		_ = tmp.Close()
 		return fmt.Errorf("store: secrets: %w", err)
 	}
 	if _, err := tmp.Write(raw); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return fmt.Errorf("store: secrets: %w", err)
 	}
 	if err := tmp.Sync(); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return fmt.Errorf("store: secrets: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
@@ -263,11 +263,13 @@ func (s *Store) carrySecrets(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("store: carry secrets: %w", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	if _, err := conn.ExecContext(ctx, `PRAGMA secure_delete = ON`); err != nil {
 		return fmt.Errorf("store: carry secrets: %w", err)
 	}
-	defer conn.ExecContext(context.WithoutCancel(ctx), `PRAGMA secure_delete = OFF`)
+	// Back off before the connection returns to the pool, so the next user of
+	// it does not pay for secure_delete. A failure here costs speed, not data.
+	defer func() { _, _ = conn.ExecContext(context.WithoutCancel(ctx), `PRAGMA secure_delete = OFF`) }()
 	if _, err := conn.ExecContext(ctx, `UPDATE settings SET value = '' WHERE secret = 1`); err != nil {
 		return fmt.Errorf("store: carry secrets: %w", err)
 	}
