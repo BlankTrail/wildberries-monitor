@@ -38,6 +38,7 @@ func openEngine(t *testing.T) *Engine {
 	if err != nil {
 		t.Fatalf("Channels: %v", err)
 	}
+	unpinChannels(t, s)
 	for _, c := range list {
 		if err := s.DeleteChannel(t.Context(), c.ID); err != nil {
 			t.Fatalf("DeleteChannel: %v", err)
@@ -152,6 +153,7 @@ func TestRunnerFor_ARefusedPreflightStopsTheRunWithAReason(t *testing.T) {
 	// nobody reads to the end.
 	e := openEngine(t)
 	configure(t, e, "http://127.0.0.1:1", "secret")
+	pinDirect(t, e)
 
 	var logged []string
 	e.Log = func(format string, _ ...any) { logged = append(logged, format) }
@@ -404,5 +406,114 @@ func TestPoolConfig_SwitchesOnTheProactiveIdentityRenewal(t *testing.T) {
 	if cfg.RenewAfterInterval > time.Hour {
 		t.Errorf("таймер смены личности %v — прогон на ночь проведёт её на одном адресе",
 			cfg.RenewAfterInterval)
+	}
+}
+
+// unpinChannels empties every proxy profile, so a test that starts by deleting
+// the seeded channels can: DeleteChannel refuses a channel a profile names, and
+// the carry put the seeded direct exit in «Основной».
+func unpinChannels(t *testing.T, s *store.Store) {
+	t.Helper()
+	profiles, err := s.ProxyProfiles(t.Context())
+	if err != nil {
+		t.Fatalf("ProxyProfiles: %v", err)
+	}
+	for _, p := range profiles {
+		p.Channels = nil
+		if err := s.SaveProxyProfile(t.Context(), p); err != nil {
+			t.Fatalf("SaveProxyProfile: %v", err)
+		}
+	}
+}
+
+// pinDirect gives the default proxy profile one exit — the host's own address
+// — so a test about what comes after the profile can get past it. openEngine
+// empties the profiles with the channels it deletes.
+func pinDirect(t *testing.T, e *Engine) int64 {
+	t.Helper()
+	id, err := e.Store.SaveChannel(t.Context(), store.ChannelRow{
+		Name: "свой адрес", Kind: store.ChannelDirect, Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("SaveChannel: %v", err)
+	}
+	p, err := e.Store.DefaultProxyProfile(t.Context())
+	if err != nil {
+		t.Fatalf("DefaultProxyProfile: %v", err)
+	}
+	p.Channels = []int64{id}
+	if err := e.Store.SaveProxyProfile(t.Context(), p); err != nil {
+		t.Fatalf("SaveProxyProfile: %v", err)
+	}
+	return id
+}
+
+func TestRunnerFor_AnEmptyProxyProfileStopsTheRunBeforeTheNetwork(t *testing.T) {
+	// A profile with nothing ticked used to have no equivalent: an empty list
+	// was every enabled channel, and with none enabled the host's own address.
+	// Now it is a profile nobody finished, and the run stops on it by name —
+	// before the preflight, because reading the profile is a database read and
+	// the preflight is a call over the network.
+	e := openEngine(t)
+	configure(t, e, "http://127.0.0.1:1", "secret")
+
+	var logged []string
+	e.Log = func(format string, _ ...any) { logged = append(logged, format) }
+
+	_, _, err := e.RunnerFor(t.Context(), job.Job{ID: 1, Threads: 1})
+	if err == nil {
+		t.Fatal("прогон собран с пустым профилем прокси")
+	}
+	if !strings.Contains(err.Error(), "Основной") || !strings.Contains(err.Error(), "не отмечено") {
+		t.Errorf("err = %v — не называет профиль и не говорит, что в нём пусто", err)
+	}
+	if len(logged) != 0 {
+		t.Errorf("до отказа успела пройти предполётная проверка: %v", logged)
+	}
+}
+
+func TestRunnerFor_ADeletedProfileFallsBackToTheDefaultAndSaysWhichOne(t *testing.T) {
+	// A job naming a profile somebody has since deleted goes through the
+	// default — the one fallback store.ProxyProfileFor makes. What it must not
+	// do is fail as if the default were the profile it named, so an empty
+	// default is reported under the default's own name.
+	e := openEngine(t)
+	configure(t, e, "http://127.0.0.1:1", "secret")
+
+	_, _, err := e.RunnerFor(t.Context(), job.Job{ID: 1, Threads: 1, ProxyProfileID: 4242})
+	if err == nil {
+		t.Fatal("прогон собран с пустым профилем прокси")
+	}
+	if !strings.Contains(err.Error(), "Основной") {
+		t.Errorf("err = %v — должен назвать профиль по умолчанию, через который пошло бы задание", err)
+	}
+}
+
+func TestThroughProxies_TheHostsOwnAddressAloneIsNotAPool(t *testing.T) {
+	// Since migration 0012 a fresh install has one channel, the direct one.
+	// Counted as a pool it gave a run with a single address the fifteen-attempt
+	// budget meant for walking through a list of them.
+	e := openEngine(t)
+	direct := saveChannel(t, e, store.ChannelRow{Name: "свой адрес", Kind: store.ChannelDirect, Enabled: true})
+	gateway := saveChannel(t, e, store.ChannelRow{
+		Name: "шлюз", Kind: store.ChannelGateway, Source: "berlin", Enabled: true,
+	})
+
+	only, done, err := e.Channels(t.Context(), direct)
+	if err != nil {
+		t.Fatalf("Channels: %v", err)
+	}
+	defer done()
+	if throughProxies(only) {
+		t.Error("один прямой выход посчитан пулом прокси")
+	}
+
+	mixed, doneMixed, err := e.Channels(t.Context(), direct, gateway)
+	if err != nil {
+		t.Fatalf("Channels: %v", err)
+	}
+	defer doneMixed()
+	if !throughProxies(mixed) {
+		t.Error("прямой выход вместе со шлюзом не посчитан пулом прокси")
 	}
 }

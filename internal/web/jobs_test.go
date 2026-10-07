@@ -716,7 +716,7 @@ func TestConstructor_TheRunControlsItShowsReachTheSavedJob(t *testing.T) {
 	form := goodForm()
 	form.Set("threads", "7")
 	form.Set("attempts", "12")
-	form["channels"] = []string{"1", "0", "4"}
+	form.Set("proxy_profile", "4")
 	if w := postForm(t, srv, "/jobs", form); w.Code != 200 {
 		t.Fatalf("POST /jobs = %d", w.Code)
 	}
@@ -738,10 +738,8 @@ func TestConstructor_TheRunControlsItShowsReachTheSavedJob(t *testing.T) {
 	if made.Attempts != 12 {
 		t.Errorf("повторов %d, форма просила 12", made.Attempts)
 	}
-	// The empty box a form always posts is dropped: channel nought is an exit
-	// nothing can build.
-	if !slices.Equal(made.Channels, []int64{1, 4}) {
-		t.Errorf("каналы %v, форма просила [1 4]", made.Channels)
+	if made.ProxyProfileID != 4 {
+		t.Errorf("профиль прокси %d, форма просила 4", made.ProxyProfileID)
 	}
 }
 
@@ -755,7 +753,7 @@ func TestConstructor_EveryRunControlItDrawsIsOneTheBuilderReads(t *testing.T) {
 		t.Fatalf("read: %v", err)
 	}
 	body := get(t, newServer(t), "/jobs/new", "").Body.String()
-	for _, name := range []string{"threads", "attempts", "channels"} {
+	for _, name := range []string{"threads", "attempts", "proxy_profile"} {
 		if !strings.Contains(body, `name="`+name+`"`) {
 			t.Errorf("форма больше не показывает %q", name)
 			continue

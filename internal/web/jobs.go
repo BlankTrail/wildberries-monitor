@@ -683,9 +683,9 @@ func (s *Server) constructorHTML(r *http.Request, edit *job.Job) (string, error)
 	// Which exits, beside the regions: both are «где смотреть», and a job that
 	// must go through one country's proxies is the same kind of decision as one
 	// that must be read for one region.
-	b.WriteString(field("Через какие прокси", s.channelPicker(r, "channels", d.Channels),
-		"Ничего не отмечено — через все включённые. Отметьте, если это задание должно идти "+
-			"только через определённые выходы."))
+	b.WriteString(field("Профиль прокси", s.proxyProfilePicker(r, "proxy_profile", d.ProxyProfileID),
+		"Через какой набор выходов идёт задание. Наборы настраиваются на вкладке «Прокси»; "+
+			"«по умолчанию» следует за отметкой, если её перенесут на другой профиль."))
 
 	b.WriteString(`<h3 class="bt-form-head">Когда и как быстро</h3>`)
 	b.WriteString(`<div class="bt-form-grid">`)
@@ -1138,19 +1138,19 @@ func (s *Server) jobFromForm(r *http.Request) (job.Job, error) {
 		// Zero for a new job, and the saved job's own id when the constructor
 		// was opened to change one. job.Save reads it: without it every
 		// correction to a job would write a second copy of it.
-		ID:       atoi64(f.Get("id")),
-		Name:     strings.TrimSpace(f.Get("name")),
-		Kind:     job.Kind(f.Get("kind")),
-		Regions:  splitCommas(f.Get("regions")),
-		AppType:  int(atoi64(f.Get("app_type"))),
-		Fields:   wb.Selection(f["fields"]),
-		Threads:  int(atoi64(f.Get("threads"))),
-		Channels: idList(f["channels"]),
-		Attempts: int(atoi64(f.Get("attempts"))),
-		Delay:    time.Duration(atoi64(f.Get("delay_ms"))) * time.Millisecond,
-		Schedule: strings.TrimSpace(f.Get("schedule")),
-		Enabled:  enabledFrom(f),
-		KeepRaw:  f.Get("keep_raw") != "",
+		ID:             atoi64(f.Get("id")),
+		Name:           strings.TrimSpace(f.Get("name")),
+		Kind:           job.Kind(f.Get("kind")),
+		Regions:        splitCommas(f.Get("regions")),
+		AppType:        int(atoi64(f.Get("app_type"))),
+		Fields:         wb.Selection(f["fields"]),
+		Threads:        int(atoi64(f.Get("threads"))),
+		ProxyProfileID: atoi64(f.Get("proxy_profile")),
+		Attempts:       int(atoi64(f.Get("attempts"))),
+		Delay:          time.Duration(atoi64(f.Get("delay_ms"))) * time.Millisecond,
+		Schedule:       strings.TrimSpace(f.Get("schedule")),
+		Enabled:        enabledFrom(f),
+		KeepRaw:        f.Get("keep_raw") != "",
 	}
 
 	// Only the chosen kind's own parameters are read. The constructor shows

@@ -227,17 +227,17 @@ type Job struct {
 	// without a bound is a job that never finishes.
 	MaxPages int
 
-	// Channels names the egress channels this job runs through, by their store
-	// ids. Empty is every enabled channel, which is what every job did before
-	// this could be said — and still the right default, because a run wants the
-	// whole mix unless somebody has a reason.
+	// ProxyProfileID names the proxy profile this job runs through, by store
+	// id. Zero is the default profile, and so is a profile that has since been
+	// deleted — see store.ProxyProfileFor.
 	//
-	// A channel that is named and then deleted or switched off is a refusal
-	// rather than a fallback: falling back to the rest would run through exits
-	// the person had deliberately excluded, and falling back to none would run
-	// through the machine's own address, which is the one outcome anybody
-	// configuring proxies is trying to avoid.
-	Channels []int64
+	// The profile is read when the run starts, not when the job is saved, so an
+	// edit on the proxies screen reaches every job that has not started yet.
+	// A channel the profile names that is deleted or switched off is still a
+	// refusal rather than a fallback: falling back to the rest would run
+	// through exits the person had deliberately excluded, and falling back to
+	// none would run through the machine's own address.
+	ProxyProfileID int64
 
 	// Attempts is how many times one request may be sent before the run counts
 	// it as failed. Zero is the build's own budget — see wb.DefaultRetryPolicy,

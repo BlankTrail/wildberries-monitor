@@ -1483,7 +1483,7 @@ func TestProfileChain_ItsJobsCarryTheProfilesOwnAnswers(t *testing.T) {
 	p := aProfile(t, a, 4242)
 	seedStorefront(t, a, 4242)
 
-	p.Threads, p.Attempts, p.Channels = 9, 10, []int64{3, 5}
+	p.Threads, p.Attempts, p.ProxyProfileID = 9, 10, 5
 	if err := a.Store.SaveProfilePlan(ctx, p); err != nil {
 		t.Fatalf("SaveProfilePlan: %v", err)
 	}
@@ -1502,8 +1502,8 @@ func TestProfileChain_ItsJobsCarryTheProfilesOwnAnswers(t *testing.T) {
 	if walk.Attempts != 10 {
 		t.Errorf("повторов у витрины %d, профиль просил 10", walk.Attempts)
 	}
-	if !slices.Equal(walk.Channels, []int64{3, 5}) {
-		t.Errorf("витрина идёт через %v, профиль просил [3 5]", walk.Channels)
+	if walk.ProxyProfileID != 5 {
+		t.Errorf("витрина идёт через профиль прокси %d, профиль просил 5", walk.ProxyProfileID)
 	}
 
 	// And the stage after it, which is the one that makes the most requests:
@@ -1531,8 +1531,8 @@ func TestProfileChain_ItsJobsCarryTheProfilesOwnAnswers(t *testing.T) {
 	if check.Attempts != 10 {
 		t.Errorf("повторов у проверки %d, профиль просил 10", check.Attempts)
 	}
-	if !slices.Equal(check.Channels, []int64{3, 5}) {
-		t.Errorf("проверка идёт через %v, профиль просил [3 5]", check.Channels)
+	if check.ProxyProfileID != 5 {
+		t.Errorf("проверка идёт через профиль прокси %d, профиль просил 5", check.ProxyProfileID)
 	}
 
 	// And the default is the default: a profile that said nothing gets it.
@@ -1548,8 +1548,8 @@ func TestProfileChain_ItsJobsCarryTheProfilesOwnAnswers(t *testing.T) {
 	if plain.Threads != store.DefaultProfileThreads {
 		t.Errorf("без выбора потоков %d, ожидалось %d", plain.Threads, store.DefaultProfileThreads)
 	}
-	if len(plain.Channels) != 0 {
-		t.Errorf("без выбора каналы = %v — должно быть «через все»", plain.Channels)
+	if plain.ProxyProfileID != 0 {
+		t.Errorf("без выбора профиль прокси = %d — должен быть «по умолчанию»", plain.ProxyProfileID)
 	}
 }
 
@@ -1600,7 +1600,7 @@ func TestResolveProfile_TheAnswersGivenWithTheLinkReachTheFirstRun(t *testing.T)
 
 	id, err := a.ResolveProfile(ctx, "141504066", store.RunControls{
 		Regions: []string{"-1257786", "-5887751"},
-		Threads: 9, Attempts: 10, Channels: []int64{3, 5},
+		Threads: 9, Attempts: 10, ProxyProfileID: 5,
 	})
 	if err != nil {
 		t.Fatalf("ResolveProfile: %v", err)
@@ -1610,9 +1610,9 @@ func TestResolveProfile_TheAnswersGivenWithTheLinkReachTheFirstRun(t *testing.T)
 	if err != nil {
 		t.Fatalf("Profile: %v", err)
 	}
-	if p.Threads != 9 || p.Attempts != 10 || !slices.Equal(p.Channels, []int64{3, 5}) {
-		t.Errorf("профиль сохранён как потоки=%d повторы=%d каналы=%v",
-			p.Threads, p.Attempts, p.Channels)
+	if p.Threads != 9 || p.Attempts != 10 || p.ProxyProfileID != 5 {
+		t.Errorf("профиль сохранён как потоки=%d повторы=%d профиль прокси=%d",
+			p.Threads, p.Attempts, p.ProxyProfileID)
 	}
 	// Where, as well as how. Every number a profile collects is regional, so a
 	// region chosen beside the link has to be on the profile before the chain
@@ -1630,8 +1630,8 @@ func TestResolveProfile_TheAnswersGivenWithTheLinkReachTheFirstRun(t *testing.T)
 	if made.Attempts != 10 {
 		t.Errorf("у разбора ссылки повторов %d, просили 10", made.Attempts)
 	}
-	if !slices.Equal(made.Channels, []int64{3, 5}) {
-		t.Errorf("разбор ссылки идёт через %v, просили [3 5]", made.Channels)
+	if made.ProxyProfileID != 5 {
+		t.Errorf("разбор ссылки идёт через профиль прокси %d, просили 5", made.ProxyProfileID)
 	}
 	if !slices.Equal(made.Regions, []string{"-1257786", "-5887751"}) {
 		t.Errorf("разбор ссылки идёт по регионам %v, просили два", made.Regions)

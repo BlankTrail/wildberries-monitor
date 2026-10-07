@@ -108,26 +108,18 @@ func Save(ctx context.Context, s *store.Store, j Job) (int64, error) {
 	if err != nil {
 		return 0, fmt.Errorf("job: save: %w", err)
 	}
-	// The column has been here since the schema was written and every save put
-	// "[]" in it, so no job could ever name a channel and the run used every
-	// enabled one. It carries the answer now.
-	channels, err := json.Marshal(j.Channels)
-	if err != nil {
-		return 0, fmt.Errorf("job: save: %w", err)
-	}
-
 	return s.SaveJob(ctx, store.JobRow{
-		ID:       j.ID,
-		Name:     j.Name,
-		Type:     string(j.Kind),
-		Params:   string(p),
-		Fields:   string(fields),
-		Regions:  string(regions),
-		Channels: string(channels),
-		Schedule: j.Schedule,
-		Threads:  j.Threads,
-		DelayMS:  int(j.Delay / time.Millisecond),
-		Enabled:  j.Enabled,
+		ID:             j.ID,
+		Name:           j.Name,
+		Type:           string(j.Kind),
+		Params:         string(p),
+		Fields:         string(fields),
+		Regions:        string(regions),
+		ProxyProfileID: j.ProxyProfileID,
+		Schedule:       j.Schedule,
+		Threads:        j.Threads,
+		DelayMS:        int(j.Delay / time.Millisecond),
+		Enabled:        j.Enabled,
 	})
 }
 
@@ -149,12 +141,6 @@ func fromRow(row store.JobRow) (Job, error) {
 	if err := json.Unmarshal([]byte(row.Params), &p); err != nil {
 		return Job{}, fmt.Errorf("job %d: params: %w", row.ID, err)
 	}
-	// The channels this job names. A list that will not parse is read as an
-	// empty one — «через все включённые», which is what every job did before
-	// the column carried anything — rather than as a reason to refuse a job
-	// somebody can still see and run.
-	var channels []int64
-	_ = json.Unmarshal([]byte(row.Channels), &channels)
 	var fields []string
 	if err := json.Unmarshal([]byte(row.Fields), &fields); err != nil {
 		return Job{}, fmt.Errorf("job %d: fields: %w", row.ID, err)
@@ -187,7 +173,7 @@ func fromRow(row store.JobRow) (Job, error) {
 		MaxPages:        p.MaxPages,
 		Attempts:        p.Attempts,
 		KeepRaw:         p.KeepRaw,
-		Channels:        channels,
+		ProxyProfileID:  row.ProxyProfileID,
 		Threads:         row.Threads,
 		Delay:           time.Duration(row.DelayMS) * time.Millisecond,
 		Schedule:        row.Schedule,

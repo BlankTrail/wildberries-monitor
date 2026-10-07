@@ -50,17 +50,41 @@ func TestChannels_AFreshInstallShowsTheExitItCollectsThrough(t *testing.T) {
 	}
 }
 
-func TestChannels_WithEverythingRemovedTheScreenSaysThatIsFine(t *testing.T) {
-	// What is left after somebody deletes the default exit: collection still
-	// works, and the screen has to say so rather than show an empty table.
+func TestChannels_WithEverythingRemovedTheScreenSaysJobsWillNotStart(t *testing.T) {
+	// What is left after somebody deletes the default exit. It used to be a
+	// working state — nothing enabled was the host's own address — and the
+	// screen said so. Since proxy profiles it is not: a profile names its
+	// exits, and a run with none to go through stops rather than going out
+	// directly. The screen has to say that, and how to get the old behaviour
+	// back on purpose.
 	srv := clearedChannels(t)
 
 	body := get(t, srv, "/channels", "correct horse").Body.String()
-	if !strings.Contains(body, "собственного адреса") {
-		t.Errorf("пустой экран не объясняет, что происходит:\n%s", firstLines(body))
+	if !strings.Contains(body, "не запустятся") {
+		t.Errorf("пустой экран не говорит, что задания не запустятся:\n%s", firstLines(body))
 	}
-	if !strings.Contains(body, "не поломка") {
-		t.Error("пустой экран не говорит, что это рабочее состояние")
+	if !strings.Contains(body, "Прямое соединение") {
+		t.Error("пустой экран не говорит, как собирать с собственного адреса машины")
+	}
+}
+
+func TestChannels_DeletingOneAProfileNamesIsRefusedWithTheProfilesNamed(t *testing.T) {
+	// Deleting a channel used to check nothing, and the first anybody heard of
+	// it was the next run of every job going through it. The seeded direct
+	// exit is in «Основной» after the carry, so that is the profile to name.
+	srv := newServer(t)
+	list, err := srv.Store.Channels(t.Context())
+	if err != nil || len(list) == 0 {
+		t.Fatalf("Channels: %v, %d", err, len(list))
+	}
+
+	w := postForm(t, srv, "/channels/delete?id="+strconv.FormatInt(list[0].ID, 10), url.Values{})
+	if !strings.Contains(w.Body.String(), "«Основной»") {
+		t.Errorf("отказ не называет профиль, в котором отмечен прокси:\n%s", firstLines(w.Body.String()))
+	}
+	still, err := srv.Store.Channels(t.Context())
+	if err != nil || len(still) != len(list) {
+		t.Errorf("прокси удалён, хотя профиль его называет: было %d, стало %d", len(list), len(still))
 	}
 }
 
@@ -74,6 +98,7 @@ func clearedChannels(t *testing.T) *Server {
 	if err != nil {
 		t.Fatalf("Channels: %v", err)
 	}
+	unpinChannels(t, srv.Store)
 	for _, c := range list {
 		if err := srv.Store.DeleteChannel(t.Context(), c.ID); err != nil {
 			t.Fatalf("DeleteChannel: %v", err)
@@ -889,5 +914,22 @@ func TestChannels_AnIdNamingNothingIsRefusedRatherThanQuietlyAdded(t *testing.T)
 	}
 	if len(list) != 0 {
 		t.Errorf("отказ всё-таки записал %d канал(ов)", len(list))
+	}
+}
+
+// unpinChannels empties every proxy profile, so a test that starts by deleting
+// the seeded channels can: DeleteChannel refuses a channel a profile names, and
+// the carry put the seeded direct exit in «Основной».
+func unpinChannels(t *testing.T, s *store.Store) {
+	t.Helper()
+	profiles, err := s.ProxyProfiles(t.Context())
+	if err != nil {
+		t.Fatalf("ProxyProfiles: %v", err)
+	}
+	for _, p := range profiles {
+		p.Channels = nil
+		if err := s.SaveProxyProfile(t.Context(), p); err != nil {
+			t.Fatalf("SaveProxyProfile: %v", err)
+		}
 	}
 }

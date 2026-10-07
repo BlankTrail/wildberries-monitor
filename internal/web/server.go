@@ -377,6 +377,11 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /channels/gateways", s.auth(http.HandlerFunc(s.refreshGateways)))
 	mux.Handle("GET /channels/test", s.auth(http.HandlerFunc(s.testChannel)))
 	mux.Handle("POST /channels/delete", s.auth(http.HandlerFunc(s.deleteChannel)))
+	mux.Handle("GET /proxy-profiles/list", s.auth(http.HandlerFunc(s.listProxyProfiles)))
+	mux.Handle("GET /proxy-profiles/edit", s.auth(http.HandlerFunc(s.editProxyProfile)))
+	mux.Handle("POST /proxy-profiles", s.auth(http.HandlerFunc(s.saveProxyProfile)))
+	mux.Handle("POST /proxy-profiles/default", s.auth(http.HandlerFunc(s.defaultProxyProfile)))
+	mux.Handle("POST /proxy-profiles/delete", s.auth(http.HandlerFunc(s.deleteProxyProfile)))
 	mux.Handle("GET /jobs", s.auth(http.HandlerFunc(s.jobsPage)))
 	mux.Handle("POST /jobs", s.auth(http.HandlerFunc(s.saveJobHandler)))
 	mux.Handle("GET /jobs/new", s.auth(http.HandlerFunc(s.newJobHandler)))
@@ -479,6 +484,10 @@ type page struct {
 	// columns of collected facts, and a column that ends at 1400px puts half of
 	// them behind a sideways scroll on a monitor with room for all of them.
 	Width string
+	// Notice is a warning that belongs on every screen until it is dealt
+	// with — today only the one proxyProfileNotice raises. Filled in by
+	// render, not by each handler, so no screen can forget it.
+	Notice template.HTML
 }
 
 // rawHTML marks a string as already-escaped markup.
@@ -514,6 +523,7 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, p page) {
 		tone = "neutral"
 	}
 	p.BlankTrail = rawHTML(blankTrailBadge(tone, state, note))
+	p.Notice = rawHTML(s.proxyProfileNotice(r.Context(), r.URL.Path))
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := t.ExecuteTemplate(w, "layout.html", p); err != nil {

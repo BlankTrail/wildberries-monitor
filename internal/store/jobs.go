@@ -42,17 +42,20 @@ const (
 
 // JobRow is one saved job, as the database holds it.
 type JobRow struct {
-	ID       int64
-	Name     string
-	Type     string
-	Params   string // JSON, opaque here
-	Fields   string // JSON array of catalogue keys
-	Regions  string // JSON array of dest codes
-	Channels string // JSON array
-	Schedule string
-	Threads  int
-	DelayMS  int
-	Enabled  bool
+	ID      int64
+	Name    string
+	Type    string
+	Params  string // JSON, opaque here
+	Fields  string // JSON array of catalogue keys
+	Regions string // JSON array of dest codes
+	// ProxyProfileID is the proxy profile the job runs through; zero is the
+	// default. The old channels column is not read here: the carry in
+	// proxyprofiles.go is the only reader it has left.
+	ProxyProfileID int64
+	Schedule       string
+	Threads        int
+	DelayMS        int
+	Enabled        bool
 
 	FirstSavedAt int64
 	LastSavedAt  int64
@@ -102,11 +105,11 @@ func (s *Store) SaveJob(ctx context.Context, j JobRow) (int64, error) {
 	now := s.now().UTC().Unix()
 	if j.ID == 0 {
 		res, err := s.db.ExecContext(ctx, `
-			INSERT INTO jobs (name, type, params, fields, regions, channels,
+			INSERT INTO jobs (name, type, params, fields, regions, proxy_profile_id,
 			                  schedule, threads, delay_ms, enabled, created_at, updated_at)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			j.Name, j.Type, jsonOr(j.Params, "{}"), jsonOr(j.Fields, "[]"),
-			jsonOr(j.Regions, "[]"), jsonOr(j.Channels, "[]"),
+			jsonOr(j.Regions, "[]"), max(j.ProxyProfileID, 0),
 			j.Schedule, j.Threads, j.DelayMS, boolInt(j.Enabled), now, now)
 		if err != nil {
 			return 0, fmt.Errorf("store: save job %q: %w", j.Name, err)
@@ -120,11 +123,11 @@ func (s *Store) SaveJob(ctx context.Context, j JobRow) (int64, error) {
 
 	res, err := s.db.ExecContext(ctx, `
 		UPDATE jobs SET name = ?, type = ?, params = ?, fields = ?, regions = ?,
-		                channels = ?, schedule = ?, threads = ?, delay_ms = ?,
+		                proxy_profile_id = ?, schedule = ?, threads = ?, delay_ms = ?,
 		                enabled = ?, updated_at = ?
 		WHERE id = ?`,
 		j.Name, j.Type, jsonOr(j.Params, "{}"), jsonOr(j.Fields, "[]"),
-		jsonOr(j.Regions, "[]"), jsonOr(j.Channels, "[]"),
+		jsonOr(j.Regions, "[]"), max(j.ProxyProfileID, 0),
 		j.Schedule, j.Threads, j.DelayMS, boolInt(j.Enabled), now, j.ID)
 	if err != nil {
 		return 0, fmt.Errorf("store: save job %d: %w", j.ID, err)
@@ -147,10 +150,10 @@ func (s *Store) Job(ctx context.Context, id int64) (JobRow, error) {
 	var j JobRow
 	var enabled int
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, name, type, params, fields, regions, channels, schedule,
+		SELECT id, name, type, params, fields, regions, proxy_profile_id, schedule,
 		       threads, delay_ms, enabled, created_at, updated_at
 		FROM jobs WHERE id = ?`, id).
-		Scan(&j.ID, &j.Name, &j.Type, &j.Params, &j.Fields, &j.Regions, &j.Channels,
+		Scan(&j.ID, &j.Name, &j.Type, &j.Params, &j.Fields, &j.Regions, &j.ProxyProfileID,
 			&j.Schedule, &j.Threads, &j.DelayMS, &enabled, &j.FirstSavedAt, &j.LastSavedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return JobRow{}, fmt.Errorf("store: job %d: %w", id, err)

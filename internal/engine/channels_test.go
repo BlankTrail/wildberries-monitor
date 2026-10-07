@@ -50,18 +50,18 @@ func saveChannel(t *testing.T, e *Engine, c store.ChannelRow) int64 {
 	return id
 }
 
-func TestChannels_NoneConfiguredIsTheHostsOwnAddress(t *testing.T) {
-	// Every fresh install. Empty is what the pool reads as direct, so this is
-	// not a failure to report — it is the state before anybody has decided.
+func TestChannels_NamingNoneIsRefusedRatherThanReadAsDirect(t *testing.T) {
+	// Nothing named used to mean every enabled channel, and with none enabled
+	// that was the host's own address — reached without anybody choosing it.
+	// Since proxy profiles the set is always written down, so an empty one is
+	// a caller's mistake, and an empty pool is not what it gets.
 	e := openEngine(t)
+	saveChannel(t, e, store.ChannelRow{Name: "свой адрес", Kind: store.ChannelDirect, Enabled: true})
 
 	channels, done, err := e.Channels(t.Context())
-	if err != nil {
-		t.Fatalf("Channels: %v", err)
-	}
-	defer done()
-	if len(channels) != 0 {
-		t.Errorf("каналов %d, ожидалось ни одного", len(channels))
+	if err == nil {
+		done()
+		t.Fatalf("без названных каналов собрано %d вместо отказа", len(channels))
 	}
 }
 
@@ -71,23 +71,25 @@ func TestChannels_BuildsEachOfTheFourKinds(t *testing.T) {
 	// a run that quietly uses the host's own address.
 	e := openEngine(t)
 
-	saveChannel(t, e, store.ChannelRow{
-		Name: "свой адрес", Kind: store.ChannelDirect, Enabled: true,
-	})
-	saveChannel(t, e, store.ChannelRow{
-		Name: "шлюз", Kind: store.ChannelGateway, Source: "berlin", Enabled: true,
-	})
-	saveChannel(t, e, store.ChannelRow{
-		Name: "список", Kind: store.ChannelList, Source: listFile(t),
-		DefaultScheme: "socks5", Enabled: true,
-	})
-	saveChannel(t, e, store.ChannelRow{
-		Name: "ротируемый", Kind: store.ChannelRotating,
-		Source: "socks5://user:pass@10.0.0.9:1080", RotateURL: "https://provider.example/rotate",
-		RotateMinInterval: time.Minute, Enabled: true,
-	})
+	ids := []int64{
+		saveChannel(t, e, store.ChannelRow{
+			Name: "свой адрес", Kind: store.ChannelDirect, Enabled: true,
+		}),
+		saveChannel(t, e, store.ChannelRow{
+			Name: "шлюз", Kind: store.ChannelGateway, Source: "berlin", Enabled: true,
+		}),
+		saveChannel(t, e, store.ChannelRow{
+			Name: "список", Kind: store.ChannelList, Source: listFile(t),
+			DefaultScheme: "socks5", Enabled: true,
+		}),
+		saveChannel(t, e, store.ChannelRow{
+			Name: "ротируемый", Kind: store.ChannelRotating,
+			Source: "socks5://user:pass@10.0.0.9:1080", RotateURL: "https://provider.example/rotate",
+			RotateMinInterval: time.Minute, Enabled: true,
+		}),
+	}
 
-	channels, done, err := e.Channels(t.Context())
+	channels, done, err := e.Channels(t.Context(), ids...)
 	if err != nil {
 		t.Fatalf("Channels: %v", err)
 	}
@@ -109,21 +111,25 @@ func TestChannels_BuildsEachOfTheFourKinds(t *testing.T) {
 	}
 }
 
-func TestChannels_ASwitchedOffChannelIsLeftOut(t *testing.T) {
-	// The whole of what the switch on the screen does, and the reason it exists
-	// rather than "delete it and add it back": a list being repaired should not
-	// have to be retyped.
+func TestChannels_ASwitchedOffChannelBesideAWorkingOneStillStopsTheRun(t *testing.T) {
+	// Switched off used to mean «left out of the mix», and the run went on
+	// through the rest. Named in a profile it is now a refusal even with a
+	// working exit beside it: the profile says which exits this job goes
+	// through, and quietly using a subset of them is a different profile than
+	// the one somebody chose. The switch still keeps a list being repaired
+	// from having to be retyped; what it no longer does is change a run's mix
+	// without the run saying so.
 	e := openEngine(t)
-	saveChannel(t, e, store.ChannelRow{Name: "выключен", Kind: store.ChannelDirect})
-	saveChannel(t, e, store.ChannelRow{Name: "включён", Kind: store.ChannelDirect, Enabled: true})
+	off := saveChannel(t, e, store.ChannelRow{Name: "выключен", Kind: store.ChannelDirect})
+	on := saveChannel(t, e, store.ChannelRow{Name: "включён", Kind: store.ChannelDirect, Enabled: true})
 
-	channels, done, err := e.Channels(t.Context())
-	if err != nil {
-		t.Fatalf("Channels: %v", err)
+	channels, done, err := e.Channels(t.Context(), on, off)
+	if err == nil {
+		done()
+		t.Fatalf("собрано %d каналов вместо отказа", len(channels))
 	}
-	defer done()
-	if len(channels) != 1 || channels[0].Name() != "включён" {
-		t.Errorf("собрано %d каналов, первый %q", len(channels), channels[0].Name())
+	if !strings.Contains(err.Error(), "выключен") {
+		t.Errorf("причина не про выключенный прокси: %v", err)
 	}
 }
 
@@ -155,10 +161,10 @@ func TestChannels_AChannelThatWillNotBuildStopsTheRun(t *testing.T) {
 			e := openEngine(t)
 			// Beside a working one, so the test is about refusing rather than
 			// about there being nothing to build.
-			saveChannel(t, e, store.ChannelRow{Name: "рабочий", Kind: store.ChannelDirect, Enabled: true})
-			saveChannel(t, e, c.row)
+			working := saveChannel(t, e, store.ChannelRow{Name: "рабочий", Kind: store.ChannelDirect, Enabled: true})
+			broken := saveChannel(t, e, c.row)
 
-			channels, done, err := e.Channels(t.Context())
+			channels, done, err := e.Channels(t.Context(), working, broken)
 			if err == nil {
 				done()
 				t.Fatalf("собралось %d каналов вместо отказа", len(channels))
@@ -260,15 +266,16 @@ func TestChannels_TheCleanupStopsTheGoroutineAListLeavesBehind(t *testing.T) {
 	// the channel is closed. A program collecting every hour that dropped its
 	// channels would leave one behind an hour.
 	e := openEngine(t)
+	var ids []int64
 	for _, name := range []string{"первый", "второй", "третий"} {
-		saveChannel(t, e, store.ChannelRow{
+		ids = append(ids, saveChannel(t, e, store.ChannelRow{
 			Name: name, Kind: store.ChannelList, Source: listFile(t),
 			DefaultScheme: "socks5", Enabled: true,
-		})
+		}))
 	}
 
 	before := runtime.NumGoroutine()
-	channels, done, err := e.Channels(t.Context())
+	channels, done, err := e.Channels(t.Context(), ids...)
 	if err != nil {
 		t.Fatalf("Channels: %v", err)
 	}
@@ -442,13 +449,13 @@ func TestChannels_AGatewayChannelCarriesEveryGatewayItNames(t *testing.T) {
 	// gateway while the screen showed sixteen, and nothing between here and the
 	// run would say which one.
 	e := openEngine(t)
-	saveChannel(t, e, store.ChannelRow{
+	id := saveChannel(t, e, store.ChannelRow{
 		Name: "подписка", Kind: store.ChannelGateway,
 		Source:  store.JoinGatewayNames([]string{"berlin", "amsterdam", "paris"}),
 		Enabled: true,
 	})
 
-	channels, done, err := e.Channels(t.Context())
+	channels, done, err := e.Channels(t.Context(), id)
 	if err != nil {
 		t.Fatalf("Channels: %v", err)
 	}
@@ -478,21 +485,12 @@ func TestChannels_AJobRunsThroughTheExitsItNames(t *testing.T) {
 	e := openEngine(t)
 	ctx := t.Context()
 
-	first := saveChannel(t, e, store.ChannelRow{
+	saveChannel(t, e, store.ChannelRow{
 		Name: "первый", Kind: store.ChannelDirect, Enabled: true,
 	})
 	second := saveChannel(t, e, store.ChannelRow{
 		Name: "второй", Kind: store.ChannelDirect, Enabled: true,
 	})
-
-	all, done, err := e.Channels(ctx)
-	if err != nil {
-		t.Fatalf("Channels: %v", err)
-	}
-	done()
-	if len(all) != 2 {
-		t.Fatalf("без выбора собрано каналов: %d, ожидалось 2", len(all))
-	}
 
 	one, done, err := e.Channels(ctx, second)
 	if err != nil {
@@ -502,7 +500,6 @@ func TestChannels_AJobRunsThroughTheExitsItNames(t *testing.T) {
 	if len(one) != 1 || one[0].Name() != "второй" {
 		t.Fatalf("по выбору собрано %d каналов: %+v", len(one), one)
 	}
-	_ = first
 }
 
 func TestChannels_AnExitAJobNamesAndCannotHaveStopsTheRun(t *testing.T) {
@@ -547,17 +544,22 @@ func TestRetryPolicyFor_TheJobsOwnBudgetWinsAndZeroIsTheBuilds(t *testing.T) {
 }
 
 func TestRunnerFor_HandsTheJobsOwnExitsToTheChannelBuilder(t *testing.T) {
-	// A source-level check, because everything else in RunnerFor needs a live
-	// licensed service: it opens ports before the first fetch. What is being
-	// guarded is one argument — the job's chosen exits reaching the builder that
-	// filters on them — and dropped, every job silently runs through every
-	// enabled proxy again, which is the state this setting exists to end.
+	// A source-level check, because everything past the profile in RunnerFor
+	// needs a live licensed service: it opens ports before the first fetch.
+	// What is being guarded is two arguments — the job's profile reaching the
+	// lookup, and that profile's exits reaching the builder — and either one
+	// dropped runs every job through the default profile whatever it chose.
 	src, err := os.ReadFile("engine.go")
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
-	if !strings.Contains(string(src), "e.Channels(ctx, j.Channels...)") {
-		t.Error("RunnerFor не передаёт выбранные задания каналы — прогон пойдёт через все")
+	for _, want := range []string{
+		"e.Store.ProxyProfileFor(ctx, j.ProxyProfileID)",
+		"e.Channels(ctx, profile.Channels...)",
+	} {
+		if !strings.Contains(string(src), want) {
+			t.Errorf("RunnerFor больше не содержит %q — задание пойдёт не через свой профиль прокси", want)
+		}
 	}
 }
 

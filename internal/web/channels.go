@@ -43,50 +43,6 @@ var channelKinds = []struct {
 		"Собственный адрес машины. Имеет смысл в смеси с другими выходами."},
 }
 
-// channelPicker is the choice of which exits a run goes through.
-//
-// Nothing ticked is every enabled one, which is what every run did before this
-// could be said and still the right default: a run wants the whole mix unless
-// somebody has a reason. So the boxes are an exception being made, and the
-// hint says so rather than leaving «ни одного» to be read as «ни через что».
-func (s *Server) channelPicker(r *http.Request, name string, chosen []int64) string {
-	rows, err := s.Store.Channels(r.Context())
-	if err != nil {
-		return alert("error", err.Error())
-	}
-
-	want := map[int64]bool{}
-	for _, id := range chosen {
-		want[id] = true
-	}
-
-	var live []store.ChannelRow
-	for _, c := range rows {
-		if c.Enabled {
-			live = append(live, c)
-		}
-	}
-	if len(live) == 0 {
-		return `<div class="bt-alert bt-alert--neutral bt-alert--sm">` +
-			`Включённых прокси нет — сбор пойдёт с собственного адреса машины.</div>`
-	}
-
-	var b strings.Builder
-	b.WriteString(`<div class="bt-checks">`)
-	for _, c := range live {
-		id := name + "-" + strconv.FormatInt(c.ID, 10)
-		b.WriteString(`<label class="bt-checkbox" for="` + html.EscapeString(id) + `">` +
-			`<input id="` + html.EscapeString(id) + `" type="checkbox" name="` +
-			html.EscapeString(name) + `" value="` + strconv.FormatInt(c.ID, 10) + `"` +
-			checkedIf(want[c.ID]) + `>` +
-			`<span>` + html.EscapeString(c.Name) +
-			`<span class="bt-dim bt-gw-line">` + html.EscapeString(channelLabel(c.Kind)) +
-			`</span></span></label>`)
-	}
-	b.WriteString(`</div>`)
-	return b.String()
-}
-
 func channelLabel(kind string) string {
 	for _, k := range channelKinds {
 		if k.Kind == kind {
@@ -108,7 +64,12 @@ func (s *Server) channelsPage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "channels: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	s.render(w, r, page{Title: "Прокси", Body: rawHTML(body)})
+	profiles, err := s.proxyProfilesSection(r)
+	if err != nil {
+		http.Error(w, "proxy profiles: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.render(w, r, page{Title: "Прокси", Body: rawHTML(body + profiles)})
 }
 
 // channelsFragment renders the inside of that section, for a save that must not
@@ -174,10 +135,14 @@ func channelList(list []store.ChannelRow, editing int64) string {
 			enabled++
 		}
 	}
+	// Since proxy profiles, nothing enabled is not «сбор идёт с адреса
+	// машины» any more: a profile names its exits, and a run whose exits are
+	// all switched off stops rather than going out directly. Said here so the
+	// person switching the last one off hears it before a run does.
 	if enabled == 0 {
-		b.WriteString(`<div class="bt-alert bt-alert--neutral">` +
-			`Включённых прокси нет — сбор идёт с собственного адреса машины. ` +
-			`Это рабочее состояние, а не поломка.</div>`)
+		b.WriteString(`<div class="bt-alert bt-alert--warning">` +
+			`Включённых прокси нет — задания не запустятся. Чтобы собирать с собственного адреса машины, ` +
+			`добавьте «Прямое соединение» и отметьте его в профиле прокси.</div>`)
 	}
 
 	if len(list) > 0 {
@@ -625,6 +590,16 @@ func (s *Server) deleteChannel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.Store.DeleteChannel(r.Context(), id); err != nil {
+		var inUse *store.ChannelInUseError
+		if errors.As(err, &inUse) {
+			// Refused, and said where: the profiles are in the section below,
+			// and «используется» without naming them is a search.
+			s.channelsFragment(w, r, alert("error",
+				"Этот прокси отмечен в профилях: «"+strings.Join(inUse.Profiles, "», «")+
+					"». Уберите его оттуда в разделе «Профили прокси» ниже — или выключите прокси, "+
+					"если он нужен позже."), store.ChannelRow{})
+			return
+		}
 		http.Error(w, "channels: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
