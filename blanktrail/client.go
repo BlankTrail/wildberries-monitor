@@ -139,6 +139,13 @@ type PortSpec struct {
 	// which is what a dead upstream looks like.
 	TimeoutSeconds int
 
+	// ConnectTimeoutSeconds bounds reaching the upstream address alone. A dead
+	// proxy is a connection that never opens, and recognising it in seconds is
+	// what lets a thread on a cheap list move to the next address instead of
+	// waiting out the service's default on each dead one. Zero leaves it to
+	// the service.
+	ConnectTimeoutSeconds int
+
 	MaxConcurrent int    // in-flight requests allowed on the port
 	RetryDelayMs  int    // proxy-side retry delay
 	IdleSeconds   int    // per-port idle timeout (0 = inherit the global one)
@@ -172,6 +179,11 @@ func DefaultPortSpec() PortSpec {
 		// raises this itself while it clears a challenge, so bounding it here costs
 		// a slow challenge nothing and costs a bad proxy the whole wait.
 		TimeoutSeconds: 30,
+		// And the connection to the upstream itself in five, as Google Parser
+		// asks: half the addresses of a cheap list never answer, and 500
+		// threads spent on waiting for them made three pages a second
+		// (09.10.2026).
+		ConnectTimeoutSeconds: 5,
 
 		LeakGuard: "warn",
 
@@ -229,6 +241,7 @@ type openPortRequest struct {
 	RetryDelayMs    *int    `json:"retry_delay_ms,omitempty"`
 	IdleSeconds     *int    `json:"idle_seconds,omitempty"`
 	TimeoutSeconds  *int    `json:"timeout_seconds,omitempty"`
+	ConnectTimeout  *int    `json:"connect_timeout_seconds,omitempty"`
 	LeakGuard       string  `json:"leak_guard,omitempty"`
 }
 
@@ -274,6 +287,10 @@ func (s PortSpec) request(port int, eg Egress) openPortRequest {
 	if s.TimeoutSeconds > 0 {
 		n := s.TimeoutSeconds
 		req.TimeoutSeconds = &n
+	}
+	if s.ConnectTimeoutSeconds > 0 {
+		n := s.ConnectTimeoutSeconds
+		req.ConnectTimeout = &n
 	}
 	switch {
 	case eg.Gateway != "":

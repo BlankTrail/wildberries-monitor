@@ -22,10 +22,11 @@ func portSays(status int, reason string) func() (*http.Response, error) {
 func TestLadder_ADeadExitIsAnErrorAndNotTheSitesAnswer(t *testing.T) {
 	// Handed up as a response, a port's refusal reached a classifier that took
 	// it for the origin's own error and gave the page up after one attempt,
-	// with no word that the site had never been asked. The two reasons that
-	// are the exit's — it would not take the connection, or a challenge could
-	// not be cleared from it — strike and replace it.
-	for _, reason := range []string{"upstream_unreachable", "solver_failed"} {
+	// with no word that the site had never been asked. The reasons that are
+	// the exit's — it would not take the connection, a challenge could not be
+	// cleared from it, or it opens TLS itself (mitm_upstream: fourteen pages of
+	// four hundred lost on a cheap list, 09.10.2026) — strike and replace it.
+	for _, reason := range []string{"upstream_unreachable", "solver_failed", "mitm_upstream"} {
 		t.Run(reason, func(t *testing.T) {
 			rt := &fakeRT{steps: []func() (*http.Response, error){portSays(525, reason)}}
 			rem := &fakeRemedy{retries: 4, transportRetries: 1, rotateErr: ErrRenewUnsupported}
@@ -91,6 +92,21 @@ func TestLadder_ADeadExitIsRepeatedOnlyThroughANewOne(t *testing.T) {
 		if w > 0 {
 			t.Errorf("waits = %v, want no pause before a repeat through a fresh exit", rem.waits)
 		}
+	}
+}
+
+func TestLadder_ADeadChannelIsNotWalkedFurther(t *testing.T) {
+	// Every exit of the channel is like this one: the next would be another
+	// fifteen seconds for the same answer.
+	rt := &fakeRT{steps: []func() (*http.Response, error){portSays(523, "upstream_unreachable")}}
+	rem := &fakeRemedy{retries: 4, transportRetries: 5, channelDown: true}
+	l := &ladder{rt: rt, port: 20015, rem: rem}
+
+	if _, err := l.RoundTrip(newReq(t, http.MethodGet, "")); err == nil {
+		t.Fatal("no error from a channel that is down")
+	}
+	if rt.calls != 1 || rem.rotations != 0 {
+		t.Errorf("calls=%d rotations=%d after the channel went down, want 1 and 0", rt.calls, rem.rotations)
 	}
 }
 

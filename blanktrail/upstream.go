@@ -4,6 +4,8 @@ package blanktrail
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net"
@@ -38,8 +40,24 @@ func (u Upstream) URL() string {
 	return uu.String()
 }
 
-// Key identifies an upstream by scheme and address, ignoring credentials.
-func (u Upstream) Key() string { return u.Scheme + "|" + net.JoinHostPort(u.Host, u.Port) }
+// Key identifies an upstream by scheme, address and credentials, without
+// spelling the credentials out.
+//
+// It used to be scheme and address alone, on the reading that one host and port
+// is one machine. Residential and mobile providers sell one host and port and
+// pick the exit by the login — a session number in the user name — so a list of
+// a hundred sessions was one key: a dead session could never rest on its own,
+// and three failures anywhere benched the list (seen on a real list,
+// 09.10.2026). The credentials go in as a short hash, because the key is what
+// the bench writes to the database, and passwords are kept out of it.
+func (u Upstream) Key() string {
+	k := u.Scheme + "|" + net.JoinHostPort(u.Host, u.Port)
+	if u.User == "" && u.Pass == "" {
+		return k
+	}
+	sum := sha256.Sum256([]byte(u.User + "\x00" + u.Pass))
+	return k + "|" + hex.EncodeToString(sum[:6])
+}
 
 var validSchemes = map[string]bool{
 	"http": true, "https": true,

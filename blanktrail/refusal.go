@@ -52,6 +52,12 @@ const (
 	// reasonSolverFailed: the challenge was attempted and not cleared. That
 	// one is about the exit the request goes out from.
 	reasonSolverFailed = "solver_failed"
+	// reasonMITMUpstream: the exit opens TLS itself and shows its own
+	// certificate, and the port refuses to send a browser's fingerprint
+	// through a machine that would replace it. Seven addresses in ten on a
+	// large cheap list do this; the next exit is the answer, as for one that
+	// does not answer at all.
+	reasonMITMUpstream = "mitm_upstream"
 
 	// resumeDetail is how the service words its own TLS failing to resume a
 	// session with the far end: it cannot reprocess a resumed session's key
@@ -138,12 +144,15 @@ func (e *RefusalError) ChallengeUnsolved() bool { return e.Reason == reasonSolve
 
 // BlamesExit reports whether the port's current exit is what failed, and so
 // whether another exit could carry the same request: one that would not take
-// the connection, or one a challenge could not be cleared from. False for a
+// the connection, one a challenge could not be cleared from, or one that opens
+// TLS itself. The last used to blame nobody, so a list full of such exits kept
+// them on its ports and a page gave up after fifteen of them (09.10.2026). False for a
 // refusal that is the service's own TLS, the port's load, the challenge queue,
 // a shared hop or the origin's name — and for a reason this package does not
 // know, which is not grounds to strike anyone.
 func (e *RefusalError) BlamesExit() bool {
-	return (e.Reason == reasonUpstreamUnreachable && !e.ResumeDefect()) || e.Reason == reasonSolverFailed
+	return (e.Reason == reasonUpstreamUnreachable && !e.ResumeDefect()) ||
+		e.Reason == reasonSolverFailed || e.Reason == reasonMITMUpstream
 }
 
 // Refusal reports whether err is, or wraps, a port's refusal.

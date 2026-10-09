@@ -456,16 +456,16 @@ func TestClient_MintsANewVisitorAfterTheProxyChanges(t *testing.T) {
 }
 
 func TestClient_OnlyAChallengeRetries(t *testing.T) {
-	// A usable response, our own malformed request and the origin's own error
-	// are all answers this loop cannot improve on. Retrying them would multiply
-	// every failed page by the whole budget.
+	// A usable response and the origin's own error are answers this loop
+	// cannot improve on. Retrying them would multiply every failed page by the
+	// whole budget. A refusal of the exit — 403, 429 — can be improved on by
+	// another exit: see TestClient_ARefusedExitIsReplaced.
 	for _, tc := range []struct {
 		name   string
 		status int
 		body   string
 	}{
 		{"ok", 200, "{}"},
-		{"request fault", 403, ""},
 		{"server error", 500, ""},
 		{"soft wall", 200, "почти готово"},
 	} {
@@ -484,6 +484,44 @@ func TestClient_OnlyAChallengeRetries(t *testing.T) {
 				t.Errorf("asked for %d egress changes for a %d", l.rotations, tc.status)
 			}
 		})
+	}
+}
+
+func TestClient_ARefusedExitIsReplaced(t *testing.T) {
+	// On a cheap list of server proxies, 403 is the site refusing that address,
+	// not the request: the same request went through four hundred other exits
+	// in the same run. It was handed back after one attempt and the page was
+	// lost (500 threads over 15 000 proxies, 09.10.2026). 429 is the same: the
+	// address has spent its rate.
+	for _, status := range []int{403, 429} {
+		l := &fakeLease{port: 1, replies: []*http.Response{reply(status, ""), reply(200, "{}")}}
+		c := NewClientWithRetry(&fakeLeaser{leases: []*fakeLease{l}}, NewSessions(), DefaultRetryPolicy(true))
+		got, err := c.Get(context.Background(), "https://www.wildberries.ru/x", KindSearch, "")
+		if err != nil {
+			t.Fatalf("%d: Get: %v", status, err)
+		}
+		if got.Status != 200 || l.rotations != 1 {
+			t.Errorf("%d: Status=%d rotations=%d, want 200 through a second exit", status, got.Status, l.rotations)
+		}
+	}
+}
+
+func TestClient_AForbiddenRequestIsNotChasedAcrossThePool(t *testing.T) {
+	// But a 403 that every exit gets is the request's own fault, and spending
+	// the pool on it discards a solved challenge at every step. A few exits in
+	// a row, then the answer goes back.
+	var replies []*http.Response
+	for range 10 {
+		replies = append(replies, reply(403, ""))
+	}
+	l := &fakeLease{port: 1, replies: replies}
+	c := NewClientWithRetry(&fakeLeaser{leases: []*fakeLease{l}}, NewSessions(), DefaultRetryPolicy(true))
+	got, err := c.Get(context.Background(), "https://www.wildberries.ru/x", KindSearch, "")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Status != 403 || got.Attempts != refusedExits {
+		t.Errorf("Status=%d Attempts=%d, want 403 after %d exits", got.Status, got.Attempts, refusedExits)
 	}
 }
 
@@ -1704,3 +1742,33 @@ func TestClient_AQuickLossStillGetsThePortsUsualPatience(t *testing.T) {
 		t.Errorf("PortChanges=%d sent on the first port=%d, want 0 and 2", got.PortChanges, len(flaky.sent))
 	}
 }
+
+// rejectingLease is a fakeLease that can mark the address it leaves.
+type rejectingLease struct {
+	*fakeLease
+	rejected int
+}
+
+func (l *rejectingLease) RejectEgress(ctx context.Context) error {
+	l.rejected++
+	return l.fakeLease.RotateEgress(ctx)
+}
+
+func TestClient_ATurnedAwayAddressIsMarkedOnItsWayOut(t *testing.T) {
+	// Rotating alone left the blocked address in the list for the next thread
+	// to draw. Marked, three such answers rest it.
+	l := &rejectingLease{fakeLease: &fakeLease{port: 1, replies: []*http.Response{reply(403, ""), reply(200, "{}")}}}
+	c := NewClientWithRetry(&fakeLeaser{leases: []*fakeLease{l.fakeLease}}, NewSessions(), DefaultRetryPolicy(true))
+	c.leaser = rejectingLeaser{l}
+	got, err := c.Get(context.Background(), "https://www.wildberries.ru/x", KindSearch, "")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Status != 200 || l.rejected != 1 {
+		t.Errorf("Status=%d rejected=%d, want 200 after one marked rotation", got.Status, l.rejected)
+	}
+}
+
+type rejectingLeaser struct{ l *rejectingLease }
+
+func (r rejectingLeaser) Acquire(context.Context) (Lease, error) { return r.l, nil }

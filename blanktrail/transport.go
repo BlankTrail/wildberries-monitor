@@ -83,6 +83,9 @@ type remedy interface {
 	attemptSucceeded(port int)
 	rotateEgress(ctx context.Context, port int) error
 	markBadEgress(port int)
+	// exitFailed counts an exit that would not carry a request against its
+	// channel and reports whether the channel is now down as a whole.
+	exitFailed(port int) (channelDown bool)
 	// refreshTLS has the service drop what it holds for the port — pooled
 	// connections and TLS tickets — while keeping its exit. Best effort.
 	refreshTLS(ctx context.Context, port int)
@@ -230,6 +233,11 @@ func (t *ladder) RoundTrip(req *http.Request) (*http.Response, error) {
 				// would carry the same request into the same exit, and the
 				// pause between those would be the whole cost of the page.
 				t.rem.markBadEgress(t.port)
+				if t.rem.exitFailed(t.port) {
+					// Every exit of the channel is like this one: walking on
+					// through it is fifteen seconds a step to nowhere.
+					return nil, ref
+				}
 				if t.rem.rotateEgress(req.Context(), t.port) != nil || transportRetries >= transportBudget {
 					return nil, ref
 				}

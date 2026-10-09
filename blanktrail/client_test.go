@@ -207,3 +207,14 @@ func TestAPIError_MessageFallsBackToBody(t *testing.T) {
 }
 
 func errorsAs(err error, target any) bool { return errors.As(err, target) }
+
+func TestDefaultPortSpec_GivesUpOnADeadExitInSeconds(t *testing.T) {
+	// On a cheap list half the addresses do not answer at all. Without a
+	// connect timeout of its own the port waited the service's default on each
+	// of them, and 500 threads over 15 000 server proxies made three pages a
+	// second (09.10.2026). Google Parser asks for five seconds; so does this.
+	req := DefaultPortSpec().request(20000, Egress{Upstream: "socks5://10.0.0.1:1080"})
+	if req.ConnectTimeout == nil || *req.ConnectTimeout != 5 {
+		t.Errorf("connect_timeout_seconds = %v, want 5", req.ConnectTimeout)
+	}
+}

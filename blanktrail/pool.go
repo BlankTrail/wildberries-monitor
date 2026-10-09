@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -234,6 +235,12 @@ type Pool struct {
 	// refused is one line per slot that never opened, written once at
 	// construction and read-only afterwards. See Shortfall.
 	refused []string
+
+	// exitFails is each channel's run of exits that would not carry a
+	// request, with no answer from any of its exits in between; down is the
+	// channels that run condemned. Both under mu. See exitFailed.
+	exitFails map[string]int
+	down      []string
 }
 
 // Stats is a snapshot of pool activity, for the progress screen and the logs.
@@ -800,6 +807,11 @@ func (p *Pool) exhaustedLocked() error {
 		}
 		pt.mu.Unlock()
 	}
+	if len(p.down) > 0 && lost == 0 {
+		return fmt.Errorf("%w: channel(s) %s: %d exits in a row would not carry a request and none answered — "+
+			"the provider is refusing the login, is out of traffic, or is down", ErrPoolExhausted,
+			strings.Join(p.down, ", "), channelDownAfter)
+	}
 	switch lost {
 	case 0:
 		return ErrPoolExhausted
@@ -924,6 +936,20 @@ func (l *Lease) RotateEgress(ctx context.Context) error {
 	}
 	l.pool.resetFailures(l.pt.num)
 	return nil
+}
+
+// RejectEgress is RotateEgress for an address the site itself turned away —
+// a 403 or a 429 answered to a request other exits carry. The address is
+// marked bad on its way out, so three such answers rest it like a dead one
+// instead of handing it to the next thread: on a cheap list of server proxies
+// a quarter of the addresses were blocked by the site, and a page lost three
+// of them in a row eighty times in five thousand (09.10.2026).
+func (l *Lease) RejectEgress(ctx context.Context) error {
+	if l.released {
+		return errors.New("blanktrail: RejectEgress on a released lease")
+	}
+	l.pool.markBadEgress(l.pt.num)
+	return l.RotateEgress(ctx)
 }
 
 // RenewIdentity gives this port a new fingerprint and a new visit identity,
@@ -1124,7 +1150,70 @@ func (p *Pool) attemptFailedStatus(num, status int) bool {
 }
 
 // attemptSucceeded clears a port's consecutive-failure count.
-func (p *Pool) attemptSucceeded(num int) { p.resetFailures(num) }
+func (p *Pool) attemptSucceeded(num int) {
+	p.resetFailures(num)
+	if pt := p.port(num); pt != nil {
+		p.mu.Lock()
+		delete(p.exitFails, pt.ch.Name())
+		p.mu.Unlock()
+	}
+}
+
+// channelDownAfter is how many exits of one channel in a row may fail to carry
+// a request, with not one answer between them, before the channel is taken to
+// be down as a whole. On a cheap mixed list seven exits in ten are bad, and
+// fifty bad in a row there is a chance in fifty million; a provider that has
+// stopped taking the login gets there in a minute.
+const channelDownAfter = 50
+
+// exitFailed counts an exit that would not carry a request against its
+// channel, and reports whether that made the channel down.
+//
+// The exit itself is struck and replaced by the caller, and that is right for
+// one bad address. It does nothing for a channel whose every address is bad —
+// a residential login the provider stopped accepting answered «523» on all
+// hundred sessions, the bench let a share of them out again by design, and a
+// run walked its sixteen threads through dead exits at fifteen seconds a try
+// for an hour, with every port on the screen saying «работает» (09.10.2026).
+// Down, the channel's ports are quarantined, so a run with other channels
+// carries on through them and a run with only this one ends, saying why.
+func (p *Pool) exitFailed(num int) bool {
+	pt := p.port(num)
+	if pt == nil {
+		return false
+	}
+	name := pt.ch.Name()
+	p.mu.Lock()
+	if p.exitFails == nil {
+		p.exitFails = map[string]int{}
+	}
+	p.exitFails[name]++
+	if p.exitFails[name] < channelDownAfter || slices.Contains(p.down, name) {
+		down := slices.Contains(p.down, name)
+		p.mu.Unlock()
+		return down
+	}
+	p.down = append(p.down, name)
+	ports := slices.Clone(p.ports)
+	p.mu.Unlock()
+
+	for _, other := range ports {
+		if other.ch.Name() != name {
+			continue
+		}
+		other.mu.Lock()
+		already := other.quarantined
+		other.quarantined = true
+		other.mu.Unlock()
+		if !already {
+			p.mu.Lock()
+			p.stats.Quarantines++
+			p.mu.Unlock()
+		}
+	}
+	p.mixer.Penalise(pt.ch)
+	return true
+}
 
 // resetFailures clears a port's consecutive-failure count. Both things that
 // clear it — a successful attempt and a fresh egress — mean the same to the

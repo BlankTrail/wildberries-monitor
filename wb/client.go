@@ -316,6 +316,7 @@ func (c *Client) Get(ctx context.Context, url string, kind Kind, referer string)
 		identities  int
 		portChanges int
 		faults      int
+		refused     int // answers in a row refusing the exit itself — see refusedExits
 	)
 
 	// swapPort gives the current port back and takes another. It is the only
@@ -490,6 +491,35 @@ attempts:
 		res.Attempts, res.Rotations, res.TransportErrors = spent, rotations, faults
 		res.PortChanges = portChanges
 		last, lastErr = res, nil
+		// The site refused this address rather than this request — 429 says
+		// so outright, and a 403 that the same request does not get through
+		// other exits says it too. Another exit at once, the way a dead one
+		// is left: on a cheap list of server proxies a page was handed back
+		// after one 403 and lost, beside four hundred other exits carrying the
+		// same search (09.10.2026). Bounded: a 403 every exit gets is the
+		// request's own, and chasing it across the pool throws away a solved
+		// challenge at every step.
+		if res.Class == ClassEgress || res.Class == ClassRequest {
+			refused++
+			if refused < refusedExits && attempt < c.retry.Attempts {
+				// Turned away, so the address is told so on its way out where
+				// the lease can say it — see blanktrail.Lease.RejectEgress.
+				if r, ok := lease.(egressRejecter); ok {
+					switch err := r.RejectEgress(ctx); {
+					case err == nil:
+						rotations++
+						onPort = 0
+						continue
+					case !errors.Is(err, blanktrail.ErrRenewUnsupported):
+						// Fall through to the ladder at the top of the loop.
+					}
+				}
+				onPort = max(onPort, c.retry.AttemptsPerEgress)
+				continue
+			}
+			return res, nil
+		}
+		refused = 0
 		if res.Class != ClassChallenge {
 			return res, nil
 		}
@@ -513,6 +543,18 @@ attempts:
 		return nil, fmt.Errorf("%s: no attempt was made", url)
 	}
 	return last, nil
+}
+
+// refusedExits is how many exits in a row may refuse a request with 403 or 429
+// before the refusal is taken as the request's own and handed back. Four: on a
+// cheap list a quarter of the addresses are blocked, and three in a row lost
+// eighty pages of five thousand (09.10.2026).
+const refusedExits = 4
+
+// egressRejecter is a lease that can mark the address it is leaving as turned
+// away by the site — blanktrail.Lease does.
+type egressRejecter interface {
+	RejectEgress(context.Context) error
 }
 
 // attempt makes exactly one request on lease and returns it read and judged.

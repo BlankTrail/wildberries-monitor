@@ -372,8 +372,13 @@ var catalogue = []Field{
 	// shelf.go), the store layer already persists it as shelf_items, and a
 	// saved job's column is not worth breaking to fix a naming mismatch that
 	// was really about the group, not the fields.
-	{Key: "shelf_title", Name: "Полка", Group: GroupPhraseAds, Type: FieldText, Source: FieldSourceShelves, Many: true},
-	{Key: "shelf_position", Name: "Место на полке", Group: GroupPhraseAds, Type: FieldInt, Source: FieldSourceShelves, Many: true},
+	// The first two are columns after all: a reading's placements are few —
+	// a product is on one or two shelves of one search — so they join into one
+	// cell the way sizes do, and the best place is one number. Until
+	// 09.10.2026 all three were Many, and the placements an ads job collected
+	// could be read nowhere in the panel or in a file.
+	{Key: "shelf_title", Name: "Полка", Group: GroupPhraseAds, Type: FieldText, Source: FieldSourceShelves},
+	{Key: "shelf_position", Name: "Место на полке", Group: GroupPhraseAds, Type: FieldInt, Source: FieldSourceShelves},
 	{Key: "shelf_nm_id", Name: "Артикул на полке", Group: GroupPhraseAds, Type: FieldInt, Source: FieldSourceShelves, Many: true},
 }
 

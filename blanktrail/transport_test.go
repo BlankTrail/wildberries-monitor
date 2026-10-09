@@ -78,6 +78,7 @@ type fakeRemedy struct {
 	rotateOnNth      int // attemptFailed returns true on this failure number (0 = never)
 	rotateErr        error
 	refreshes        int
+	channelDown      bool // exitFailed reports the channel down
 }
 
 func (r *fakeRemedy) attemptFailed(int) bool {
@@ -86,6 +87,7 @@ func (r *fakeRemedy) attemptFailed(int) bool {
 }
 func (r *fakeRemedy) attemptFailedStatus(port, _ int) bool    { return r.attemptFailed(port) }
 func (r *fakeRemedy) attemptSucceeded(int)                    { r.successes++ }
+func (r *fakeRemedy) exitFailed(int) bool                     { return r.channelDown }
 func (r *fakeRemedy) rotateEgress(context.Context, int) error { r.rotations++; return r.rotateErr }
 func (r *fakeRemedy) markBadEgress(int)                       { r.markedBad++ }
 func (r *fakeRemedy) refreshTLS(context.Context, int)         { r.refreshes++ }

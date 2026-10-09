@@ -3,6 +3,7 @@
 package blanktrail
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -150,5 +151,36 @@ func TestGatewayChannel_OnABenchSkipsARestingGateway(t *testing.T) {
 		if eg.Gateway == "berlin" {
 			t.Fatal("отдыхающий шлюз выдан")
 		}
+	}
+}
+
+// A provider that sells one host and port and picks the exit by the login — a
+// session number written into the user name — puts every exit behind the same
+// address. Found on a real residential list (09.10.2026): one dead session
+// benched the whole list, and the dead session itself was never skipped.
+func TestRotor_SessionsBehindOneAddressRestApart(t *testing.T) {
+	ups, _ := Parse("socks5://acc--sid-1:pw@gw.example:8080\n"+
+		"socks5://acc--sid-2:pw@gw.example:8080\n"+
+		"socks5://acc--sid-3:pw@gw.example:8080\n"+
+		"socks5://acc--sid-4:pw@gw.example:8080", "")
+	if ups[0].Key() == ups[1].Key() {
+		t.Fatal("две сессии одного адреса получили один ключ")
+	}
+	r := NewStaticRotor(ups, WithBench(NewBench(time.Hour)))
+	for range benchMaxFails {
+		r.MarkBad(ups[0])
+	}
+	for range 9 {
+		u, _ := r.Next()
+		if u.User == ups[0].User {
+			t.Fatalf("мёртвая сессия %s выдана снова", u.User)
+		}
+	}
+}
+
+func TestUpstreamKey_HoldsNoPassword(t *testing.T) {
+	ups, _ := Parse("socks5://login:s3cret-pass@gw.example:8080", "")
+	if k := ups[0].Key(); strings.Contains(k, "s3cret-pass") || strings.Contains(k, "login") {
+		t.Fatalf("ключ выдаёт учётные данные: %s", k)
 	}
 }
