@@ -97,10 +97,14 @@ type App struct {
 	// same job, and the second start meets a job already running — which the
 	// stage reports as a failure over a chain that was doing fine.
 	profileMu sync.Mutex
-	Bot       *telegram.Bot
-	MTProto   *telegram.MTProto
-	Commands  *telegram.Commands
-	Ladder    *telegram.Ladder
+
+	// telegramMu guards the bot's token and allowed chat between the pass
+	// that reloads them and pollCommands, which copies them.
+	telegramMu sync.Mutex
+	Bot        *telegram.Bot
+	MTProto    *telegram.MTProto
+	Commands   *telegram.Commands
+	Ladder     *telegram.Ladder
 
 	// Password is what the browser must present, and Generated says whether
 	// this program made it. Both are shown once on the first start.
@@ -511,6 +515,11 @@ const settingTelegramOffset = "telegram.offset"
 // Telegram would require restarting the program — which on Windows means
 // finding the tray icon, and on a server means an ssh session.
 func (a *App) reloadTelegram(ctx context.Context) {
+	// Under the lock pollCommands copies the bot under: the two run side by
+	// side now.
+	a.telegramMu.Lock()
+	defer a.telegramMu.Unlock()
+
 	token := a.Store.SettingOr(ctx, store.SettingTelegramToken, "")
 	appID, _ := strconv.Atoi(a.Store.SettingOr(ctx, store.SettingTelegramAppID, "0"))
 	appHash := a.Store.SettingOr(ctx, store.SettingTelegramAppHash, "")
@@ -641,10 +650,14 @@ func (a *App) Run(ctx context.Context) error {
 	}
 
 	var wg sync.WaitGroup
-	wg.Add(1)
+	wg.Add(2)
 	go func() {
 		defer wg.Done()
 		a.loop(ctx)
+	}()
+	go func() {
+		defer wg.Done()
+		a.pollCommands(ctx)
 	}()
 
 	if a.Engine != nil {
@@ -772,11 +785,10 @@ func (a *App) Tick(ctx context.Context) {
 	// its own button, and nothing said in which order they had to be pressed.
 	a.advanceProfiles(ctx)
 
-	if a.Commands != nil && a.Bot.Token != "" {
-		if _, err := a.Commands.Poll(ctx); err != nil && ctx.Err() == nil {
-			a.Log.Printf("команды бота: %v", err)
-		}
-	}
+	// The bot's commands are not read here any more: see pollCommands, which
+	// waits on Telegram all the time. Read once a minute at the end of this
+	// pass, a /jobs was answered a minute or more after it was sent
+	// (10.10.2026).
 
 	// Last, and only when nothing is collecting: spec section 5.2's thinning
 	// and VACUUM. See maintain.go — both were written a milestone ago and
@@ -909,3 +921,69 @@ func (osAutostart) Enable() error {
 }
 
 func (osAutostart) Disable() error { return autostart.Disable() }
+
+// pollCommands answers the bot's commands as they come.
+//
+// A long poll: Telegram holds the request until a message arrives or the poll
+// times out, so a command is read the moment it is sent. It ran at the end of
+// the minute's pass, after the jobs and the rules, and a /jobs was answered a
+// minute or more later (10.10.2026).
+//
+// The bot is copied under telegramMu for each poll: the pass reloads the token
+// and the allowed chat while this waits.
+func (a *App) pollCommands(ctx context.Context) {
+	menuFor := ""
+	for ctx.Err() == nil {
+		a.telegramMu.Lock()
+		if a.Commands == nil || a.Bot == nil || a.Bot.Token == "" || a.Paused() {
+			a.telegramMu.Unlock()
+			if !sleepCtx(ctx, commandsIdle) {
+				return
+			}
+			continue
+		}
+		bot := *a.Bot
+		commands := *a.Commands
+		a.telegramMu.Unlock()
+		commands.Bot = &bot
+
+		if bot.Token != menuFor {
+			// The «Меню» button, once per token: what the bot can do,
+			// without remembering it.
+			if err := bot.SetMyCommands(ctx, telegram.Menu); err != nil {
+				if ctx.Err() == nil {
+					a.Log.Printf("меню бота: %v", err)
+				}
+			} else {
+				menuFor = bot.Token
+			}
+		}
+
+		if _, err := commands.Poll(ctx); err != nil && ctx.Err() == nil {
+			a.Log.Printf("команды бота: %v", err)
+			if !sleepCtx(ctx, commandsRetry) {
+				return
+			}
+		}
+	}
+}
+
+// commandsIdle is how often the poll looks for a token while there is none;
+// commandsRetry is the pause after a failed poll, so an outage is not a busy
+// loop.
+const (
+	commandsIdle  = 5 * time.Second
+	commandsRetry = 10 * time.Second
+)
+
+// sleepCtx waits d, or less if ctx ends, and reports whether to go on.
+func sleepCtx(ctx context.Context, d time.Duration) bool {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-t.C:
+		return true
+	}
+}

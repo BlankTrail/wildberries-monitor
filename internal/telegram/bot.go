@@ -364,3 +364,21 @@ func (b *Bot) Send(ctx context.Context, m notify.Message) error {
 	}
 	return b.SendMessage(ctx, m.Address, m.Body)
 }
+
+// BotCommand is one line of the bot's menu.
+type BotCommand struct {
+	Command     string `json:"command"`
+	Description string `json:"description"`
+}
+
+// SetMyCommands puts the bot's commands in Telegram's own menu — the «Меню»
+// button beside the message field — so nobody has to remember them.
+func (b *Bot) SetMyCommands(ctx context.Context, commands []BotCommand) error {
+	raw, err := json.Marshal(commands)
+	if err != nil {
+		return err
+	}
+	form := url.Values{}
+	form.Set("commands", string(raw))
+	return b.call(ctx, "setMyCommands", strings.NewReader(form.Encode()), nil)
+}

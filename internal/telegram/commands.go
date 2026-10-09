@@ -376,6 +376,11 @@ func (c *Commands) replyExport(ctx context.Context, u Update, format string, rep
 	if format == "" {
 		format = "csv"
 	}
+	// Said at once: a big export takes a minute, and a command answered by
+	// nothing for a minute reads as a bot that did not hear it (10.10.2026).
+	if err := reply("Собираю выгрузку, это может занять минуту…"); err != nil {
+		return err
+	}
 	path, caption, err := c.Export(ctx, format)
 	if err != nil {
 		return reply("Не удалось собрать выгрузку: " + err.Error())
@@ -667,4 +672,19 @@ func chatName(u Update) string {
 		return "@" + c.Username
 	}
 	return ""
+}
+
+// Menu is the bot's commands as Telegram's menu shows them: the same ones the
+// help text lists, with the argument said in the description.
+var Menu = []BotCommand{
+	{Command: "jobs", Description: "Задания и что сейчас идёт"},
+	{Command: "run", Description: "Запустить задание: /run 3"},
+	{Command: "stop", Description: "Остановить задание: /stop 3"},
+	{Command: "chart", Description: "График цены или места: /chart артикул [фраза]"},
+	{Command: "card", Description: "Карточка товара: /card артикул"},
+	{Command: "tracked", Description: "Что под наблюдением"},
+	{Command: "track", Description: "Добавить товар или фразу: /track артикул"},
+	{Command: "untrack", Description: "Убрать из наблюдения: /untrack фраза"},
+	{Command: "export", Description: "Результаты файлом: /export csv"},
+	{Command: "help", Description: "Что умеет бот"},
 }

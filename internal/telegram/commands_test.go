@@ -277,7 +277,7 @@ func TestPoll_SendsTheExportAsAFile(t *testing.T) {
 	if askedFor != "csv" {
 		t.Errorf("asked for format %q", askedFor)
 	}
-	if len(api.paths) < 2 || !strings.HasSuffix(api.paths[1], "sendDocument") {
+	if len(api.paths) < 3 || !strings.HasSuffix(api.paths[2], "sendDocument") {
 		t.Errorf("the export went to %v, want it sent as a document", api.paths)
 	}
 }
@@ -561,8 +561,8 @@ func TestPoll_TheCaptionTheProducerGaveIsWhatTheFileArrivesWith(t *testing.T) {
 	if _, err := c.Poll(t.Context()); err != nil {
 		t.Fatalf("Poll: %v", err)
 	}
-	if len(api.forms) < 2 || api.forms[1]["caption"] != caption {
-		t.Errorf("файл ушёл с подписью %q, ожидалась %q", api.forms[1]["caption"], caption)
+	if len(api.forms) < 3 || api.forms[2]["caption"] != caption {
+		t.Errorf("файл ушёл с подписью %q, ожидалась %q", api.forms[2]["caption"], caption)
 	}
 }
 
@@ -618,7 +618,7 @@ func TestExport_ARefusedFileIsSaidInTheChat(t *testing.T) {
 	if err := c.replyExport(t.Context(), u, "", reply); err != nil {
 		t.Fatalf("replyExport: %v", err)
 	}
-	if len(said) != 1 || !strings.Contains(said[0], "не отправился") {
+	if len(said) != 2 || !strings.Contains(said[1], "не отправился") {
 		t.Errorf("said %q, want the refusal told in the chat", said)
 	}
 }

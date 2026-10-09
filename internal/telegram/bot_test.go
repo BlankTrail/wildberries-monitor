@@ -3,6 +3,7 @@
 package telegram
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -338,5 +339,29 @@ func TestSend_AMissingAttachmentDoesNotSilentlyBecomeAPlainMessage(t *testing.T)
 	}
 	if len(api.paths) != 0 {
 		t.Errorf("something was sent anyway: %v", api.paths)
+	}
+}
+
+func TestSetMyCommands_PutsTheMenuInTelegram(t *testing.T) {
+	// No menu, and a person had to remember every command (10.10.2026).
+	api := newFakeAPI(t)
+	api.reply = `{"ok":true,"result":true}`
+	if err := api.bot().SetMyCommands(t.Context(), Menu); err != nil {
+		t.Fatalf("SetMyCommands: %v", err)
+	}
+	if len(api.paths) != 1 || !strings.HasSuffix(api.paths[0], "/setMyCommands") {
+		t.Fatalf("paths = %v", api.paths)
+	}
+	var got []BotCommand
+	if err := json.Unmarshal([]byte(api.forms[0]["commands"]), &got); err != nil {
+		t.Fatalf("commands = %q: %v", api.forms[0]["commands"], err)
+	}
+	if len(got) != len(Menu) || got[0].Command != "jobs" {
+		t.Errorf("menu = %+v", got)
+	}
+	for _, c := range got {
+		if c.Command == "" || strings.ToLower(c.Command) != c.Command || c.Description == "" || len([]rune(c.Description)) > 256 {
+			t.Errorf("Telegram refuses a menu line like %+v", c)
+		}
 	}
 }
