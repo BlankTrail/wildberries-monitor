@@ -203,6 +203,21 @@ func deref(p *int64) int64 {
 // SalesSince estimates what every product read at least twice since the
 // moment sold, biggest first. nmID narrows it to one product; zero means all.
 func (s *Store) SalesSince(ctx context.Context, since, nmID int64) ([]SalesEstimate, error) {
+	return s.salesSince(ctx, since, nmID, "")
+}
+
+// SalesMatching is SalesSince for the products a search answers: a piece of
+// the name, brand or seller, folded in every alphabet, or of the article.
+//
+// The search goes into the query rather than over its result. Over the result,
+// every product read in the window was estimated first — a million and a half
+// rows of sizes and warehouses after a run of five thousand pages, fifteen
+// seconds for a screen that then showed the thermoses (09.10.2026).
+func (s *Store) SalesMatching(ctx context.Context, since int64, search string) ([]SalesEstimate, error) {
+	return s.salesSince(ctx, since, 0, strings.TrimSpace(search))
+}
+
+func (s *Store) salesSince(ctx context.Context, since, nmID int64, search string) ([]SalesEstimate, error) {
 	q := `
 		SELECT s.nm_id, s.id, s.ts, s.stock_cap, s.price_sale, s.total_quantity, s.currency,
 		       COALESCE(sz.name, ''), st.warehouse_id, st.qty
@@ -214,6 +229,12 @@ func (s *Store) SalesSince(ctx context.Context, since, nmID int64) ([]SalesEstim
 	if nmID != 0 {
 		q += ` AND s.nm_id = ?`
 		args = append(args, nmID)
+	}
+	if search != "" {
+		q += ` AND s.nm_id IN (SELECT p.nm_id FROM products p WHERE ` +
+			containsFunc + `(p.name, ?) OR ` + containsFunc + `(p.brand, ?) OR ` +
+			containsFunc + `(p.supplier_name, ?) OR CAST(p.nm_id AS TEXT) LIKE ?)`
+		args = append(args, search, search, search, "%"+search+"%")
 	}
 	q += ` ORDER BY s.nm_id, s.ts, s.id`
 	rows, err := s.db.QueryContext(ctx, q, args...)

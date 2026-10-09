@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/BlankTrail/wildberries-monitor/internal/store"
 	"github.com/BlankTrail/wildberries-monitor/wb"
 )
 
@@ -271,5 +272,32 @@ func TestTrackChart_ARefusalIsNotDressedAsAnImage(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), "нет данных") {
 		t.Errorf("отказ без объяснения: %q", w.Body.String())
+	}
+}
+
+func TestTrack_MyOwnProductsComeFirst(t *testing.T) {
+	// The list was the latest reading of everything, by a window over every
+	// snapshot: thirty seconds after a big run, to show twenty products of no
+	// particular interest (09.10.2026). A profile's products lead it now.
+	srv := newServer(t)
+	ctx := t.Context()
+	tracked(t, srv, "куртка")
+	mine := wb.Product{ID: 777, Name: "Мой термос", Dest: "-1257786", AppType: 1, FetchedAt: time.Now().Add(-48 * time.Hour),
+		Sizes: []wb.Size{{Name: "M", PriceProduct: ptrTo(int64(90000))}}}
+	if _, err := srv.Store.SaveProduct(ctx, mine, "", 0); err != nil {
+		t.Fatalf("SaveProduct: %v", err)
+	}
+	id, err := srv.Store.SaveProfile(ctx, store.ProfileRow{Name: "мой"})
+	if err != nil {
+		t.Fatalf("SaveProfile: %v", err)
+	}
+	if err := srv.Store.AddProfileItem(ctx, id, store.ProfileProduct, 777); err != nil {
+		t.Fatalf("AddProfileItem: %v", err)
+	}
+
+	body := get(t, srv, "/track", "correct horse").Body.String()
+	m, j := strings.Index(body, "Мой термос"), strings.Index(body, "Winter jacket")
+	if m < 0 || j < 0 || m > j {
+		t.Errorf("свой товар не первым (мой %d, чужой %d)", m, j)
 	}
 }

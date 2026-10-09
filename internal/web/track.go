@@ -16,6 +16,7 @@ import (
 	"github.com/BlankTrail/wildberries-monitor/internal/chart"
 	"github.com/BlankTrail/wildberries-monitor/internal/collect"
 	"github.com/BlankTrail/wildberries-monitor/internal/history"
+	"github.com/BlankTrail/wildberries-monitor/internal/job"
 	"github.com/BlankTrail/wildberries-monitor/internal/store"
 	"github.com/BlankTrail/wildberries-monitor/wb"
 )
@@ -127,12 +128,22 @@ func trackForm(nm string, days int) string {
 // means here: this monitor watches what its jobs collect, and the newest
 // readings are the ones a person came to look at.
 func watchedHTML(s *Server, r *http.Request) string {
-	var rows []store.ProductRow
-	for row, err := range s.Store.Products(r.Context(), store.ProductFilter{Latest: true, Limit: 20}) {
+	ids := s.watchedIDs(r.Context())
+	// The newest reading of each, whichever region it came from.
+	newest := map[int64]store.ProductRow{}
+	for row, err := range s.Store.Products(r.Context(), store.ProductFilter{NmIDs: ids, Latest: true}) {
 		if err != nil {
 			return alert("error", err.Error())
 		}
-		rows = append(rows, row)
+		if have, ok := newest[row.NmID]; !ok || row.TS > have.TS {
+			newest[row.NmID] = row
+		}
+	}
+	var rows []store.ProductRow
+	for _, id := range ids {
+		if row, ok := newest[id]; ok {
+			rows = append(rows, row)
+		}
 	}
 	if len(rows) == 0 {
 		return alert("neutral",
@@ -153,6 +164,52 @@ func watchedHTML(s *Server, r *http.Request) string {
 	}
 	b.WriteString(`</tbody></table></div>`)
 	return b.String()
+}
+
+// watchedLimit bounds the list on the tracking screen.
+const watchedLimit = 30
+
+// watchedIDs is what is under observation: the products of the profiles and
+// the articles the position and article jobs name first, then whatever was
+// read most recently — a product this monitor has readings for is one it is
+// watching.
+//
+// It was the latest reading of everything, by a window over every snapshot in
+// the database: thirty seconds after a run of five thousand pages, to list
+// twenty products of no particular interest (09.10.2026).
+func (s *Server) watchedIDs(ctx context.Context) []int64 {
+	var out []int64
+	seen := map[int64]bool{}
+	add := func(ids []int64) {
+		for _, id := range ids {
+			if id != 0 && !seen[id] && len(out) < watchedLimit {
+				seen[id] = true
+				out = append(out, id)
+			}
+		}
+	}
+	if profiles, err := s.Store.Profiles(ctx); err == nil {
+		for _, p := range profiles {
+			if ids, err := s.Store.ProfileItems(ctx, p.ID, store.ProfileProduct); err == nil {
+				add(ids)
+			}
+		}
+	}
+	if jobs, err := s.Store.Jobs(ctx); err == nil {
+		for _, row := range jobs {
+			j, err := job.Load(ctx, s.Store, row.ID)
+			if err != nil || (j.Kind != job.KindPositions && j.Kind != job.KindArticles) {
+				continue
+			}
+			add(j.Articles)
+		}
+	}
+	if len(out) < watchedLimit {
+		if recent, err := s.Store.RecentlyRead(ctx, watchedLimit); err == nil {
+			add(recent)
+		}
+	}
+	return out
 }
 
 // productTrackHTML is one product: what it is, and its two kinds of chart.

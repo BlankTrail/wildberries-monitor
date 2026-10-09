@@ -715,3 +715,35 @@ func (s *Store) ProductNames(ctx context.Context, nmIDs []int64) (map[int64]stri
 	}
 	return out, rows.Err()
 }
+
+// RecentlyRead is the products the newest readings were of, newest first, at
+// most limit of them.
+//
+// Walked by row id, which is the order readings were written in: a window
+// over every snapshot for «the latest of each» took thirty seconds after a run
+// of five thousand pages (09.10.2026), and this reads a few thousand rows.
+func (s *Store) RecentlyRead(ctx context.Context, limit int) ([]int64, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT nm_id FROM snapshots ORDER BY id DESC LIMIT ?`, limit*recentScan)
+	if err != nil {
+		return nil, fmt.Errorf("store: recently read: %w", err)
+	}
+	defer rows.Close()
+	var out []int64
+	seen := map[int64]bool{}
+	for rows.Next() && len(out) < limit {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("store: recently read: %w", err)
+		}
+		if !seen[id] {
+			seen[id] = true
+			out = append(out, id)
+		}
+	}
+	return out, rows.Err()
+}
+
+// recentScan is how many readings per wanted product RecentlyRead looks
+// through: one product read in several regions is several rows in a row.
+const recentScan = 50

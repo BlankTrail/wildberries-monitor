@@ -235,3 +235,36 @@ func TestProductLabels_MoreThanOneBatch(t *testing.T) {
 		t.Errorf("labels = %d, %v; want all 501", len(got), err)
 	}
 }
+
+func TestSalesMatching_EstimatesOnlyWhatTheSearchAnswers(t *testing.T) {
+	// Filtered after the fact, every product of the window was estimated first:
+	// fifteen seconds after a big run for a screen showing thermoses (09.10.2026).
+	s := openTestStore(t)
+	ctx := t.Context()
+	base := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	save := func(nm int64, name string, qty int64, at time.Time) {
+		t.Helper()
+		p := wb.Product{ID: nm, Name: name, Brand: "Бренд", SupplierName: "Продавец", Dest: "-1257786",
+			AppType: 1, FetchedAt: at, TotalQuantity: &qty, StockCap: 100}
+		if _, err := s.SaveProduct(ctx, p, "", 0); err != nil {
+			t.Fatalf("SaveProduct: %v", err)
+		}
+	}
+	for _, p := range []struct {
+		nm   int64
+		name string
+	}{{1, "Термос маленький"}, {2, "Куртка зимняя"}} {
+		save(p.nm, p.name, 20, base)
+		save(p.nm, p.name, 15, base.Add(time.Hour))
+	}
+
+	for search, want := range map[string]int64{"термос": 1, "КУРТКА": 2, "2": 2} {
+		got, err := s.SalesMatching(ctx, base.Unix(), search)
+		if err != nil || len(got) != 1 || got[0].NmID != want {
+			t.Errorf("SalesMatching(%q) = %+v, %v; want product %d alone", search, got, err, want)
+		}
+	}
+	if all, _ := s.SalesMatching(ctx, base.Unix(), ""); len(all) != 2 {
+		t.Errorf("an empty search estimated %d products, want both", len(all))
+	}
+}

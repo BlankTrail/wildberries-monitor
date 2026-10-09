@@ -998,3 +998,24 @@ func TestSaveProduct_FallsBackToTheStoresClockWhenFetchedAtIsZero(t *testing.T) 
 		t.Errorf("snapshots.ts = %d, want %d — the store's clock, since the reading carried no FetchedAt", snapshotTS, at.Unix())
 	}
 }
+
+func TestRecentlyRead_NewestFirstAndEachOnce(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	at := time.Date(2026, 8, 20, 9, 0, 0, 0, time.UTC)
+	for i, nm := range []int64{1, 2, 1, 3} {
+		p := sampleProduct()
+		p.ID, p.FetchedAt = nm, at.Add(time.Duration(i)*time.Hour)
+		p.Sizes[0].PriceProduct = ptrTo(int64(1000 + i)) // a change, so each reading is written
+		if _, err := s.SaveProduct(ctx, p, "", 0); err != nil {
+			t.Fatalf("SaveProduct: %v", err)
+		}
+	}
+	got, err := s.RecentlyRead(ctx, 2)
+	if err != nil {
+		t.Fatalf("RecentlyRead: %v", err)
+	}
+	if len(got) != 2 || got[0] != 3 || got[1] != 1 {
+		t.Errorf("RecentlyRead = %v, want [3 1]", got)
+	}
+}

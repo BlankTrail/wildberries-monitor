@@ -37,7 +37,7 @@ func (s *Server) salesPage(w http.ResponseWriter, r *http.Request) {
 	search := strings.TrimSpace(r.URL.Query().Get("q"))
 	since := s.now().Add(-time.Duration(days) * 24 * time.Hour).Unix()
 
-	all, err := s.Store.SalesSince(r.Context(), since, 0)
+	all, err := s.Store.SalesMatching(r.Context(), since, search)
 	if err != nil {
 		http.Error(w, "sales: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -92,6 +92,8 @@ func (s *Server) salesPage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	switch {
+	case len(all) == 0 && search != "":
+		b.WriteString(alert("neutral", "По этому поиску товаров нет."))
 	case len(all) == 0:
 		b.WriteString(alert("neutral", "За этот срок нет ни одного товара, снятого хотя бы дважды. "+
 			"Оценка продаж складывается из разницы между съёмками: поставьте задание на расписание, "+
