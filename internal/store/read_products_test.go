@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"errors"
 	"iter"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -1527,5 +1528,46 @@ func TestProducts_TheJobFilterKeepsWhatAJobConfirmedUnchanged(t *testing.T) {
 	got := collectSeq(t, "Products", s.Products(ctx, ProductFilter{JobID: &second}))
 	if len(got) != 1 || got[0].NmID != 100 || got[0].Dest != "-1257786" {
 		t.Fatalf("получено %d строк %+v — ожидалось одно показание, которое задание подтвердило", len(got), got)
+	}
+}
+
+func TestProducts_APageIsChosenOverTheKeysAndCanOpenOnTheNewest(t *testing.T) {
+	// A page of a hundred was sorted and windowed over full rows: twelve
+	// seconds on 791 thousand readings, seventy-seven for «только свежее»
+	// (09.10.2026). The page is chosen over the key columns now; the rows it
+	// returns must be the same ones.
+	s := openTestStore(t)
+	ctx := context.Background()
+	base := time.Date(2026, 8, 20, 9, 0, 0, 0, time.UTC)
+	for i, nm := range []int64{3, 1, 2, 1} {
+		p := sampleProduct()
+		p.ID, p.FetchedAt = nm, base.Add(time.Duration(i)*time.Hour)
+		p.Sizes[0].PriceProduct = ptrTo(int64(1000 + i))
+		if _, err := s.SaveProduct(ctx, p, "", 0); err != nil {
+			t.Fatalf("SaveProduct: %v", err)
+		}
+	}
+	ids := func(f ProductFilter) []int64 {
+		t.Helper()
+		var out []int64
+		for row, err := range s.Products(ctx, f) {
+			if err != nil {
+				t.Fatalf("Products: %v", err)
+			}
+			out = append(out, row.NmID)
+		}
+		return out
+	}
+	if got := ids(ProductFilter{Limit: 2, Offset: 1}); !slices.Equal(got, []int64{1, 2}) {
+		t.Errorf("page two of the key order = %v, want [1 2]", got)
+	}
+	if got := ids(ProductFilter{Limit: 3, Newest: true}); !slices.Equal(got, []int64{1, 2, 1}) {
+		t.Errorf("newest first = %v, want [1 2 1]", got)
+	}
+	if got := ids(ProductFilter{Latest: true, Limit: 10}); !slices.Equal(got, []int64{1, 2, 3}) {
+		t.Errorf("latest of each = %v, want [1 2 3]", got)
+	}
+	if n, err := s.CountProducts(ctx, ProductFilter{Latest: true}); err != nil || n != 3 {
+		t.Errorf("CountProducts(latest) = %d, %v; want 3", n, err)
 	}
 }

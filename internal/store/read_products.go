@@ -173,6 +173,13 @@ type ProductFilter struct {
 	// overall.
 	Latest bool
 
+	// Newest orders a filter with no sort of its own newest reading first, in
+	// the order readings were written: a screen opens on what was just read
+	// rather than on the lowest article number, and it is the one order the
+	// engine can serve from the row ids without sorting 791 thousand rows
+	// (09.10.2026). An export leaves it off and keeps the stable key order.
+	Newest bool
+
 	// JobID keeps only what one job collected. nil means everything, whoever
 	// collected it.
 	//
@@ -406,6 +413,23 @@ func placeholders(n int) string {
 // ts can leave: two readings of one triple inside the same second, which a
 // re-run produces.
 func productsQuery(f ProductFilter) (string, []any) {
+	where, args := productConditions(f)
+	if f.Limit > 0 || f.Latest {
+		// A page, or the latest of each: decided over the key columns alone,
+		// and only the rows that survive get the full row with its dozen
+		// subqueries. Sorted and windowed whole, a page of a hundred over
+		// 791 thousand readings took twelve seconds and «только свежее»
+		// seventy-seven (09.10.2026).
+		keys, keyArgs := keysQuery(f, where, args)
+		full := f
+		full.Latest, full.Limit, full.Offset = false, 0, 0
+		return assembleProducts(full, []string{"s.id IN (" + keys + ")"}, keyArgs)
+	}
+	return assembleProducts(f, where, args)
+}
+
+// productConditions is the WHERE of a filter, over snapshots s and products p.
+func productConditions(f ProductFilter) ([]string, []any) {
 	var (
 		where []string
 		args  []any
@@ -490,6 +514,64 @@ func productsQuery(f ProductFilter) (string, []any) {
 		args = append(args, f.To)
 	}
 
+	return where, args
+}
+
+// keyColumns is what ordering and «the latest of each» need of a reading, and
+// nothing else: no subqueries, so the engine can sort and window them cheaply.
+const keyColumns = `
+	    p.nm_id                  AS nm_id,
+	    p.name                   AS name,
+	    p.brand                  AS brand,
+	    p.supplier_id            AS supplier_id,
+	    p.supplier_name          AS supplier_name,
+	    COALESCE(s.dest, '')     AS dest,
+	    COALESCE(s.app_type, 0)  AS app_type,
+	    COALESCE(s.ts, 0)        AS ts,
+	    s.rating                 AS rating,
+	    s.feedbacks              AS feedbacks,
+	    s.total_quantity         AS total_quantity,
+	    s.price_base             AS price_base,
+	    s.price_sale             AS price_sale,
+	    s.discount_pct           AS discount_pct,
+	    s.id                     AS snapshot_id`
+
+// keysQuery selects the snapshot ids of the rows a filter keeps — the latest of
+// each series when asked, one page of them when a limit is set — in order.
+func keysQuery(f ProductFilter, where []string, args []any) (string, []any) {
+	inner := "SELECT" + keyColumns
+	if f.Latest {
+		inner += `,
+	    ROW_NUMBER() OVER (
+	        PARTITION BY s.nm_id, s.dest, s.app_type
+	        ORDER BY s.ts DESC, s.id DESC
+	    ) AS recency`
+	}
+	inner += `
+	FROM snapshots s
+	JOIN products p ON p.nm_id = s.nm_id`
+	if len(where) > 0 {
+		inner += "\n\tWHERE " + strings.Join(where, " AND ")
+	}
+	q := "SELECT snapshot_id FROM (" + inner + "\n)"
+	if f.Latest {
+		q += "\nWHERE recency = 1"
+	}
+	out := append([]any(nil), args...)
+	if f.Limit > 0 {
+		q += "\nORDER BY " + orderBy(f) + "\nLIMIT ?"
+		out = append(out, f.Limit)
+		if f.Offset > 0 {
+			q += " OFFSET ?"
+			out = append(out, f.Offset)
+		}
+	}
+	return q, out
+}
+
+// assembleProducts is the full row for every reading the conditions keep, in
+// the stable order, as one page when the filter asks for one.
+func assembleProducts(f ProductFilter, where []string, args []any) (string, []any) {
 	inner := "SELECT" + productRowColumns + ",\n	    s.id AS snapshot_id"
 	if f.Latest {
 		// One last row per triple, which is a window function and not
@@ -630,6 +712,9 @@ func orderBy(f ProductFilter) string {
 	tail := "nm_id, dest, app_type, ts, snapshot_id"
 	col, ok := sortable[f.Sort]
 	if !ok {
+		if f.Newest {
+			return "snapshot_id DESC"
+		}
 		return tail
 	}
 	dir := " ASC"
@@ -671,7 +756,10 @@ func (s *Store) AnyRawKept(ctx context.Context) (bool, error) {
 func (s *Store) CountProducts(ctx context.Context, f ProductFilter) (int64, error) {
 	// The page has no bearing on the total.
 	f.Limit, f.Offset, f.Sort = 0, 0, ""
-	inner, args := productsQuery(f)
+	// Over the key columns: counted through the full row, «только свежее»
+	// windowed every reading with its subqueries first.
+	where, args := productConditions(f)
+	inner, args := keysQuery(f, where, args)
 
 	var n int64
 	if err := s.db.QueryRowContext(ctx,

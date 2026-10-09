@@ -93,6 +93,8 @@ func (s *Server) resultsBody(r *http.Request) (string, error) {
 
 	filter.Limit = resultsPageSize
 	filter.Offset = (page - 1) * resultsPageSize
+	// The screen opens on what was just read; the export keeps the key order.
+	filter.Newest = true
 	// Read once for the whole table rather than per cell: it is a query, and a
 	// hundred rows would make it a hundred.
 	names := s.regionNames(r)
