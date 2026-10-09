@@ -12,7 +12,6 @@ import (
 
 	"github.com/BlankTrail/wildberries-monitor/internal/history"
 	"github.com/BlankTrail/wildberries-monitor/internal/store"
-	"github.com/BlankTrail/wildberries-monitor/wb"
 )
 
 // botCards is spec section 8.3's last item: a product card in the chat.
@@ -59,7 +58,7 @@ func (c botCards) Card(ctx context.Context, nmID int64) (string, error) {
 	b.WriteString(priceLine(product))
 	b.WriteString(ratingLine(product))
 	b.WriteString(stockLine(product))
-	b.WriteString(where(product) + "\n")
+	b.WriteString(where(product, c.a.newLabels(ctx)) + "\n")
 	fmt.Fprintf(&b, "Прочитано: %s\n", readAt(product.TS))
 
 	// The link last, because Telegram builds its preview from it and puts the
@@ -78,9 +77,9 @@ func priceLine(p store.ProductRow) string {
 		// claim the site never made.
 		return "Цена: не было в последнем чтении\n"
 	}
-	line := "Цена: " + wb.Money{Minor: *p.PriceSale, Currency: p.Currency}.String()
+	line := "Цена: " + money(p.PriceSale, p.Currency)
 	if p.PriceBase != nil && *p.PriceBase > *p.PriceSale {
-		line += fmt.Sprintf(" (без скидки %s", wb.Money{Minor: *p.PriceBase, Currency: p.Currency})
+		line += fmt.Sprintf(" (без скидки %s", money(p.PriceBase, p.Currency))
 		if p.DiscountPct != nil {
 			line += fmt.Sprintf(", −%d%%", *p.DiscountPct)
 		}

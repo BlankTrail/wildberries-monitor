@@ -3,6 +3,8 @@
 package app
 
 import (
+	"archive/zip"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -49,7 +51,7 @@ func TestBotJobs_ListsWhatWasSavedWithItsProgress(t *testing.T) {
 		t.Fatalf("заданий: %d", len(list))
 	}
 	got := list[0]
-	if got.ID != id || got.Name != "кроссовки, Москва" || got.Kind != "phrase" {
+	if got.ID != id || got.Name != "кроссовки, Москва" || got.Kind != "Поисковая выдача по фразе" {
 		t.Errorf("задание пришло как %+v", got)
 	}
 	if !got.Running {
@@ -259,5 +261,31 @@ func TestBotExport_CaptionCarriesTheTimeTheFileCouldNot(t *testing.T) {
 	}
 	if !strings.Contains(caption, time.Now().Format("02.01.2006")) {
 		t.Errorf("подпись без даты: %q", caption)
+	}
+}
+
+func TestZipOne_PacksTheFileBesideItself(t *testing.T) {
+	src := filepath.Join(t.TempDir(), "results.csv")
+	body := strings.Repeat("термос;925\n", 10000)
+	if err := os.WriteFile(src, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, err := zipOne(src)
+	if err != nil {
+		t.Fatalf("zipOne: %v", err)
+	}
+	zr, err := zip.OpenReader(out)
+	if err != nil {
+		t.Fatalf("OpenReader: %v", err)
+	}
+	defer zr.Close()
+	if len(zr.File) != 1 || zr.File[0].Name != "results.csv" {
+		t.Fatalf("archive holds %v", zr.File)
+	}
+	rc, _ := zr.File[0].Open()
+	got, _ := io.ReadAll(rc)
+	_ = rc.Close()
+	if string(got) != body {
+		t.Error("the archive does not hold the file as it was")
 	}
 }

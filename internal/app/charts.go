@@ -47,7 +47,7 @@ func (c botCharts) Price(ctx context.Context, nmID int64) (string, string, error
 			money(facts.Lo, facts.Product.Currency), money(facts.Hi, facts.Product.Currency))
 	}
 	caption.WriteString(".\n")
-	caption.WriteString(where(facts.Product))
+	caption.WriteString(where(facts.Product, c.a.newLabels(ctx)))
 	return path, caption.String(), nil
 }
 
@@ -67,7 +67,7 @@ func (c botCharts) Position(ctx context.Context, nmID int64, phrase string) (str
 	caption.WriteString(describe(facts.Product))
 	fmt.Fprintf(&caption, "\nПозиция по фразе «%s» за 30 дней.\n", phrase)
 	fmt.Fprintf(&caption, "Сейчас %d-я, лучшая %d-я.\n", facts.LastRank, facts.Best)
-	caption.WriteString(where(facts.Product))
+	caption.WriteString(where(facts.Product, c.a.newLabels(ctx)))
 	return path, caption.String(), nil
 }
 
@@ -114,6 +114,9 @@ func money(minor *int64, currency string) string {
 	if minor == nil {
 		return "без цены"
 	}
+	if currency == "" || currency == "RUB" {
+		return roubles(*minor)
+	}
 	return wb.Money{Minor: *minor, Currency: currency}.String()
 }
 
@@ -135,10 +138,24 @@ func describe(p store.ProductRow) string {
 // product has a different price and a different position in another region and
 // on another storefront, and a chart that did not say which one it is invites
 // the reading that it is all of them.
-func where(p store.ProductRow) string {
+func where(p store.ProductRow, names *labels) string {
 	dest := strings.TrimSpace(p.Dest)
 	if dest == "" {
-		dest = "не указан"
+		return "Регион не указан."
 	}
-	return fmt.Sprintf("Регион %s, витрина %d.", dest, p.AppType)
+	// By name: «Регион -364764» under a chart in somebody's chat was
+	// Novosibirsk, and nothing said so (10.10.2026).
+	return "Регион: " + names.region(dest) + ", " + storefront(p.AppType) + "."
+}
+
+// storefront is which audience the reading was taken as, in words: «витрина 1»
+// was the site's own number for it.
+func storefront(app int) string {
+	switch app {
+	case wb.AppWeb, 0:
+		return "сайт"
+	case wb.AppMobile:
+		return "приложение"
+	}
+	return fmt.Sprintf("витрина %d", app)
 }

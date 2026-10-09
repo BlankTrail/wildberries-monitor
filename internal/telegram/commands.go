@@ -358,8 +358,10 @@ func (c *Commands) replyJobs(ctx context.Context, _ Update, reply func(string) e
 			// Reported as "0 из 0" it reads like a job that is doing nothing.
 			b.WriteString("   идёт: план составляется\n")
 		case j.LastFinish > 0:
+			// Local time, as the panel shows it: in UTC the hourly job read
+			// «21:45» at a quarter to one at night (10.10.2026).
 			fmt.Fprintf(&b, "   последний прогон: %s\n",
-				time.Unix(j.LastFinish, 0).UTC().Format("2006-01-02 15:04"))
+				time.Unix(j.LastFinish, 0).Local().Format("02.01.2006 15:04"))
 		default:
 			b.WriteString("   ещё не запускалось\n")
 		}
@@ -378,7 +380,13 @@ func (c *Commands) replyExport(ctx context.Context, u Update, format string, rep
 	if err != nil {
 		return reply("Не удалось собрать выгрузку: " + err.Error())
 	}
-	return c.Bot.SendDocument(ctx, c.address(u), caption, path)
+	if err := c.Bot.SendDocument(ctx, c.address(u), caption, path); err != nil {
+		// Said in the chat, not only in the log: a refused file left the
+		// person looking at their own /export with nothing under it
+		// (10.10.2026).
+		return reply("Файл не отправился: " + err.Error())
+	}
+	return nil
 }
 
 // replyChart sends one of the two pictures.

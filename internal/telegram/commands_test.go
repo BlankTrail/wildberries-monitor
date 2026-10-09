@@ -600,3 +600,25 @@ func TestPoll_TellsWhoWroteEvenWhenTheyMayNotCommand(t *testing.T) {
 		t.Errorf("Seen(%d, %q), want 999 and the person's name", gotID, gotName)
 	}
 }
+
+func TestExport_ARefusedFileIsSaidInTheChat(t *testing.T) {
+	// A 107 MB export was refused with a 413 and the person heard nothing
+	// (10.10.2026).
+	api := newFakeAPI(t)
+	api.reply = `{"ok":false,"error_code":413,"description":"Request Entity Too Large"}`
+	c := commandsFor(t, api, &fakeJobs{})
+	c.Export = func(context.Context, string) (string, string, error) { return "results.csv", "выгрузка", nil }
+	var said []string
+	reply := func(text string) error { said = append(said, text); return nil }
+
+	var u Update
+	if err := json.Unmarshal([]byte(`{"update_id":1,"message":{"text":"/export","chat":{"id":42}}}`), &u); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.replyExport(t.Context(), u, "", reply); err != nil {
+		t.Fatalf("replyExport: %v", err)
+	}
+	if len(said) != 1 || !strings.Contains(said[0], "не отправился") {
+		t.Errorf("said %q, want the refusal told in the chat", said)
+	}
+}

@@ -60,7 +60,7 @@ func TestCard_HoldsWhatTheStoreKnowsAndSaysWhenItWasRead(t *testing.T) {
 	}
 	for _, want := range []string{
 		"Куртка зимняя", "BrandCo", "Ромашка", "4242",
-		"3000.00", "4.7", "311", "-1257786", "Прочитано",
+		"3 000 ₽", "4.7", "311", "Москва (по умолчанию)", "Прочитано",
 	} {
 		if !strings.Contains(card, want) {
 			t.Errorf("в карточке нет %q:\n%s", want, card)
@@ -94,7 +94,7 @@ func TestCard_ShowsTheDiscountAsBothNumbers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Card: %v", err)
 	}
-	if !strings.Contains(card, "3000.00") || !strings.Contains(card, "3600.00") {
+	if !strings.Contains(card, "3 000 ₽") || !strings.Contains(card, "3 600 ₽") {
 		t.Errorf("в карточке нет обеих цен:\n%s", card)
 	}
 	if !strings.Contains(card, "%") {

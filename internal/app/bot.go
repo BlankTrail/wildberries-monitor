@@ -3,13 +3,16 @@
 package app
 
 import (
+	"archive/zip"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"time"
 
 	"github.com/BlankTrail/wildberries-monitor/internal/export"
+	"github.com/BlankTrail/wildberries-monitor/internal/job"
 	"github.com/BlankTrail/wildberries-monitor/internal/store"
 	"github.com/BlankTrail/wildberries-monitor/internal/telegram"
 	"github.com/BlankTrail/wildberries-monitor/wb"
@@ -41,7 +44,7 @@ func (b botJobs) List(ctx context.Context) ([]telegram.JobSummary, error) {
 		out = append(out, telegram.JobSummary{
 			ID:      j.ID,
 			Name:    jobName(j),
-			Kind:    j.Type,
+			Kind:    job.Label(job.Kind(j.Type)),
 			Running: j.Running,
 			Done:    j.Done,
 			Total:   j.Total,
@@ -95,9 +98,64 @@ func (a *App) botExport(ctx context.Context, format string) (string, string, err
 		return "", "", err
 	}
 
-	caption := fmt.Sprintf("Результаты на %s, формат %s: %d строк.",
-		time.Now().Format("02.01.2006 15:04"), ext, rows)
-	return path, caption, nil
+	caption := fmt.Sprintf("Результаты на %s, формат %s: %d %s.",
+		time.Now().Format("02.01.2006 15:04"), ext, rows, plural(rows, "строка", "строки", "строк"))
+
+	// Telegram takes a bot's file up to 50 MB. The results of a big run were
+	// 107 MB of CSV, refused with a 413 the person never heard about
+	// (10.10.2026): zipped, a table like that is a fraction of itself.
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", "", err
+	}
+	if info.Size() <= botFileLimit {
+		return path, caption, nil
+	}
+	zipped, err := zipOne(path)
+	if err != nil {
+		return "", "", err
+	}
+	if info, err := os.Stat(zipped); err != nil {
+		return "", "", err
+	} else if info.Size() > botFileLimit {
+		return "", "", fmt.Errorf("выгрузка слишком большая для Telegram даже в архиве (%d МБ, предел 50 МБ) — "+
+			"скачайте её в панели, на вкладке «Результаты», или сузьте условия там", info.Size()>>20)
+	}
+	return zipped, caption + " В архиве: целиком файл больше 50 МБ, которые Telegram принимает от бота.", nil
+}
+
+// botFileLimit is the largest file Telegram takes from a bot, with a margin.
+const botFileLimit = 49 << 20
+
+// zipOne packs one file into a .zip beside it and returns the archive's path.
+func zipOne(path string) (string, error) {
+	out := path + ".zip"
+	f, err := os.Create(out)
+	if err != nil {
+		return "", err
+	}
+	zw := zip.NewWriter(f)
+	src, err := os.Open(path)
+	if err != nil {
+		_ = f.Close()
+		return "", err
+	}
+	defer src.Close()
+	w, err := zw.Create(filepath.Base(path))
+	if err == nil {
+		_, err = io.Copy(w, src)
+	}
+	if err == nil {
+		err = zw.Close()
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		_ = os.Remove(out)
+		return "", err
+	}
+	return out, nil
 }
 
 // exportTo writes one export and reports how many rows it holds.

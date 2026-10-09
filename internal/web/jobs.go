@@ -37,24 +37,7 @@ import (
 // to job.Kinds and forgotten here renders as its own bare identifier — ugly,
 // visible, and fixed in a minute — rather than silently vanishing from the
 // list of things a user can choose.
-var kindLabels = map[job.Kind]string{
-	job.KindPhrase:    "Поисковая выдача по фразе",
-	job.KindCatalog:   "Товары в категории",
-	job.KindSeller:    "Витрина продавца",
-	job.KindBrand:     "Товары бренда",
-	job.KindArticles:  "Список артикулов",
-	job.KindPhraseAds: "Реклама в выдаче по фразе",
-	job.KindPositions: "Позиции товаров по фразам",
-	job.KindPromotion: "Состав акции",
-	job.KindMainFeed:  "Лента главной страницы",
-	job.KindShelves:   "Полка «Продавец рекомендует»",
-	// Not composable — Composable() leaves it out of the picker — but it is
-	// saved as a job, so it appears in the list like any other, and the list
-	// is what this map is for. Without a line here the tab printed «profile»
-	// in Latin among ten Russian names, which is the exact ugliness the
-	// comment above promises would be fixed in a minute.
-	job.KindProfile: "Профиль: разбор ссылки",
-}
+var kindLabels = job.KindLabels
 
 // kindWhat says what picking a kind will make the job walk.
 //

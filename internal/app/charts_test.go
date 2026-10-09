@@ -78,7 +78,7 @@ func TestCharts_PriceDrawsAPngAndSaysWhatIsInIt(t *testing.T) {
 		t.Errorf("это не PNG (err=%v)", err)
 	}
 
-	for _, want := range []string{"Winter jacket", "BrandCo", "-1257786", "Сейчас"} {
+	for _, want := range []string{"Winter jacket", "BrandCo", "Москва (по умолчанию)", "Сейчас"} {
 		if !strings.Contains(caption, want) {
 			t.Errorf("в подписи нет %q:\n%s", want, caption)
 		}
@@ -95,10 +95,10 @@ func TestCharts_PriceCaptionNamesTheRegionAndStorefront(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Price: %v", err)
 	}
-	if !strings.Contains(caption, "Регион -1257786") {
+	if !strings.Contains(caption, "Регион: Москва (по умолчанию)") {
 		t.Errorf("подпись без региона:\n%s", caption)
 	}
-	if !strings.Contains(caption, "витрина 1") {
+	if !strings.Contains(caption, "сайт") {
 		t.Errorf("подпись без витрины:\n%s", caption)
 	}
 }
@@ -218,7 +218,7 @@ func TestDescribe_FallsBackToTheNumberWhenThereIsNoTitle(t *testing.T) {
 func TestWhere_SaysSoWhenThereWasNoRegion(t *testing.T) {
 	// An empty dest is a real state — SaveProduct writes it for a reading that
 	// carried no region — and rendered as "Регион ." it reads like a defect.
-	got := where(store.ProductRow{})
+	got := where(store.ProductRow{}, nil)
 	if strings.Contains(got, "Регион ,") || strings.Contains(got, "Регион .") {
 		t.Errorf("where = %q", got)
 	}
@@ -231,7 +231,7 @@ func TestMoney_SaysSoWhenThereIsNoPrice(t *testing.T) {
 	if got := money(nil, "RUB"); strings.Contains(got, "0") {
 		t.Errorf("money(nil) = %q — ноль вместо отсутствия цены", got)
 	}
-	if got := money(ptrTo(int64(234950)), "RUB"); !strings.Contains(got, "2349.50") {
+	if got := money(ptrTo(int64(234950)), "RUB"); !strings.Contains(got, "2 349,50 ₽") {
 		t.Errorf("money = %q", got)
 	}
 }
