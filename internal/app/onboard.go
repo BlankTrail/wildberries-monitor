@@ -4,10 +4,12 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
+	"github.com/BlankTrail/wildberries-monitor/internal/bench"
 	"github.com/BlankTrail/wildberries-monitor/internal/job"
 	"github.com/BlankTrail/wildberries-monitor/internal/phrase"
 	"github.com/BlankTrail/wildberries-monitor/internal/store"
@@ -778,7 +780,15 @@ func (a *App) profileRivals(ctx context.Context, p store.ProfileRow) error {
 	if err != nil {
 		return err
 	}
-	a.Log.Printf("профиль %q: сбор завершён — рабочих фраз %d, конкурентов %d",
-		p.Name, len(working), len(found))
+	// And the comparison, from the same pages: the chain ended with the
+	// competitors found and the comparison screen saying «Срез не считался»
+	// until somebody pressed its button (09.10.2026). Not the chain's failure
+	// when it cannot be built — the button stays for that.
+	compared, err := bench.Recompute(ctx, a.Store, p.ID)
+	if err != nil && !errors.Is(err, bench.ErrNothingToCompare) {
+		a.Log.Printf("профиль %q: сравнение не посчитано: %v", p.Name, err)
+	}
+	a.Log.Printf("профиль %q: сбор завершён — рабочих фраз %d, конкурентов %d, сравнений %d",
+		p.Name, len(working), len(found), compared)
 	return a.Store.SetProfileStage(ctx, p.ID, store.StageDone, 0, 0)
 }

@@ -965,3 +965,67 @@ func TestSaveBenchmarks_KeepsThePhotographComparison(t *testing.T) {
 			rows[0].PhotoCount, rows[0].RivalPhotoCount)
 	}
 }
+
+func TestTopOfSearch_APriceThatHeldIsStillMyPrice(t *testing.T) {
+	// A snapshot is written when something in it changed. The afternoon's
+	// search found the product where the morning's did, at the same price —
+	// so there was no snapshot at the afternoon's instant, and the comparison
+	// showed «—» for its price beside a place it did know (09.10.2026).
+	s := openTestStore(t)
+	ctx := context.Background()
+	morning := time.Date(2026, 8, 20, 9, 0, 0, 0, time.UTC)
+	for _, at := range []time.Time{morning, morning.Add(5 * time.Hour)} {
+		p := sampleProduct()
+		p.ID, p.Rank, p.Dest, p.FetchedAt = 100, 1, "-1257786", at
+		if _, err := s.SaveSearchPage(ctx, wb.Envelope{Products: []wb.Product{p}}, "платье", 0); err != nil {
+			t.Fatalf("SaveSearchPage: %v", err)
+		}
+	}
+	afternoon := morning.Add(5 * time.Hour).Unix()
+	if n, _ := s.CountForTest(ctx, `SELECT COUNT(*) FROM snapshots WHERE ts = ?`, afternoon); n != 0 {
+		t.Skipf("снимок записан и в неизменной цене (%d) — случай не воспроизведён", n)
+	}
+
+	top, err := s.TopOfSearch(ctx, "платье", "-1257786", 10)
+	if err != nil || len(top) != 1 {
+		t.Fatalf("TopOfSearch = %v, %v", top, err)
+	}
+	if top[0].TS != afternoon {
+		t.Fatalf("чтение %d, ожидалось дневное %d", top[0].TS, afternoon)
+	}
+	if top[0].Price == nil {
+		t.Error("цена пропала: в момент поиска снимка не было, а утренний — тот же")
+	}
+	if st, ok, err := s.StandingOf(ctx, 100, "платье", "-1257786"); err != nil || !ok || st.Price == nil {
+		t.Errorf("StandingOf = %+v, %v, %v; want the price that held", st, ok, err)
+	}
+}
+
+func TestSaveBenchmarks_TheSameMomentComputedAgainIsReplaced(t *testing.T) {
+	// A comparison computed while the query missed a price that held stayed
+	// «—» after the query was mended: the same moment, kept as first written
+	// (09.10.2026). Another moment is history and stays beside it.
+	s := openTestStore(t)
+	ctx := context.Background()
+	id, err := s.SaveProfile(ctx, ProfileRow{Name: "мой", SourceInput: "141504066"})
+	if err != nil {
+		t.Fatalf("SaveProfile: %v", err)
+	}
+	row := func(ts int64, price *int64) BenchmarkRow {
+		return BenchmarkRow{ProfileID: id, NmID: 100, Query: "платье", Dest: "-1257786", TS: ts,
+			Baseline: BaselineMedian, Currency: "RUB", Price: price}
+	}
+	price := int64(99400)
+	for _, rows := range [][]BenchmarkRow{{row(1000, nil)}, {row(1000, &price)}, {row(2000, &price)}} {
+		if err := s.SaveBenchmarks(ctx, rows); err != nil {
+			t.Fatalf("SaveBenchmarks: %v", err)
+		}
+	}
+	if n, _ := s.CountForTest(ctx, `SELECT COUNT(*) FROM benchmarks WHERE profile_id = ?`, id); n != 2 {
+		t.Errorf("сравнений %d, ожидались два момента", n)
+	}
+	if n, _ := s.CountForTest(ctx, `SELECT COUNT(*) FROM benchmarks WHERE profile_id = ? AND ts = 1000 AND price = ?`,
+		id, price); n != 1 {
+		t.Error("пересчёт того же момента не заменил записанное: цена осталась пустой")
+	}
+}

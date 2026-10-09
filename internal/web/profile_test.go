@@ -358,6 +358,9 @@ func TestCompetitors_AreRecomputedFromWhatWasCollected(t *testing.T) {
 	if !strings.Contains(body, "200") || !strings.Contains(body, "300") {
 		t.Error("соседи не показаны")
 	}
+	if !strings.Contains(body, "товар<span class=\"bt-sub\">ID 200</span>") {
+		t.Error("сосед показан голым артикулом, без названия")
+	}
 	// Ours is not its own competitor.
 	list, err := srv.Store.Competitors(ctx, id)
 	if err != nil {

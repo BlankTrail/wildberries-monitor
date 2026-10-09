@@ -1134,8 +1134,18 @@ func (s *Server) competitorsHTML(r *http.Request, p store.ProfileRow) string {
 			`Нужны рабочие фразы и собранная по ним выдача — тогда «Пересчитать» найдёт соседей.</div>`)
 	} else {
 		b.WriteString(`<div class="bt-table-wrap"><table class="bt-table"><thead><tr>` +
-			`<th>Артикул</th><th class="bt-num">В скольких фразах</th><th class="bt-num">Разница мест</th>` +
+			`<th>Товар</th><th class="bt-num">В скольких фразах</th><th class="bt-num">Разница мест</th>` +
 			`<th>Состояние</th><th></th></tr></thead><tbody>`)
+		ids := make([]int64, len(list))
+		for i, c := range list {
+			ids[i] = c.EntityID
+		}
+		// By name, with the article under it: a column of bare numbers named
+		// nobody, and «кто мой конкурент» is the question the table is for.
+		names, err := s.Store.ProductNames(ctx, ids)
+		if err != nil {
+			names = map[int64]string{}
+		}
 		for _, c := range list {
 			delta := "—"
 			if c.PositionDelta != nil {
@@ -1148,8 +1158,12 @@ func (s *Server) competitorsHTML(r *http.Request, p store.ProfileRow) string {
 			case c.Pinned:
 				state = `<span class="bt-badge bt-badge--success bt-badge--sm">закреплён</span>`
 			}
-			fmt.Fprintf(&b, `<tr><td class="bt-mono">%d</td><td class="bt-num">%d</td><td class="bt-num">%s</td><td>%s</td><td class="bt-row-actions">%s%s</td></tr>`,
-				c.EntityID, c.Adjacency, delta, state,
+			who := fmt.Sprintf(`<span class="bt-mono">%d</span>`, c.EntityID)
+			if name := names[c.EntityID]; name != "" {
+				who = html.EscapeString(name) + fmt.Sprintf(`<span class="bt-sub">ID %d</span>`, c.EntityID)
+			}
+			fmt.Fprintf(&b, `<tr><td>%s</td><td class="bt-num">%d</td><td class="bt-num">%s</td><td>%s</td><td class="bt-row-actions">%s%s</td></tr>`,
+				who, c.Adjacency, delta, state,
 				action(fmt.Sprintf("/profile/competitors/pin?id=%d&entity=%d&on=%t", p.ID, c.EntityID, !c.Pinned),
 					"#profile-body", pinLabel(c.Pinned)),
 				action(fmt.Sprintf("/profile/competitors/exclude?id=%d&entity=%d&on=%t", p.ID, c.EntityID, !c.Excluded),

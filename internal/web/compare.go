@@ -3,6 +3,7 @@
 package web
 
 import (
+	"errors"
 	"fmt"
 	"html"
 	"net/http"
@@ -140,7 +141,7 @@ func copiesSection(cs []store.CopyCandidate) string {
 		}
 		// Side by side, both as pictures: whether the photographs were lifted
 		// with the title is the first thing to look at.
-		b.WriteString(`<tr>` + productCell(c.Mine, "", wb.DefaultEndpoints().CardPageURL(c.Mine)) +
+		b.WriteString(`<tr>` + productCell(c.Mine, c.MyName, wb.DefaultEndpoints().CardPageURL(c.Mine)) +
 			productCell(c.Copy, c.CopyName, wb.DefaultEndpoints().CardPageURL(c.Copy)))
 		fmt.Fprintf(&b, `<td>%s</td><td class="bt-num">%.0f%%</td><td class="bt-num">%s</td><td class="bt-num">%s</td></tr>`,
 			html.EscapeString(c.CopySeller), c.Similarity*100, html.EscapeString(price), html.EscapeString(mine))
@@ -361,87 +362,19 @@ func (s *Server) recompare(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "compare: which profile?", http.StatusBadRequest)
 		return
 	}
-	ctx := r.Context()
-
-	mine, err := s.Store.ProfileItems(ctx, id, store.ProfileProduct)
-	if err != nil {
-		http.Error(w, "compare: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-	working, err := s.Store.ProfilePhrases(ctx, id, store.PhraseWorking)
-	if err != nil {
-		http.Error(w, "compare: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if len(mine) == 0 || len(working) == 0 {
+	n, err := bench.Recompute(r.Context(), s.Store, id)
+	switch {
+	case errors.Is(err, bench.ErrNothingToCompare):
 		s.compareFragment(w, r, alert("neutral",
 			"Сравнивать нечего: нужны товары профиля и рабочие фразы."))
 		return
-	}
-
-	rivals, err := s.Store.Competitors(ctx, id)
-	if err != nil {
+	case err != nil:
 		http.Error(w, "compare: "+err.Error(), http.StatusInternalServerError)
 		return
-	}
-	var pinned []int64
-	for _, c := range rivals {
-		if c.Pinned && !c.Excluded {
-			pinned = append(pinned, c.EntityID)
-		}
-	}
-
-	var rows []store.BenchmarkRow
-	for _, ph := range working {
-		if ph.NmID == 0 || ph.Dest == "" {
-			// A candidate that has not been tied to a listing yet: there is no
-			// «my place» for it, and a comparison without one is not a
-			// comparison.
-			continue
-		}
-		top, err := s.Store.TopOfSearch(ctx, ph.Text, ph.Dest, compareTopK)
-		if err != nil {
-			http.Error(w, "compare: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-		own, ok, err := s.Store.StandingOf(ctx, ph.NmID, ph.Text, ph.Dest)
-		if err != nil {
-			http.Error(w, "compare: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-		if !ok || len(top) == 0 {
-			continue
-		}
-
-		var rivalStandings []store.SearchStanding
-		for _, nm := range pinned {
-			st, ok, err := s.Store.StandingOf(ctx, nm, ph.Text, ph.Dest)
-			if err != nil {
-				http.Error(w, "compare: "+err.Error(), http.StatusInternalServerError)
-				return
-			}
-			if ok {
-				rivalStandings = append(rivalStandings, st)
-			}
-		}
-		rows = append(rows, bench.Compare(id, ph.Text, ph.Dest, own, top, rivalStandings)...)
-	}
-
-	if err := s.Store.SaveBenchmarks(ctx, rows); err != nil {
-		http.Error(w, "compare: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if len(rows) == 0 {
+	case n == 0:
 		s.compareFragment(w, r, alert("neutral",
 			"Не из чего считать: по рабочим фразам ещё не собрана выдача."))
 		return
 	}
-	s.compareFragment(w, r, alert("success", fmt.Sprintf("Срез пересчитан: сравнений %d.", len(rows))))
+	s.compareFragment(w, r, alert("success", fmt.Sprintf("Срез пересчитан: сравнений %d.", n)))
 }
-
-// compareTopK is how much of the page the median is taken over.
-//
-// Ten, because that is what a shopper sees before deciding: comparing against
-// the median of a hundred listings would answer a question about the whole
-// category rather than about the seat somebody is trying to take.
-const compareTopK = 10

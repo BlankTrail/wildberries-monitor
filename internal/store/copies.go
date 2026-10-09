@@ -41,6 +41,9 @@ type CopyCandidate struct {
 	Mine, Copy int64
 	// Similarity is the share of words in common, 0..1.
 	Similarity float64
+	// MyName is what my product is called: the screen showed my side as a
+	// bare article beside the copy's full title (09.10.2026).
+	MyName     string
 	CopyName   string
 	CopyBrand  string
 	CopySeller string
@@ -111,7 +114,7 @@ func (s *Store) CopiesOfMine(ctx context.Context, firstSeenAfter int64) ([]CopyC
 				continue
 			}
 			out = append(out, CopyCandidate{
-				Mine: m.nm, Copy: o.nm, Similarity: sim,
+				Mine: m.nm, Copy: o.nm, Similarity: sim, MyName: m.name,
 				CopyName: o.name, CopyBrand: o.brand, CopySeller: o.seller, FirstSeenAt: o.firstSeen,
 			})
 		}

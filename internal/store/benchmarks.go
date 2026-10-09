@@ -100,6 +100,10 @@ type BenchmarkRow struct {
 // rather than a running total: «в понедельник я отставал на два места» is a
 // fact, and overwriting it with Tuesday's would throw away the only thing
 // that shows whether anything is being done about it.
+//
+// The same moment computed again replaces what it said before: it is the same
+// reading, read better. Kept as it was, a comparison computed while the query
+// missed a price that held stayed «—» after the query was mended (09.10.2026).
 func (s *Store) SaveBenchmarks(ctx context.Context, rows []BenchmarkRow) error {
 	if len(rows) == 0 {
 		return nil
@@ -128,7 +132,34 @@ func (s *Store) SaveBenchmarks(ctx context.Context, rows []BenchmarkRow) error {
 				has_ad, rival_has_ad,
 				in_promo, rival_in_promo
 			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-			ON CONFLICT (profile_id, nm_id, query, dest, ts, baseline, baseline_id) DO NOTHING`,
+			ON CONFLICT (profile_id, nm_id, query, dest, ts, baseline, baseline_id) DO UPDATE SET
+				position_organic = excluded.position_organic,
+				rival_position_organic = excluded.rival_position_organic,
+				price = excluded.price,
+				rival_price = excluded.rival_price,
+				currency = excluded.currency,
+				discount_pct = excluded.discount_pct,
+				rival_discount_pct = excluded.rival_discount_pct,
+				rating = excluded.rating,
+				rival_rating = excluded.rival_rating,
+				feedbacks = excluded.feedbacks,
+				rival_feedbacks = excluded.rival_feedbacks,
+				feedbacks_per_day = excluded.feedbacks_per_day,
+				rival_feedbacks_per_day = excluded.rival_feedbacks_per_day,
+				total_quantity = excluded.total_quantity,
+				rival_total_quantity = excluded.rival_total_quantity,
+				delivery_time2 = excluded.delivery_time2,
+				rival_delivery_time2 = excluded.rival_delivery_time2,
+				description_len = excluded.description_len,
+				rival_description_len = excluded.rival_description_len,
+				options_filled_pct = excluded.options_filled_pct,
+				rival_options_filled_pct = excluded.rival_options_filled_pct,
+				photo_count = excluded.photo_count,
+				rival_photo_count = excluded.rival_photo_count,
+				has_ad = excluded.has_ad,
+				rival_has_ad = excluded.rival_has_ad,
+				in_promo = excluded.in_promo,
+				rival_in_promo = excluded.rival_in_promo`,
 			r.ProfileID, r.NmID, r.Query, r.Dest, r.TS, r.Baseline, r.BaselineID,
 			r.PositionOrganic, r.RivalPositionOrganic,
 			r.Price, r.RivalPrice, r.Currency,
@@ -248,6 +279,17 @@ var wasAdvertised = `EXISTS (
 		             AND sh.dest = p.dest
 		             AND sh.ts BETWEEN p.ts - ` + adWindowSeconds + ` AND p.ts + ` + adWindowSeconds + `
 		       )`
+
+// standingSnapshot is the product's reading as it stood at the position: the
+// newest snapshot at or before it.
+//
+// Not the one at the same instant. A snapshot is written when something in it
+// changed, so a price that held since the morning has no row at the moment of
+// the afternoon's search — and the comparison showed «—» for my price, my
+// rating and my reviews beside a place it did know (09.10.2026).
+const standingSnapshot = `SELECT sn.id FROM snapshots sn
+		           WHERE sn.nm_id = p.nm_id AND sn.dest = p.dest AND sn.ts <= p.ts
+		           ORDER BY sn.ts DESC LIMIT 1`
 
 // adWindowSeconds is adWindow as the queries above splice it in — one source
 // of truth for the span, whichever of the two forms is being read.
@@ -527,7 +569,7 @@ func (s *Store) TopOfSearch(ctx context.Context, query, dest string, limit int) 
 		       `+inPromotion+`
 		FROM positions p
 		JOIN latest l ON l.ts = p.ts
-		LEFT JOIN snapshots s ON s.nm_id = p.nm_id AND s.dest = p.dest AND s.ts = p.ts
+		LEFT JOIN snapshots s ON s.id = (`+standingSnapshot+`)
 		LEFT JOIN products pr ON pr.nm_id = p.nm_id
 		WHERE p.query = ? AND p.dest = ?
 		ORDER BY p.rank
@@ -588,7 +630,7 @@ func (s *Store) StandingOf(ctx context.Context, nmID int64, query, dest string) 
 		       `+inPromotion+`
 		FROM positions p
 		JOIN latest l ON l.ts = p.ts
-		LEFT JOIN snapshots s ON s.nm_id = p.nm_id AND s.dest = p.dest AND s.ts = p.ts
+		LEFT JOIN snapshots s ON s.id = (`+standingSnapshot+`)
 		LEFT JOIN products pr ON pr.nm_id = p.nm_id
 		WHERE p.query = ? AND p.dest = ? AND p.nm_id = ?`,
 		query, dest, query, dest, nmID).

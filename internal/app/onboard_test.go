@@ -1676,3 +1676,39 @@ func TestResolveProfile_TheAnswersGivenWithTheLinkReachTheFirstRun(t *testing.T)
 		t.Errorf("разбор ссылки идёт по регионам %v, просили два", made.Regions)
 	}
 }
+
+func TestProfileRivals_TheChainEndsWithTheComparisonBuilt(t *testing.T) {
+	// The chain ended with competitors found and the comparison screen saying
+	// «Срез не считался» until somebody pressed its button (09.10.2026).
+	a := newApp(t)
+	ctx := t.Context()
+	p := aProfile(t, a, 4242)
+	if err := a.Store.AddProfileItem(ctx, p.ID, store.ProfileProduct, 100); err != nil {
+		t.Fatalf("AddProfileItem: %v", err)
+	}
+	if _, err := a.Store.CheckedPhrase(ctx, p.ID, "платье", 100, "-1257786", 8, 100); err != nil {
+		t.Fatalf("CheckedPhrase: %v", err)
+	}
+	at := time.Now().Add(-time.Minute)
+	var listings []wb.Product
+	for i, nm := range []int64{200, 300, 100} {
+		listings = append(listings, wb.Product{
+			ID: nm, Name: "товар", Dest: "-1257786", AppType: 1, Rank: i + 1, Page: 1, FetchedAt: at,
+			Sizes: []wb.Size{{Name: "M", PriceProduct: ptrTo(int64(100000 + i*1000))}},
+		})
+	}
+	if _, err := a.Store.SaveSearchPage(ctx, wb.Envelope{Products: listings}, "платье", 0); err != nil {
+		t.Fatalf("SaveSearchPage: %v", err)
+	}
+
+	if err := a.profileRivals(ctx, p); err != nil {
+		t.Fatalf("profileRivals: %v", err)
+	}
+	rows, err := a.Store.Benchmarks(ctx, p.ID)
+	if err != nil {
+		t.Fatalf("Benchmarks: %v", err)
+	}
+	if len(rows) == 0 {
+		t.Error("цепочка закончилась без среза сравнения")
+	}
+}

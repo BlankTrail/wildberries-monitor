@@ -51,7 +51,7 @@ func TestCopiesOfMine_FindsTheLookalikeOfAnotherSeller(t *testing.T) {
 	c := got[0]
 	if c.Mine != 1 || c.Copy != 2 || c.Similarity != 1 || c.CopyBrand != "Бета" || c.CopySeller != "Продавец Бета" ||
 		c.MyPrice != 250000 || c.CopyPrice != 190000 || c.Currency != "RUB" || c.FirstSeenAt != at.Add(time.Hour).Unix() ||
-		c.CopyName == "" {
+		c.CopyName == "" || c.MyName == "" {
 		t.Errorf("candidate = %+v", c)
 	}
 
