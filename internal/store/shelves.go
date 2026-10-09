@@ -67,11 +67,48 @@ const (
 //
 // It returns how many slots were recorded across every shelf in the reading.
 func (s *Store) SaveShelves(ctx context.Context, sh wb.Shelves) (int, error) {
+	return s.saveShelvesAt(ctx, sh, s.now().UTC().Unix())
+}
+
+// SaveAds is SaveShelves for a job that collects the paid placements, plus
+// every advertised product as a reading of that job, dated to the same second
+// as its shelf.
+//
+// The placements alone were all that was kept, and nothing on any screen read
+// them: «Результаты» of a «Реклама в выдаче» job said «ничего не собрано» over
+// ten shelves and fifty-two products, and the columns «Полка» and «Место на
+// полке» were empty for every reading there was (09.10.2026). The products on
+// a shelf are whole listings — the same decoder as a search page — so they are
+// readings like any other; ProductRow joins the shelf back onto them.
+func (s *Store) SaveAds(ctx context.Context, sh wb.Shelves, jobID int64) (int, error) {
+	now := s.now().UTC()
+	for _, group := range [][]wb.Shelf{sh.Banners, sh.Shelves} {
+		for _, shelf := range group {
+			for _, p := range shelf.Products {
+				if p.Dest == "" {
+					p.Dest = sh.Dest
+				}
+				if p.AppType == 0 {
+					p.AppType = sh.AppType
+				}
+				p.FetchedAt = now
+				if _, err := s.SaveProduct(ctx, p, "", jobID); err != nil {
+					return 0, fmt.Errorf("store: save ads: product %d: %w", p.ID, err)
+				}
+				if err := s.LinkJobProduct(ctx, jobID, p.ID); err != nil {
+					return 0, err
+				}
+			}
+		}
+	}
+	return s.saveShelvesAt(ctx, sh, now.Unix())
+}
+
+func (s *Store) saveShelvesAt(ctx context.Context, sh wb.Shelves, ts int64) (int, error) {
 	source, key, err := shelfSourceOf(sh)
 	if err != nil {
 		return 0, err
 	}
-	ts := s.now().UTC().Unix()
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {

@@ -735,6 +735,7 @@ func (a *App) Tick(ctx context.Context) {
 	}
 
 	a.runDue(ctx)
+	a.resumeInterrupted(ctx)
 
 	// After the runs are started and before the queue is looked at again next
 	// round: what a finished run collected becomes changes, changes meet the
@@ -766,6 +767,33 @@ func (a *App) Tick(ctx context.Context) {
 	// neither was ever called, which is the one omission the spec itself calls
 	// «решение, без которого продукт разваливается через месяц».
 	a.maintain(ctx)
+}
+
+// resumeInterrupted starts again every job whose run the last stop left open.
+//
+// The runner resumes a run it finds unfinished, item by item, so this carries
+// on from where the stop interrupted it. The guide promised it and only the
+// profile chain did it: an ordinary job stayed at «идёт 4 из 5» with nothing
+// behind it until somebody pressed «Запустить» (09.10.2026).
+func (a *App) resumeInterrupted(ctx context.Context) {
+	if a.Scheduler == nil {
+		return
+	}
+	list, err := a.Store.Jobs(ctx)
+	if err != nil {
+		a.Log.Printf("прерванные задания: %v", err)
+		return
+	}
+	for _, j := range list {
+		if !a.orphaned(ctx, j.ID) {
+			continue
+		}
+		if err := a.StartJob(ctx, j.ID); err != nil {
+			a.Log.Printf("задание %d было прервано, поднять не удалось: %v", j.ID, err)
+			continue
+		}
+		a.Log.Printf("задание %d было прервано остановкой программы, продолжаем", j.ID)
+	}
 }
 
 // Close releases everything, once.

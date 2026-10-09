@@ -158,10 +158,27 @@ func (a *App) StopJob(id int64) error {
 	if a.Scheduler == nil {
 		return errors.New("сбор не собран в этой сборке")
 	}
-	if !a.Scheduler.Stop(id) {
-		return ErrNotRunning
+	if a.Scheduler.Stop(id) {
+		return nil
 	}
-	return nil
+	// Not running in this process — but a run the last stop of the program
+	// left open is still going as far as the next tick is concerned, and
+	// resumeInterrupted would start it again. Closed here as stopped, which
+	// is what the press asked for (09.10.2026).
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if a.orphaned(ctx, id) {
+		runs, err := a.Store.Runs(ctx, id, 1)
+		if err == nil && len(runs) > 0 {
+			if err := a.Store.FinishRun(ctx, runs[0].ID, store.RunOutcome{
+				State: store.RunStopped, Error: job.ErrStopped.Error(),
+			}); err != nil {
+				return err
+			}
+			return nil
+		}
+	}
+	return ErrNotRunning
 }
 
 // runJob is one run, from the goroutine that owns it.

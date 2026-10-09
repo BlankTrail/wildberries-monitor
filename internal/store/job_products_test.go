@@ -136,3 +136,23 @@ func TestLinkJobProduct_ASaveWithNoJobBehindItRecordsNothing(t *testing.T) {
 		t.Errorf("связь без задания всё же записана: %v", jobs)
 	}
 }
+
+func TestLinkJobProducts_APageIsOneWrite(t *testing.T) {
+	// A page linked its hundred products one autocommit at a time. At five
+	// hundred threads that was tens of thousands of commits queueing for the
+	// one write lock, and pages already fetched were lost to «database is
+	// locked» (09.10.2026). One page, one transaction.
+	s := openTestStore(t)
+	ctx := t.Context()
+	id := linkable(t, s, 100, 101, 102)
+	if err := s.LinkJobProducts(ctx, id, []int64{100, 101, 102, 0, 101}); err != nil {
+		t.Fatalf("LinkJobProducts: %v", err)
+	}
+	n, err := s.CountForTest(ctx, `SELECT COUNT(*) FROM job_products WHERE job_id = ?`, id)
+	if err != nil {
+		t.Fatalf("CountForTest: %v", err)
+	}
+	if n != 3 {
+		t.Errorf("привязано %d, ожидалось 3 — по одному на товар, без нуля", n)
+	}
+}

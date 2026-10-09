@@ -1493,3 +1493,39 @@ func TestProducts_JoiningAPromotionIsWorthItsOwnReading(t *testing.T) {
 		t.Errorf("снимков %d — вход в акцию не записался как изменение", n)
 	}
 }
+
+func TestProducts_TheJobFilterKeepsWhatAJobConfirmedUnchanged(t *testing.T) {
+	// A reading that matches the last one is not written again — that is what
+	// keeps history small. But «результаты задания» read only the rows a job
+	// wrote, so a job that walked the same pages minutes after another showed
+	// almost nothing: 400 pages, 38 767 products, 463 rows on its results
+	// screen (WB Monitor overview, 09.10.2026). What the job saw is the reading
+	// that stood when it looked, whoever wrote it — in the job's own regions.
+	s := openTestStore(t)
+	ctx := context.Background()
+	at := time.Date(2026, 8, 24, 9, 0, 0, 0, time.UTC)
+
+	first, err := s.SaveJob(ctx, JobRow{Name: "первое", Type: "phrase", Threads: 1, Regions: `["-1257786"]`})
+	if err != nil {
+		t.Fatalf("SaveJob: %v", err)
+	}
+	second, err := s.SaveJob(ctx, JobRow{Name: "второе", Type: "phrase", Threads: 1, Regions: `["-1257786"]`})
+	if err != nil {
+		t.Fatalf("SaveJob: %v", err)
+	}
+	saveReading2(t, s, readingAt(100, "-1257786", 1, 43000, at), first)
+	saveReading2(t, s, readingAt(100, "-364764", 1, 45000, at), first) // not the second job's region
+	if err := s.LinkJobProduct(ctx, first, 100); err != nil {
+		t.Fatalf("LinkJobProduct: %v", err)
+	}
+	// The second job reads the same product a few minutes later: unchanged.
+	saveReading2(t, s, readingAt(100, "-1257786", 1, 43000, at.Add(5*time.Minute)), second)
+	if err := s.LinkJobProduct(ctx, second, 100); err != nil {
+		t.Fatalf("LinkJobProduct: %v", err)
+	}
+
+	got := collectSeq(t, "Products", s.Products(ctx, ProductFilter{JobID: &second}))
+	if len(got) != 1 || got[0].NmID != 100 || got[0].Dest != "-1257786" {
+		t.Fatalf("получено %d строк %+v — ожидалось одно показание, которое задание подтвердило", len(got), got)
+	}
+}

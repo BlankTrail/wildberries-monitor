@@ -39,7 +39,7 @@ func TestValidate_ReportsEveryProblemAtOnce(t *testing.T) {
 	if err == nil {
 		t.Fatal("Validate accepted an empty job")
 	}
-	for _, want := range []string{"kind", "regions", "fields"} {
+	for _, want := range []string{"вид задания", "регион", "поля"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the message does not mention %q: %v", want, err)
 		}
@@ -73,7 +73,7 @@ func TestValidate_RefusesAPhraseJobWithNoPageLimit(t *testing.T) {
 	if err == nil {
 		t.Fatal("Validate accepted a phrase job with no page limit")
 	}
-	if !strings.Contains(err.Error(), "page limit") {
+	if !strings.Contains(err.Error(), "страниц") {
 		t.Errorf("the message does not name the page limit: %v", err)
 	}
 
@@ -110,11 +110,11 @@ func TestValidate_EachKindRefusesAJobMissingItsOwnParameter(t *testing.T) {
 		kind Kind
 		want string
 	}{
-		{KindPhrase, "phrases"},
-		{KindPhraseAds, "phrases"},
-		{KindSeller, "supplier"},
-		{KindBrand, "brand"},
-		{KindArticles, "article"},
+		{KindPhrase, "фраз"},
+		{KindPhraseAds, "фраз"},
+		{KindSeller, "продавец"},
+		{KindBrand, "бренд"},
+		{KindArticles, "артикул"},
 	} {
 		j := Job{
 			Kind: tc.kind, Regions: []string{"-1257786"},
@@ -180,10 +180,11 @@ func TestEstimate_AdsArePricedPerPhraseAndRegionNotPerProduct(t *testing.T) {
 	if e.Items != 0 {
 		t.Errorf("Items = %d, want 0 — this kind's cost does not multiply by the size of the result", e.Items)
 	}
-	// Two phrases times two regions for the walk, and the shelf field costs
-	// one per phrase and region again.
-	if e.Requests != 8 {
-		t.Errorf("Requests = %d, want 8 (2 phrases x 2 regions, walk plus field)", e.Requests)
+	// Two phrases times two regions, and nothing again for the shelf field:
+	// the shelves are the walk itself, one request per phrase and region. It
+	// was quoted twice — eight here — for a run that makes four.
+	if e.Requests != 4 {
+		t.Errorf("Requests = %d, want 4 (2 phrases x 2 regions — the walk is the shelf fetch)", e.Requests)
 	}
 }
 
@@ -308,13 +309,13 @@ func TestPositions_NeedsBothHalvesOfItsQuestion(t *testing.T) {
 
 	withPhrases := base
 	withPhrases.Phrases = []string{"кроссовки"}
-	if err := withPhrases.Validate(); err == nil || !strings.Contains(err.Error(), "article") {
+	if err := withPhrases.Validate(); err == nil || !strings.Contains(err.Error(), "артикул") {
 		t.Errorf("без артикулов: %v", err)
 	}
 
 	withArticles := base
 	withArticles.Articles = []int64{141504066}
-	if err := withArticles.Validate(); err == nil || !strings.Contains(err.Error(), "phrases") {
+	if err := withArticles.Validate(); err == nil || !strings.Contains(err.Error(), "фраз") {
 		t.Errorf("без фраз: %v", err)
 	}
 
@@ -328,7 +329,7 @@ func TestPositions_NeedsBothHalvesOfItsQuestion(t *testing.T) {
 	// paging does not end on its own.
 	unbounded := both
 	unbounded.MaxPages = 0
-	if err := unbounded.Validate(); err == nil || !strings.Contains(err.Error(), "page limit") {
+	if err := unbounded.Validate(); err == nil || !strings.Contains(err.Error(), "страниц") {
 		t.Errorf("без предела страниц: %v", err)
 	}
 }
@@ -608,7 +609,11 @@ func TestEstimate_ShelvesArePricedOnlyWhereTheyAreFetched(t *testing.T) {
 	ads.Kind = KindPhraseAds
 	adsPlain := ads
 	adsPlain.Fields = wb.Selection{"nm_id"}
-	if got, want := ads.Estimate(0).Requests, adsPlain.Estimate(0).Requests; got <= want {
-		t.Errorf("рекламное задание с полками стоит %d, без них %d — полки не посчитаны", got, want)
+	// And an ads job pays for its shelves once, as its walk, whether the
+	// field is ticked or not: the fetch is the same single request per phrase
+	// and region either way (measured: three phrases, three requests,
+	// 09.10.2026). It used to be quoted twice with the field ticked.
+	if got, want := ads.Estimate(0).Requests, adsPlain.Estimate(0).Requests; got != want || got == 0 {
+		t.Errorf("рекламное задание с полками стоит %d, без них %d — а запрос один и тот же", got, want)
 	}
 }

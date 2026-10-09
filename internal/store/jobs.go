@@ -614,6 +614,30 @@ func (s *Store) UnfinishedRun(ctx context.Context, jobID int64) (RunRow, bool, e
 	return r, true, nil
 }
 
+// CloseSupersededRuns closes every unfinished run of a job that a newer run
+// came after, and reports how many it closed.
+//
+// A crash leaves its run open, and a start that fails before planning — no
+// port, no BlankTrail — writes a newer run that closes at once. The old one
+// then sat «running» under it, and the next start resumed it: four hours
+// late, with a run id older than the one the profile chain was waiting past,
+// so the chain waited for ever (09.10.2026). Only the newest run of a job is
+// one a start may carry on.
+func (s *Store) CloseSupersededRuns(ctx context.Context, jobID int64) (int64, error) {
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE job_runs
+		SET state = ?, finished_at = ?, error = ?
+		WHERE job_id = ? AND state = ? AND id <> (
+		    SELECT id FROM job_runs WHERE job_id = ?
+		    ORDER BY started_at DESC, id DESC LIMIT 1)`,
+		RunStopped, s.now().UTC().Unix(), "прервано: после него задание запускалось заново",
+		jobID, RunRunning, jobID)
+	if err != nil {
+		return 0, fmt.Errorf("store: closing superseded runs of job %d: %w", jobID, err)
+	}
+	return res.RowsAffected()
+}
+
 // PendingItems returns a run's items that have not reached a terminal state,
 // in plan order.
 //
@@ -621,6 +645,21 @@ func (s *Store) UnfinishedRun(ctx context.Context, jobID int64) (RunRow, bool, e
 // way, and the item was not done. Retrying it can duplicate work, which is
 // the cheaper of the two mistakes — the alternative is deciding it succeeded
 // on no evidence.
+// RunSoFar is what a run had finished before it was interrupted: items done,
+// items failed, and the attempts the done ones took — the requests, as near as
+// the item rows record them. A resumed run starts its books from here, or a
+// five-page walk resumed for its last page is written down as one page.
+func (s *Store) RunSoFar(ctx context.Context, runID int64) (done, failed, attempts int64, err error) {
+	err = s.db.QueryRowContext(ctx, `
+		SELECT COALESCE(SUM(state = ?), 0), COALESCE(SUM(state = ?), 0),
+		       COALESCE(SUM(CASE WHEN state = ? THEN attempts ELSE 0 END), 0)
+		FROM job_items WHERE run_id = ?`, ItemDone, ItemFailed, ItemDone, runID).Scan(&done, &failed, &attempts)
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("store: what run %d had done: %w", runID, err)
+	}
+	return done, failed, attempts, nil
+}
+
 func (s *Store) PendingItems(ctx context.Context, runID int64) ([]ItemRow, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT position, kind, item_key, state, attempts, error, started_at, finished_at

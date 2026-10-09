@@ -637,3 +637,22 @@ func TestSaveCard_DatesBothHalvesByWhenTheLiveHalfWasFetched(t *testing.T) {
 		t.Errorf("snapshots.ts = %d, want %d", snapshotTS, fetchedAt.Unix())
 	}
 }
+
+func TestSaveCardFor_TheReadingBelongsToTheJob(t *testing.T) {
+	// An article-list job reads nothing but cards. Saved with no job on them,
+	// its results fell back to every reading of the same articles, other jobs'
+	// included (09.10.2026).
+	s := openTestStore(t)
+	ctx := context.Background()
+	freezeClock(s, time.Date(2026, 8, 16, 9, 0, 0, 0, time.UTC))
+	if _, err := s.SaveCardFor(ctx, sampleCardFetch(), 7); err != nil {
+		t.Fatalf("SaveCardFor: %v", err)
+	}
+	n, err := s.CountForTest(ctx, `SELECT COUNT(*) FROM snapshots WHERE job_id = 7`)
+	if err != nil {
+		t.Fatalf("CountForTest: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("показаний задания 7: %d, ожидалось 1", n)
+	}
+}

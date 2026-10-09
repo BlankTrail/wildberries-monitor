@@ -206,6 +206,13 @@ func TestPoolConfig_OpensTheJobsThreadsAndNoMore(t *testing.T) {
 		{-4, portsPerThread}, // and so does nonsense
 		{1, portsPerThread},
 		{4, 4 * portsPerThread},
+		// A big run with no pause between requests: the second port only
+		// idles, while doubling the fresh addresses the solver has to clear
+		// and filling the licence — 500 threads were 1000 ports, all there
+		// were, and every other job was refused (09.10.2026).
+		{500, 500},
+		{bigRun, bigRun},
+		{bigRun - 1, (bigRun - 1) * portsPerThread},
 	} {
 		j := job.Job{Threads: c.threads}
 		if got := poolConfig(nil, j, nil, nil).Size(); got != c.wantPorts {

@@ -67,10 +67,11 @@ func (s *Store) SaveSearchPage(ctx context.Context, env wb.Envelope, query strin
 		return stats, nil
 	}
 
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, done, err := s.beginCollected(ctx)
 	if err != nil {
 		return SaveStats{}, fmt.Errorf("store: save search page: %w", err)
 	}
+	defer done()
 	defer tx.Rollback()
 
 	// One reading of the clock for the whole page, used only as the fallback
@@ -101,10 +102,11 @@ func (s *Store) SaveSearchPage(ctx context.Context, env wb.Envelope, query strin
 // refresh. It is recorded on the row so that «результаты этого задания» can be
 // answered exactly; see migration 0032 for what null in that column means.
 func (s *Store) SaveProduct(ctx context.Context, p wb.Product, query string, jobID int64) (SaveStats, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, done, err := s.beginCollected(ctx)
 	if err != nil {
 		return SaveStats{}, fmt.Errorf("store: save product %d: %w", p.ID, err)
 	}
+	defer done()
 	defer tx.Rollback()
 
 	// Same fallback role as SaveSearchPage's: only used when p carries no
@@ -682,4 +684,34 @@ func (s *Store) Brands(ctx context.Context) ([]BrandRow, error) {
 		return nil, fmt.Errorf("store: brands: %w", err)
 	}
 	return out, nil
+}
+
+// ProductNames is what each of these products is called, for screens that
+// would otherwise show a bare article number. A product the store has no name
+// for is simply absent.
+func (s *Store) ProductNames(ctx context.Context, nmIDs []int64) (map[int64]string, error) {
+	out := make(map[int64]string, len(nmIDs))
+	if len(nmIDs) == 0 {
+		return out, nil
+	}
+	ids, err := json.Marshal(nmIDs)
+	if err != nil {
+		return nil, fmt.Errorf("store: product names: %w", err)
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT nm_id, name FROM products
+		WHERE nm_id IN (SELECT value FROM json_each(?)) AND name <> ''`, string(ids))
+	if err != nil {
+		return nil, fmt.Errorf("store: product names: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int64
+		var name string
+		if err := rows.Scan(&id, &name); err != nil {
+			return nil, fmt.Errorf("store: product names: %w", err)
+		}
+		out[id] = name
+	}
+	return out, rows.Err()
 }

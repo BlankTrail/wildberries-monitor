@@ -777,3 +777,34 @@ func TestDuplicates_RefuseADuplicateNaturalKey(t *testing.T) {
 	execFails(t, s, "a second duplicates row sharing the natural key",
 		`INSERT INTO duplicates (match_id, dest, ts, total) VALUES (55, '-1257786', 1000, 9)`)
 }
+
+func TestSaveAds_TheAdvertisedProductsAreTheJobsResults(t *testing.T) {
+	// The placements alone were kept and nothing read them: «Результаты» of an
+	// ads job said «ничего не собрано» over ten shelves and fifty-two products
+	// (09.10.2026).
+	s := openTestStore(t)
+	ctx := context.Background()
+	freezeClock(s, time.Date(2026, 10, 9, 10, 55, 0, 0, time.UTC))
+	job, err := s.SaveJob(ctx, JobRow{Name: "реклама", Type: "phrase-ads", Threads: 1, Regions: `["-1257786"]`})
+	if err != nil {
+		t.Fatalf("SaveJob: %v", err)
+	}
+	if _, err := s.SaveAds(ctx, oneShelvesReading(), job); err != nil {
+		t.Fatalf("SaveAds: %v", err)
+	}
+	got := collectSeq(t, "Products", s.Products(ctx, ProductFilter{JobID: &job}))
+	if len(got) != 5 {
+		t.Fatalf("строк %d, ожидалось 5 — по одной на рекламный товар", len(got))
+	}
+	for _, r := range got {
+		if r.NmID != 22 {
+			continue
+		}
+		if r.Shelves == nil || *r.Shelves != "Похожие — «кроссовки», место 2" {
+			t.Errorf("полка = %v", r.Shelves)
+		}
+		if r.ShelfPlace == nil || *r.ShelfPlace != 2 {
+			t.Errorf("место = %v, ожидалось 2", r.ShelfPlace)
+		}
+	}
+}

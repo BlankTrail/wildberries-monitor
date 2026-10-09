@@ -838,6 +838,7 @@ func TestValueOf_EveryColumnHasAValueToRead(t *testing.T) {
 		Sizes:       ptr("M; L"), SizeStock: ptr("M: 3; L: 0"),
 		ReviewValuation: ptr(4.8), ReviewCount: ptr(int64(1026)),
 		Rank: ptr(int64(12)), Page: ptr(int64(1)),
+		Shelves: ptr("Похожие — «кроссовки», место 2"), ShelfPlace: ptr(int64(2)),
 	}
 
 	var silent []string

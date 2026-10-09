@@ -321,55 +321,55 @@ func (j Job) Validate() error {
 		}
 	}
 	if !known {
-		bad = append(bad, fmt.Sprintf("kind %q is not one this build can run", j.Kind))
+		bad = append(bad, fmt.Sprintf("вид задания %q этой версии неизвестен", j.Kind))
 	}
 
 	switch j.Kind {
 	case KindPhrase, KindPhraseAds:
 		if j.phraseCount() == 0 {
 			// Either source will do — a few typed in, or a file uploaded.
-			bad = append(bad, "no phrases: a phrase job with nothing to search for enumerates nothing")
+			bad = append(bad, "нет фраз — впишите их или выберите загруженный файл")
 		}
 		if len(nonEmpty(j.Phrases)) > 0 && j.PhraseListID != 0 {
 			// Refused rather than merged. Which one the estimate priced and
 			// which one the run walked would be two different answers, and
 			// the user would see neither.
-			bad = append(bad, "both typed phrases and an uploaded list: pick one")
+			bad = append(bad, "заданы и вписанные фразы, и файл — выберите что-то одно")
 		}
 	case KindSeller:
 		if j.SupplierID <= 0 {
-			bad = append(bad, "no supplier id")
+			bad = append(bad, "не указан продавец")
 		}
 	case KindBrand:
 		if j.BrandID <= 0 {
-			bad = append(bad, "no brand id")
+			bad = append(bad, "не указан бренд")
 		}
 	case KindArticles:
 		if len(j.Articles) == 0 {
-			bad = append(bad, "no article numbers")
+			bad = append(bad, "не указаны артикулы")
 		}
 	case KindShelves:
 		// Whose shelves. There is no search here: the shelf hangs under a
 		// card, so the job is a list of cards.
 		if len(j.Articles) == 0 {
-			bad = append(bad, "no article numbers: a shelf job needs the products to look under")
+			bad = append(bad, "не указаны артикулы — полка ищется под карточкой товара")
 		}
 	case KindPromotion:
 		// Which promotion, and where its goods are kept. All three, because a
 		// job with the slug alone cannot build a request and a job with the
 		// preset alone cannot say what it is collecting.
 		if strings.TrimSpace(j.PromotionSlug) == "" {
-			bad = append(bad, "no promotion: choose one from the list")
+			bad = append(bad, "не выбрана акция — выберите её из списка")
 		}
 		if strings.TrimSpace(j.PromotionShard) == "" || strings.TrimSpace(j.PromotionQuery) == "" {
-			bad = append(bad, "the promotion has no preset saved with it — pick it again")
+			bad = append(bad, "у акции не сохранился пресет — выберите её ещё раз")
 		}
 	case KindProfile:
 		// A link that carries no article number is not a refusal this program
 		// can make later: the whole job is resolving it, and «не нашли ничего»
 		// after a request costs a request to say what a glance says free.
 		if _, ok := wb.NmID(j.Input); !ok {
-			bad = append(bad, "profile: paste a card link or an article number")
+			bad = append(bad, "нужна ссылка на карточку или артикул")
 		}
 	case KindCatalog:
 		// The node and its query, because neither alone is a job: an id with
@@ -377,23 +377,23 @@ func (j Job) Validate() error {
 		// recorded against anything. Both come from the same pick, so a job
 		// missing either was not built by the constructor.
 		if j.CategoryID == 0 {
-			bad = append(bad, "no category: a catalogue job needs the node to walk")
+			bad = append(bad, "не выбрана категория")
 		}
 		if strings.TrimSpace(j.CategoryQuery) == "" {
-			bad = append(bad, "the category carries no search query, so this build cannot walk it")
+			bad = append(bad, "у категории нет поискового запроса — обновите справочник и выберите её заново")
 		}
 	case KindPositions:
 		// Both halves, because the question is a pair: this is «where does
 		// this product stand for this phrase», and either half alone is a
 		// different job that already exists.
 		if len(j.Articles) == 0 {
-			bad = append(bad, "no article numbers: a position job needs the products to look for")
+			bad = append(bad, "не указаны артикулы — позиции ищутся для ваших товаров")
 		}
 		if j.phraseCount() == 0 {
-			bad = append(bad, "no phrases: a position job needs the searches to look in")
+			bad = append(bad, "нет фраз — позиции ищутся в выдаче по фразам")
 		}
 		if len(nonEmpty(j.Phrases)) > 0 && j.PhraseListID != 0 {
-			bad = append(bad, "both typed phrases and an uploaded list: pick one")
+			bad = append(bad, "заданы и вписанные фразы, и файл — выберите что-то одно")
 		}
 	}
 
@@ -404,20 +404,20 @@ func (j Job) Validate() error {
 		if len(bad) == 0 {
 			return nil
 		}
-		return fmt.Errorf("rules: %s", strings.Join(bad, "; "))
+		return fmt.Errorf("задание: %s", strings.Join(bad, "; "))
 	}
 
 	if len(nonEmpty(j.Regions)) == 0 {
 		// Not defaulted to one region. Prices, stock and rank are all
 		// regional, and a run whose region nobody chose produces rows nobody
 		// can say the meaning of.
-		bad = append(bad, "no regions: every reading is regional, so there is no sensible default")
+		bad = append(bad, "не выбран регион — цены, остатки и выдача у Wildberries свои в каждом")
 	}
 	if len(j.Fields) == 0 {
-		bad = append(bad, "no fields selected")
+		bad = append(bad, "не отмечено ни одного поля")
 	}
 	if _, unknown := columnsUnknown(j.Fields); len(unknown) > 0 {
-		bad = append(bad, fmt.Sprintf("fields this build does not declare: %s", strings.Join(unknown, ", ")))
+		bad = append(bad, fmt.Sprintf("поля, которых эта версия не знает: %s", strings.Join(unknown, ", ")))
 	}
 	if (j.Kind == KindPhrase || j.Kind == KindPositions) && j.MaxPages <= 0 {
 		// Search paging did not end during live measurement in M1a. A phrase
@@ -427,19 +427,23 @@ func (j Job) Validate() error {
 		// The other paged kinds are not refused here: their walks are finite,
 		// and a missing bound now reads as one page everywhere — the plan, the
 		// estimate and the screen agree. See pagesOf.
-		bad = append(bad, "no page limit: search paging has no end of its own")
+		bad = append(bad, "не указано, сколько страниц выдачи обходить")
 	}
 	if j.Threads < 0 {
-		bad = append(bad, "negative thread count")
+		bad = append(bad, "число потоков меньше нуля")
 	}
 	if j.Delay < 0 {
-		bad = append(bad, "negative delay")
+		bad = append(bad, "пауза меньше нуля")
 	}
 
 	if len(bad) == 0 {
 		return nil
 	}
-	return fmt.Errorf("job: %s", strings.Join(bad, "; "))
+	// In Russian: these reach the constructor as they are, and «job: no
+	// phrases: a phrase job with nothing to search for enumerates nothing» was
+	// what the estimate said under a file somebody had just uploaded
+	// (09.10.2026).
+	return fmt.Errorf("задание: %s", strings.Join(bad, "; "))
 }
 
 // columnsUnknown reports the selection's keys the catalogue does not declare.
@@ -580,15 +584,13 @@ func (j Job) Estimate(items int) Estimate {
 
 	// What the field selection adds on top, per product and per phrase.
 	e.Requests += e.Items * regions * cost.PerProduct
-	// The per-phrase half is the advertising shelves, and only one kind fetches
-	// them: the shelf request lives on the ads item, which nothing but an ads
-	// job plans. Charged on every kind, as it was, a phrase job with the
-	// «Реклама по фразе» group ticked was quoted a request per phrase per
-	// region for a fetch its run would never make — money on the screen for
-	// work that cannot happen, and empty columns where it was supposed to land.
-	if j.Kind == KindPhraseAds {
-		e.Requests += phrases * regions * cost.PerPhrase
-	}
+	// The per-phrase half is the advertising shelves, and nothing more is
+	// added for it: the one kind that fetches them makes that fetch as its own
+	// walk, a request per phrase and region, already counted above. Charged on
+	// every kind, it quoted a phrase job for a fetch its run never makes; then,
+	// charged on the ads kind, it quoted that kind twice — eight requests for
+	// a run of four.
+	_ = cost.PerPhrase
 
 	threads := j.Threads
 	if threads <= 0 {

@@ -311,6 +311,44 @@ func TestUnfinishedRun_FindsWhatACrashLeftAndNothingElse(t *testing.T) {
 	}
 }
 
+func TestCloseSupersededRuns_LeavesOnlyTheNewestToResume(t *testing.T) {
+	// A crash left a run open; a later start failed before planning and wrote
+	// a newer run that closed at once. Resuming the old one under it kept a
+	// profile chain waiting past the newer run for ever (09.10.2026).
+	s := openTestStore(t)
+	ctx := context.Background()
+	jobID, _ := s.SaveJob(ctx, sampleJobRow())
+
+	crashed, _ := s.StartRun(ctx, jobID, []ItemRow{{Kind: "page", Key: "a"}})
+	failed, _ := s.StartRun(ctx, jobID, []ItemRow{{Kind: "page", Key: "a"}})
+	if err := s.FinishRun(ctx, failed, RunOutcome{State: RunFailed, Error: "нет порта"}); err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+
+	n, err := s.CloseSupersededRuns(ctx, jobID)
+	if err != nil || n != 1 {
+		t.Fatalf("CloseSupersededRuns = %d, %v; want 1, nil", n, err)
+	}
+	if run, ok, _ := s.UnfinishedRun(ctx, jobID); ok {
+		t.Errorf("run %d is still offered for resuming, under a newer one", run.ID)
+	}
+	runs, _ := s.Runs(ctx, jobID, 5)
+	for _, r := range runs {
+		if r.ID == crashed && (r.State != RunStopped || r.FinishedAt == nil) {
+			t.Errorf("the superseded run is %q, finished %v; want stopped and closed", r.State, r.FinishedAt)
+		}
+	}
+
+	// The newest open run is the one a start carries on, and stays open.
+	open, _ := s.StartRun(ctx, jobID, []ItemRow{{Kind: "page", Key: "b"}})
+	if n, _ := s.CloseSupersededRuns(ctx, jobID); n != 0 {
+		t.Errorf("the newest open run was closed too (%d)", n)
+	}
+	if run, ok, _ := s.UnfinishedRun(ctx, jobID); !ok || run.ID != open {
+		t.Errorf("UnfinishedRun = %d, %v; want %d", run.ID, ok, open)
+	}
+}
+
 func TestUnfinishedRun_LooksOnlyAtItsOwnJob(t *testing.T) {
 	// The measurement that would otherwise be constant: every test above uses
 	// one job, so a query that forgot to filter by job would pass all of them

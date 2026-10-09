@@ -6,8 +6,11 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -24,6 +27,9 @@ func ptrTo[T any](v T) *T { return &v }
 // the run's bill, and the estimate the user approved was computed from the
 // same field selection.
 type fakeSite struct {
+	// mu guards what the enrichment writes: a page's products are fetched
+	// several at a time.
+	mu       sync.Mutex
 	searches []wb.SearchQuery
 	listings []int64
 	// brandListings is the same list for the brand address, kept apart so a
@@ -213,6 +219,8 @@ func (f *fakeSite) Details(_ context.Context, _ wb.Endpoints, nms []int64, dest 
 }
 
 func (f *fakeSite) Card(_ context.Context, _ *wb.Basket, _ wb.Endpoints, nm int64, dest string, app int) (wb.CardFetch, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.cards = append(f.cards, nm)
 	f.cardDest, f.cardApp = dest, app
 	if f.fail != nil {
@@ -245,6 +253,8 @@ func (f *fakeSite) Card(_ context.Context, _ *wb.Basket, _ wb.Endpoints, nm int6
 }
 
 func (f *fakeSite) Reviews(_ context.Context, _ wb.Endpoints, imtID int64) (wb.Reviews, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.reviews = append(f.reviews, imtID)
 	if f.fail != nil {
 		return wb.Reviews{}, f.fail
@@ -259,6 +269,8 @@ func (f *fakeSite) Reviews(_ context.Context, _ wb.Endpoints, imtID int64) (wb.R
 }
 
 func (f *fakeSite) Questions(_ context.Context, _ wb.Endpoints, imtID int64, take, _ int) (wb.Questions, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.questions = append(f.questions, imtID)
 	f.questionTakes = append(f.questionTakes, take)
 	if f.fail != nil {
@@ -1387,7 +1399,8 @@ func TestFetch_AsksEachGroupsOwnWindow(t *testing.T) {
 	}.String()}); err != nil {
 		t.Fatalf("Fetch: %v", err)
 	}
-	if len(site.reviews) != 2 || site.reviews[0] != 900 || site.reviews[1] != 700 {
+	asked := slices.Sorted(slices.Values(site.reviews))
+	if len(asked) != 2 || asked[0] != 700 || asked[1] != 900 {
 		t.Errorf("запрошены окна %v, ожидались обе группы по одному разу", site.reviews)
 	}
 }
@@ -1946,5 +1959,43 @@ func TestFetch_BillsTheReviewsForEveryRequestTheyMade(t *testing.T) {
 				t.Errorf("cost %d requests, want %d", n, c.want)
 			}
 		})
+	}
+}
+
+// meetingSite answers a card only once a second card is being asked for at
+// the same time, or gives up after a while — which is how a page walked one
+// card after another shows itself.
+type meetingSite struct {
+	*fakeSite
+	arrived chan struct{}
+	met     atomic.Int32
+}
+
+func (m *meetingSite) Card(ctx context.Context, b *wb.Basket, eps wb.Endpoints, nm int64, dest string, app int) (wb.CardFetch, error) {
+	select {
+	case m.arrived <- struct{}{}:
+		m.met.Add(1)
+	case <-m.arrived:
+		m.met.Add(1)
+	case <-time.After(2 * time.Second):
+	}
+	return m.fakeSite.Card(ctx, b, eps, nm, dest, app)
+}
+
+func TestFetch_CardsOfAPageAreFetchedSideBySide(t *testing.T) {
+	// One card after another, a page of a hundred took a quarter of an hour
+	// through residential exits (09.10.2026).
+	site := &meetingSite{fakeSite: &fakeSite{products: []wb.Product{grouped(101, 900), grouped(201, 700)}},
+		arrived: make(chan struct{})}
+	f, _ := fetcherFor(t, site.fakeSite, "nm_id", "description")
+	f.Site = site
+
+	if _, err := f.Fetch(t.Context(), job.Item{Key: job.Key{
+		Kind: job.ItemPage, Phrase: "платье", Dest: "-1257786", AppType: 1, Page: 1,
+	}.String()}); err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if site.met.Load() != 2 {
+		t.Error("карточки двух моделей одной страницы запрошены по очереди, а не вместе")
 	}
 }

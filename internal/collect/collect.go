@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/BlankTrail/wildberries-monitor/internal/events"
 	"github.com/BlankTrail/wildberries-monitor/internal/job"
@@ -550,7 +551,7 @@ func (f *Fetcher) product(ctx context.Context, key job.Key) (int, error) {
 		return requests, fmt.Errorf("collect: card %d: %w", key.NmID, err)
 	}
 
-	if _, err := f.Store.SaveCard(ctx, f.storedCard(fetch)); err != nil {
+	if _, err := f.Store.SaveCardFor(ctx, f.storedCard(fetch), f.Job.ID); err != nil {
 		return requests, fmt.Errorf("collect: saving card %d: %w", key.NmID, err)
 	}
 	if err := f.link(ctx, []wb.Product{fetch.Product}); err != nil {
@@ -660,7 +661,7 @@ func (f *Fetcher) oneOfBatch(ctx context.Context, key job.Key, live wb.Product) 
 		}
 	}
 
-	if _, err := f.Store.SaveCard(ctx, f.storedCard(fetch)); err != nil {
+	if _, err := f.Store.SaveCardFor(ctx, f.storedCard(fetch), f.Job.ID); err != nil {
 		return requests, fmt.Errorf("collect: saving card %d: %w", live.ID, err)
 	}
 	if err := f.link(ctx, []wb.Product{live}); err != nil {
@@ -699,10 +700,13 @@ func (f *Fetcher) link(ctx context.Context, products []wb.Product) error {
 	// is decided once, in the store — a second guard here would be a second
 	// place deciding it, and the last pair that did that spent a while hiding
 	// each other's mistakes.
-	for _, p := range products {
-		if err := f.Store.LinkJobProduct(ctx, f.Job.ID, p.ID); err != nil {
-			return fmt.Errorf("collect: %w", err)
-		}
+	// One transaction for the page — see store.LinkJobProducts.
+	ids := make([]int64, len(products))
+	for i, p := range products {
+		ids[i] = p.ID
+	}
+	if err := f.Store.LinkJobProducts(ctx, f.Job.ID, ids); err != nil {
+		return fmt.Errorf("collect: %w", err)
 	}
 	return nil
 }
@@ -715,7 +719,7 @@ func (f *Fetcher) ads(ctx context.Context, key job.Key) (int, error) {
 	if err != nil {
 		return 1, fmt.Errorf("collect: ads for %q: %w", key.Phrase, err)
 	}
-	if _, err := f.Store.SaveShelves(ctx, shelves); err != nil {
+	if _, err := f.Store.SaveAds(ctx, shelves, f.Job.ID); err != nil {
 		return 1, fmt.Errorf("collect: saving ads for %q: %w", key.Phrase, err)
 	}
 	f.scraped(ctx, "реклама по фразе «%s» — полок %d", key.Phrase,
@@ -887,52 +891,115 @@ func (f *Fetcher) enrich(ctx context.Context, products []wb.Product, key job.Key
 		return 0, nil
 	}
 
-	requests := 0
-	for _, p := range products {
+	// Several products at once. One by one, a page of a hundred cards took a
+	// quarter of an hour through residential exits — nine seconds a card, a
+	// profile check of thirty-six phrases most of a day (09.10.2026). The
+	// client takes a port per request, so the cards of one page spread over
+	// the pool the way the pages of a run do.
+	var (
+		wg       sync.WaitGroup
+		mu       sync.Mutex
+		requests int
+		failure  error
+	)
+	// By group: the colours of one model share a review window, and asked
+	// at once they each asked for it. One model's products go in turn, so
+	// the second finds the window the first has read.
+	slots := make(chan struct{}, cardsAtOnce)
+	for _, group := range byGroup(products) {
 		if err := ctx.Err(); err != nil {
 			// Stopped part way. What was saved stays saved, and the item is
 			// left unfinished so a resume does it again — which is what the
 			// recorded plan is for.
-			return requests, err
+			break
 		}
-
-		imtID := groupOf(p)
-		if wants[wb.FieldSourceCardDocument] {
-			fetch, err := f.Site.Card(ctx, f.Basket, f.Eps, p.ID, key.Dest, key.AppType)
-			requests += cardRequests
-			// A partial answer is still an answer. Client.Card returns the
-			// static half it already fetched alongside a failure on the live
-			// half, and says so in its own doc; checking only err threw away a
-			// downloaded, decoded card document because a second request this
-			// caller did not need had timed out. The document is the whole
-			// reason for the call — the live half is already in hand from the
-			// page — so what came back is saved and only what is missing is
-			// reported.
-			if err != nil {
-				f.lost(ctx, "карточка товара %d: %v", p.ID, err)
-				if fetch.Card.ImtID == 0 {
-					// Nothing usable came back: the static half is what failed,
-					// and there is no document to save.
-					continue
+		mu.Lock()
+		failed := failure != nil
+		mu.Unlock()
+		if failed {
+			break
+		}
+		slots <- struct{}{}
+		wg.Add(1)
+		go func() {
+			defer func() { <-slots; wg.Done() }()
+			for _, p := range group {
+				n, err := f.enrichOne(ctx, p, key, wants)
+				mu.Lock()
+				requests += n
+				if err != nil && failure == nil {
+					failure = err
+				}
+				stop := failure != nil
+				mu.Unlock()
+				if stop || ctx.Err() != nil {
+					return
 				}
 			}
-			if _, err := f.Store.SaveCard(ctx, f.storedCard(fetch)); err != nil {
-				return requests, fmt.Errorf("collect: saving card %d: %w", p.ID, err)
-			}
-			if fetch.Card.ImtID != 0 {
-				// The card states the grouping id outright, so it wins over
-				// whatever the listing row implied.
-				imtID = fetch.Card.ImtID
+		}()
+	}
+	wg.Wait()
+	if failure == nil {
+		failure = ctx.Err()
+	}
+	return requests, failure
+}
+
+// byGroup splits a page into its models, in page order. A product whose group
+// the row did not name is a group of its own.
+func byGroup(products []wb.Product) [][]wb.Product {
+	var out [][]wb.Product
+	at := map[int64]int{}
+	for _, p := range products {
+		g := groupOf(p)
+		if i, ok := at[g]; ok && g != 0 {
+			out[i] = append(out[i], p)
+			continue
+		}
+		at[g] = len(out)
+		out = append(out, []wb.Product{p})
+	}
+	return out
+}
+
+// cardsAtOnce is how many products of one page are enriched at the same time.
+const cardsAtOnce = 8
+
+// enrichOne fetches what the selection wants of one product beyond the page.
+func (f *Fetcher) enrichOne(ctx context.Context, p wb.Product, key job.Key, wants map[wb.FieldSource]bool) (int, error) {
+	requests := 0
+	imtID := groupOf(p)
+	if wants[wb.FieldSourceCardDocument] {
+		fetch, err := f.Site.Card(ctx, f.Basket, f.Eps, p.ID, key.Dest, key.AppType)
+		requests += cardRequests
+		// A partial answer is still an answer. Client.Card returns the
+		// static half it already fetched alongside a failure on the live
+		// half, and says so in its own doc; checking only err threw away a
+		// downloaded, decoded card document because a second request this
+		// caller did not need had timed out. The document is the whole
+		// reason for the call — the live half is already in hand from the
+		// page — so what came back is saved and only what is missing is
+		// reported.
+		if err != nil {
+			f.lost(ctx, "карточка товара %d: %v", p.ID, err)
+			if fetch.Card.ImtID == 0 {
+				// Nothing usable came back: the static half is what failed,
+				// and there is no document to save.
+				return requests, nil
 			}
 		}
-
-		extra, err := f.signals(ctx, imtID, p.ID, p.Feedbacks)
-		requests += extra
-		if err != nil {
-			return requests, err
+		if _, err := f.Store.SaveCardFor(ctx, f.storedCard(fetch), f.Job.ID); err != nil {
+			return requests, fmt.Errorf("collect: saving card %d: %w", p.ID, err)
+		}
+		if fetch.Card.ImtID != 0 {
+			// The card states the grouping id outright, so it wins over
+			// whatever the listing row implied.
+			imtID = fetch.Card.ImtID
 		}
 	}
-	return requests, nil
+
+	extra, err := f.signals(ctx, imtID, p.ID, p.Feedbacks)
+	return requests + extra, err
 }
 
 // groupOf is the id under which this product's reviews and questions live.

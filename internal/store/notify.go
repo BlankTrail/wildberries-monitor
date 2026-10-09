@@ -136,6 +136,44 @@ func (s *Store) RuleEvents(ctx context.Context, ruleID int64, limit int) ([]Rule
 	return scanRuleEvents(rows)
 }
 
+// Delivery is what became of the message one rule event put in the outbox.
+type Delivery struct {
+	State     string // OutboxPending, OutboxSent or OutboxFailed
+	SentAt    int64
+	LastError string
+}
+
+// Deliveries reads, for each of these events, the newest outbox message that
+// carries it. An event with none — suppressed, or folded into a digest — is
+// absent from the map.
+func (s *Store) Deliveries(ctx context.Context, eventIDs []int64) (map[int64]Delivery, error) {
+	out := make(map[int64]Delivery, len(eventIDs))
+	if len(eventIDs) == 0 {
+		return out, nil
+	}
+	args := make([]any, len(eventIDs))
+	for i, id := range eventIDs {
+		args[i] = id
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT rule_event_id, state, COALESCE(sent_at, 0), COALESCE(last_error, '')
+		FROM notify_outbox WHERE rule_event_id IN (`+placeholders(len(eventIDs))+`)
+		ORDER BY id`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("store: deliveries: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int64
+		var d Delivery
+		if err := rows.Scan(&id, &d.State, &d.SentAt, &d.LastError); err != nil {
+			return nil, fmt.Errorf("store: deliveries: %w", err)
+		}
+		out[id] = d
+	}
+	return out, rows.Err()
+}
+
 // scanRuleEvents reads what both event queries select, in the order they
 // select it.
 func scanRuleEvents(rows *sql.Rows) ([]RuleEventRow, error) {

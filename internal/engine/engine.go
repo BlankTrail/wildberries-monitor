@@ -149,7 +149,7 @@ func (e *Engine) RunnerFor(ctx context.Context, j job.Job) (*job.Runner, func(),
 	pool, err := blanktrail.NewPool(ctx, poolConfig(client, j, report.CA, channels))
 	if err != nil {
 		closeChannels()
-		return nil, nil, fmt.Errorf("engine: не удалось открыть порты: %w", err)
+		return nil, nil, fmt.Errorf("не удалось открыть порты BlankTrail: %s%w", portLimitHint(err), err)
 	}
 	// A pool short of what the job asked for still collects — slower, and
 	// that is the better answer than refusing to start because one VPN
@@ -161,7 +161,7 @@ func (e *Engine) RunnerFor(ctx context.Context, j job.Job) (*job.Runner, func(),
 		if len(why) > 0 {
 			first = why[0]
 		}
-		e.logf("портов не открылось: %d из %d, первая причина: %s", missing, want, first)
+		e.logf("портов не открылось: %d из %d, %sпервая причина: %s", missing, want, portLimitHint(errors.New(first)), first)
 	}
 
 	// Whether there is anywhere to move to decides how hard a challenge is
@@ -240,6 +240,23 @@ func portStats(pool *blanktrail.Pool) []job.PortStat {
 // sitting idle on a licence that counts them.
 const portsPerThread = 2
 
+// bigRun is where a job with no pause between requests gets one port a thread.
+//
+// The second port is there to cover a port's cooldown, and with no pause there
+// is none to cover. At this size it only doubled the fresh addresses Challenge
+// Breaker had to clear — fourteen gigabytes of solver on 500 threads — and
+// filled the licence: 1000 ports, all there were, so every other job was
+// refused (09.10.2026).
+const bigRun = 100
+
+// portsFor is how many ports a thread of this job gets.
+func portsFor(j job.Job) int {
+	if j.Delay == 0 && threadsOf(j) >= bigRun {
+		return 1
+	}
+	return portsPerThread
+}
+
 // control builds the API client from what the settings screen saved.
 func (e *Engine) control(ctx context.Context) (*blanktrail.Client, error) {
 	addr, err := setting(ctx, e.Store, store.SettingBlankTrailURL, store.DefaultBlankTrailURL)
@@ -291,7 +308,7 @@ func setting(ctx context.Context, s *store.Store, key, fallback string) (string,
 // machine where it is fine. The port count is this job's, because a licence
 // counts ports and the answer to "will this run fit" depends on how many.
 func preflightInput(eps wb.Endpoints, j job.Job) blanktrail.PreflightInput {
-	return preflightFor(eps, threadsOf(j)*portsPerThread)
+	return preflightFor(eps, threadsOf(j)*portsFor(j))
 }
 
 // poolConfig is the pool this job will drive.
@@ -313,7 +330,7 @@ func poolConfig(client *blanktrail.Client, j job.Job, ca *x509.CertPool, channel
 		Mode:           wb.ModeOf(j.AppType),
 		Channels:       channels,
 		Threads:        threadsOf(j),
-		PortsPerThread: portsPerThread,
+		PortsPerThread: portsFor(j),
 		// The pause the pool offers callers between requests, taken from the
 		// job because that is where a person set it. Both ends the same: a job
 		// that asked for half a second means half a second, and a range it
@@ -349,4 +366,17 @@ func hostOf(raw string) string {
 		return raw
 	}
 	return u.Hostname()
+}
+
+// portLimitHint says in words what «port limit reached» means, when that is
+// the refusal. The licence caps how many ports may be open at once, and a job
+// asking for more than are left — another job holding the rest, or ports a
+// stopped program left open until their idle timeout — got the service's own
+// English and nothing about what to do (09.10.2026).
+func portLimitHint(err error) string {
+	if err == nil || !strings.Contains(err.Error(), "port limit reached") {
+		return ""
+	}
+	return "лицензия BlankTrail исчерпала лимит одновременно открытых портов — уменьшите число потоков " +
+		"или дождитесь, пока закончатся другие задания. Ответ службы: "
 }

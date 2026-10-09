@@ -842,6 +842,45 @@ func TestProfileCheck_KeepsTheWholePageSoThereAreCompetitors(t *testing.T) {
 	}
 }
 
+func TestProfileCheck_DoesNotReadEveryRivalsReviews(t *testing.T) {
+	// The check walks one page per phrase and keeps every product on it. With
+	// the profile's own fields — reviews and questions included — that was
+	// three more requests for each of a hundred strangers per phrase: a real
+	// profile spent 394 requests and finished none of its 24 phrases in eight
+	// minutes (09.10.2026). The comparison reads the rivals' cards, not their
+	// reviews.
+	a := newApp(t)
+	ctx := t.Context()
+	configured(t, a)
+	collecting(t, a)
+	p := aProfile(t, a, 4242)
+	p.Fields = []string{"nm_id", "name", "price_sale", "rating", "feedbacks", "description", "review_text", "question_text"}
+	if _, err := a.Store.SaveProfile(ctx, p); err != nil {
+		t.Fatalf("SaveProfile: %v", err)
+	}
+	seedProfileProductOf(t, a, 100, 4242, "Платье летнее")
+	seedStorefront(t, a, 4242)
+	if err := a.StartProfileChain(ctx, p.ID); err != nil {
+		t.Fatalf("StartProfileChain: %v", err)
+	}
+	got, _ := a.Store.Profile(ctx, p.ID)
+	landed(t, a, got.CatalogJob)
+	a.advanceProfiles(ctx)
+
+	after, _ := a.Store.Profile(ctx, p.ID)
+	made, err := job.Load(ctx, a.Store, after.CheckJob)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	keys := strings.Join(made.Fields, ",")
+	if strings.Contains(keys, "review_text") || strings.Contains(keys, "question_text") {
+		t.Errorf("проверка фраз читает отзывы чужих товаров: %s", keys)
+	}
+	if !strings.Contains(keys, "description") || !strings.Contains(keys, "rating") {
+		t.Errorf("проверка фраз потеряла то, что нужно сравнению: %s", keys)
+	}
+}
+
 // seedSubjectProduct puts one product of one seller in one category.
 func seedSubjectProduct(t *testing.T, a *App, nm, seller int64, name string, subject int64) {
 	t.Helper()

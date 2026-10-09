@@ -211,6 +211,21 @@ func (r *Runner) reporter(jobID, total int64,
 	return afterItem, heartbeat
 }
 
+// rampOver is how long a big run takes to bring all its threads up, and
+// rampFrom how many threads make a run big.
+const (
+	rampOver = 30 * time.Second
+	rampFrom = 100
+)
+
+// rampDelay is how long thread i of n waits before its first item.
+func rampDelay(i, n int) time.Duration {
+	if n < rampFrom || i <= 0 {
+		return 0
+	}
+	return time.Duration(i) * rampOver / time.Duration(n)
+}
+
 // ErrStopped is returned when a run ended because it was asked to.
 // Its text reaches a screen: it is what FinishRun writes into the run's
 // error column, which the jobs list and the profile's own card print
@@ -244,7 +259,10 @@ func (r *Runner) Run(ctx context.Context, j Job) (Result, error) {
 	var items, failed, requests atomic.Int64
 	stopped := r.walk(ctx, j, res.RunID, todo, total, &items, &failed, &requests)
 
-	res.Items, res.Failed, res.Requests = items.Load(), failed.Load(), requests.Load()
+	// Added to what a resumed run carried in; a fresh run carries in nothing.
+	res.Items += items.Load()
+	res.Failed += failed.Load()
+	res.Requests += requests.Load()
 	res.Dropped = r.Bus.Stats().Dropped
 	if counter, ok := r.Fetcher.(Loser); ok {
 		res.Lost = counter.Lost()
@@ -295,6 +313,11 @@ func (r *Runner) Run(ctx context.Context, j Job) (Result, error) {
 // openRun either resumes the run a crash left behind or starts a new one.
 func (r *Runner) openRun(ctx context.Context, j Job) (Result, []store.ItemRow, error) {
 	if j.ID != 0 {
+		// An open run with a newer one after it is not this job's to carry on:
+		// closed, so the one found below is the newest or none.
+		if _, err := r.Store.CloseSupersededRuns(ctx, j.ID); err != nil {
+			return Result{}, nil, err
+		}
 		prev, ok, err := r.Store.UnfinishedRun(ctx, j.ID)
 		if err != nil {
 			return Result{}, nil, fmt.Errorf("job: looking for an unfinished run: %w", err)
@@ -304,10 +327,15 @@ func (r *Runner) openRun(ctx context.Context, j Job) (Result, []store.ItemRow, e
 			if err != nil {
 				return Result{}, nil, fmt.Errorf("job: reading run %d's remaining items: %w", prev.ID, err)
 			}
+			// The books start from what the first attempt finished.
+			done, failed, attempts, err := r.Store.RunSoFar(ctx, prev.ID)
+			if err != nil {
+				return Result{}, nil, err
+			}
 			// Resumed even when nothing is left: the run still has to be
 			// closed, or it stays "running" forever and every later attempt
 			// resumes the same empty remainder.
-			return Result{RunID: prev.ID, Resumed: true}, todo, nil
+			return Result{RunID: prev.ID, Resumed: true, Items: done, Failed: failed, Requests: attempts}, todo, nil
 		}
 	}
 
@@ -401,6 +429,18 @@ func (r *Runner) walk(ctx context.Context, j Job, runID int64, todo []store.Item
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			// A big run comes up over half a minute rather than at once: five
+			// hundred fresh addresses asking at the same second are five
+			// hundred challenges for the solver at the same second, and the
+			// machine ran out of memory in that first minute — the monitor
+			// with it (09.10.2026). Spread out, the same threads arrive as
+			// the first ones clear.
+			if wait := rampDelay(i, threads); wait > 0 {
+				select {
+				case <-time.After(wait):
+				case <-ctx.Done():
+				}
+			}
 			for row := range work {
 				if ctx.Err() != nil {
 					stopped.Store(true)

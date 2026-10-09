@@ -41,6 +41,41 @@ func (s *Store) LinkJobProduct(ctx context.Context, jobID, nmID int64) error {
 	return nil
 }
 
+// LinkJobProducts is LinkJobProduct for a whole page, in one transaction.
+//
+// One autocommit per product was a hundred commits a page queueing for the
+// single write lock; at five hundred threads the queue outlasted the busy
+// timeout and pages already fetched were lost to «database is locked»
+// (09.10.2026). Zero ids are skipped, as LinkJobProduct skips them.
+func (s *Store) LinkJobProducts(ctx context.Context, jobID int64, nmIDs []int64) error {
+	if jobID == 0 || len(nmIDs) == 0 {
+		return nil
+	}
+	tx, done, err := s.beginCollected(ctx)
+	if err != nil {
+		return fmt.Errorf("store: linking products to job %d: %w", jobID, err)
+	}
+	defer done()
+	defer tx.Rollback()
+	now := s.now().UTC().Unix()
+	for _, nm := range nmIDs {
+		if nm == 0 {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO job_products (job_id, nm_id, first_seen, last_seen)
+			VALUES (?, ?, ?, ?)
+			ON CONFLICT (job_id, nm_id) DO UPDATE SET last_seen = excluded.last_seen`,
+			jobID, nm, now, now); err != nil {
+			return fmt.Errorf("store: linking product %d to job %d: %w", nm, jobID, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: linking products to job %d: %w", jobID, err)
+	}
+	return nil
+}
+
 // JobsOfProduct lists the jobs that collect one product, lowest id first.
 //
 // Several, legitimately: the same article is watched by an article list and

@@ -690,7 +690,8 @@ func (a *App) profileCheck(ctx context.Context, p store.ProfileRow) error {
 	//
 	// The same requests either way: one per phrase per page. What changes is
 	// how much of each page is kept, and keeping all of it is what «собрать
-	// всё, чтобы потом сравнивать» means.
+	// всё, чтобы потом сравнивать» means — but not the reviews and questions
+	// of every stranger on it: see rivalFields.
 	j := job.Job{
 		ID:             p.CheckJob,
 		Name:           "профиль: проверка фраз " + p.Name,
@@ -703,7 +704,7 @@ func (a *App) profileCheck(ctx context.Context, p store.ProfileRow) error {
 		Threads:        profileThreadCount(p),
 		ProxyProfileID: p.ProxyProfileID,
 		Attempts:       p.Attempts,
-		Fields:         wb.Selection(p.Fields),
+		Fields:         rivalFields(p.Fields),
 	}
 	id, err := job.Save(ctx, a.Store, j)
 	if err != nil {
@@ -723,6 +724,26 @@ func (a *App) profileCheck(ctx context.Context, p store.ProfileRow) error {
 	}
 	a.Log.Printf("профиль %q: проверка %d фраз на %d товарах", p.Name, len(texts), len(products))
 	return a.Store.SetProfileStage(ctx, p.ID, store.StageRivals, id, after)
+}
+
+// rivalFields is what the phrase check keeps of every product on its pages:
+// the profile's fields without the reviews and questions.
+//
+// They are three more requests for each of a hundred products per phrase, and
+// nothing reads them for a rival — the comparison takes ratings and review
+// counts from the listing and the card's fullness from the card. A real
+// profile spent 394 requests and finished none of its 24 phrases in eight
+// minutes on them (09.10.2026). The seller's own reviews come with the
+// storefront, which keeps the whole selection.
+func rivalFields(fields []string) wb.Selection {
+	out := make(wb.Selection, 0, len(fields))
+	for _, key := range fields {
+		if f, ok := wb.FieldByKey(key); ok && f.Group == wb.GroupReputation {
+			continue
+		}
+		out = append(out, key)
+	}
+	return out
 }
 
 // profileRivals computes who stands beside these products in these phrases.

@@ -354,6 +354,12 @@ func TestRun_ResumesFromWhatIsLeftRatherThanFromTheStart(t *testing.T) {
 	if len(got) != 2 || got[0] != "c" || got[1] != "d" {
 		t.Errorf("the fetcher saw %v, want [c d]: the first two were already done", got)
 	}
+	// And the run's books count the whole of it, not the part after the
+	// stop: a five-page category resumed for its last page was written down
+	// as «1 позиция, 1 запрос» (09.10.2026).
+	if res.Items != 4 {
+		t.Errorf("Items = %d, want 4: two before the stop and two after", res.Items)
+	}
 }
 
 func TestRun_RecordsEachItemAsItGoesRatherThanAtTheEnd(t *testing.T) {
@@ -722,5 +728,19 @@ func TestRun_KeepsTalkingWhileOneLongItemIsInFlight(t *testing.T) {
 	}
 	if !spoke {
 		t.Error("пока шёл первый элемент, прогон не сказал о себе ничего")
+	}
+}
+
+func TestRampDelay_ABigRunComesUpOverHalfAMinute(t *testing.T) {
+	// Five hundred threads at once were five hundred challenges at once, and
+	// the machine ran out of memory in the first minute (09.10.2026).
+	if d := rampDelay(250, 500); d != 15*time.Second {
+		t.Errorf("поток 250 из 500 ждёт %v, ожидалось 15s", d)
+	}
+	if d := rampDelay(499, 500); d >= rampOver {
+		t.Errorf("последний поток ждёт %v — дольше разгона", d)
+	}
+	if d := rampDelay(10, 24); d != 0 {
+		t.Errorf("небольшое задание разгоняется (%v), а должно стартовать сразу", d)
 	}
 }

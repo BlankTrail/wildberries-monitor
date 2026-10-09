@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -22,6 +23,10 @@ import (
 // path here is a single statement or an explicit transaction.
 type Store struct {
 	db *sql.DB
+
+	// collecting queues the writes a run makes for every page and card it
+	// collects — see beginCollected.
+	collecting sync.Mutex
 
 	// path is what Open was called with. Kept for reopening the same file —
 	// a migration test proving idempotency across a restart, or vacuum.go's
@@ -205,4 +210,24 @@ func (s *Store) SetClock(now func() time.Time) { s.now = now }
 // adds, so nothing here needs to reproduce it.
 func (s *Store) Close() error {
 	return s.db.Close()
+}
+
+// beginCollected opens a write transaction for what a run collected — a page,
+// a card, the products a page linked to its job — after the ones before it.
+//
+// SQLite takes one writer at a time, and its own wait is a poll with a
+// deadline. At five hundred threads, fourteen pages a second of a hundred
+// products each kept the write lock busy for longer than the deadline, and 570
+// pages of 5 000 already fetched were lost to «database is locked»
+// (09.10.2026). A queue here has no deadline: a page waits its turn and is
+// written. The returned function releases the turn; call it after Commit or
+// Rollback.
+func (s *Store) beginCollected(ctx context.Context) (*sql.Tx, func(), error) {
+	s.collecting.Lock()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		s.collecting.Unlock()
+		return nil, func() {}, err
+	}
+	return tx, s.collecting.Unlock, nil
 }

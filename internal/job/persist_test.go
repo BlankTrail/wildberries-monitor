@@ -149,7 +149,7 @@ func TestValidate_TakesPhrasesFromEitherSource(t *testing.T) {
 	if err == nil {
 		t.Fatal("a job with both a typed phrase and an uploaded list was accepted")
 	}
-	if !strings.Contains(err.Error(), "pick one") {
+	if !strings.Contains(err.Error(), "выберите что-то одно") {
 		t.Errorf("error = %v, want it to say which to pick", err)
 	}
 }

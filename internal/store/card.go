@@ -52,6 +52,14 @@ import (
 //     naming the requests that were actually made so the caller can tell a
 //     static-half failure from a total loss.
 func (s *Store) SaveCard(ctx context.Context, cf wb.CardFetch) (SaveStats, error) {
+	return s.SaveCardFor(ctx, cf, 0)
+}
+
+// SaveCardFor is SaveCard for a card one job asked for, which is recorded on
+// the reading. An article-list job reads nothing but cards: with the job left
+// off, its results screen fell back to «every reading of these articles» and
+// showed other jobs' rows beside its own (09.10.2026).
+func (s *Store) SaveCardFor(ctx context.Context, cf wb.CardFetch, jobID int64) (SaveStats, error) {
 	// Both halves identify themselves by their own id: wb.decodeCard refuses a
 	// document with no nm_id, and Client.Card refuses a detail response for
 	// another product, so a zero here means "this half did not arrive" and
@@ -81,10 +89,11 @@ func (s *Store) SaveCard(ctx context.Context, cf wb.CardFetch) (SaveStats, error
 		id = cf.Product.ID
 	}
 
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, done, err := s.beginCollected(ctx)
 	if err != nil {
 		return SaveStats{}, fmt.Errorf("store: save card %d: %w", id, err)
 	}
+	defer done()
 	defer tx.Rollback()
 
 	now := s.now().UTC().Unix()
@@ -142,10 +151,9 @@ func (s *Store) SaveCard(ctx context.Context, cf wb.CardFetch) (SaveStats, error
 		// ranked for a phrase and saveProductTx records no organic position
 		// for it. Writing the Rank the live half happens to carry would invent
 		// a position for a query nobody ran.
-		// Zero: a card fetch is a reading of one product, and which job
-		// asked for it is recorded on the search readings that job took —
-		// see migration 0032.
-		one, err := s.saveProductTx(ctx, tx, cf.Product, "", now, 0)
+		// The job that asked, when one did — see SaveCardFor and migration
+		// 0032.
+		one, err := s.saveProductTx(ctx, tx, cf.Product, "", now, jobID)
 		if err != nil {
 			return SaveStats{}, err
 		}

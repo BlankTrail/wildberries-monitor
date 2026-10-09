@@ -127,6 +127,15 @@ type ProductRow struct {
 	// rather than depending on which phrase sorted first.
 	Rank *int64
 	Page *int64
+
+	// Shelves is the paid placements this product was shown in at this
+	// reading — shelf title («баннер» for a banner), phrase and place, joined
+	// for one cell like Sizes — and ShelfPlace the best of those places. From the shelves read within ten
+	// minutes of the reading in its region and audience; nil when it was on
+	// none. Collected by «Реклама в выдаче» jobs and read by nothing until
+	// 09.10.2026, when both columns were empty for every reading there was.
+	Shelves    *string
+	ShelfPlace *int64
 }
 
 // ProductFilter narrows a stream of readings.
@@ -315,7 +324,28 @@ const productRowColumns = `
 	         WHERE nm_id = s.nm_id AND dest = s.dest
 	           AND app_type = s.app_type AND ts = s.ts
 	         ORDER BY rank, query LIMIT 1
-	    )                        AS page`
+	    )                        AS page,
+	    (
+	        SELECT GROUP_CONCAT(z.label, '; ')
+	          FROM (
+	              SELECT CASE WHEN sh.kind = 'banner' THEN 'баннер'
+	                          WHEN sh.title = '' THEN 'полка'
+	                          ELSE sh.title END
+	                     || ' — «' || sh.source_key || '», место ' || (si.position + 1) AS label
+	                FROM shelf_items si JOIN shelves sh ON sh.id = si.shelf_id
+	               WHERE si.nm_id = s.nm_id AND sh.source = 'query'
+	                 AND sh.dest = s.dest AND sh.app_type = s.app_type
+	                 AND ABS(sh.ts - s.ts) <= 600
+	               ORDER BY sh.ts, sh.kind, sh.position
+	          ) z
+	    )                        AS shelves,
+	    (
+	        SELECT MIN(si.position) + 1
+	          FROM shelf_items si JOIN shelves sh ON sh.id = si.shelf_id
+	         WHERE si.nm_id = s.nm_id AND sh.source = 'query'
+	           AND sh.dest = s.dest AND sh.app_type = s.app_type
+	           AND ABS(sh.ts - s.ts) <= 600
+	    )                        AS shelf_place`
 
 // productRowOutput names the same columns for the outer half of the streaming
 // query. Three copies of one list live in this file — this one,
@@ -329,7 +359,7 @@ const productRowOutput = `nm_id, imt_id, name, brand, brand_id, supplier_id, sup
 	    description, vendor_code, subject_name, card_created,
 	    options, compositions,
 	    time1, time2, dist, warehouse_id, sizes, size_stock,
-	    review_valuation, review_count, rank, page`
+	    review_valuation, review_count, rank, page, shelves, shelf_place`
 
 // scanProductRow reads one row in the order productRowColumns names.
 //
@@ -347,7 +377,7 @@ func scanProductRow(sc rowScanner) (ProductRow, error) {
 		&r.Description, &r.VendorCode, &r.SubjectName, &r.CardCreated,
 		&r.Options, &r.Compositions,
 		&r.Time1, &r.Time2, &r.Dist, &r.WarehouseID, &r.Sizes, &r.SizeStock,
-		&r.ReviewValuation, &r.ReviewCount, &r.Rank, &r.Page)
+		&r.ReviewValuation, &r.ReviewCount, &r.Rank, &r.Page, &r.Shelves, &r.ShelfPlace)
 	return r, err
 }
 
@@ -410,9 +440,28 @@ func productsQuery(f ProductFilter) (string, []any) {
 		args = append(args, *f.PromoID)
 	}
 	if f.JobID != nil {
-		where = append(where, "(s.job_id = ? OR (s.job_id IS NULL AND EXISTS ("+
-			"SELECT 1 FROM job_products jp WHERE jp.nm_id = p.nm_id AND jp.job_id = ?)))")
-		args = append(args, *f.JobID, *f.JobID)
+		// Three ways a row is this job's: it wrote it; it is from before the
+		// column and the job walked the product; or the job read the product,
+		// found it unchanged and so wrote nothing — then what it saw is the
+		// reading that stood when it looked, in one of its regions, whoever
+		// wrote it. Without the third, a job that walked pages another job had
+		// read minutes before showed 463 rows for 38 767 products.
+		//
+		// As a set of row ids built from the job's side — its own rows by
+		// index, its walked products by key — rather than three ORed
+		// conditions on every reading: the conditions cost a scan of the whole
+		// table with subqueries per row, and the results screen of one job
+		// took over two minutes on 222 thousand readings (09.10.2026).
+		where = append(where, "s.id IN ("+
+			"SELECT id FROM snapshots WHERE job_id = ?"+
+			" UNION SELECT s1.id FROM job_products jp JOIN snapshots s1 ON s1.nm_id = jp.nm_id"+
+			" WHERE jp.job_id = ? AND s1.job_id IS NULL"+
+			" UNION SELECT (SELECT s2.id FROM snapshots s2 WHERE s2.nm_id = jp.nm_id AND s2.dest = d.value"+
+			" AND s2.ts <= jp.last_seen ORDER BY s2.ts DESC, s2.id DESC LIMIT 1)"+
+			" FROM job_products jp JOIN jobs j ON j.id = jp.job_id, json_each(j.regions) d"+
+			" WHERE jp.job_id = ? AND NOT EXISTS (SELECT 1 FROM snapshots s3 WHERE s3.nm_id = jp.nm_id"+
+			" AND s3.dest = d.value AND +s3.job_id = jp.job_id))")
+		args = append(args, *f.JobID, *f.JobID, *f.JobID)
 	}
 	if q := f.Search; q != "" {
 		// Four columns and one term, «содержит», folded in every alphabet —

@@ -339,6 +339,12 @@ func valueOf(r store.ProductRow, f wb.Field) Value {
 		return optInt(r.Rank)
 	case "page":
 		return optInt(r.Page)
+
+	// The paid placements of the reading — see store.ProductRow.Shelves.
+	case "shelf_title":
+		return optText(r.Shelves)
+	case "shelf_position":
+		return optInt(r.ShelfPlace)
 	}
 	return Value{Absent: true}
 }
