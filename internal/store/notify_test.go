@@ -28,3 +28,18 @@ func TestDueNow_BringsEveryWaitingMessageForward(t *testing.T) {
 		t.Errorf("due after DueNow: %d messages, want 1", len(due))
 	}
 }
+
+func TestDueNow_LeavesAMessageHeldForTheMorning(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	tid, err := s.SaveTarget(ctx, TargetRow{Kind: "telegram", Address: "1", Enabled: true})
+	if err != nil {
+		t.Fatalf("SaveTarget: %v", err)
+	}
+	if _, err := s.Enqueue(ctx, OutboxRow{TargetID: tid, Body: "ночью", DueAt: 1_000_000}); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	if n, _ := s.DueNow(ctx, 500); n != 0 {
+		t.Errorf("DueNow moved %d messages held over quiet hours, want none", n)
+	}
+}

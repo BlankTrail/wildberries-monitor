@@ -308,12 +308,15 @@ func (s *Store) Postpone(ctx context.Context, id, dueAt int64, reason string) er
 	return nil
 }
 
-// DueNow makes every waiting message due at once, for the moment a way to send
-// them has just been configured: the ones a missing token pushed out by
-// backoff would otherwise wait their hours out (10.10.2026).
+// DueNow makes every message a failure pushed back due at once, for the moment
+// a way to send them has just been configured: the ones a missing token pushed
+// out by backoff would otherwise wait their hours out (10.10.2026). A message
+// held over quiet hours has no failure and keeps its morning — a restart at
+// night would otherwise wake somebody.
 func (s *Store) DueNow(ctx context.Context, now int64) (int64, error) {
 	res, err := s.db.ExecContext(ctx, `
-		UPDATE notify_outbox SET due_at = ? WHERE state = 'pending' AND due_at > ?`, now, now)
+		UPDATE notify_outbox SET due_at = ?
+		 WHERE state = 'pending' AND due_at > ? AND COALESCE(last_error, '') <> ''`, now, now)
 	if err != nil {
 		return 0, fmt.Errorf("store: due now: %w", err)
 	}
