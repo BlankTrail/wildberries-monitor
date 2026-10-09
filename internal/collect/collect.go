@@ -41,6 +41,7 @@ type Site interface {
 	SellerCatalogPage(ctx context.Context, eps wb.Endpoints, id int64, q wb.SearchQuery) (wb.Envelope, error)
 	BrandCatalogPage(ctx context.Context, eps wb.Endpoints, id int64, q wb.SearchQuery) (wb.Envelope, error)
 	Card(ctx context.Context, b *wb.Basket, eps wb.Endpoints, nm int64, dest string, app int) (wb.CardFetch, error)
+	CardDocument(ctx context.Context, b *wb.Basket, eps wb.Endpoints, nm int64) (wb.CardFetch, error)
 	Detail(ctx context.Context, eps wb.Endpoints, nm int64, dest string, app int) (wb.CardFetch, error)
 	Details(ctx context.Context, eps wb.Endpoints, nms []int64, dest string, app int) (map[int64]wb.Product, []wb.Fetch, error)
 	Reviews(ctx context.Context, eps wb.Endpoints, imtID int64) (wb.Reviews, error)
@@ -642,20 +643,16 @@ func (f *Fetcher) oneOfBatch(ctx context.Context, key job.Key, live wb.Product) 
 	// rule the single-article path follows, and the reason a batch is worth
 	// having at all: without it every article pays for a document nobody opens.
 	if f.sources()[wb.FieldSourceCardDocument] {
-		card, err := f.Site.Card(ctx, f.Basket, f.Eps, live.ID, key.Dest, key.AppType)
-		requests += cardRequests
+		// The document alone: the live half is already in hand from the
+		// batch, and asking for it again was a second reading of the same
+		// moment that cost a request and, through residential exits, often a
+		// refusal.
+		card, err := f.Site.CardDocument(ctx, f.Basket, f.Eps, live.ID)
+		requests++
 		if err != nil {
 			f.lost(ctx, "карточка товара %d: %v", live.ID, err)
 		}
-		// Whatever document came back, error or not. This path is the sharpest
-		// case Client.Card's «check the returned Card itself» warns about: the
-		// live half is already in hand from the batch, so the only thing this
-		// call was for is the document — and when the document arrived and the
-		// live half timed out, checking only err threw the document away and
-		// billed two requests for nothing.
 		if card.Card.ImtID != 0 {
-			// The document's own live half is a second reading of the same
-			// moment; the batch's is the one this item is about.
 			card.Product = live
 			fetch = card
 		}
@@ -970,8 +967,16 @@ func (f *Fetcher) enrichOne(ctx context.Context, p wb.Product, key job.Key, want
 	requests := 0
 	imtID := groupOf(p)
 	if wants[wb.FieldSourceCardDocument] {
-		fetch, err := f.Site.Card(ctx, f.Basket, f.Eps, p.ID, key.Dest, key.AppType)
-		requests += cardRequests
+		var fetch wb.CardFetch
+		var err error
+		if wants[wb.FieldSourceCardDetail] {
+			fetch, err = f.Site.Card(ctx, f.Basket, f.Eps, p.ID, key.Dest, key.AppType)
+			requests += cardRequests
+		} else {
+			// The live half is the page's own row, already in hand.
+			fetch, err = f.Site.CardDocument(ctx, f.Basket, f.Eps, p.ID)
+			requests++
+		}
 		// A partial answer is still an answer. Client.Card returns the
 		// static half it already fetched alongside a failure on the live
 		// half, and says so in its own doc; checking only err threw away a

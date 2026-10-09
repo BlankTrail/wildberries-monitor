@@ -252,6 +252,17 @@ func (f *fakeSite) Card(_ context.Context, _ *wb.Basket, _ wb.Endpoints, nm int6
 	}, nil
 }
 
+// CardDocument is Card's static half: recorded with the cards, no live half.
+func (f *fakeSite) CardDocument(ctx context.Context, b *wb.Basket, eps wb.Endpoints, nm int64) (wb.CardFetch, error) {
+	fetch, err := f.Card(ctx, b, eps, nm, "", 0)
+	fetch.Product = wb.Product{}
+	if err != nil && f.cardPartial != nil && errors.Is(err, f.cardPartial) {
+		// The static half was fetched; only a live half could have failed.
+		err = nil
+	}
+	return fetch, err
+}
+
 func (f *fakeSite) Reviews(_ context.Context, _ wb.Endpoints, imtID int64) (wb.Reviews, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -438,9 +449,10 @@ func TestFetch_BuysTheCardWhenAFieldNamesIt(t *testing.T) {
 	if len(site.cards) != 2 {
 		t.Errorf("fetched %d cards, want one per product", len(site.cards))
 	}
-	// One search plus two halves per card, which is how the estimate prices it.
-	if n != 5 {
-		t.Errorf("cost %d requests, want 1 + 2×2", n)
+	// One search plus the document of each card — the live half is the page's
+	// own row — which is how the estimate prices it.
+	if n != 3 {
+		t.Errorf("cost %d requests, want 1 + 2×1", n)
 	}
 	// A card lands in products, alongside what the search page wrote — the
 	// stable half of the same row. There is no table of its own.
@@ -535,8 +547,8 @@ func TestFetch_OneProductsCardFailingDoesNotThrowAwayThePage(t *testing.T) {
 		t.Errorf("tried %d cards, want it to keep going after the first failed", len(site.cards))
 	}
 	// Still billed: the requests were made, whatever came back.
-	if n != 5 {
-		t.Errorf("cost %d requests, want 1 + 2×2 even though the cards failed", n)
+	if n != 3 {
+		t.Errorf("cost %d requests, want 1 + 2×1 even though the cards failed", n)
 	}
 
 	products, err := s.CountForTest(t.Context(), `SELECT COUNT(*) FROM products`)
@@ -1716,8 +1728,8 @@ func TestFetch_ABatchStillBuysTheDocumentWhenItIsAskedFor(t *testing.T) {
 	if len(site.cards) != 2 {
 		t.Errorf("документов запрошено %v, ожидались два", site.cards)
 	}
-	// One batch plus two cards of two halves each.
-	if n != 5 {
+	// One batch plus two documents: the batch is the live half.
+	if n != 3 {
 		t.Errorf("потрачено %d запросов, ожидались пачка и два документа", n)
 	}
 }
@@ -1857,7 +1869,8 @@ func TestFetch_TheDocumentSurvivesTheLiveHalfFailing(t *testing.T) {
 		cardPartial: errors.New("живая половина не ответила"),
 	}
 
-	f, st := fetcherFor(t, site, "nm_id", "description")
+	// A live field beside the document, so both halves are asked for.
+	f, st := fetcherFor(t, site, "nm_id", "description", "size_quantity")
 	if _, err := f.Fetch(t.Context(), job.Item{Key: job.Key{
 		Kind: job.ItemPage, Phrase: "платье", Dest: "-1257786", AppType: 1, Page: 1,
 	}.String()}); err != nil {
@@ -1982,6 +1995,10 @@ func (m *meetingSite) Card(ctx context.Context, b *wb.Basket, eps wb.Endpoints, 
 	return m.fakeSite.Card(ctx, b, eps, nm, dest, app)
 }
 
+func (m *meetingSite) CardDocument(ctx context.Context, b *wb.Basket, eps wb.Endpoints, nm int64) (wb.CardFetch, error) {
+	return m.Card(ctx, b, eps, nm, "", 0)
+}
+
 func TestFetch_CardsOfAPageAreFetchedSideBySide(t *testing.T) {
 	// One card after another, a page of a hundred took a quarter of an hour
 	// through residential exits (09.10.2026).
@@ -1997,5 +2014,34 @@ func TestFetch_CardsOfAPageAreFetchedSideBySide(t *testing.T) {
 	}
 	if site.met.Load() != 2 {
 		t.Error("карточки двух моделей одной страницы запрошены по очереди, а не вместе")
+	}
+}
+
+func TestFetch_APageAsksTheLiveCardOnlyForItsOwnFields(t *testing.T) {
+	// The page already carried the price and the stock; the live address is
+	// asked only when a field read out of it was ticked. Asked for every
+	// rival of a profile check, it refused through residential exits more
+	// often than it answered (09.10.2026).
+	for _, tc := range []struct {
+		fields []string
+		want   int
+	}{
+		{[]string{"nm_id", "description"}, 1 + 2},
+		{[]string{"nm_id", "description", "size_quantity"}, 1 + 2*2},
+	} {
+		site := &fakeSite{products: []wb.Product{product(101), product(102)}, cardImt: 900}
+		f, _ := fetcherFor(t, site, tc.fields...)
+		n, err := f.Fetch(t.Context(), job.Item{Key: job.Key{
+			Kind: job.ItemPage, Phrase: "платье", Dest: "-1257786", AppType: 1, Page: 1,
+		}.String()})
+		if err != nil {
+			t.Fatalf("Fetch: %v", err)
+		}
+		if n != tc.want {
+			t.Errorf("%v: %d requests, want %d", tc.fields, n, tc.want)
+		}
+		if est := wb.Selection(tc.fields).Cost().PerProduct; 1+2*est != tc.want {
+			t.Errorf("%v: the estimate prices a product at %d, the run spends %d", tc.fields, est, (tc.want-1)/2)
+		}
 	}
 }

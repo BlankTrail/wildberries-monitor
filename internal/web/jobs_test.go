@@ -105,17 +105,16 @@ func TestEstimate_CountsWhatTheRunWillSpend(t *testing.T) {
 	srv := newServer(t)
 	form := goodForm()
 	// One region, two phrases, five pages, and one paid field: the card
-	// document, which costs two requests per product — the static half from
-	// the CDN and the live half beside it.
+	// document, one request per product — the live half is the page's own.
 	form["fields"] = []string{"nm_id", "description"}
 
 	body := postForm(t, srv, "/jobs/estimate", form).Body.String()
 	if !strings.Contains(body, "запросов") {
 		t.Fatalf("the estimate says nothing about requests: %q", firstLines(body))
 	}
-	// 2 phrases × 5 pages = 10 search requests, plus two per product for an
-	// assumed 100 per page: 2000 + 10.
-	if !strings.Contains(body, "2 010") {
+	// 2 phrases × 5 pages = 10 search requests, plus one per product for an
+	// assumed 100 per page: 1000 + 10.
+	if !strings.Contains(body, "1 010") {
 		t.Errorf("estimate = %q, want 1 010 requests", firstLines(body))
 	}
 	// An assumed number is never presented as a known one.

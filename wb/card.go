@@ -250,6 +250,37 @@ func (c *Client) Card(ctx context.Context, b *Basket, eps Endpoints, nm int64, d
 	return out, nil
 }
 
+// CardDocument is the static half of a product on its own: the card document
+// from the media CDN, with no live request beside it.
+//
+// The half a page walk needs when the selection reads the document and not the
+// live fields: the page already carried the price and the stock. Client.Card
+// asked the live address too, and through residential exits that address
+// answered 403 and 525 more often than not — each answer a change of exit and
+// a fresh wait, a page of a hundred cards a quarter of an hour (09.10.2026).
+func (c *Client) CardDocument(ctx context.Context, b *Basket, eps Endpoints, nm int64) (CardFetch, error) {
+	var out CardFetch
+	cardURL, err := b.CardURL(ctx, nm)
+	if err != nil {
+		return out, err
+	}
+	res, err := c.Get(ctx, cardURL, KindPlain, eps.CardPageURL(nm))
+	if err != nil {
+		out.Fetches = append(out.Fetches, lostFetch(SourceCardStatic, err))
+		return out, err
+	}
+	out.Fetches = append(out.Fetches, fetchOf(SourceCardStatic, res))
+	if res.Class != ClassOK {
+		return out, fmt.Errorf("card %d: status %d (%s)", nm, res.Status, res.Class)
+	}
+	card, err := decodeCard(res.Body)
+	if err != nil {
+		return out, err
+	}
+	out.Card = card
+	return out, nil
+}
+
 // Detail is the live half of a product on its own: price, per-size stock,
 // delivery and promotions for one region, with no card document beside it.
 //

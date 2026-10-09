@@ -245,20 +245,23 @@ func TestSelectionCost_CountsOneRequestPerSourceNotPerField(t *testing.T) {
 	if a, b := one.Cost().PerProduct, four.Cost().PerProduct; a != b {
 		t.Errorf("one field costs %d and four fields of the same document cost %d; they are one request", a, b)
 	}
-	// Two, because Client.Card makes two: the static half from the CDN and the
-	// live half. Priced at one, an article list quoted half what it spent.
-	if one.Cost().PerProduct != 2 {
-		t.Errorf("one card field costs %d requests per product, want 2", one.Cost().PerProduct)
+	// One: the document alone. The live half is the page's or the batch's.
+	if one.Cost().PerProduct != 1 {
+		t.Errorf("one card field costs %d requests per product, want 1", one.Cost().PerProduct)
+	}
+	// Two when a live field is ticked beside it: Client.Card, both halves.
+	if got := (Selection{"description", "size_quantity"}).Cost().PerProduct; got != 2 {
+		t.Errorf("document and live card cost %d requests per product, want 2", got)
 	}
 }
 
 func TestSelectionCost_AddsUpAcrossSources(t *testing.T) {
-	// Card, reviews and questions are three different responses — and the card
-	// is two requests of its own, and so are the reviews (the route to their
-	// host, then the host), so five.
+	// Card, reviews and questions are three different responses — the
+	// reviews two requests of their own (the route to their host, then the
+	// host), so four.
 	s := Selection{"description", "review_text", "question_text"}
-	if got := s.Cost().PerProduct; got != 5 {
-		t.Errorf("PerProduct = %d, want 5 (карточка вдвоём, отзывы вдвоём, вопросы)", got)
+	if got := s.Cost().PerProduct; got != 4 {
+		t.Errorf("PerProduct = %d, want 4 (карточка, отзывы вдвоём, вопросы)", got)
 	}
 }
 
@@ -271,8 +274,8 @@ func TestSelectionCost_NamesAKeyItDoesNotKnow(t *testing.T) {
 	if len(got.Unknown) != 1 || got.Unknown[0] != "colour_of_the_sky" {
 		t.Errorf("Unknown = %v, want [colour_of_the_sky]", got.Unknown)
 	}
-	if got.PerProduct != 2 {
-		t.Errorf("PerProduct = %d, want 2 — the known field still counts, and a card is two requests", got.PerProduct)
+	if got.PerProduct != 1 {
+		t.Errorf("PerProduct = %d, want 1 — the known field still counts", got.PerProduct)
 	}
 }
 

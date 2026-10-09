@@ -738,7 +738,12 @@ func (a *App) profileCheck(ctx context.Context, p store.ProfileRow) error {
 func rivalFields(fields []string) wb.Selection {
 	out := make(wb.Selection, 0, len(fields))
 	for _, key := range fields {
-		if f, ok := wb.FieldByKey(key); ok && f.Group == wb.GroupReputation {
+		// And the live card's own fields — stock by size and warehouse. The
+		// page carries a rival's price and total stock; asked per rival, the
+		// live address refused through residential exits more often than it
+		// answered, and a page of a hundred took a quarter of an hour
+		// (09.10.2026).
+		if f, ok := wb.FieldByKey(key); ok && (f.Group == wb.GroupReputation || f.Source == wb.FieldSourceCardDetail) {
 			continue
 		}
 		out = append(out, key)

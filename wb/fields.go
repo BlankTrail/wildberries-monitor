@@ -2,6 +2,8 @@
 
 package wb
 
+import "slices"
+
 // This file declares what the product can collect, and nothing else: no
 // requests, no state, no clock. Three consumers read it and none of them
 // should have to know the others exist — the task constructor draws
@@ -474,18 +476,22 @@ type Cost struct {
 var requestsPerProduct = map[FieldSource]int{
 	FieldSourceSearchResult: 0,
 	FieldSourceCardDetail:   0,
-	// Two, and not one. The document is fetched by Client.Card, which makes two
-	// requests every time — the static half from the CDN and the live half —
-	// and the collector says so out loud at both of its call sites (requests +=
-	// 2). Priced at one, a hundred-article job with «Карточка» ticked quoted a
-	// hundred and one requests, without the word «около» because that kind's
-	// estimate is marked exact, and then made two hundred and one.
-	FieldSourceCardDocument: 2,
+	// One: the document alone, Client.CardDocument. When the live card's own
+	// fields are ticked too the collector asks Client.Card, both halves, and
+	// Cost adds the second — see liveWithDocument. Priced at one when it was
+	// always two, a hundred-article job quoted a hundred and one requests and
+	// made two hundred and one; priced at two now that it is mostly one, a
+	// profile check would quote twice what it spends.
+	FieldSourceCardDocument: 1,
 	// Two as well: Client.Reviews first asks which host keeps the card's
 	// reviews, then asks that host.
 	FieldSourceReviews:   2,
 	FieldSourceQuestions: 1,
 }
+
+// liveWithDocument is the live half fetched beside the document, per product,
+// when the selection reads both: Client.Card's second request.
+const liveWithDocument = 1
 
 // requestsPerPhrase is what one extra fetch of each per-phrase source costs,
 // per phrase × region. FieldSourceShelves is the only entry: Client.Shelves
@@ -501,9 +507,13 @@ var requestsPerPhrase = map[FieldSource]int{
 // make a cheap group look expensive.
 func (s Selection) Cost() Cost {
 	var c Cost
-	for _, src := range s.Sources() {
+	sources := s.Sources()
+	for _, src := range sources {
 		c.PerProduct += requestsPerProduct[src]
 		c.PerPhrase += requestsPerPhrase[src]
+	}
+	if slices.Contains(sources, FieldSourceCardDocument) && slices.Contains(sources, FieldSourceCardDetail) {
+		c.PerProduct += liveWithDocument
 	}
 	for _, key := range s {
 		if _, ok := FieldByKey(key); !ok {
