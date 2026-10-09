@@ -213,11 +213,25 @@ func TestBot_ARefusalTelegramWillRepeatIsPermanent(t *testing.T) {
 	if err == nil {
 		t.Fatal("a refusal was reported as a success")
 	}
-	if !errors.Is(err, notify.ErrPermanent) {
-		t.Errorf("error = %v, want it marked as one no retry can fix", err)
+	// The chat, not the message: the addressee is switched off and the
+	// message waits for a corrected address rather than being thrown away
+	// (10.10.2026).
+	if !errors.Is(err, notify.ErrBadAddress) || errors.Is(err, notify.ErrPermanent) {
+		t.Errorf("error = %v, want it marked as the addressee's refusal", err)
 	}
 	if !strings.Contains(err.Error(), "blocked by the user") {
 		t.Errorf("error = %v, want Telegram's own words", err)
+	}
+
+	// A message Telegram will never take is the message's own failure.
+	api.reply = `{"ok":false,"error_code":400,"description":"Bad Request: message is too long"}`
+	if err := api.bot().SendMessage(t.Context(), "1", "привет"); !errors.Is(err, notify.ErrPermanent) {
+		t.Errorf("message too long = %v, want it permanent", err)
+	}
+	// A token Telegram does not accept is configuration, not a failed send.
+	api.reply = `{"ok":false,"error_code":401,"description":"Unauthorized"}`
+	if err := api.bot().SendMessage(t.Context(), "1", "привет"); !errors.Is(err, notify.ErrNotConfigured) {
+		t.Errorf("unauthorized = %v, want it not configured", err)
 	}
 }
 

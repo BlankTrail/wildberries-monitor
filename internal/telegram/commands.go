@@ -33,7 +33,12 @@ type Update struct {
 	Message  *struct {
 		Text string `json:"text"`
 		Chat struct {
-			ID int64 `json:"id"`
+			ID        int64  `json:"id"`
+			Type      string `json:"type"`
+			Title     string `json:"title"`
+			FirstName string `json:"first_name"`
+			LastName  string `json:"last_name"`
+			Username  string `json:"username"`
 		} `json:"chat"`
 		MessageThreadID int64 `json:"message_thread_id"`
 	} `json:"message"`
@@ -172,6 +177,12 @@ type Commands struct {
 	// stop the owner's collection.
 	Allowed func(chatID int64) bool
 
+	// Seen is told about every chat that writes to the bot, before anything
+	// else is decided about it — how the settings screen offers that chat as
+	// an addressee instead of asking a person to copy a number out of the
+	// bot's reply (10.10.2026). Nil means nobody is listening.
+	Seen func(ctx context.Context, chatID int64, name string)
+
 	// Offset is where the update stream was left off, and it has to survive a
 	// restart. Load and Save are functions rather than a number so that the
 	// place it is kept — a settings row — stays the caller's business.
@@ -239,6 +250,9 @@ func (c *Commands) handle(ctx context.Context, u Update) error {
 	}
 	chat := u.Message.Chat.ID
 	reply := func(text string) error { return c.Bot.SendMessage(ctx, c.address(u), text) }
+	if c.Seen != nil {
+		c.Seen(ctx, chat, chatName(u))
+	}
 
 	if c.Allowed == nil || !c.Allowed(chat) {
 		// Answered rather than ignored, and with the chat id: the owner's own
@@ -627,4 +641,20 @@ func splitCommand(text string) (command, argument string) {
 		command = command[:at]
 	}
 	return strings.ToLower(command), strings.TrimSpace(argument)
+}
+
+// chatName is how a chat calls itself: a group's or channel's title, a
+// person's name, or their @username — whichever there is.
+func chatName(u Update) string {
+	c := u.Message.Chat
+	if t := strings.TrimSpace(c.Title); t != "" {
+		return t
+	}
+	if n := strings.TrimSpace(strings.TrimSpace(c.FirstName) + " " + strings.TrimSpace(c.LastName)); n != "" {
+		return n
+	}
+	if c.Username != "" {
+		return "@" + c.Username
+	}
+	return ""
 }

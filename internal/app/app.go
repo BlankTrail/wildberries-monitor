@@ -475,6 +475,13 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 			n, _ := strconv.ParseInt(s.SettingOr(ctx, settingTelegramOffset, "0"), 10, 64)
 			return n, nil
 		},
+		Seen: func(ctx context.Context, chatID int64, name string) {
+			if err := s.SetSetting(ctx, store.SettingTelegramLastChat, fmt.Sprint(chatID), store.SettingText); err != nil {
+				a.Log.Printf("телеграм: чат %d не запомнен: %v", chatID, err)
+				return
+			}
+			_ = s.SetSetting(ctx, store.SettingTelegramLastChatName, name, store.SettingText)
+		},
 		SaveOffset: func(ctx context.Context, offset int64) error {
 			return s.SetSetting(ctx, settingTelegramOffset, fmt.Sprint(offset), store.SettingInt)
 		},
@@ -515,6 +522,15 @@ func (a *App) reloadTelegram(ctx context.Context) {
 		// proves nothing about these, and the ladder's check is a real
 		// exchange.
 		a.Ladder.Forget()
+		if token != "" {
+			// What waited for a way to send goes now, not when the backoff of
+			// the hours without one says so (10.10.2026).
+			if n, err := a.Store.DueNow(ctx, time.Now().Unix()); err != nil {
+				a.Log.Printf("уведомления: %v", err)
+			} else if n > 0 {
+				a.Log.Printf("уведомления: Telegram настроен, ждавших отправки: %d — отправляем", n)
+			}
+		}
 	}
 
 	chat := a.Store.SettingOr(ctx, store.SettingTelegramChat, "")

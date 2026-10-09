@@ -822,3 +822,64 @@ func TestRuleLog_SaysWhetherTheMessageWasDelivered(t *testing.T) {
 		t.Error("товар в журнале — голым артикулом, без названия")
 	}
 }
+
+func TestTargets_TheChatThatWroteToTheBotIsOfferedOnce(t *testing.T) {
+	srv := newServer(t)
+	ctx := t.Context()
+	if err := srv.Store.SetSetting(ctx, store.SettingTelegramLastChat, "777", store.SettingText); err != nil {
+		t.Fatalf("SetSetting: %v", err)
+	}
+	if err := srv.Store.SetSetting(ctx, store.SettingTelegramLastChatName, "Анна", store.SettingText); err != nil {
+		t.Fatalf("SetSetting: %v", err)
+	}
+	body := get(t, srv, "/rules", "correct horse").Body.String()
+	if !strings.Contains(body, "Анна (777)") || !strings.Contains(body, "Добавить адресатом") {
+		t.Fatalf("написавший боту чат не предложен:\n%s", firstLines(body))
+	}
+	if _, err := srv.Store.SaveTarget(ctx, store.TargetRow{Kind: "telegram", Address: "777", Enabled: true}); err != nil {
+		t.Fatalf("SaveTarget: %v", err)
+	}
+	if body := get(t, srv, "/rules", "correct horse").Body.String(); strings.Contains(body, "Добавить адресатом") {
+		t.Error("уже добавленный чат предложен снова")
+	}
+}
+
+func TestTargets_ARefusingAddresseeIsExplainedAndFixedWithoutLosingItsQueue(t *testing.T) {
+	// A wrong channel name switched the addressee off; deleting it to fix the
+	// typo would have taken its waiting messages with it (10.10.2026).
+	srv := newServer(t)
+	srv.NotifyKinds = func() []string { return []string{"telegram"} }
+	ctx := t.Context()
+	id, err := srv.Store.SaveTarget(ctx, store.TargetRow{Name: "канал", Kind: "telegram", Address: "@nope", Enabled: true})
+	if err != nil {
+		t.Fatalf("SaveTarget: %v", err)
+	}
+	msg, err := srv.Store.Enqueue(ctx, store.OutboxRow{TargetID: id, Body: "цена"})
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	if err := srv.Store.Postpone(ctx, msg, time.Now().Unix(),
+		"telegram: sendMessage: Bad Request: chat not found (400): notify: the addressee does not accept messages"); err != nil {
+		t.Fatalf("Postpone: %v", err)
+	}
+	if err := srv.Store.SetTargetEnabled(ctx, id, false); err != nil {
+		t.Fatalf("SetTargetEnabled: %v", err)
+	}
+
+	body := get(t, srv, "/rules", "correct horse").Body.String()
+	if !strings.Contains(body, "не принимает сообщения") || !strings.Contains(body, "Сообщения ждут") {
+		t.Fatalf("отказ адресата не объяснён:\n%s", firstLines(body))
+	}
+
+	form := url.Values{"id": {fmt.Sprint(id)}, "name": {"канал"}, "kind": {"telegram"}, "address": {"777"}}
+	if w := postForm(t, srv, "/rules/targets", form); !strings.Contains(w.Body.String(), "Адрес сохранён") {
+		t.Fatalf("адрес не сохранён:\n%s", firstLines(w.Body.String()))
+	}
+	targets, _ := srv.Store.Targets(ctx)
+	if len(targets) != 1 || targets[0].Address != "777" || !targets[0].Enabled {
+		t.Errorf("targets = %+v, want the one addressee corrected and switched on", targets)
+	}
+	if due, _ := srv.Store.DueMessages(ctx, time.Now().Unix()+60, 10); len(due) != 1 {
+		t.Errorf("waiting messages after the fix: %d, want the one still there", len(due))
+	}
+}

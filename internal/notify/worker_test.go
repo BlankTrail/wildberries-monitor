@@ -435,3 +435,76 @@ func TestLastRuleFiring_IsPerProductAndIgnoresItsOwnRefusals(t *testing.T) {
 		t.Error("a product the rule never spoke about has a last firing")
 	}
 }
+
+func TestRun_WithNothingToSendWithAMessageWaitsWithoutSpendingItsTries(t *testing.T) {
+	// A day before anybody pasted a token spent ten of every message's fifteen
+	// tries and pushed them hours out (10.10.2026). Nothing was tried; nothing
+	// is counted, and it is asked again next round.
+	s := openStore(t)
+	_, id := queued(t, s, "цена упала")
+	tr := &sink{fail: fmt.Errorf("telegram: no route worked: bot: no token: %w", ErrNotConfigured)}
+
+	at := noon
+	for round := 0; round < MaxAttempts+2; round++ {
+		w := worker(s, tr)
+		w.Now = func() time.Time { return at }
+		if _, err := w.Run(context.Background()); err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		at = at.Add(2 * time.Minute)
+	}
+	st, attempts, dueAt := state(t, s, id)
+	if st != store.OutboxPending || attempts != 0 {
+		t.Errorf("state %q, attempts %d — want it waiting with every try left", st, attempts)
+	}
+	if dueAt > at.Unix() {
+		t.Errorf("due at %d, after the next round %d — it was pushed out", dueAt, at.Unix())
+	}
+	tr.fail = nil
+	w := worker(s, tr)
+	w.Now = func() time.Time { return at }
+	if stats, _ := w.Run(context.Background()); stats.Sent != 1 {
+		t.Errorf("once there is a way to send, it went: %+v", stats)
+	}
+}
+
+func TestRun_AnAddresseeThatRefusesIsSwitchedOffAndItsMessagesWait(t *testing.T) {
+	// A wrong channel name threw away a day's backlog one message at a time
+	// (10.10.2026). The addressee is switched off instead; nothing is lost.
+	s := openStore(t)
+	target, first := queued(t, s, "первое")
+	second, err := s.Enqueue(context.Background(), store.OutboxRow{TargetID: target, Body: "второе"})
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	tr := &counting{fail: fmt.Errorf("telegram: chat not found (400): %w", ErrBadAddress)}
+
+	stats, err := (&Worker{Store: s, Transports: map[string]Transport{"telegram": tr},
+		Now: func() time.Time { return noon }}).Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if stats.Switched != 1 || stats.GaveUp != 0 {
+		t.Errorf("stats = %+v, want the addressee switched off once and nothing given up", stats)
+	}
+	for _, id := range []int64{first, second} {
+		if st, attempts, _ := state(t, s, id); st != store.OutboxPending || attempts != 0 {
+			t.Errorf("message %d: %q after %d tries, want it waiting untouched", id, st, attempts)
+		}
+	}
+	if tr.tries != 1 {
+		t.Errorf("tried %d times, want one try and then the addressee left alone", tr.tries)
+	}
+	targets, _ := s.Targets(context.Background())
+	if len(targets) != 1 || targets[0].Enabled {
+		t.Errorf("targets = %+v, want the addressee switched off", targets)
+	}
+}
+
+// counting is a transport that counts its tries and fails each one.
+type counting struct {
+	tries int
+	fail  error
+}
+
+func (c *counting) Send(context.Context, Message) error { c.tries++; return c.fail }

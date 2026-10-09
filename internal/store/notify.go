@@ -293,6 +293,30 @@ func (s *Store) Reschedule(ctx context.Context, id, dueAt int64, failure string)
 	return nil
 }
 
+// Postpone moves a message's due time without counting an attempt: nothing was
+// tried, because nothing could be.
+func (s *Store) Postpone(ctx context.Context, id, dueAt int64, reason string) error {
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE notify_outbox SET state = 'pending', due_at = ?, last_error = ?
+		WHERE id = ?`, dueAt, reason, id)
+	if err != nil {
+		return fmt.Errorf("store: postpone: %w", err)
+	}
+	return nil
+}
+
+// DueNow makes every waiting message due at once, for the moment a way to send
+// them has just been configured: the ones a missing token pushed out by
+// backoff would otherwise wait their hours out (10.10.2026).
+func (s *Store) DueNow(ctx context.Context, now int64) (int64, error) {
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE notify_outbox SET due_at = ? WHERE state = 'pending' AND due_at > ?`, now, now)
+	if err != nil {
+		return 0, fmt.Errorf("store: due now: %w", err)
+	}
+	return res.RowsAffected()
+}
+
 // GiveUp marks a message as one nobody will try again.
 func (s *Store) GiveUp(ctx context.Context, id int64, failure string) error {
 	_, err := s.db.ExecContext(ctx, `
@@ -332,6 +356,26 @@ func (s *Store) SaveTarget(ctx context.Context, t TargetRow) (int64, error) {
 		return 0, fmt.Errorf("store: save target: %w", err)
 	}
 	return res.LastInsertId()
+}
+
+// SetTargetEnabled switches an addressee on or off.
+func (s *Store) SetTargetEnabled(ctx context.Context, id int64, on bool) error {
+	if _, err := s.db.ExecContext(ctx, `UPDATE notify_targets SET enabled = ?, updated_at = ? WHERE id = ?`,
+		on, s.now().UTC().Unix(), id); err != nil {
+		return fmt.Errorf("store: switching an addressee: %w", err)
+	}
+	return nil
+}
+
+// TargetRefusal is the last reason an addressee's messages were refused, or
+// empty: what the screen says beside an addressee the queue switched off.
+func (s *Store) TargetRefusal(ctx context.Context, id int64) string {
+	var reason string
+	_ = s.db.QueryRowContext(ctx, `
+		SELECT COALESCE(last_error, '') FROM notify_outbox
+		 WHERE target_id = ? AND state = 'pending' AND COALESCE(last_error, '') <> ''
+		 ORDER BY id DESC LIMIT 1`, id).Scan(&reason)
+	return reason
 }
 
 // DeleteTarget removes an addressee.

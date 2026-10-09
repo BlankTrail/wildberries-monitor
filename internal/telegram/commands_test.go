@@ -582,3 +582,21 @@ func TestPoll_AFailedStartIsReportedWithWhatWentWrong(t *testing.T) {
 		t.Errorf("ответ %v — без причины отказа", said)
 	}
 }
+
+func TestPoll_TellsWhoWroteEvenWhenTheyMayNotCommand(t *testing.T) {
+	// The chat that writes first is the one the bot may write to; the screen
+	// offers it as an addressee instead of a number copied out of a reply.
+	api := newFakeAPI(t)
+	api.reply = `{"ok":true,"result":[{"update_id":1,"message":{"text":"/start","chat":{"id":999,"type":"private","first_name":"Анна","last_name":"К."}}}]}`
+	c := commandsFor(t, api, &fakeJobs{})
+	var gotID int64
+	var gotName string
+	c.Seen = func(_ context.Context, id int64, name string) { gotID, gotName = id, name }
+
+	if _, err := c.Poll(t.Context()); err != nil {
+		t.Fatalf("Poll: %v", err)
+	}
+	if gotID != 999 || gotName != "Анна К." {
+		t.Errorf("Seen(%d, %q), want 999 and the person's name", gotID, gotName)
+	}
+}

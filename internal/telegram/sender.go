@@ -146,13 +146,17 @@ func (l *Ladder) deliver(ctx context.Context, send func(Sender) error) error {
 // answers.
 func (l *Ladder) pick(ctx context.Context) (Sender, error) {
 	if len(l.Senders) == 0 {
-		return nil, fmt.Errorf("telegram: no way to reach Telegram is configured")
+		return nil, fmt.Errorf("telegram: no way to reach Telegram is configured: %w", notify.ErrNotConfigured)
 	}
 
 	var problems []string
+	unconfigured := 0
 	for _, s := range l.Senders {
 		if err := s.Check(ctx); err != nil {
 			problems = append(problems, s.Name()+": "+err.Error())
+			if errors.Is(err, ErrNoToken) || errors.Is(err, ErrNoAppCredentials) {
+				unconfigured++
+			}
 			continue
 		}
 		l.mu.Lock()
@@ -163,6 +167,11 @@ func (l *Ladder) pick(ctx context.Context) (Sender, error) {
 
 	// Every rung with its own reason. One combined "Telegram is unreachable"
 	// leaves a user guessing which of three unrelated things to fix.
+	if unconfigured == len(l.Senders) {
+		// Not one rung could even begin: nothing to send with, not a send
+		// that failed.
+		return nil, fmt.Errorf("telegram: no route worked: %s: %w", strings.Join(problems, "; "), notify.ErrNotConfigured)
+	}
 	return nil, fmt.Errorf("telegram: no route worked: %s", strings.Join(problems, "; "))
 }
 

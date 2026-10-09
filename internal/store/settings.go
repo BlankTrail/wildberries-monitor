@@ -73,6 +73,12 @@ const (
 	// default everything into one chat". A rule may name its own instead.
 	SettingTelegramChat = "telegram.chat"
 
+	// SettingTelegramLastChat and SettingTelegramLastChatName are the last chat
+	// that wrote to the bot: offered on the notifications screen as an
+	// addressee, so nobody copies a number out of a reply by hand.
+	SettingTelegramLastChat     = "telegram.last_chat"
+	SettingTelegramLastChatName = "telegram.last_chat_name"
+
 	// The three thresholds spec section 5.2 says are configurable, in days.
 	//
 	// Days rather than a duration string: what a person is deciding is «сколько

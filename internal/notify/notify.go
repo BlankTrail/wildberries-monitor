@@ -55,6 +55,20 @@ func (f TransportFunc) Send(ctx context.Context, m Message) error { return f(ctx
 // messages that can never be delivered, delaying the ones that can.
 var ErrPermanent = errors.New("notify: this will not succeed on a retry")
 
+// ErrNotConfigured marks a transport with no way to send at all yet — no bot
+// token, no MTProto credentials. Not a failed attempt: the message waits, its
+// retries untouched, and goes the moment one is configured. Counted as
+// attempts, a program that ran a day before anybody pasted a token had spent
+// ten of every message's fifteen tries and pushed them hours out (10.10.2026).
+var ErrNotConfigured = errors.New("notify: no way to send is configured yet")
+
+// ErrBadAddress marks an addressee that does not take messages — a chat that
+// does not exist, a bot blocked or removed. Not one message's fault: the
+// addressee is switched off and every message for it waits until somebody
+// corrects the address. Treated as one message's permanent failure, a wrong
+// channel name threw away a day's backlog one message at a time (10.10.2026).
+var ErrBadAddress = errors.New("notify: the addressee does not accept messages")
+
 // Backoff is how long to wait before attempt n, counting the attempt that just
 // failed as attempt n.
 //

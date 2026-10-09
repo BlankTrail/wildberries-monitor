@@ -404,7 +404,7 @@ func deliveryReason(e string) string {
 	case strings.Contains(e, "no bot token"):
 		return "не задан токен бота (Настройки → Telegram)"
 	case strings.Contains(e, "chat not found"):
-		return "бот не видит этот чат — напишите боту первым"
+		return "бот не видит этот чат: напишите боту /start, а для группы или канала добавьте бота туда (в канал — администратором)"
 	}
 	return e
 }
@@ -747,18 +747,79 @@ func (s *Server) targetsSection(ctx context.Context, targets []store.TargetRow) 
 			if !t.Enabled {
 				state = `<span class="bt-badge bt-badge--neutral bt-badge--sm">выключен</span>`
 				switchLabel = "Включить"
+				// Switched off by the queue rather than by a person: what the
+				// chat said, and that its messages are waiting, not lost.
+				if why := s.Store.TargetRefusal(ctx, t.ID); why != "" && strings.Contains(why, "addressee does not accept") {
+					state = `<span class="bt-badge bt-badge--error bt-badge--sm">не принимает сообщения</span>` +
+						`<span class="bt-sub">` + html.EscapeString(deliveryReason(why)) +
+						`. Сообщения ждут: исправьте адрес и включите.</span>`
+				}
 			}
-			fmt.Fprintf(&b, `<tr><td>%s</td><td>%s</td><td class="bt-mono">%s</td><td>%s</td><td class="bt-row-actions">%s%s</td></tr>`,
+			// The address is edited where it stands: deleting an addressee
+			// takes its queue with it, so a typo was fixed by losing a backlog.
+			address := `<form class="bt-inline" data-post="/rules/targets" data-target="#rules-body">` +
+				`<input type="hidden" name="id" value="` + fmt.Sprint(t.ID) + `">` +
+				`<input type="hidden" name="name" value="` + html.EscapeString(t.Name) + `">` +
+				`<input type="hidden" name="kind" value="` + html.EscapeString(t.Kind) + `">` +
+				`<input class="bt-input bt-input--sm bt-input--mono" name="address" required value="` +
+				html.EscapeString(t.Address) + `">` +
+				`<button class="bt-btn bt-btn--ghost bt-btn--sm" type="submit">Сохранить</button></form>`
+			fmt.Fprintf(&b, `<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td class="bt-row-actions">%s%s</td></tr>`,
 				html.EscapeString(name), html.EscapeString(targetKindLabel(t.Kind)),
-				html.EscapeString(t.Address), state,
+				address, state,
 				action("/rules/targets/toggle?id="+fmt.Sprint(t.ID), "#rules-body", switchLabel),
 				action("/rules/targets/delete?id="+fmt.Sprint(t.ID), "#rules-body", "Удалить"))
 		}
 		b.WriteString(`</tbody></table></div>`)
 	}
 
+	b.WriteString(s.lastChatOffer(ctx, targets))
 	b.WriteString(s.targetForm(ctx))
 	return b.String()
+}
+
+// lastChatOffer offers the last chat that wrote to the bot as an addressee,
+// one press, when it is not one already. Telegram lets a bot write only to a
+// chat that wrote to it first, and the number that chat has was a thing a
+// person copied out of the bot's reply by hand (10.10.2026).
+func (s *Server) lastChatOffer(ctx context.Context, targets []store.TargetRow) string {
+	id := strings.TrimSpace(s.Store.SettingOr(ctx, store.SettingTelegramLastChat, ""))
+	if id == "" {
+		return ""
+	}
+	var refused *store.TargetRow
+	for i, t := range targets {
+		if t.Kind == "telegram" && strings.TrimSpace(t.Address) == id {
+			return ""
+		}
+		if t.Kind == "telegram" && !t.Enabled && refused == nil &&
+			strings.Contains(s.Store.TargetRefusal(ctx, t.ID), "addressee does not accept") {
+			refused = &targets[i]
+		}
+	}
+	name := strings.TrimSpace(s.Store.SettingOr(ctx, store.SettingTelegramLastChatName, ""))
+	who := id
+	if name != "" {
+		who = name + " (" + id + ")"
+	}
+	if refused != nil {
+		// The addressee that refused, pointed at the chat that wrote: one
+		// press, and its waiting messages go there.
+		return `<form class="bt-alert bt-alert--neutral bt-inline" data-post="/rules/targets" data-target="#rules-body">` +
+			`Боту недавно писал чат ` + html.EscapeString(who) + `. ` +
+			`<input type="hidden" name="id" value="` + fmt.Sprint(refused.ID) + `">` +
+			`<input type="hidden" name="kind" value="telegram">` +
+			`<input type="hidden" name="name" value="` + html.EscapeString(refused.Name) + `">` +
+			`<input type="hidden" name="address" value="` + html.EscapeString(id) + `">` +
+			`<button class="bt-btn bt-btn--primary bt-btn--sm" type="submit">Направить «` +
+			html.EscapeString(firstNonEmpty([]string{refused.Name, refused.Address})) + `» в этот чат</button></form>`
+	}
+	return `<form class="bt-alert bt-alert--neutral bt-inline" data-post="/rules/targets" data-target="#rules-body">` +
+		`Боту недавно писал чат ` + html.EscapeString(who) + `. ` +
+		`<input type="hidden" name="kind" value="telegram">` +
+		`<input type="hidden" name="name" value="` + html.EscapeString(firstNonEmpty([]string{name, "Telegram " + id})) + `">` +
+		`<input type="hidden" name="address" value="` + html.EscapeString(id) + `">` +
+		`<button class="bt-btn bt-btn--primary bt-btn--sm" type="submit">Добавить адресатом</button></form>`
 }
 
 // targetForm adds one addressee.
@@ -817,6 +878,7 @@ func (s *Server) saveTarget(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	row := store.TargetRow{
+		ID:      atoi64(r.PostFormValue("id")),
 		Name:    strings.TrimSpace(r.PostFormValue("name")),
 		Kind:    strings.TrimSpace(r.PostFormValue("kind")),
 		Address: strings.TrimSpace(r.PostFormValue("address")),
@@ -837,6 +899,11 @@ func (s *Server) saveTarget(w http.ResponseWriter, r *http.Request) {
 
 	if _, err := s.Store.SaveTarget(r.Context(), row); err != nil {
 		s.rulesFragment(w, r, `<div class="bt-alert bt-alert--error">`+html.EscapeString(err.Error())+`</div>`)
+		return
+	}
+	if row.ID != 0 {
+		s.rulesFragment(w, r, `<div class="bt-alert bt-alert--success">Адрес сохранён, адресат снова получает — `+
+			`ждавшие сообщения уйдут в ближайшую минуту.</div>`)
 		return
 	}
 	s.rulesFragment(w, r, `<div class="bt-alert bt-alert--success">Адресат добавлен.</div>`)

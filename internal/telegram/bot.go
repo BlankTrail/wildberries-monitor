@@ -252,11 +252,34 @@ func (r redacted) Unwrap() error { return r.err }
 // arrives late, a message abandoned wrongly never arrives.
 func apiError(method string, code int, description string) error {
 	err := fmt.Errorf("telegram: %s: %s (%d)", method, description, code)
-	switch code {
-	case http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound:
+	switch {
+	case code == http.StatusUnauthorized:
+		// The token, not the message: every message would be refused the
+		// same way until it is corrected, and none of them is at fault.
+		return fmt.Errorf("%w: %w", err, notify.ErrNotConfigured)
+	case (code == http.StatusBadRequest || code == http.StatusForbidden) && addressRefusal(description):
+		return fmt.Errorf("%w: %w", err, notify.ErrBadAddress)
+	case code == http.StatusBadRequest || code == http.StatusForbidden || code == http.StatusNotFound:
 		return fmt.Errorf("%w: %w", err, notify.ErrPermanent)
 	}
 	return err
+}
+
+// addressRefusal reports a refusal that is about the chat rather than the
+// message: it does not exist, the bot is not in it or was blocked there, or it
+// may not write in it.
+func addressRefusal(description string) bool {
+	d := strings.ToLower(description)
+	for _, s := range []string{
+		"chat not found", "bot was blocked", "bot was kicked", "bot is not a member",
+		"user is deactivated", "peer_id_invalid", "not enough rights", "have no rights",
+		"need administrator rights", "group chat was upgraded",
+	} {
+		if strings.Contains(d, s) {
+			return true
+		}
+	}
+	return false
 }
 
 // splitThread separates a forum topic from the chat that holds it.

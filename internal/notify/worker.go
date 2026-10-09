@@ -44,6 +44,8 @@ type Stats struct {
 	// kind. Counted rather than logged and forgotten: a non-zero number here
 	// means the queue is growing for a reason nothing else reports.
 	Waiting int
+	// Switched is the addressees switched off because they refused messages.
+	Switched int
 }
 
 // Run makes one pass over what is due.
@@ -108,6 +110,25 @@ func (w *Worker) Run(ctx context.Context) (Stats, error) {
 				return stats, err
 			}
 			stats.Sent++
+		case errors.Is(err, ErrBadAddress):
+			// The addressee, not the message: switched off, and everything for
+			// it waits for a corrected address rather than being thrown away.
+			target.Enabled = false
+			targets[m.TargetID] = target
+			if err2 := w.Store.SetTargetEnabled(ctx, m.TargetID, false); err2 != nil {
+				return stats, err2
+			}
+			if err2 := w.Store.Postpone(ctx, m.ID, now.Unix(), err.Error()); err2 != nil {
+				return stats, err2
+			}
+			stats.Switched++
+		case errors.Is(err, ErrNotConfigured):
+			// Nothing was tried. Asked again next round, as it is, so the
+			// first round after a token is saved delivers it.
+			if err2 := w.Store.Postpone(ctx, m.ID, now.Add(notConfiguredAgain).Unix(), err.Error()); err2 != nil {
+				return stats, err2
+			}
+			stats.Waiting++
 		case errors.Is(err, ErrPermanent), m.Attempts+1 >= MaxAttempts:
 			if err2 := w.Store.GiveUp(ctx, m.ID, err.Error()); err2 != nil {
 				return stats, err2
@@ -126,6 +147,10 @@ func (w *Worker) Run(ctx context.Context) (Stats, error) {
 	}
 	return stats, nil
 }
+
+// notConfiguredAgain is when a message waiting for a transport is looked at
+// again: the next round of the program's own minute.
+const notConfiguredAgain = time.Minute
 
 func (w *Worker) targetsByID(ctx context.Context) (map[int64]store.TargetRow, error) {
 	rows, err := w.Store.Targets(ctx)

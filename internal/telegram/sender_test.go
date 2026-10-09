@@ -273,3 +273,23 @@ func TestLadder_DoesNotBlameTheRungForACancelledRequest(t *testing.T) {
 		t.Error("a cancelled message walked on to the next rung")
 	}
 }
+
+func TestLadder_NothingToSendWithIsNotAFailedSend(t *testing.T) {
+	// No token and no MTProto credentials: the queue must hold the message
+	// without spending its tries (10.10.2026). One rung that could have tried
+	// and failed is a real failure.
+	none := &Ladder{Senders: []Sender{
+		&step{name: "bot", checkFail: ErrNoToken},
+		&step{name: "mtproto", checkFail: ErrNoAppCredentials},
+	}}
+	if err := none.SendMessage(t.Context(), "1", "x"); !errors.Is(err, notify.ErrNotConfigured) {
+		t.Errorf("nothing configured = %v, want ErrNotConfigured", err)
+	}
+	broken := &Ladder{Senders: []Sender{
+		&step{name: "bot", checkFail: errors.New("dial tcp: timeout")},
+		&step{name: "mtproto", checkFail: ErrNoAppCredentials},
+	}}
+	if err := broken.SendMessage(t.Context(), "1", "x"); err == nil || errors.Is(err, notify.ErrNotConfigured) {
+		t.Errorf("a configured rung that failed = %v, want a plain failure", err)
+	}
+}
