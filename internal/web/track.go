@@ -167,7 +167,7 @@ func (s *Server) productTrackHTML(r *http.Request, nmID int64, days int) (string
 
 	var b strings.Builder
 	b.WriteString(`<h3>` + html.EscapeString(productTitle(facts.Product)) + `</h3>`)
-	b.WriteString(`<p class="bt-form-hint">` + html.EscapeString(whereText(facts.Product)) + `</p>`)
+	b.WriteString(`<p class="bt-form-hint">` + html.EscapeString(whereText(facts.Product, s.regionNames(r))) + `</p>`)
 
 	b.WriteString(`<h4>Цена со скидкой</h4>`)
 	if facts.Points == 0 {
@@ -301,10 +301,14 @@ func productTitle(p store.ProductRow) string {
 // whereText names the series' identity. The same product has a different price
 // and a different position in another region and on another storefront, and a
 // chart that did not say which invites the reading that it is all of them.
-func whereText(p store.ProductRow) string {
+func whereText(p store.ProductRow, names map[int64]string) string {
 	dest := strings.TrimSpace(p.Dest)
 	if dest == "" {
 		dest = "не указан"
+	} else {
+		// The name, as every other screen gives it: «Регион -1198059» was the
+		// only place a person met a bare code (09.10.2026).
+		dest = regionLabel(names, dest)
 	}
 	return fmt.Sprintf("Регион %s, витрина %d.", dest, p.AppType)
 }

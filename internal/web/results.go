@@ -327,7 +327,7 @@ func resultsCell(q url.Values, names map[int64]string, row store.ProductRow, c w
 	sub := ""
 	switch c.Key {
 	case "brand":
-		if row.BrandID != nil {
+		if row.BrandID != nil && *row.BrandID != 0 {
 			sub = `<span class="bt-sub">ID ` + strconv.FormatInt(*row.BrandID, 10) + `</span>`
 		}
 	case "supplier_name":

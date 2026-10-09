@@ -75,7 +75,9 @@ func labelled(name string, id *int64) string {
 	} else {
 		b.WriteString(`<span class="bt-labelled__name">—</span>`)
 	}
-	if id != nil {
+	// Zero is the site's «no brand», not a brand numbered nought: «— ID 0»
+	// stood under every unbranded product on the sales screen (09.10.2026).
+	if id != nil && *id != 0 {
 		b.WriteString(`<span class="bt-sub">ID ` + strconv.FormatInt(*id, 10) + `</span>`)
 	}
 	return b.String()

@@ -294,8 +294,31 @@ func (s *Server) ruleLog(w http.ResponseWriter, r *http.Request) {
 	} else {
 		b.WriteString(`<div class="bt-table-wrap"><table class="bt-table"><thead><tr>` +
 			`<th>Когда</th><th>Изменение</th><th>Товар</th><th>Результат</th></tr></thead><tbody>`)
+		ids := make([]int64, len(log))
+		for i, e := range log {
+			ids[i] = e.ID
+		}
+		// What became of each message, rather than «отправлено» for every
+		// event that was not held back: the log said so over fifty-eight
+		// messages sitting in the outbox of a program with no bot token
+		// (09.10.2026).
+		delivered, err := s.Store.Deliveries(r.Context(), ids)
+		if err != nil {
+			delivered = map[int64]store.Delivery{}
+		}
+		names := s.regionNames(r)
+		nms := make([]int64, len(log))
+		for i, e := range log {
+			nms[i] = e.NmID
+		}
+		// The product by its name, with the article under it: a column of
+		// bare eight-digit numbers told nobody which product moved.
+		titles, err := s.Store.ProductNames(r.Context(), nms)
+		if err != nil {
+			titles = map[int64]string{}
+		}
 		for _, e := range log {
-			result := `<span class="bt-badge bt-badge--success bt-badge--sm">отправлено</span>`
+			result := deliveryBadge(delivered[e.ID], delivered[e.ID] != (store.Delivery{}))
 			if e.SuppressedBy != "" {
 				label := reasonLabels[e.SuppressedBy]
 				if label == "" {
@@ -309,9 +332,16 @@ func (s *Server) ruleLog(w http.ResponseWriter, r *http.Request) {
 				subject = " (" + e.Subject + ")"
 			}
 			b.WriteString(`<tr>`)
-			b.WriteString(`<td>` + time.Unix(e.FiredAt, 0).UTC().Format("2006-01-02 15:04") + `</td>`)
+			// Local time in the panel's own format, like every other screen:
+			// it was UTC here alone, three hours off for Moscow.
+			b.WriteString(`<td>` + html.EscapeString(readAtText(e.FiredAt)) + `</td>`)
 			b.WriteString(`<td>` + html.EscapeString(kindLabel(track.Kind(e.Kind))+subject) + `</td>`)
-			fmt.Fprintf(&b, `<td>%d, %s</td>`, e.NmID, html.EscapeString(e.Dest))
+			product := fmt.Sprint(e.NmID)
+			if t := titles[e.NmID]; t != "" {
+				product = html.EscapeString(t) + `<span class="bt-sub">ID ` + fmt.Sprint(e.NmID) + `</span>`
+			}
+			b.WriteString(`<td>` + product + `<span class="bt-sub">` +
+				html.EscapeString(regionLabel(names, e.Dest)) + `</span></td>`)
 			b.WriteString(`<td>` + result + `</td>`)
 			b.WriteString(`</tr>`)
 		}
@@ -320,6 +350,37 @@ func (s *Server) ruleLog(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	fmt.Fprint(w, b.String())
+}
+
+// deliveryBadge says what happened to an event's message: delivered, still
+// trying and why, or given up on. An event with no message of its own went
+// into a digest.
+func deliveryBadge(d store.Delivery, known bool) string {
+	switch {
+	case !known:
+		return `<span class="bt-badge bt-badge--neutral bt-badge--sm">в сводке</span>`
+	case d.State == store.OutboxSent:
+		return `<span class="bt-badge bt-badge--success bt-badge--sm">доставлено ` +
+			html.EscapeString(readAtText(d.SentAt)) + `</span>`
+	case d.State == store.OutboxFailed:
+		return `<span class="bt-badge bt-badge--error bt-badge--sm">не доставлено: ` +
+			html.EscapeString(deliveryReason(d.LastError)) + `</span>`
+	case d.LastError != "":
+		return `<span class="bt-badge bt-badge--warning bt-badge--sm">ждёт отправки: ` +
+			html.EscapeString(deliveryReason(d.LastError)) + `</span>`
+	}
+	return `<span class="bt-badge bt-badge--neutral bt-badge--sm">в очереди</span>`
+}
+
+// deliveryReason is the delivery error a person can act on.
+func deliveryReason(e string) string {
+	switch {
+	case strings.Contains(e, "no bot token"):
+		return "не задан токен бота (Настройки → Telegram)"
+	case strings.Contains(e, "chat not found"):
+		return "бот не видит этот чат — напишите боту первым"
+	}
+	return e
 }
 
 // ruleForm is the constructor.

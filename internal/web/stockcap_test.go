@@ -114,7 +114,7 @@ func TestStockPanel_ShowsBothFiguresAndTheStrongerOne(t *testing.T) {
 		t.Errorf("регион с большей суммой складов не первым:\n%s", two)
 	}
 	level := get(t, srv, "/results/stock?nm=205", "").Body.String()
-	if a, b := strings.Index(level, "-1257786"), strings.Index(level, "-5818883"); a < 0 || b < 0 || a > b {
+	if a, b := strings.Index(level, defaultRegionName), strings.Index(level, "-5818883"); a < 0 || b < 0 || a > b {
 		t.Errorf("регионы с равной суммой не по порядку кодов:\n%s", level)
 	}
 	if bare := get(t, srv, "/results/stock?nm=204", "").Body.String(); strings.Contains(bare, "склады собранных регионов") {

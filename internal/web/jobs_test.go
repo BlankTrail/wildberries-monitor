@@ -148,7 +148,7 @@ func TestEstimate_ListsEveryProblemAtOnce(t *testing.T) {
 	form["fields"] = nil
 
 	body := postForm(t, srv, "/jobs/estimate", form).Body.String()
-	if !strings.Contains(body, "no regions") || !strings.Contains(body, "no fields") {
+	if !strings.Contains(body, "не выбран регион") || !strings.Contains(body, "не отмечено ни одного поля") {
 		t.Errorf("only some problems were reported: %q", firstLines(body))
 	}
 }
@@ -182,7 +182,7 @@ func TestSaveJob_ABrokenJobIsNotStored(t *testing.T) {
 	form["fields"] = nil
 
 	w := postForm(t, srv, "/jobs", form)
-	if !strings.Contains(w.Body.String(), "no fields") {
+	if !strings.Contains(w.Body.String(), "ни одного поля") {
 		t.Errorf("the refusal does not say why: %q", firstLines(w.Body.String()))
 	}
 	n, err := srv.Store.CountForTest(t.Context(), `SELECT COUNT(*) FROM jobs`)
@@ -252,6 +252,27 @@ func TestUpload_TakesAPhraseFileAndSaysHowManyLanded(t *testing.T) {
 	// And it is offered immediately, without a reload.
 	if !strings.Contains(w.Body.String(), "весна.txt") {
 		t.Error("the uploaded file is not in the dropdown")
+	}
+}
+
+func TestUpload_ChoosesTheFileAndKeepsTheRestOfTheForm(t *testing.T) {
+	// The answer was the whole constructor again, drawn from the saved job:
+	// the name typed a second earlier and «Из файла» were gone, the file just
+	// loaded sat in the list unchosen, and the estimate answered «job: no
+	// phrases» in English (09.10.2026). It now replaces the file field alone,
+	// with the new file chosen.
+	srv := newServer(t)
+	w := upload(t, srv, "термосы.txt", []byte("термос\nтермокружка\n"))
+	body := w.Body.String()
+	lists, _ := srv.Store.PhraseLists(t.Context())
+	if len(lists) != 1 {
+		t.Fatalf("%d lists", len(lists))
+	}
+	if !strings.Contains(body, fmt.Sprintf(`<option value="%d" selected>`, lists[0].ID)) {
+		t.Errorf("загруженный файл не выбран:\n%s", firstLines(body))
+	}
+	if strings.Contains(body, `name="name"`) {
+		t.Error("ответ снова рисует всю форму и сотрёт то, что в ней набрано")
 	}
 }
 
@@ -381,10 +402,10 @@ func TestJobFromForm_TakesTheListSizeFromTheStoreNotTheBrowser(t *testing.T) {
 	form["fields"] = []string{"shelf_title"}
 
 	body := postForm(t, srv, "/jobs/estimate", form).Body.String()
-	// Three phrases × one region, priced per phrase: three requests for the
-	// walk plus three for the shelves.
-	if !strings.Contains(body, "6 запросов") {
-		t.Errorf("estimate = %q, want six requests from the stored list of three", firstLines(body))
+	// Three phrases × one region, priced per phrase: three requests, and the
+	// walk is the shelf fetch — nothing more for the field.
+	if !strings.Contains(body, "3 запроса") {
+		t.Errorf("estimate = %q, want three requests from the stored list of three", firstLines(body))
 	}
 }
 

@@ -923,12 +923,16 @@ func (s *Server) phraseListField(lists []store.PhraseListRow, chosen, jobID int6
 	upload := `<div class="bt-upload">
 	  <input class="bt-input" id="phrase-file" name="file" type="file" accept=".txt,.csv">
 	  <button class="bt-btn bt-btn--secondary" type="button"
-	          data-upload="` + uploadPhrasesURL(jobID) + `" data-file="#phrase-file" data-target="#main">Загрузить</button>
+	          data-upload="` + uploadPhrasesURL(jobID) + `" data-file="#phrase-file" data-target="#phrase-list-field">Загрузить</button>
 	</div>`
 
-	return field("Файл фраз", sel.String(), "Уже загруженные файлы. Выберите один вместо списка фраз выше.") +
+	// Its own region, so that an upload replaces this and nothing else: see
+	// uploadPhrases.
+	return `<div id="phrase-list-field">` +
+		field("Файл фраз", sel.String(), "Уже загруженные файлы. Выберите один вместо списка фраз выше.") +
 		field("Загрузить файл фраз", upload,
-			"По одной фразе в строке. UTF-8 или windows-1251 — определяется само. Повторы отбрасываются.")
+			"По одной фразе в строке. UTF-8 или windows-1251 — определяется само. Повторы отбрасываются.") +
+		`</div>`
 }
 
 // fieldCheckboxes draws the catalogue, group by group, with each group's
@@ -1058,10 +1062,17 @@ func estimateHTML(j job.Job) string {
 			productsPerPage)
 	}
 
+	// The words follow the numbers: «1 полей, 3 запросов» was the first line
+	// of every small job's form (09.10.2026). After «около» the noun is in the
+	// genitive — «около 21 запроса», «около 3 запросов».
+	requests := countOf(int64(e.Requests), "запрос", "запроса", "запросов")
+	if about != "" {
+		requests = countOf(int64(e.Requests), "запроса", "запросов", "запросов")
+	}
 	return fmt.Sprintf(`<div class="bt-alert bt-alert--neutral">
-	  <strong>%d полей, %s%s запросов, примерно %s.</strong>%s
+	  <strong>%s, %s%s, примерно %s.</strong>%s
 	</div>`,
-		len(j.Fields), about, thousands(int64(e.Requests)), humanDuration(e.Duration), note)
+		countOf(int64(len(j.Fields)), "поле", "поля", "полей"), about, requests, humanDuration(e.Duration), note)
 }
 
 // assumedItems is how many products the estimate should assume.
@@ -1265,16 +1276,23 @@ func (s *Server) uploadPhrases(w http.ResponseWriter, r *http.Request) {
 					html.EscapeString(err.Error())+`</div></section>`)
 				return
 			}
-			// The constructor is re-rendered so the file that was just
-			// streamed in is already in the dropdown.
-			body, err := s.constructorHTML(r, s.uploadingJob(r))
+			// The file field alone, with the file just streamed in chosen.
+			// It used to be the whole constructor again, drawn from the saved
+			// job: what had been typed a second earlier was gone and the new
+			// file sat in the list unchosen (09.10.2026).
+			lists, err := s.Store.PhraseLists(r.Context())
 			if err != nil {
 				http.Error(w, "upload: "+err.Error(), http.StatusInternalServerError)
 				return
 			}
+			var jobID int64
+			if j := s.uploadingJob(r); j != nil {
+				jobID = j.ID
+			}
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			fmt.Fprintf(w, `<div class="bt-alert bt-alert--success">Файл «%s» загружен: %d фраз.</div>%s`,
-				html.EscapeString(list.Name), list.Count, body)
+			fmt.Fprintf(w, `<div class="bt-alert bt-alert--success">Файл «%s» загружен: %s.</div>%s`,
+				html.EscapeString(list.Name), countOf(int64(list.Count), "фраза", "фразы", "фраз"),
+				strings.TrimSuffix(strings.TrimPrefix(s.phraseListField(lists, list.ID, jobID), `<div id="phrase-list-field">`), `</div>`))
 			return
 		}
 		_ = part.Close()
@@ -1537,6 +1555,17 @@ func (s *Server) jobDetail(w http.ResponseWriter, r *http.Request) {
 
 	b.WriteString(s.failuresHTML(ctx, runs[0]))
 	b.WriteString(`</section>`)
+
+	// A run still going gets the live log here too. It used to come only with
+	// the press of «Запустить», so a run the schedule had started — or one
+	// whose page was reloaded — showed «идёт» and nothing of what it did.
+	if runs[0].FinishedAt == nil {
+		var before int64
+		if len(runs) > 1 {
+			before = runs[1].ID
+		}
+		b.WriteString(runLiveHTML(id, before))
+	}
 	s.writeHTML(w, b.String())
 }
 
@@ -1574,13 +1603,17 @@ func (s *Server) failuresHTML(ctx context.Context, run store.RunRow) string {
 	b.WriteString(`<div class="bt-table-wrap"><table class="bt-table"><thead><tr>` +
 		`<th>Что</th><th class="bt-num">Попыток</th><th>Почему</th>` +
 		`</tr></thead><tbody>`)
+	names := s.regionNamesCtx(ctx)
 	for _, it := range items {
-		reason := it.Error
-		if reason == "" {
-			reason = "причина не записана"
+		// In words first — see failures.go; the program's own text stays
+		// under a fold for whoever files the issue.
+		reason := html.EscapeString(failureReason(it.Error))
+		if it.Error != "" && failureReason(it.Error) != it.Error {
+			reason += `<details class="bt-more"><summary>как записано</summary><span class="bt-mono bt-dim">` +
+				html.EscapeString(it.Error) + `</span></details>`
 		}
-		fmt.Fprintf(&b, `<tr><td class="bt-mono">%s</td><td class="bt-num">%d</td><td class="bt-cell-wrap">%s</td></tr>`,
-			html.EscapeString(it.Key), it.Attempts, html.EscapeString(reason))
+		fmt.Fprintf(&b, `<tr><td>%s<div class="bt-mono bt-dim">%s</div></td><td class="bt-num">%d</td><td class="bt-cell-wrap">%s</td></tr>`,
+			html.EscapeString(itemTitle(names, it.Key)), html.EscapeString(it.Key), it.Attempts, reason)
 	}
 	b.WriteString(`</tbody></table></div>`)
 	if int64(len(items)) < total {

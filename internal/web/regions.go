@@ -3,6 +3,7 @@
 package web
 
 import (
+	"context"
 	"fmt"
 	"html"
 	"net/http"
@@ -159,13 +160,26 @@ func regionLabel(names map[int64]string, code string) string {
 	if name, ok := names[dest]; ok && name != "" {
 		return name
 	}
+	if strings.TrimSpace(code) == store.DefaultProfileRegion {
+		// The region every new profile and job starts with, and the one code
+		// a person sees before ever opening the directory. Bare, it read as
+		// a number nobody chose, beside named cities in the same table.
+		return defaultRegionName
+	}
 	return code
 }
 
+// defaultRegionName is what Wildberries' own default dest is: the site answers
+// for Moscow when nobody has picked a pickup point.
+const defaultRegionName = "Москва (по умолчанию)"
+
 // regionNames is the directory as a lookup, for the screens that label codes.
-func (s *Server) regionNames(r *http.Request) map[int64]string {
+func (s *Server) regionNames(r *http.Request) map[int64]string { return s.regionNamesCtx(r.Context()) }
+
+// regionNamesCtx is regionNames for a caller that holds a context and no request.
+func (s *Server) regionNamesCtx(ctx context.Context) map[int64]string {
 	out := map[int64]string{}
-	list, err := s.Store.Regions(r.Context())
+	list, err := s.Store.Regions(ctx)
 	if err != nil {
 		return out
 	}

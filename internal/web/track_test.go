@@ -96,7 +96,7 @@ func TestTrack_ShowsBothChartsForAProduct(t *testing.T) {
 	}
 	// The series' identity, which is not a detail: the same product has a
 	// different price and a different position elsewhere.
-	if !strings.Contains(body, "Регион -1257786") {
+	if !strings.Contains(body, "Регион Москва (по умолчанию)") {
 		t.Error("не сказано, для какого региона это всё")
 	}
 }

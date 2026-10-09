@@ -269,3 +269,47 @@ func TestRunHandler_ThePanelFollowsTheRunThisPressStarts(t *testing.T) {
 		t.Fatalf("панель не знает, какой прогон был до нажатия (%d):\n%s", before, firstLines(body))
 	}
 }
+
+func TestJobDetail_ARunningJobShowsItsLiveLog(t *testing.T) {
+	// The live log came only with the press of «Запустить». A run the schedule
+	// started, or one whose page was reloaded, had «Подробнее» showing «идёт»
+	// and nothing else — found while filming the overview, 09.10.2026.
+	srv := newServer(t)
+	ctx := t.Context()
+	id := oneJob(t, srv)
+
+	first, err := srv.Store.StartRun(ctx, id, []store.ItemRow{{Position: 0, Kind: "page", Key: "a|1|1"}})
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+	if err := srv.Store.FinishRun(ctx, first, store.RunOutcome{State: store.RunDone}); err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+	if _, err := srv.Store.StartRun(ctx, id, []store.ItemRow{{Position: 0, Kind: "page", Key: "a|1|1"}}); err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	body := get(t, srv, fmt.Sprintf("/jobs/detail?id=%d", id), "correct horse").Body.String()
+	// Following this run, not answered for by the one before it.
+	want := fmt.Sprintf(`data-follow="%d" data-after="%d"`, id, first)
+	if !strings.Contains(body, want) || !strings.Contains(body, "Живой лог") {
+		t.Errorf("у идущего задания нет живого лога (%s):\n%s", want, firstLines(body))
+	}
+}
+
+func TestJobDetail_AFinishedJobHasNoLiveLog(t *testing.T) {
+	srv := newServer(t)
+	ctx := t.Context()
+	id := oneJob(t, srv)
+	run, err := srv.Store.StartRun(ctx, id, []store.ItemRow{{Position: 0, Kind: "page", Key: "a|1|1"}})
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+	if err := srv.Store.FinishRun(ctx, run, store.RunOutcome{State: store.RunDone}); err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+	body := get(t, srv, fmt.Sprintf("/jobs/detail?id=%d", id), "correct horse").Body.String()
+	if strings.Contains(body, "data-follow") {
+		t.Error("у завершённого задания открыт живой лог")
+	}
+}

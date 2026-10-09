@@ -63,6 +63,10 @@
       }
       el.innerHTML = html;
       wire(el);
+      // A saved form may have changed what the live badges report — the
+      // BlankTrail key, above all. They used to keep saying «нет ключа» for
+      // up to twenty seconds after the key was saved.
+      if (asked.method === "POST") document.dispatchEvent(new Event("bt:saved"));
     } catch (err) {
       el.innerHTML = `<div class="bt-alert bt-alert--error">Сервер не отвечает: ${escapeHTML(String(err))}</div>`;
     } finally {
@@ -437,6 +441,7 @@
       };
       const timer = setInterval(tick, every * 1000);
       document.addEventListener("visibilitychange", tick);
+      document.addEventListener("bt:saved", refresh);
       // A page being restored from the back/forward cache runs neither
       // DOMContentLoaded nor this, so the timer is stopped rather than left
       // polling on a page nobody can see.

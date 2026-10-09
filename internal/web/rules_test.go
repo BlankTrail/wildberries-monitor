@@ -773,3 +773,47 @@ func TestRules_AFilterCanNameACategory(t *testing.T) {
 		t.Errorf("категория не дошла до правила: %+v", all[0].Scope.Filter)
 	}
 }
+
+func TestRuleLog_SaysWhetherTheMessageWasDelivered(t *testing.T) {
+	// «отправлено» was written for every event not held back, over messages
+	// that sat in the outbox of a program with no bot token (09.10.2026).
+	srv, target := withTarget(t)
+	ctx := t.Context()
+	id, err := rules.Save(ctx, srv.Store, rules.Rule{
+		Name: "цена", Kind: track.PriceChanged,
+		Scope:   rules.Scope{Kind: rules.ScopeProduct, ID: 141504066},
+		Targets: []int64{target}, Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if _, err := srv.Store.SaveProduct(ctx, wb.Product{ID: 141504066, Name: "Термос маленький",
+		Dest: "-1257786", AppType: 1, FetchedAt: time.Now()}, "", 0); err != nil {
+		t.Fatalf("SaveProduct: %v", err)
+	}
+	ev, err := srv.Store.SaveRuleEvent(ctx, store.RuleEventRow{
+		RuleID: id, FiredAt: time.Now().Unix(), Kind: string(track.PriceChanged),
+		NmID: 141504066, Dest: "-1257786",
+	})
+	if err != nil {
+		t.Fatalf("SaveRuleEvent: %v", err)
+	}
+	msg, err := srv.Store.Enqueue(ctx, store.OutboxRow{TargetID: target, RuleEventID: &ev, Body: "цена"})
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	if err := srv.Store.Reschedule(ctx, msg, time.Now().Add(time.Minute).Unix(),
+		"telegram: no route worked: telegram: no bot token is configured"); err != nil {
+		t.Fatalf("Reschedule: %v", err)
+	}
+	body := get(t, srv, fmt.Sprintf("/rules/log?id=%d", id), "correct horse").Body.String()
+	if strings.Contains(body, ">отправлено<") || !strings.Contains(body, "не задан токен бота") {
+		t.Errorf("журнал не говорит, что сообщение не ушло: %q", firstLines(body))
+	}
+	if !strings.Contains(body, "Москва (по умолчанию)") {
+		t.Error("регион в журнале — голым кодом")
+	}
+	if !strings.Contains(body, "Термос маленький") {
+		t.Error("товар в журнале — голым артикулом, без названия")
+	}
+}

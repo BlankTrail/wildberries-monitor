@@ -328,8 +328,11 @@ func (s *Server) chainState(_ *http.Request, p store.ProfileRow) string {
 		// Not a breakdown: somebody pressed «Остановить». Telling them to fix
 		// what they switched off themselves is the screen misreading its own
 		// state — the chain is exactly where they left it.
-		return alert("neutral", "Сбор остановлен вручную. Нажмите «Собрать всё», "+
-			"чтобы продолжить с того места — уже собранное останется.")
+		// «Собрать всё» walks the chain again from the storefront; it said
+		// «продолжить с того места», and a stopped run is over, so the place
+		// is not kept (09.10.2026). What is kept is everything collected.
+		return alert("neutral", "Сбор остановлен вручную. «Собрать всё» пройдёт цепочку заново, "+
+			"с ассортимента, — уже собранное останется.")
 	case p.Stage == store.StageFailed:
 		return alert("error", "Сбор остановился: "+sentence(p.Failure)+
 			" Исправьте и нажмите «Собрать всё» ещё раз — уже собранное останется.")

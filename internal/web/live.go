@@ -276,6 +276,9 @@ func portsHTML(ports []job.PortStat) string {
 	if len(ports) == 0 {
 		return ""
 	}
+	if len(ports) > portsShownOneByOne {
+		return channelsHTML(ports)
+	}
 	var b strings.Builder
 	b.WriteString(`<h4 class="bt-form-head">Порты и каналы</h4>`)
 	// Capped and scrolling, like the phrases. A run in sixteen threads holds
@@ -295,6 +298,56 @@ func portsHTML(ports []job.PortStat) string {
 		}
 		fmt.Fprintf(&b, `<tr><td class="bt-mono">%d</td><td>%s</td><td class="bt-num">%d</td><td>%s</td></tr>`,
 			pt.Port, html.EscapeString(channel), pt.Requests, portStateHTML(pt))
+	}
+	b.WriteString(`</tbody></table></div>`)
+	return b.String()
+}
+
+// portsShownOneByOne is how many ports the progress panel lists one by one.
+// Past it the panel sums them by channel: five hundred rows redrawn every
+// second stalled the browser watching a run, and hung a recording of it
+// (09.10.2026).
+const portsShownOneByOne = 64
+
+// channelsHTML is the ports of a big pool, a line per channel.
+func channelsHTML(ports []job.PortStat) string {
+	type sum struct{ ports, working, quarantined, gone, requests int64 }
+	var order []string
+	by := map[string]*sum{}
+	for _, pt := range ports {
+		name := pt.Channel
+		if name == "" {
+			name = "прямое соединение"
+		}
+		s, ok := by[name]
+		if !ok {
+			s = &sum{}
+			by[name] = s
+			order = append(order, name)
+		}
+		s.ports++
+		s.requests += int64(pt.Requests)
+		switch {
+		case pt.Gone:
+			s.gone++
+		case pt.Quarantined:
+			s.quarantined++
+		default:
+			s.working++
+		}
+	}
+	var b strings.Builder
+	b.WriteString(`<h4 class="bt-form-head">Порты и каналы</h4>`)
+	b.WriteString(`<div class="bt-table-wrap"><table class="bt-table"><thead><tr>` +
+		`<th>Канал</th><th class="bt-num">Портов</th><th class="bt-num">Работает</th>` +
+		`<th class="bt-num">В карантине</th><th class="bt-num">Закрыто снаружи</th><th class="bt-num">Запросов</th>` +
+		`</tr></thead><tbody>`)
+	for _, name := range order {
+		s := by[name]
+		fmt.Fprintf(&b, `<tr><td>%s</td><td class="bt-num">%s</td><td class="bt-num">%s</td>`+
+			`<td class="bt-num">%s</td><td class="bt-num">%s</td><td class="bt-num">%s</td></tr>`,
+			html.EscapeString(name), thousands(s.ports), thousands(s.working),
+			thousands(s.quarantined), thousands(s.gone), thousands(s.requests))
 	}
 	b.WriteString(`</tbody></table></div>`)
 	return b.String()
