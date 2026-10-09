@@ -172,14 +172,14 @@ func (s *Server) rulesBody(r *http.Request) (string, error) {
 	// these ends in a message somebody gets, and «Правила» is the mechanism.
 	// The address stays /rules — a saved link keeps working.
 	b.WriteString(`<h2>Уведомления</h2>`)
-	b.WriteString(s.ruleList(all))
+	b.WriteString(s.ruleList(ctx, all))
 	b.WriteString(s.targetsSection(ctx, targets))
 	b.WriteString(s.ruleForm(r, targets, jobs))
 	return b.String(), nil
 }
 
 // ruleList shows what exists, and under each rule what it has been doing.
-func (s *Server) ruleList(all []rules.Rule) string {
+func (s *Server) ruleList(ctx context.Context, all []rules.Rule) string {
 	if len(all) == 0 {
 		return `<div class="bt-alert bt-alert--neutral">Уведомлений пока нет. Первое — ниже.</div>`
 	}
@@ -208,7 +208,7 @@ func (s *Server) ruleList(all []rules.Rule) string {
 		b.WriteString(`<tr>`)
 		b.WriteString(`<td>` + html.EscapeString(rule.Name) + `</td>`)
 		b.WriteString(`<td>` + html.EscapeString(kindLabel(rule.Kind)) + `</td>`)
-		b.WriteString(`<td>` + html.EscapeString(scopeText(rule.Scope)) + `</td>`)
+		b.WriteString(`<td>` + html.EscapeString(scopeText(rule.Scope, s.scopeName(ctx, rule.Scope))) + `</td>`)
 		b.WriteString(`<td>` + html.EscapeString(thresholdText(rule)) + `</td>`)
 		b.WriteString(`<td>` + state + `</td>`)
 		fmt.Fprintf(&b,
@@ -221,7 +221,30 @@ func (s *Server) ruleList(all []rules.Rule) string {
 	return b.String()
 }
 
-func scopeText(sc rules.Scope) string {
+// scopeName is what the thing a rule watches is called: the product's title,
+// the seller's storefront name, the job's name. Empty when nothing is known
+// about it, and the number alone is shown then. «Продавец 436614» named nobody
+// on a screen whose other columns are all words (09.10.2026).
+func (s *Server) scopeName(ctx context.Context, sc rules.Scope) string {
+	switch sc.Kind {
+	case rules.ScopeProduct:
+		names, err := s.Store.ProductNames(ctx, []int64{sc.ID})
+		if err == nil {
+			return names[sc.ID]
+		}
+	case rules.ScopeSeller:
+		if seller, err := s.Store.Seller(ctx, sc.ID); err == nil {
+			return seller.Name
+		}
+	case rules.ScopeJob:
+		if j, err := s.Store.Job(ctx, sc.ID); err == nil {
+			return j.Name
+		}
+	}
+	return ""
+}
+
+func scopeText(sc rules.Scope, name string) string {
 	label := scopeLabels[sc.Kind]
 	if label == "" {
 		label = string(sc.Kind)
@@ -242,6 +265,9 @@ func scopeText(sc rules.Scope) string {
 			return label + ": всё"
 		}
 		return label + ": " + strings.Join(parts, ", ")
+	}
+	if name = strings.TrimSpace(name); name != "" {
+		return fmt.Sprintf("%s «%s» (%d)", label, name, sc.ID)
 	}
 	return fmt.Sprintf("%s %d", label, sc.ID)
 }

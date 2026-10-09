@@ -113,6 +113,9 @@ func (s *Server) compareBody(r *http.Request) (string, error) {
 	return b.String(), nil
 }
 
+// copiesShown is how many look-alikes the screen lists.
+const copiesShown = 50
+
 // copiesSection lists other sellers' listings that look like copies of mine.
 func copiesSection(cs []store.CopyCandidate) string {
 	var b strings.Builder
@@ -127,6 +130,28 @@ func copiesSection(cs []store.CopyCandidate) string {
 		b.WriteString(`<div class="bt-alert bt-alert--neutral">Похожих чужих карточек среди собранного нет.</div>`)
 		return b.String()
 	}
+	// One row per other card, at its closest match: six of my thermoses
+	// against three hundred look-alikes was seventeen hundred rows and a page
+	// of two megabytes (09.10.2026). The most similar first, and a count of the
+	// rest rather than all of them.
+	seen := map[int64]bool{}
+	var one []store.CopyCandidate
+	for _, c := range cs {
+		if !seen[c.Copy] {
+			seen[c.Copy] = true
+			one = append(one, c)
+		}
+	}
+	shown := one
+	if len(shown) > copiesShown {
+		shown = shown[:copiesShown]
+	}
+	fmt.Fprintf(&b, `<p class="bt-form-hint">Похожих карточек: %d. `, len(one))
+	if len(one) > len(shown) {
+		fmt.Fprintf(&b, `Показаны %d самых похожих.`, len(shown))
+	}
+	b.WriteString(`</p>`)
+	cs = shown
 	b.WriteString(`<div class="bt-table-wrap"><table class="bt-table"><thead><tr>` +
 		`<th>Ваш товар</th><th>Похожий</th><th>Продавец</th>` +
 		`<th class="bt-num">Совпадение</th><th class="bt-num">Цена</th><th class="bt-num">Ваша цена</th>` +

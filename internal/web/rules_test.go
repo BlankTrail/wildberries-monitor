@@ -308,9 +308,14 @@ func TestScopeText_ReadsAsSomethingAPersonWrote(t *testing.T) {
 		{rules.Scope{Kind: rules.ScopeFilter, Filter: rules.Filter{PriceMinMinor: 50000, PriceMaxMinor: 500000}}, "500–5000 ₽"},
 		{rules.Scope{Kind: rules.ScopeFilter}, "всё"},
 	} {
-		if got := scopeText(c.scope); !strings.Contains(got, c.want) {
+		if got := scopeText(c.scope, ""); !strings.Contains(got, c.want) {
 			t.Errorf("scope %+v reads as %q, want it to mention %q", c.scope, got, c.want)
 		}
+	}
+	// With a name known, the name comes first and the number stays beside it:
+	// «Продавец 436614» named nobody (09.10.2026).
+	if got := scopeText(rules.Scope{Kind: rules.ScopeSeller, ID: 436614}, "D&M Company"); got != "Продавец «D&M Company» (436614)" {
+		t.Errorf("seller scope reads as %q", got)
 	}
 }
 
