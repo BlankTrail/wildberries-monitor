@@ -104,7 +104,7 @@ func TestDetectChanges_APriceMoveReachesTheOutbox(t *testing.T) {
 	// The message says which product and both numbers: «цена изменилась» about
 	// an unnamed product is a notification somebody has to go and look up.
 	body := due[0].Body
-	for _, want := range []string{"100", "цена", "1299", "999"} {
+	for _, want := range []string{"100", "цена", "1 299 ₽", "999"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("в сообщении нет %q: %q", want, body)
 		}
@@ -257,10 +257,10 @@ func TestDescribeChange_SaysWhatMovedAndByHowMuch(t *testing.T) {
 	}{
 		{track.Change{Kind: track.PriceChanged, Was: 129900, Now: 99900,
 			Unit: track.UnitMinor, HadBefore: true, HasNow: true},
-			[]string{"цена", "1299", "999"}},
+			[]string{"цена", "1 299 ₽", "999"}},
 		{track.Change{Kind: track.PositionChanged, Was: 3, Now: 17,
 			Unit: track.UnitRank, HadBefore: true, HasNow: true},
-			[]string{"место", "3 место", "17 место"}},
+			[]string{"место", "3-е → 17-е место", "ниже на 14"}},
 		{track.Change{Kind: track.RatingChanged, Was: 475, Now: 462,
 			Unit: track.UnitRatingHundredths, HadBefore: true, HasNow: true},
 			[]string{"рейтинг", "4.75", "4.62"}},
@@ -270,7 +270,7 @@ func TestDescribeChange_SaysWhatMovedAndByHowMuch(t *testing.T) {
 			Unit: track.UnitItems, HasNow: true},
 			[]string{"остаток", "появилось", "7"}},
 	} {
-		got := describeChange(c.change)
+		got := describeChange(c.change, nil)
 		for _, want := range c.want {
 			if !strings.Contains(got, want) {
 				t.Errorf("%q не содержит %q", got, want)
@@ -546,7 +546,7 @@ func TestDetectChanges_ARivalCuttingTheirPriceReachesTheOutbox(t *testing.T) {
 	// The message says which product, which phrase and both numbers: «вас
 	// подрезали» about an unnamed product in an unnamed search is a
 	// notification somebody has to go and look up.
-	for _, want := range []string{"100", "платье летнее", "1099", "899"} {
+	for _, want := range []string{"100", "платье летнее", "1 099 ₽", "899"} {
 		if !strings.Contains(due[0].Body, want) {
 			t.Errorf("в сообщении нет %q: %q", want, due[0].Body)
 		}
@@ -845,5 +845,43 @@ func sampleCardFetchFor(nmID int64) wb.CardFetch {
 			Description: "Летнее платье.", VendorCode: "PL-1",
 			Options: []wb.Option{{Name: "Цвет", Value: "синий"}},
 		},
+	}
+}
+
+func TestChangeNames_EveryKindIsCalledSomethingInRussian(t *testing.T) {
+	// «undercut-by-competitor» reached a phone (10.10.2026): a kind with no
+	// name here comes out as its identifier.
+	for _, k := range track.Kinds() {
+		if changeNames[k] == "" {
+			t.Errorf("вид %q не назван в сообщениях", k)
+		}
+	}
+}
+
+func TestWording_NumbersReadTheWayTheyAreSaid(t *testing.T) {
+	for _, c := range []struct {
+		got, want string
+	}{
+		{roubles(201600), "2 016 ₽"}, {roubles(99950), "999,50 ₽"}, {roubles(-1000), "−10 ₽"},
+		{plural(1, "товар", "товара", "товаров"), "товар"}, {plural(3, "товар", "товара", "товаров"), "товара"},
+		{plural(11, "товар", "товара", "товаров"), "товаров"}, {plural(21, "товар", "товара", "товаров"), "товар"},
+		{shorten("Термос для чая и кофе металлический маленький", 20), "Термос для чая и…"},
+	} {
+		if c.got != c.want {
+			t.Errorf("%q, want %q", c.got, c.want)
+		}
+	}
+}
+
+func TestCountPhrase_ChangesAndProductsAreCountedApart(t *testing.T) {
+	// «8 товаров» over five products counted moves, not products (10.10.2026).
+	if got := countPhrase(8, 5, track.PositionChanged); got != "8 изменений у 5 товаров — место в выдаче" {
+		t.Errorf("countPhrase = %q", got)
+	}
+	if got := countPhrase(3, 3, track.PriceChanged); got != "3 товара — цена" {
+		t.Errorf("countPhrase = %q", got)
+	}
+	if got := countPhrase(2, 1, track.PriceChanged); got != "2 изменения у 1 товара — цена" {
+		t.Errorf("countPhrase = %q", got)
 	}
 }

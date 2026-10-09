@@ -141,6 +141,9 @@ type Delivery struct {
 	State     string // OutboxPending, OutboxSent or OutboxFailed
 	SentAt    int64
 	LastError string
+	// DueAt is when a pending message may first go: later than now for one
+	// held over quiet hours.
+	DueAt int64
 }
 
 // Deliveries reads, for each of these events, the newest outbox message that
@@ -156,7 +159,7 @@ func (s *Store) Deliveries(ctx context.Context, eventIDs []int64) (map[int64]Del
 		args[i] = id
 	}
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT rule_event_id, state, COALESCE(sent_at, 0), COALESCE(last_error, '')
+		SELECT rule_event_id, state, COALESCE(sent_at, 0), COALESCE(last_error, ''), due_at
 		FROM notify_outbox WHERE rule_event_id IN (`+placeholders(len(eventIDs))+`)
 		ORDER BY id`, args...)
 	if err != nil {
@@ -166,7 +169,7 @@ func (s *Store) Deliveries(ctx context.Context, eventIDs []int64) (map[int64]Del
 	for rows.Next() {
 		var id int64
 		var d Delivery
-		if err := rows.Scan(&id, &d.State, &d.SentAt, &d.LastError); err != nil {
+		if err := rows.Scan(&id, &d.State, &d.SentAt, &d.LastError, &d.DueAt); err != nil {
 			return nil, fmt.Errorf("store: deliveries: %w", err)
 		}
 		out[id] = d

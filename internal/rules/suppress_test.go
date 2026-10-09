@@ -227,20 +227,20 @@ func TestDecide_KeepsQuietAtNightAndLetsUrgentThrough(t *testing.T) {
 	s.Now = func() time.Time { return night }
 	s.Quiet = QuietHours{From: 22, To: 8}
 
+	// Held for the morning rather than thrown away: a night's changes were
+	// never told at all (10.10.2026).
 	d := decide(t, s, watching(), priceFall())
-	if d.Fire {
-		t.Error("an ordinary rule sent a message at half past eleven")
-	}
-	if d.Reason != ReasonQuietHours {
-		t.Errorf("reason = %q, want quiet-hours", d.Reason)
+	morning := time.Date(2026, 8, 18, 8, 0, 0, 0, time.UTC)
+	if !d.Fire || !d.HoldUntil.Equal(morning) {
+		t.Errorf("an ordinary rule at half past eleven: fire %v, held until %v — want it held until 08:00", d.Fire, d.HoldUntil)
 	}
 
 	// The one exemption section 6.3 allows, which is what keeps "urgent"
 	// meaning something.
 	urgent := watching()
 	urgent.Urgent = true
-	if d := decide(t, s, urgent, priceFall()); !d.Fire {
-		t.Errorf("an urgent rule was silenced at night: %q", d.Reason)
+	if d := decide(t, s, urgent, priceFall()); !d.Fire || !d.HoldUntil.IsZero() {
+		t.Errorf("an urgent rule was held at night: %q, until %v", d.Reason, d.HoldUntil)
 	}
 }
 
@@ -288,5 +288,17 @@ func TestDecide_RefusesToRunWithoutAClock(t *testing.T) {
 	// last fired half a century ago.
 	if _, err := (Suppressor{}).Decide(watching(), priceFall()); err == nil {
 		t.Error("a suppressor with no clock made a decision")
+	}
+}
+
+func TestQuietHours_EndIsTheNextMorning(t *testing.T) {
+	q := QuietHours{From: 22, To: 8}
+	for _, c := range []struct{ at, want time.Time }{
+		{time.Date(2026, 8, 17, 23, 30, 0, 0, time.UTC), time.Date(2026, 8, 18, 8, 0, 0, 0, time.UTC)},
+		{time.Date(2026, 8, 18, 3, 0, 0, 0, time.UTC), time.Date(2026, 8, 18, 8, 0, 0, 0, time.UTC)},
+	} {
+		if got := q.End(c.at); !got.Equal(c.want) {
+			t.Errorf("End(%v) = %v, want %v", c.at, got, c.want)
+		}
 	}
 }

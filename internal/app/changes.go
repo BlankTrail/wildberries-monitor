@@ -13,7 +13,6 @@ import (
 	"github.com/BlankTrail/wildberries-monitor/internal/rules"
 	"github.com/BlankTrail/wildberries-monitor/internal/store"
 	"github.com/BlankTrail/wildberries-monitor/internal/track"
-	"github.com/BlankTrail/wildberries-monitor/wb"
 )
 
 // This file is where spec section 6 starts happening.
@@ -57,11 +56,14 @@ func (a *App) detectChanges(ctx context.Context) {
 	}
 
 	since := a.watermark(ctx)
+	names := a.newLabels(ctx)
 	engine := &rules.Engine{
 		Store:      a.Store,
 		Suppressor: a.suppressor(ctx),
-		Render:     renderFiring,
-		Summarise:  a.summarise,
+		Render:     func(r rules.Rule, ev rules.Event) (string, string) { return renderFiring(r, ev, names) },
+		Summarise: func(r rules.Rule, firings []rules.Firing) (string, string) {
+			return a.summarise(r, firings, names)
+		},
 	}
 
 	seen, fired := 0, 0
@@ -917,15 +919,17 @@ func (a *App) advanceWatermark(ctx context.Context) {
 // product, from what to what. The wording lives here rather than in the rules
 // package because it is a product decision — see rules.Engine.Render, which is
 // a function for exactly this reason.
-func renderFiring(r rules.Rule, ev rules.Event) (body, attachment string) {
+func renderFiring(r rules.Rule, ev rules.Event, names *labels) (body, attachment string) {
 	name := strings.TrimSpace(r.Name)
 	if name == "" {
 		name = "правило"
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s: товар %d — %s", name, ev.Change.NmID, describeChange(ev.Change))
+	// The rule's name on a line of its own, then what moved: a phone shows
+	// the first line in the notification, and it should say which watch.
+	fmt.Fprintf(&b, "%s\n%s — %s", name, names.product(ev.Change.NmID), describeChange(ev.Change, names))
 	if ev.Change.Dest != "" {
-		fmt.Fprintf(&b, " (регион %s)", ev.Change.Dest)
+		fmt.Fprintf(&b, "\nРегион: %s", names.region(ev.Change.Dest))
 	}
 	return b.String(), ""
 }
@@ -937,13 +941,13 @@ func renderFiring(r rules.Rule, ev rules.Event) (body, attachment string) {
 // that read like a path would undo that at the last step. The two numbers are
 // rendered in the change's own unit, because «упал на 200» means one thing in
 // kopecks and another in places.
-func describeChange(c track.Change) string {
+func describeChange(c track.Change, names *labels) string {
 	switch c.Kind {
 	case track.RegionPriceGap:
 		// Two prices at one moment rather than one price over time, so not
 		// «было → стало»: the cheaper region is named, and the gap said.
-		line := fmt.Sprintf("цена выше, чем в регионе %s: там %s, здесь %s",
-			c.Subject, inUnit(c.Was, c.Unit), inUnit(c.Now, c.Unit))
+		line := fmt.Sprintf("цена выше, чем в регионе «%s»: там %s, здесь %s",
+			names.region(c.Subject), inUnit(c.Was, c.Unit), inUnit(c.Now, c.Unit))
 		if pct, ok := c.PercentChange(); ok {
 			line += fmt.Sprintf(" (+%.1f%%)", pct)
 		}
@@ -969,6 +973,18 @@ func describeChange(c track.Change) string {
 		return fmt.Sprintf("%s: появилось, %s", what, side(c.Now, c.NowAtLeast, c.Unit))
 	case !c.HasNow:
 		return fmt.Sprintf("%s: было %s, теперь не сообщается", what, side(c.Was, c.WasAtLeast, c.Unit))
+	}
+	if c.Unit == track.UnitRank && !c.WasAtLeast && !c.NowAtLeast {
+		// «273-е место → 322-е место» said «место» twice and not which way:
+		// a place is better when the number is smaller (10.10.2026).
+		line := fmt.Sprintf("%s: %d-е → %d-е место", what, c.Was, c.Now)
+		switch d := c.Now - c.Was; {
+		case d > 0:
+			line += fmt.Sprintf(", ниже на %d", d)
+		case d < 0:
+			line += fmt.Sprintf(", выше на %d", -d)
+		}
+		return line
 	}
 	return fmt.Sprintf("%s: %s → %s", what, side(c.Was, c.WasAtLeast, c.Unit), side(c.Now, c.NowAtLeast, c.Unit))
 }
@@ -1004,17 +1020,44 @@ var changeNames = map[track.Kind]string{
 	track.RegionAvailabilityChanged: "доступность в регионе",
 	track.RatingChanged:             "рейтинг",
 	track.ReviewCountChanged:        "отзывов",
+
+	// The rest, which came out as their identifiers — «undercut-by-competitor»
+	// in a message on somebody's phone (10.10.2026).
+	track.PromoJoined:                "зашёл в акцию",
+	track.PromoLeft:                  "вышел из акции",
+	track.PromoPriceChanged:          "цена в акции",
+	track.UndercutByCompetitor:       "конкурент подрезал цену",
+	track.LostPriceLead:              "перестал быть дешевле",
+	track.CompetitorOutranked:        "конкурент обошёл в выдаче",
+	track.CompetitorEnteredTop:       "конкурент вошёл в топ",
+	track.RatingFellBelowMedian:      "рейтинг ниже медианы",
+	track.ContentGapWidened:          "разрыв по карточке вырос",
+	track.CompetitorJoinedPromo:      "конкурент зашёл в акцию",
+	track.WorkingPhraseLost:          "рабочая фраза перестала находить",
+	track.NewCompetitorInEnvironment: "новый конкурент рядом",
+	track.ProductAdded:               "новый товар у продавца",
+	track.ProductRemoved:             "товар пропал из витрины",
+	track.AssortmentSizeChanged:      "ассортимент",
+	track.AdAppeared:                 "попал в рекламную выдачу",
+	track.AdLost:                     "пропал из рекламной выдачи",
+	track.AdCompetitorEntered:        "конкурент в рекламе по вашей фразе",
+	track.ShelfEntered:               "попал на чужую полку",
+	track.ShelfLost:                  "пропал с чужой полки",
+	track.ShelfCompetitorEntered:     "конкурент на полке вашего товара",
+	track.ContentChanged:             "продавец переписал карточку",
+	track.RegionPriceGap:             "цена в регионе выше других",
+	track.CopyAppeared:               "возможная копия",
 }
 
 // inUnit renders one number the way its unit is read.
 func inUnit(v int64, u track.Unit) string {
 	switch u {
 	case track.UnitMinor:
-		return wb.Money{Minor: v, Currency: "RUB"}.String()
+		return roubles(v)
 	case track.UnitHours:
 		return fmt.Sprintf("%d ч", v)
 	case track.UnitRank:
-		return fmt.Sprintf("%d место", v)
+		return fmt.Sprintf("%d-е место", v)
 	case track.UnitRatingHundredths:
 		return fmt.Sprintf("%.2f", float64(v)/100)
 	default:

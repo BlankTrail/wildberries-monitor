@@ -394,6 +394,9 @@ func deliveryBadge(d store.Delivery, known bool) string {
 	case d.LastError != "":
 		return `<span class="bt-badge bt-badge--warning bt-badge--sm">ждёт отправки: ` +
 			html.EscapeString(deliveryReason(d.LastError)) + `</span>`
+	case d.State == store.OutboxPending && d.DueAt > time.Now().Unix():
+		return `<span class="bt-badge bt-badge--neutral bt-badge--sm">отложено до ` +
+			html.EscapeString(readAtText(d.DueAt)) + ` — тихие часы</span>`
 	}
 	return `<span class="bt-badge bt-badge--neutral bt-badge--sm">в очереди</span>`
 }
@@ -811,6 +814,7 @@ func (s *Server) lastChatOffer(ctx context.Context, targets []store.TargetRow) s
 			`<input type="hidden" name="kind" value="telegram">` +
 			`<input type="hidden" name="name" value="` + html.EscapeString(refused.Name) + `">` +
 			`<input type="hidden" name="address" value="` + html.EscapeString(id) + `">` +
+			`<input type="hidden" name="default_chat" value="1">` +
 			`<button class="bt-btn bt-btn--primary bt-btn--sm" type="submit">Направить «` +
 			html.EscapeString(firstNonEmpty([]string{refused.Name, refused.Address})) + `» в этот чат</button></form>`
 	}
@@ -819,6 +823,7 @@ func (s *Server) lastChatOffer(ctx context.Context, targets []store.TargetRow) s
 		`<input type="hidden" name="kind" value="telegram">` +
 		`<input type="hidden" name="name" value="` + html.EscapeString(firstNonEmpty([]string{name, "Telegram " + id})) + `">` +
 		`<input type="hidden" name="address" value="` + html.EscapeString(id) + `">` +
+		`<input type="hidden" name="default_chat" value="1">` +
 		`<button class="bt-btn bt-btn--primary bt-btn--sm" type="submit">Добавить адресатом</button></form>`
 }
 
@@ -900,6 +905,17 @@ func (s *Server) saveTarget(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.Store.SaveTarget(r.Context(), row); err != nil {
 		s.rulesFragment(w, r, `<div class="bt-alert bt-alert--error">`+html.EscapeString(err.Error())+`</div>`)
 		return
+	}
+	// The chat offered because it wrote to the bot is also the one that may
+	// give the bot orders, when nobody has been named yet: otherwise its
+	// /start was answered «нет доступа» and the fix was a settings field
+	// somewhere else (10.10.2026).
+	if r.PostFormValue("default_chat") != "" && row.Kind == "telegram" &&
+		strings.TrimSpace(s.Store.SettingOr(r.Context(), store.SettingTelegramChat, "")) == "" {
+		if err := s.Store.SetSetting(r.Context(), store.SettingTelegramChat, row.Address, store.SettingText); err != nil {
+			s.rulesFragment(w, r, `<div class="bt-alert bt-alert--error">`+html.EscapeString(err.Error())+`</div>`)
+			return
+		}
 	}
 	if row.ID != 0 {
 		s.rulesFragment(w, r, `<div class="bt-alert bt-alert--success">Адрес сохранён, адресат снова получает — `+

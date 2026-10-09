@@ -17,20 +17,20 @@ func TestStockCap_AFloorIsSaidAsOne(t *testing.T) {
 	// and the message has to say so or a seller acts on a number nobody saw.
 	c := track.Change{Kind: track.StockChanged, Unit: track.UnitItems,
 		Was: 50, Now: 20, HadBefore: true, HasNow: true, WasAtLeast: true}
-	if got := describeChange(c); !strings.Contains(got, "не меньше 50 → 20") {
+	if got := describeChange(c, nil); !strings.Contains(got, "не меньше 50 → 20") {
 		t.Errorf("message = %q", got)
 	}
 	c = track.Change{Kind: track.StockChanged, Unit: track.UnitItems,
 		Was: 5, Now: 38, HadBefore: true, HasNow: true, NowAtLeast: true}
-	if got := describeChange(c); !strings.Contains(got, "5 → не меньше 38") {
+	if got := describeChange(c, nil); !strings.Contains(got, "5 → не меньше 38") {
 		t.Errorf("message = %q", got)
 	}
 	if got := describeChange(track.Change{Kind: track.StockChanged, Unit: track.UnitItems,
-		Now: 38, HasNow: true, NowAtLeast: true}); !strings.Contains(got, "не меньше 38") {
+		Now: 38, HasNow: true, NowAtLeast: true}, nil); !strings.Contains(got, "не меньше 38") {
 		t.Errorf("appearance message = %q", got)
 	}
 	if got := describeChange(track.Change{Kind: track.StockChanged, Unit: track.UnitItems,
-		Was: 38, HadBefore: true, WasAtLeast: true}); !strings.Contains(got, "было не меньше 38") {
+		Was: 38, HadBefore: true, WasAtLeast: true}, nil); !strings.Contains(got, "было не меньше 38") {
 		t.Errorf("disappearance message = %q", got)
 	}
 }
@@ -52,7 +52,7 @@ func TestStockCap_TheSummaryFileMarksAFloor(t *testing.T) {
 	for i := int64(0); i < 6; i++ {
 		firings = append(firings, fell(200+i, 100000, 90000))
 	}
-	_, attachment := a.summarise(firings[0].Rule, firings)
+	_, attachment := a.summarise(firings[0].Rule, firings, nil)
 	if attachment == "" {
 		t.Fatal("файла нет")
 	}

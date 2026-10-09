@@ -42,7 +42,7 @@ const summaryShown = 5
 const summaryKeep = 7 * 24 * time.Hour
 
 // summarise renders one aggregating rule's whole pass.
-func (a *App) summarise(r rules.Rule, firings []rules.Firing) (body, attachment string) {
+func (a *App) summarise(r rules.Rule, firings []rules.Firing, names *labels) (body, attachment string) {
 	if len(firings) == 0 {
 		return "", ""
 	}
@@ -60,10 +60,20 @@ func (a *App) summarise(r rules.Rule, firings []rules.Firing) (body, attachment 
 	})
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s: %s\n", name, countPhrase(len(sorted), sorted[0].Event.Change.Kind))
+	products := map[int64]bool{}
+	for _, f := range sorted {
+		products[f.Event.Change.NmID] = true
+	}
+	fmt.Fprintf(&b, "%s: %s\n", name, countPhrase(len(sorted), len(products), sorted[0].Event.Change.Kind))
 	shown := min(len(sorted), summaryShown)
 	for _, f := range sorted[:shown] {
-		fmt.Fprintf(&b, "• товар %d — %s\n", f.Event.Change.NmID, describeChange(f.Event.Change))
+		// The region on every line: the same product in three regions was
+		// three identical lines (10.10.2026).
+		where := ""
+		if f.Event.Change.Dest != "" {
+			where = ", " + names.region(f.Event.Change.Dest)
+		}
+		fmt.Fprintf(&b, "• %s%s — %s\n", names.product(f.Event.Change.NmID), where, describeChange(f.Event.Change, names))
 	}
 	if len(sorted) > shown {
 		fmt.Fprintf(&b, "Показаны %d из %d, остальные в файле.", shown, len(sorted))
@@ -94,12 +104,20 @@ func (a *App) summarise(r rules.Rule, firings []rules.Firing) (body, attachment 
 // Named by the kind rather than «сработок N»: what somebody wants from the
 // first line of a notification is whether to open it, and «40 товаров
 // подешевели» answers that where «правило сработало 40 раз» does not.
-func countPhrase(n int, kind track.Kind) string {
+//
+// Changes and products are counted apart when they differ: one product moving
+// in two phrases is two changes, and «8 товаров» over five products was a
+// count of something else (10.10.2026).
+func countPhrase(changes, products int, kind track.Kind) string {
 	what := changeNames[kind]
 	if what == "" {
 		what = string(kind)
 	}
-	return fmt.Sprintf("%d товаров — %s", n, what)
+	if products <= 0 || products == changes {
+		return fmt.Sprintf("%d %s — %s", changes, plural(changes, "товар", "товара", "товаров"), what)
+	}
+	return fmt.Sprintf("%d %s у %d %s — %s", changes, plural(changes, "изменение", "изменения", "изменений"),
+		products, plural(products, "товара", "товаров", "товаров"), what)
 }
 
 // weightOf is how big a move is, for ordering.

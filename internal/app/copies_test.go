@@ -49,7 +49,7 @@ func TestDetectChanges_ACopyOfMyProductIsTold(t *testing.T) {
 	if len(due) != 1 {
 		t.Fatalf("сообщений %d, ожидалось одно", len(due))
 	}
-	for _, want := range []string{"товар 100", "возможная копия", "товар 200", "Копировщик", "100%", "цена 1"} {
+	for _, want := range []string{"(100)", "возможная копия", "товар 200", "Копировщик", "100%", "цена 1"} {
 		if !strings.Contains(due[0].Body, want) {
 			t.Errorf("в сообщении нет %q: %q", want, due[0].Body)
 		}

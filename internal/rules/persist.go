@@ -161,6 +161,8 @@ type Firing struct {
 	Rule    Rule
 	Event   Event
 	EventID int64
+	// HoldUntil is when its message may first go — see Decision.
+	HoldUntil time.Time
 }
 
 // Apply runs every rule against one change.
@@ -206,7 +208,7 @@ func (e *Engine) Apply(ctx context.Context, all []Rule, ev Event) (fired int, er
 			if _, seen := e.held[r.ID]; !seen {
 				e.order = append(e.order, r.ID)
 			}
-			e.held[r.ID] = append(e.held[r.ID], Firing{Rule: r, Event: ev, EventID: eventID})
+			e.held[r.ID] = append(e.held[r.ID], Firing{Rule: r, Event: ev, EventID: eventID, HoldUntil: d.HoldUntil})
 			fired++
 			continue
 		}
@@ -215,7 +217,7 @@ func (e *Engine) Apply(ctx context.Context, all []Rule, ev Event) (fired int, er
 		if e.Render != nil {
 			body, attachment = e.Render(r, ev)
 		}
-		if err := e.queue(ctx, r, &eventID, body, attachment); err != nil {
+		if err := e.queue(ctx, r, &eventID, body, attachment, d.HoldUntil); err != nil {
 			return fired, err
 		}
 		fired++
@@ -253,7 +255,15 @@ func (e *Engine) Flush(ctx context.Context) (queued int, err error) {
 		}
 
 		first := firings[0].EventID
-		if err := e.queue(ctx, r, &first, body, attachment); err != nil {
+		// The latest hold of any of them: one message, sent when all of it
+		// may be.
+		var hold time.Time
+		for _, f := range firings {
+			if f.HoldUntil.After(hold) {
+				hold = f.HoldUntil
+			}
+		}
+		if err := e.queue(ctx, r, &first, body, attachment, hold); err != nil {
 			return queued, err
 		}
 		queued++
@@ -263,11 +273,16 @@ func (e *Engine) Flush(ctx context.Context) (queued int, err error) {
 }
 
 // queue puts one message in front of every addressee the rule names.
-func (e *Engine) queue(ctx context.Context, r Rule, eventID *int64, body, attachment string) error {
+func (e *Engine) queue(ctx context.Context, r Rule, eventID *int64, body, attachment string, hold time.Time) error {
+	var due int64
+	if !hold.IsZero() {
+		due = hold.Unix()
+	}
 	for _, target := range r.Targets {
 		if _, err := e.Store.Enqueue(ctx, store.OutboxRow{
 			TargetID:    target,
 			RuleEventID: eventID,
+			DueAt:       due,
 			Body:        body,
 			Attachment:  attachment,
 		}); err != nil {

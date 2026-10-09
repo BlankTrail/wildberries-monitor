@@ -41,7 +41,7 @@ func TestSummarise_OneMessageWithTheBiggestMovesFirst(t *testing.T) {
 		firings = append(firings, fell(100+i, 100000, 100000-(i+1)*5000))
 	}
 
-	body, attachment := a.summarise(firings[0].Rule, firings)
+	body, attachment := a.summarise(firings[0].Rule, firings, nil)
 
 	if !strings.Contains(body, "8 товаров") {
 		t.Errorf("в первой строке нет числа:\n%s", body)
@@ -97,7 +97,7 @@ func TestSummarise_AShortPassNeedsNoFile(t *testing.T) {
 	a := newApp(t)
 	firings := []rules.Firing{fell(100, 100000, 90000), fell(101, 100000, 80000)}
 
-	body, attachment := a.summarise(firings[0].Rule, firings)
+	body, attachment := a.summarise(firings[0].Rule, firings, nil)
 	if attachment != "" {
 		t.Errorf("к двум товарам приложен файл: %q", attachment)
 	}
@@ -127,7 +127,7 @@ func TestSummarise_AnUnreadSideIsAnEmptyCellRatherThanAZero(t *testing.T) {
 		rest = append(rest, fell(200+i, 100000, 90000))
 	}
 
-	_, attachment := a.summarise(rest[0].Rule, rest)
+	_, attachment := a.summarise(rest[0].Rule, rest, nil)
 	if attachment == "" {
 		t.Fatal("файла нет")
 	}
@@ -229,7 +229,7 @@ func TestDetectChanges_AnAggregatingRuleSendsOneMessage(t *testing.T) {
 	if len(due) != 1 {
 		t.Fatalf("сообщений %d, ожидалось одно на весь проход", len(due))
 	}
-	if !strings.Contains(due[0].Body, "3 товаров") {
+	if !strings.Contains(due[0].Body, "3 товара") {
 		t.Errorf("сводка не считает товары: %q", due[0].Body)
 	}
 }

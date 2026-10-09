@@ -46,6 +46,9 @@ type Decision struct {
 	// DedupKey is recorded either way, because the next decision compares
 	// against it — including when this one was itself suppressed.
 	DedupKey string
+	// HoldUntil, when set, is when a message that fires may first be sent:
+	// the end of quiet hours. Zero is at once.
+	HoldUntil time.Time
 }
 
 // QuietHours is a do-not-disturb window in whole hours of local time.
@@ -79,6 +82,21 @@ func (q QuietHours) Active(t time.Time) bool {
 	}
 	// Wrapping midnight: 22 to 8 means late evening or early morning.
 	return h >= q.From || h < q.To
+}
+
+// End is the first moment after t that the window is over: the next time the
+// clock reads To o'clock. Meaningful while the window is active.
+func (q QuietHours) End(t time.Time) time.Time {
+	loc := q.Location
+	if loc == nil {
+		loc = time.UTC
+	}
+	local := t.In(loc)
+	end := time.Date(local.Year(), local.Month(), local.Day(), q.To, 0, 0, 0, loc)
+	if !end.After(local) {
+		end = end.AddDate(0, 0, 1)
+	}
+	return end
 }
 
 // Suppressor applies section 6.3 to one match at a time.
@@ -162,8 +180,13 @@ func (s Suppressor) Decide(r Rule, ev Event) (Decision, error) {
 	// so that a message stopped for being trivial says so even at night: told
 	// "quiet hours", a person waits for morning for something that was never
 	// coming.
+	//
+	// Held for the morning, not thrown away. Thrown away, a night's changes
+	// were simply never told — quiet hours from eleven to eight lost every
+	// one of them, which nobody setting «не беспокоить ночью» meant
+	// (10.10.2026).
 	if !r.Urgent && s.Quiet.Active(now) {
-		return stop(ReasonQuietHours)
+		return Decision{Fire: true, DedupKey: key, HoldUntil: s.Quiet.End(now)}, nil
 	}
 
 	return Decision{Fire: true, DedupKey: key}, nil

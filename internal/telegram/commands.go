@@ -259,7 +259,9 @@ func (c *Commands) handle(ctx context.Context, u Update) error {
 		// first message is how they learn which id to allow, and silence would
 		// leave them unable to tell "not permitted" from "bot is down".
 		return reply(fmt.Sprintf(
-			"Этот чат (%d) не имеет доступа. Укажите его в настройках как чат по умолчанию.", chat))
+			"Этот чат (%d) пока не имеет доступа к командам. Откройте монитор → «Уведомления»: "+
+				"этот чат там предложен кнопкой — нажмите её, и уведомления с командами пойдут сюда. "+
+				"Или впишите номер в Настройки → Telegram → чат по умолчанию.", chat))
 	}
 
 	command, argument := splitCommand(u.Message.Text)

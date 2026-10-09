@@ -40,7 +40,7 @@ func TestDetectChanges_ARegionPricedAboveTheOthersIsTold(t *testing.T) {
 	if len(due) != 1 {
 		t.Fatalf("сообщений %d, ожидалось одно", len(due))
 	}
-	for _, want := range []string{"100", "цена выше, чем в регионе -1257786", "там 1", "здесь 1", "(+0.2%)", "регион -5818883"} {
+	for _, want := range []string{"100", "цена выше, чем в регионе «Москва (по умолчанию)»", "там 1", "здесь 1", "(+0.2%)", "Регион: регион -5818883"} {
 		if !strings.Contains(due[0].Body, want) {
 			t.Errorf("в сообщении нет %q: %q", want, due[0].Body)
 		}

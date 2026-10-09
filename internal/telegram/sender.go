@@ -6,8 +6,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/BlankTrail/wildberries-monitor/internal/notify"
 )
@@ -189,8 +191,26 @@ func AsTransport(s Sender) notify.Transport {
 type transport struct{ s Sender }
 
 func (t transport) Send(ctx context.Context, m notify.Message) error {
-	if m.Attachment != "" {
-		return t.s.SendDocument(ctx, m.Address, m.Body, m.Attachment)
+	if m.Attachment == "" {
+		return t.s.SendMessage(ctx, m.Address, m.Body)
 	}
-	return t.s.SendMessage(ctx, m.Address, m.Body)
+	if _, err := os.Stat(m.Attachment); errors.Is(err, os.ErrNotExist) {
+		// The file is gone — swept after its week, or left behind when the
+		// data folder moved. Retried, the message waited for a file that
+		// would never come back (10.10.2026); the text goes, saying so.
+		return t.s.SendMessage(ctx, m.Address, m.Body+"\n\n(файл со всеми строками больше недоступен)")
+	}
+	if utf8.RuneCountInString(m.Body) > captionLimit {
+		// Telegram refuses a caption this long, and the refusal is a 400 —
+		// the message would be thrown away whole. The text goes on its own,
+		// the file after it.
+		if err := t.s.SendMessage(ctx, m.Address, m.Body); err != nil {
+			return err
+		}
+		return t.s.SendDocument(ctx, m.Address, "Все строки — в файле.", m.Attachment)
+	}
+	return t.s.SendDocument(ctx, m.Address, m.Body, m.Attachment)
 }
+
+// captionLimit is the longest caption Telegram takes on a file.
+const captionLimit = 1024

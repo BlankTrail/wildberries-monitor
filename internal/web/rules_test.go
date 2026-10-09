@@ -883,3 +883,20 @@ func TestTargets_ARefusingAddresseeIsExplainedAndFixedWithoutLosingItsQueue(t *t
 		t.Errorf("waiting messages after the fix: %d, want the one still there", len(due))
 	}
 }
+
+func TestTargets_TheOfferedChatBecomesTheDefaultWhenThereIsNone(t *testing.T) {
+	// Its /start was answered «нет доступа», and the fix was a field in
+	// another screen (10.10.2026).
+	srv := newServer(t)
+	srv.NotifyKinds = func() []string { return []string{"telegram"} }
+	form := url.Values{"name": {"Анна"}, "kind": {"telegram"}, "address": {"777"}, "default_chat": {"1"}}
+	postForm(t, srv, "/rules/targets", form)
+	if got := srv.Store.SettingOr(t.Context(), store.SettingTelegramChat, ""); got != "777" {
+		t.Errorf("default chat = %q, want 777", got)
+	}
+	form["address"] = []string{"888"}
+	postForm(t, srv, "/rules/targets", form)
+	if got := srv.Store.SettingOr(t.Context(), store.SettingTelegramChat, ""); got != "777" {
+		t.Errorf("default chat = %q — a second offer replaced the one already chosen", got)
+	}
+}
