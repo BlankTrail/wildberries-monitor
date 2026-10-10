@@ -243,6 +243,12 @@ type openPortRequest struct {
 	TimeoutSeconds  *int    `json:"timeout_seconds,omitempty"`
 	ConnectTimeout  *int    `json:"connect_timeout_seconds,omitempty"`
 	LeakGuard       string  `json:"leak_guard,omitempty"`
+	// AllowMITMUpstream is sent, and always false. An exit that opens TLS
+	// itself replaces the browser's fingerprint with its own, and the port
+	// is told outright to refuse one rather than left to the service's
+	// default — a default that changed would have broken every request's
+	// fingerprint without a word (10.10.2026).
+	AllowMITMUpstream *bool `json:"allow_mitm_upstream"`
 }
 
 // protocolOr defaults an unset protocol to the HTTP CONNECT forward proxy, which
@@ -271,6 +277,8 @@ func (s PortSpec) request(port int, eg Egress) openPortRequest {
 		Decompress:     &dec,
 		EnableHTTP3:    &h3,
 		LeakGuard:      s.LeakGuard,
+
+		AllowMITMUpstream: new(bool),
 	}
 	if s.MaxConcurrent > 0 {
 		n := s.MaxConcurrent

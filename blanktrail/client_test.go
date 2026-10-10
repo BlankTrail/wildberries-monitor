@@ -218,3 +218,17 @@ func TestDefaultPortSpec_GivesUpOnADeadExitInSeconds(t *testing.T) {
 		t.Errorf("connect_timeout_seconds = %v, want 5", req.ConnectTimeout)
 	}
 }
+
+func TestPortSpec_RefusesAnExitThatInterceptsTLS(t *testing.T) {
+	// Such an exit replaces the browser fingerprint with its own. Left to the
+	// service's default, a changed default would have broken it unseen.
+	for _, eg := range []Egress{{Upstream: "socks5://10.0.0.1:1080"}, {Gateway: "gw"}, {}} {
+		raw, err := json.Marshal(DefaultPortSpec().request(20000, eg))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(raw), `"allow_mitm_upstream":false`) {
+			t.Errorf("egress %+v: request %s does not say allow_mitm_upstream: false", eg, raw)
+		}
+	}
+}
