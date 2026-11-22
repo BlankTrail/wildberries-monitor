@@ -203,7 +203,7 @@ func httpGet(ctx context.Context, rawURL string) ([]byte, error) {
 	}
 	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
 	if err != nil {
-		return nil, err
+		return nil, redactURLError(err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {

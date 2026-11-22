@@ -182,7 +182,7 @@ func (c *rotatingChannel) Renew(ctx context.Context, cur Egress) (Egress, error)
 	}
 	resp, err := c.hc.Do(req)
 	if err != nil {
-		return cur, fmt.Errorf("blanktrail: channel %q: call rotate URL: %w", c.name, err)
+		return cur, fmt.Errorf("blanktrail: channel %q: call rotate URL: %w", c.name, redactURLError(err))
 	}
 	defer func() { _ = resp.Body.Close() }()
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))

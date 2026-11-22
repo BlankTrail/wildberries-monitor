@@ -3,6 +3,9 @@
 package blanktrail
 
 import (
+	"errors"
+	"fmt"
+	"net/url"
 	"strconv"
 	"strings"
 )
@@ -125,4 +128,17 @@ func secretName(name string) bool {
 		}
 	}
 	return false
+}
+
+// redactURLError is err with the address net/http quotes in it redacted.
+//
+// A *url.Error prints «Get "<the whole URL>": …», so a list or rotate link that
+// failed would put its key in the message however carefully the caller quoted
+// the link itself.
+func redactURLError(err error) error {
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		return fmt.Errorf("%s %q: %w", ue.Op, Redact(ue.URL), ue.Err)
+	}
+	return err
 }

@@ -4,9 +4,12 @@ package blanktrail
 
 import (
 	"context"
+	"errors"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -182,4 +185,29 @@ func TestRotor_CloseIsIdempotentAndConcurrencySafe(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+// TestSource_LoadFailureDoesNotQuoteTheKey: the address in the message was
+// redacted, but the error from net/http wrapped under it quotes the whole URL
+// again — so a refused list link put the provider's key in the log.
+func TestSource_LoadFailureDoesNotQuoteTheKey(t *testing.T) {
+	src := Source{Kind: "url", Location: "http://127.0.0.1:1/list?order=7&key=s3cr3tvalue"}
+	_, _, err := src.Load(context.Background())
+	if err == nil {
+		t.Fatal("a link to a closed port loaded")
+	}
+	if msg := err.Error(); strings.Contains(msg, "s3cr3tvalue") {
+		t.Errorf("the error quotes the key: %s", msg)
+	}
+}
+
+func TestRedactURLError_HidesTheKeyAndKeepsTheCause(t *testing.T) {
+	cause := errors.New("connection refused")
+	err := redactURLError(&url.Error{Op: "Get", URL: "https://rotate.example/change?token=s3cr3tvalue", Err: cause})
+	if strings.Contains(err.Error(), "s3cr3tvalue") {
+		t.Errorf("the error quotes the token: %v", err)
+	}
+	if !errors.Is(err, cause) {
+		t.Error("the cause is lost")
+	}
 }
